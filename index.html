@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>RECOVERIC 의뢰서 시스템 v2.6</title>
+<title>RECOVERIC 의뢰서 시스템 v2.7</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Nanum+Gothic:wght@400;700;800&family=Nanum+Myeongjo:wght@400;700;800&display=swap" rel="stylesheet">
@@ -81,6 +81,23 @@
   .history-item.active .item-copy-btn:hover { background: #444; }
   
   .history-empty { color: #555; font-size: 11px; padding: 20px 0; text-align: center; }
+  
+  .history-filter-select, .history-search-input {
+    width: 100%;
+    background: #2a2a2a;
+    color: #fff;
+    border: 1px solid #444;
+    padding: 6px 8px;
+    border-radius: 3px;
+    font-size: 12px;
+    font-family: inherit;
+    margin-bottom: 6px;
+  }
+  .history-filter-select:focus, .history-search-input:focus {
+    outline: none;
+    border-color: #fff;
+  }
+  .history-search-input::placeholder { color: #777; }
   
   .form-panel h2 { font-size: 15px; margin-bottom: 16px; padding-bottom: 8px; border-bottom: 2px solid #222; display: flex; justify-content: space-between; align-items: center; font-weight: 700; }
   .form-panel h2 .type-badge { color: #fff; font-size: 11px; padding: 3px 10px; border-radius: 3px; font-weight: 700; font-family: inherit; }
@@ -582,12 +599,23 @@
   .dash-table .col-num { text-align: center; }
   .dash-table .col-action { width: 70px; text-align: center; }
   
+  /* 인라인 편집 가능한 셀 */
   .dash-table .editable {
     cursor: pointer;
     background: #fffef0;
   }
   .dash-table .editable:hover { background: #fff8c5; }
   .dash-table .editable.has-value { background: transparent; }
+  .dash-table .editable[data-field="internal_memo"] {
+    max-width: 220px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .dash-table .editable[data-field="internal_memo"]:not(.has-value) {
+    color: #aaa;
+    font-style: italic;
+  }
   
   .dash-table input.dash-edit-date,
   .dash-table input.dash-edit-text {
@@ -698,7 +726,7 @@
 <div class="app" id="main-app" style="display:none;">
   <aside class="sidebar">
     <h1>RECOVERIC</h1>
-    <div class="sub">HIWOS v2.6</div>
+    <div class="sub">HIWOS v2.7</div>
     <div id="user-info-section"></div>
     
     <!-- 모드 전환 -->
@@ -716,7 +744,14 @@
       </div>
       <button class="new-btn" id="new-btn">+ 새 의뢰서</button>
       
-      <div class="history-title">이력 (전체)</div>
+      <div class="history-title">이력 검색</div>
+      <select id="history-type-filter" class="history-filter-select">
+        <option value="all">전체</option>
+        <option value="원사">원사</option>
+        <option value="편직">편직</option>
+        <option value="염색가공">염색가공</option>
+      </select>
+      <input type="text" id="history-search" class="history-search-input" placeholder="🔍 품목/컬러/거래처 검색..." lang="ko">
       <div id="history-list"><div class="history-empty">불러오는 중...</div></div>
     </div>
     
@@ -1016,9 +1051,11 @@ const state = {
   savedKnitCautions: null,
   // v2.5 대시보드
   uiMode: 'write',          // 'write' | 'dashboard'
-  dashView: 'overview',     // 'overview' | 'yarn' | 'knit' | 'finish'
+  dashView: 'overview',     // 'overview' | 'yarn' | 'knit' | 'finish' | 'trash'
   showCompleted: false,
-  showDeleted: false
+  // v2.7 이력 검색
+  historyTypeFilter: 'all',
+  historySearch: ''
 };
 
 function toast(msg, type='') {
@@ -2216,14 +2253,61 @@ window.addEventListener('firebase-ready', () => {
     }, err => toast('이력 불러오기 실패: ' + err.message, 'error'));
   }
   
+  // v2.7 이력 필터/검색 변경 시 재렌더
+  document.addEventListener('hiwos-rerender-history', () => renderHistory());
+  
   function renderHistory() {
     const list = document.getElementById('history-list');
     // deleted 항목 제외
-    const visible = state.allWorkOrders.filter(wo => !wo.deleted);
+    let visible = state.allWorkOrders.filter(wo => !wo.deleted);
+    
+    // 타입 필터
+    if (state.historyTypeFilter && state.historyTypeFilter !== 'all') {
+      visible = visible.filter(wo => wo.type === state.historyTypeFilter);
+    }
+    
+    // 검색어 필터 (대소문자 무시, 다양한 필드 종합 검색)
+    if (state.historySearch) {
+      const q = state.historySearch.toLowerCase();
+      visible = visible.filter(wo => {
+        const haystack = [];
+        haystack.push(wo.wo_number || '');
+        if (wo.type === '원사') {
+          haystack.push(wo.supplier || '');
+          haystack.push(wo.purpose || '');
+          (wo.yarns || []).forEach(y => {
+            haystack.push(y.type || '');
+            haystack.push(y.dest || '');
+          });
+        } else if (wo.type === '편직') {
+          haystack.push(wo.recipient || '');
+          (wo.items || []).forEach(it => {
+            haystack.push(it.item || '');
+            haystack.push(it.color || '');
+            haystack.push(it.shared_code || it.wo_no || '');
+            haystack.push(it.yarn_input || '');
+          });
+        } else if (wo.type === '염색가공') {
+          haystack.push(wo.body?.item || '');
+          haystack.push(wo.rib?.item || '');
+          haystack.push(wo.final_destination || '');
+          haystack.push(wo.recipients?.dyeing || '');
+          haystack.push(wo.recipients?.processing || '');
+          haystack.push(wo.recipients?.post || '');
+          (wo.colors || []).forEach(c => haystack.push(c.name || ''));
+        }
+        return haystack.some(s => s.toLowerCase().includes(q));
+      });
+    }
+    
     if (visible.length === 0) {
-      list.innerHTML = '<div class="history-empty">의뢰서 없음</div>';
+      const reason = state.historySearch ? `"${state.historySearch}" 검색 결과 없음` 
+                   : state.historyTypeFilter !== 'all' ? `${state.historyTypeFilter} 의뢰서 없음`
+                   : '의뢰서 없음';
+      list.innerHTML = `<div class="history-empty">${escapeHtml(reason)}</div>`;
       return;
     }
+    
     list.innerHTML = visible.map(wo => {
       const d = wo.date ? new Date(wo.date).toLocaleDateString('ko-KR', {month:'short', day:'numeric'}) : '-';
       let title = '-', sub = '';
@@ -2427,9 +2511,13 @@ function validateBlendSum(blends, label) {
   // 인라인 편집 가능한 셀
   function renderEditableCell(wo, field, value, type='text') {
     const hasValue = value && value !== '';
-    const display = hasValue ? escapeHtml(value) : '+';
+    let display;
+    if (hasValue) display = escapeHtml(value);
+    else if (field === 'internal_memo') display = '+ 메모';
+    else display = '+';
     const cls = hasValue ? 'editable has-value' : 'editable';
-    return `<td class="${cls}" data-id="${wo.id}" data-field="${field}" data-type="${type}">${display}</td>`;
+    const titleAttr = field === 'internal_memo' && hasValue ? `title="${escapeHtml(value)}"` : '';
+    return `<td class="${cls}" data-id="${wo.id}" data-field="${field}" data-type="${type}" ${titleAttr}>${display}</td>`;
   }
   
   // 컬러 요약 (대표 컬러 + 개수)
@@ -2603,6 +2691,7 @@ function validateBlendSum(blends, label) {
       <th>납기일</th>
       <th>용도</th>
       <th class="col-date">입고일</th>
+      <th>📝 메모</th>
       <th class="col-action">작지</th>
       <th class="col-action">작업</th>
       <th class="col-action">완료</th>
@@ -2629,6 +2718,7 @@ function validateBlendSum(blends, label) {
         <td>${escapeHtml(wo.delivery || '-')}</td>
         <td>${escapeHtml(wo.purpose || '-')}</td>
         ${renderEditableCell(wo, 'arrival_date', wo.arrival_date, 'date')}
+        ${renderEditableCell(wo, 'internal_memo', wo.internal_memo, 'text')}
         <td class="col-action"><button class="dash-action-btn dash-view-btn" data-id="${wo.id}">보기</button></td>
         <td class="col-action"><button class="dash-action-btn dash-edit-btn" data-id="${wo.id}">수정</button></td>
         <td class="col-action"><input type="checkbox" class="dash-complete-cb" data-id="${wo.id}" ${wo.completed ? 'checked' : ''}> ${wo.completed ? '완료' : ''}</td>
@@ -2660,6 +2750,7 @@ function validateBlendSum(blends, label) {
       <th class="col-action">생지 출고</th>
       <th class="col-num">예상 재고 절</th>
       <th class="col-num">예상 재고 kg</th>
+      <th>📝 메모</th>
       <th class="col-action">작지</th>
       <th class="col-action">작업</th>
       <th class="col-action">완료</th>
@@ -2710,6 +2801,7 @@ function validateBlendSum(blends, label) {
         ${shipmentDisplay}
         <td class="col-num" style="font-weight:700;color:${remainJul < 0 ? '#c00' : remainJul === 0 ? '#047857' : '#000'};">${remainJul}절</td>
         <td class="col-num" style="font-weight:700;color:${remainKg < 0 ? '#c00' : remainKg === 0 ? '#047857' : '#000'};">${remainKg.toFixed(1)}kg</td>
+        ${renderEditableCell(wo, 'internal_memo', wo.internal_memo, 'text')}
         <td class="col-action"><button class="dash-action-btn dash-view-btn" data-id="${wo.id}">보기</button></td>
         <td class="col-action"><button class="dash-action-btn dash-edit-btn" data-id="${wo.id}">수정</button></td>
         <td class="col-action"><input type="checkbox" class="dash-complete-cb" data-id="${wo.id}" ${wo.completed ? 'checked' : ''}> ${wo.completed ? '완료' : ''}</td>
@@ -2745,6 +2837,7 @@ function validateBlendSum(blends, label) {
       <th>후가공처</th>
       <th class="col-date">후가공완료</th>
       <th class="col-action">LOT</th>
+      <th>📝 메모</th>
       <th class="col-action">작지</th>
       <th class="col-action">작업</th>
       <th class="col-action">완료</th>
@@ -2775,6 +2868,7 @@ function validateBlendSum(blends, label) {
         <td>${escapeHtml(wo.recipients?.post || '-')}</td>
         ${renderEditableCell(wo, 'post_done_date', wo.post_done_date, 'date')}
         ${renderEditableCell(wo, 'lot_no', wo.lot_no, 'text')}
+        ${renderEditableCell(wo, 'internal_memo', wo.internal_memo, 'text')}
         <td class="col-action"><button class="dash-action-btn dash-view-btn" data-id="${wo.id}">보기</button></td>
         <td class="col-action"><button class="dash-action-btn dash-edit-btn" data-id="${wo.id}">수정</button></td>
         <td class="col-action"><input type="checkbox" class="dash-complete-cb" data-id="${wo.id}" ${wo.completed ? 'checked' : ''}> ${wo.completed ? '완료' : ''}</td>
@@ -3024,107 +3118,211 @@ function validateBlendSum(blends, label) {
     const totalKg = (wo.items || []).reduce((s,i) => s + (parseFloat(i.jul) || 0) * (parseFloat(i.kg_per_jul) || 21), 0);
     const shippedJul = shipments.reduce((s,sh) => s + (parseFloat(sh.jul) || 0), 0);
     const shippedKg = shipments.reduce((s,sh) => s + (parseFloat(sh.kg) || 0), 0);
+    const avgKgPerJul = totalJul > 0 ? totalKg / totalJul : 21;
     
     const modal = document.getElementById('dash-modal-bg');
     document.getElementById('dash-modal-title').textContent = `🚚 생지 출고 입력 (${wo.wo_number || ''})`;
     
-    let body = `<div style="padding:20px;font-family:var(--font-gothic);">
-      <div style="background:#f5f5f5;padding:12px;border-radius:4px;margin-bottom:16px;border-left:4px solid #000;">
-        <div style="font-size:13px;font-weight:700;margin-bottom:6px;">📋 의뢰 내역</div>
-        <div style="font-size:12px;line-height:1.6;">
-          품목: ${escapeHtml(wo.items?.[0]?.item || '-')} / 컬러: ${escapeHtml(wo.items?.[0]?.color || '-')}<br>
-          편직 공장: ${escapeHtml(wo.recipient || '-')}<br>
-          <strong>의뢰 총량: ${totalJul}절 / ${totalKg.toFixed(1)}kg</strong><br>
-          <strong style="color:${shippedJul >= totalJul ? '#047857' : '#c00'};">출고 누계: ${shippedJul}절 / ${shippedKg.toFixed(1)}kg → 잔량 ${totalJul - shippedJul}절 / ${(totalKg - shippedKg).toFixed(1)}kg</strong>
-        </div>
-      </div>
+    // 모달 상태: 'list' (출고 내역 보기) | 'add' (새 출고 입력) | 'edit' (기존 출고 수정)
+    let viewMode = 'list';
+    let editIdx = -1;
+    
+    const renderModal = () => {
+      let body = `<div style="padding:20px;font-family:var(--font-gothic);">
+        <div style="background:#f5f5f5;padding:12px;border-radius:4px;margin-bottom:16px;border-left:4px solid #000;">
+          <div style="font-size:13px;font-weight:700;margin-bottom:6px;">📋 의뢰 내역</div>
+          <div style="font-size:12px;line-height:1.6;">
+            품목: ${escapeHtml(wo.items?.[0]?.item || '-')} / 컬러: ${escapeHtml(wo.items?.[0]?.color || '-')}<br>
+            편직 공장: ${escapeHtml(wo.recipient || '-')}<br>
+            <strong>의뢰 총량: ${totalJul}절 / ${totalKg.toFixed(1)}kg</strong><br>
+            <strong style="color:${shippedJul >= totalJul ? '#047857' : '#c00'};">출고 누계: ${shippedJul}절 / ${shippedKg.toFixed(1)}kg → 잔량 ${(totalJul - shippedJul)}절 / ${(totalKg - shippedKg).toFixed(1)}kg</strong>
+          </div>
+        </div>`;
       
-      <div style="font-size:13px;font-weight:700;margin-bottom:8px;">출고 내역</div>
+      // 출고 내역 표
+      body += `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+        <div style="font-size:13px;font-weight:700;">📦 출고 내역</div>
+        ${viewMode === 'list' ? `<button class="dash-action-btn" id="ship-show-add" style="background:#000;color:#fff;padding:6px 14px;">+ 새 출고 추가</button>` : ''}
+      </div>
       <table class="dash-table" style="margin-bottom:14px;">
         <thead><tr>
-          <th style="width:25%;">출고일</th>
-          <th style="width:20%;">절수</th>
-          <th style="width:20%;">중량(kg)</th>
-          <th style="width:25%;">메모</th>
-          <th style="width:10%;">삭제</th>
-        </tr></thead><tbody id="ship-list">`;
-    
-    if (shipments.length === 0) {
-      body += `<tr><td colspan="5" style="text-align:center;color:#999;padding:14px;">출고 내역 없음</td></tr>`;
-    } else {
-      shipments.forEach((sh, idx) => {
-        body += `<tr>
-          <td>${sh.date ? new Date(sh.date).toLocaleDateString('ko-KR') : '-'}</td>
-          <td style="text-align:center;">${sh.jul || 0}절</td>
-          <td style="text-align:center;">${(parseFloat(sh.kg) || 0).toFixed(1)}kg</td>
-          <td>${escapeHtml(sh.memo || '-')}</td>
-          <td style="text-align:center;"><button class="dash-action-btn danger" data-del-ship="${idx}">X</button></td>
-        </tr>`;
-      });
-    }
-    body += `</tbody></table>
+          <th style="width:18%;">출고일</th>
+          <th style="width:14%;">절수</th>
+          <th style="width:14%;">중량(kg)</th>
+          <th style="width:32%;">메모</th>
+          <th style="width:22%;">작업</th>
+        </tr></thead><tbody>`;
       
-      <div style="font-size:13px;font-weight:700;margin-bottom:8px;">+ 새 출고 추가</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr 2fr;gap:8px;margin-bottom:12px;">
-        <div><label style="font-size:11px;color:#666;">출고일</label><input type="date" id="new-ship-date" style="width:100%;padding:6px;border:1px solid #ccc;border-radius:3px;" value="${new Date().toISOString().slice(0,10)}"></div>
-        <div><label style="font-size:11px;color:#666;">절수</label><input type="number" id="new-ship-jul" placeholder="30" step="0.5" style="width:100%;padding:6px;border:1px solid #ccc;border-radius:3px;"></div>
-        <div><label style="font-size:11px;color:#666;">중량(kg)</label><input type="number" id="new-ship-kg" placeholder="630" step="0.1" style="width:100%;padding:6px;border:1px solid #ccc;border-radius:3px;"></div>
-        <div><label style="font-size:11px;color:#666;">메모 (선택)</label><input type="text" id="new-ship-memo" placeholder="1차 출고 등" style="width:100%;padding:6px;border:1px solid #ccc;border-radius:3px;"></div>
-      </div>
-      <div style="display:flex;gap:8px;justify-content:flex-end;">
-        <button class="dash-action-btn" id="ship-add-btn" style="padding:8px 16px;font-size:13px;background:#000;color:#fff;">+ 출고 추가</button>
-      </div>
-      
-      <div style="font-size:11px;color:#888;margin-top:12px;background:#fff8e1;padding:8px;border-radius:3px;">
-        ※ 절수만 입력하면 평균 kg/절(${(totalJul > 0 ? totalKg/totalJul : 21).toFixed(1)})로 자동 계산됩니다.<br>
-        ※ 다회 출고 가능 - 누적되어 예상 재고가 자동 계산됩니다.
-      </div>
-    </div>`;
-    
-    document.getElementById('dash-modal-body').innerHTML = body;
-    modal.classList.add('show');
-    
-    // 출고 추가 버튼
-    document.getElementById('ship-add-btn').addEventListener('click', async () => {
-      const date = document.getElementById('new-ship-date').value;
-      const jul = parseFloat(document.getElementById('new-ship-jul').value) || 0;
-      let kg = parseFloat(document.getElementById('new-ship-kg').value) || 0;
-      const memo = document.getElementById('new-ship-memo').value.trim();
-      if (!date || !jul) { toast('출고일과 절수를 입력하세요', 'error'); return; }
-      if (!kg) {
-        // 평균 kg/절로 자동 계산
-        const avg = totalJul > 0 ? totalKg / totalJul : 21;
-        kg = jul * avg;
-      }
-      const newShipments = [...shipments, { date, jul, kg, memo, recorded_at: new Date().toISOString(), recorded_by: state.user?.email || '' }];
-      try {
-        await updateDoc(doc(db, 'workorders', woId), {
-          greige_shipments: newShipments,
-          updated_at: serverTimestamp(),
-          updated_by: state.user.email
+      if (shipments.length === 0 && viewMode === 'list') {
+        body += `<tr><td colspan="5" style="text-align:center;color:#999;padding:14px;">출고 내역 없음 — 우측 상단 "+새 출고 추가" 클릭</td></tr>`;
+      } else {
+        shipments.forEach((sh, idx) => {
+          if (viewMode === 'edit' && editIdx === idx) {
+            // 수정 모드 행
+            body += `<tr style="background:#fffbe6;">
+              <td><input type="date" id="edit-date-${idx}" value="${sh.date || ''}" style="width:100%;padding:4px;border:1px solid #000;font-size:11px;"></td>
+              <td><input type="number" id="edit-jul-${idx}" value="${sh.jul || 0}" step="0.5" style="width:100%;padding:4px;border:1px solid #000;font-size:11px;text-align:center;"></td>
+              <td><input type="number" id="edit-kg-${idx}" value="${(parseFloat(sh.kg) || 0).toFixed(1)}" step="0.1" style="width:100%;padding:4px;border:1px solid #000;font-size:11px;text-align:center;"></td>
+              <td><input type="text" id="edit-memo-${idx}" value="${escapeHtml(sh.memo || '')}" placeholder="메모" style="width:100%;padding:4px;border:1px solid #000;font-size:11px;"></td>
+              <td style="text-align:center;">
+                <button class="dash-action-btn" data-save-edit="${idx}" style="background:#000;color:#fff;">저장</button>
+                <button class="dash-action-btn" data-cancel-edit="${idx}">취소</button>
+              </td>
+            </tr>`;
+          } else {
+            body += `<tr>
+              <td>${sh.date ? new Date(sh.date).toLocaleDateString('ko-KR') : '-'}</td>
+              <td style="text-align:center;">${sh.jul || 0}절</td>
+              <td style="text-align:center;">${(parseFloat(sh.kg) || 0).toFixed(1)}kg</td>
+              <td>${escapeHtml(sh.memo || '-')}</td>
+              <td style="text-align:center;">
+                ${viewMode === 'list' ? `
+                  <button class="dash-action-btn" data-start-edit="${idx}">수정</button>
+                  <button class="dash-action-btn danger" data-del-ship="${idx}">삭제</button>
+                ` : ''}
+              </td>
+            </tr>`;
+          }
         });
-        toast(`출고 ${jul}절 / ${kg.toFixed(1)}kg 기록됨`, 'success');
-        openShipmentModal(woId);  // 모달 새로고침
-      } catch (e) { toast('실패: ' + e.message, 'error'); }
-    });
+      }
+      
+      body += `</tbody></table>`;
+      
+      // 새 출고 입력 영역 (viewMode=='add'일 때만)
+      if (viewMode === 'add') {
+        body += `<div style="background:#fff8e1;padding:14px;border-radius:4px;border:2px solid #d97706;">
+          <div style="font-size:13px;font-weight:700;margin-bottom:10px;color:#d97706;">+ 새 출고 입력</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr 2fr;gap:8px;margin-bottom:12px;">
+            <div><label style="font-size:11px;color:#666;display:block;margin-bottom:3px;">출고일 *</label><input type="date" id="new-ship-date" style="width:100%;padding:6px;border:1px solid #ccc;border-radius:3px;" value="${new Date().toISOString().slice(0,10)}"></div>
+            <div><label style="font-size:11px;color:#666;display:block;margin-bottom:3px;">절수 *</label><input type="number" id="new-ship-jul" placeholder="30" step="0.5" style="width:100%;padding:6px;border:1px solid #ccc;border-radius:3px;"></div>
+            <div><label style="font-size:11px;color:#666;display:block;margin-bottom:3px;">중량(kg)</label><input type="number" id="new-ship-kg" placeholder="비우면 자동" step="0.1" style="width:100%;padding:6px;border:1px solid #ccc;border-radius:3px;"></div>
+            <div><label style="font-size:11px;color:#666;display:block;margin-bottom:3px;">메모 (선택)</label><input type="text" id="new-ship-memo" placeholder="1차 출고 등" style="width:100%;padding:6px;border:1px solid #ccc;border-radius:3px;"></div>
+          </div>
+          <div style="display:flex;gap:8px;justify-content:flex-end;">
+            <button class="dash-action-btn" id="ship-cancel-btn" style="padding:8px 16px;">취소</button>
+            <button class="dash-action-btn" id="ship-submit-btn" style="padding:8px 18px;font-size:13px;background:#000;color:#fff;font-weight:700;">✓ 입력</button>
+          </div>
+          <div style="font-size:11px;color:#888;margin-top:10px;">※ 절수만 입력하면 평균 kg/절(${avgKgPerJul.toFixed(1)})로 자동 계산됩니다.</div>
+        </div>`;
+      }
+      
+      body += `</div>`;
+      
+      document.getElementById('dash-modal-body').innerHTML = body;
+      attachShipModalHandlers();
+    };
     
-    // 삭제 버튼
-    document.querySelectorAll('[data-del-ship]').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        if (!confirm('이 출고 내역을 삭제하시겠습니까?')) return;
-        const idx = parseInt(btn.dataset.delShip);
-        const newShipments = shipments.filter((_, i) => i !== idx);
-        try {
-          await updateDoc(doc(db, 'workorders', woId), {
-            greige_shipments: newShipments,
-            updated_at: serverTimestamp(),
-            updated_by: state.user.email
-          });
-          toast('출고 내역 삭제됨', 'success');
-          openShipmentModal(woId);
-        } catch (e) { toast('실패: ' + e.message, 'error'); }
+    const attachShipModalHandlers = () => {
+      // "+ 새 출고 추가" 버튼 → 입력 폼 표시
+      const showAddBtn = document.getElementById('ship-show-add');
+      if (showAddBtn) {
+        showAddBtn.addEventListener('click', () => {
+          viewMode = 'add';
+          renderModal();
+          // 절수 입력칸으로 포커스
+          setTimeout(() => document.getElementById('new-ship-jul')?.focus(), 50);
+        });
+      }
+      
+      // 입력 취소
+      const cancelBtn = document.getElementById('ship-cancel-btn');
+      if (cancelBtn) {
+        cancelBtn.addEventListener('click', () => {
+          viewMode = 'list';
+          renderModal();
+        });
+      }
+      
+      // 입력 제출
+      const submitBtn = document.getElementById('ship-submit-btn');
+      if (submitBtn) {
+        submitBtn.addEventListener('click', async () => {
+          const date = document.getElementById('new-ship-date').value;
+          const jul = parseFloat(document.getElementById('new-ship-jul').value) || 0;
+          let kg = parseFloat(document.getElementById('new-ship-kg').value) || 0;
+          const memo = document.getElementById('new-ship-memo').value.trim();
+          if (!date) { toast('출고일을 입력하세요', 'error'); return; }
+          if (!jul) { toast('절수를 입력하세요', 'error'); return; }
+          if (!kg) kg = jul * avgKgPerJul;
+          const newShipments = [...shipments, { date, jul, kg, memo, recorded_at: new Date().toISOString(), recorded_by: state.user?.email || '' }];
+          try {
+            await updateDoc(doc(db, 'workorders', woId), {
+              greige_shipments: newShipments,
+              updated_at: serverTimestamp(),
+              updated_by: state.user.email
+            });
+            toast(`✓ 출고 ${jul}절 / ${kg.toFixed(1)}kg 입력됨`, 'success');
+            // 모달 새로고침 (state.allWorkOrders가 onSnapshot으로 자동 업데이트되니 잠깐 기다림)
+            setTimeout(() => openShipmentModal(woId), 200);
+          } catch (e) { toast('실패: ' + e.message, 'error'); }
+        });
+      }
+      
+      // 수정 시작
+      document.querySelectorAll('[data-start-edit]').forEach(b => {
+        b.addEventListener('click', () => {
+          editIdx = parseInt(b.dataset.startEdit);
+          viewMode = 'edit';
+          renderModal();
+        });
       });
-    });
+      
+      // 수정 저장
+      document.querySelectorAll('[data-save-edit]').forEach(b => {
+        b.addEventListener('click', async () => {
+          const idx = parseInt(b.dataset.saveEdit);
+          const date = document.getElementById(`edit-date-${idx}`).value;
+          const jul = parseFloat(document.getElementById(`edit-jul-${idx}`).value) || 0;
+          let kg = parseFloat(document.getElementById(`edit-kg-${idx}`).value) || 0;
+          const memo = document.getElementById(`edit-memo-${idx}`).value.trim();
+          if (!date) { toast('출고일을 입력하세요', 'error'); return; }
+          if (!jul) { toast('절수를 입력하세요', 'error'); return; }
+          if (!kg) kg = jul * avgKgPerJul;
+          const newShipments = shipments.map((sh, i) => i === idx 
+            ? { ...sh, date, jul, kg, memo, edited_at: new Date().toISOString(), edited_by: state.user?.email || '' } 
+            : sh);
+          try {
+            await updateDoc(doc(db, 'workorders', woId), {
+              greige_shipments: newShipments,
+              updated_at: serverTimestamp(),
+              updated_by: state.user.email
+            });
+            toast('✓ 수정 완료', 'success');
+            setTimeout(() => openShipmentModal(woId), 200);
+          } catch (e) { toast('실패: ' + e.message, 'error'); }
+        });
+      });
+      
+      // 수정 취소
+      document.querySelectorAll('[data-cancel-edit]').forEach(b => {
+        b.addEventListener('click', () => {
+          viewMode = 'list';
+          editIdx = -1;
+          renderModal();
+        });
+      });
+      
+      // 삭제
+      document.querySelectorAll('[data-del-ship]').forEach(b => {
+        b.addEventListener('click', async () => {
+          if (!confirm('이 출고 내역을 삭제하시겠습니까?')) return;
+          const idx = parseInt(b.dataset.delShip);
+          const newShipments = shipments.filter((_, i) => i !== idx);
+          try {
+            await updateDoc(doc(db, 'workorders', woId), {
+              greige_shipments: newShipments,
+              updated_at: serverTimestamp(),
+              updated_by: state.user.email
+            });
+            toast('출고 내역 삭제됨', 'success');
+            setTimeout(() => openShipmentModal(woId), 200);
+          } catch (e) { toast('실패: ' + e.message, 'error'); }
+        });
+      });
+    };
+    
+    renderModal();
+    modal.classList.add('show');
   }
   
   // 모달 닫기
@@ -3193,6 +3391,20 @@ document.getElementById('add_k_caution').addEventListener('click', () => {
 
 // 코드 매핑 관리 버튼
 document.getElementById('open-code-map').addEventListener('click', openCodeMapModal);
+
+// v2.7 이력 필터/검색
+document.getElementById('history-type-filter').addEventListener('change', (e) => {
+  state.historyTypeFilter = e.target.value;
+  // renderHistory는 Firebase 핸들러 안에 정의되어 있어 직접 호출 어려움 → 강제 렌더 트리거
+  if (state.allWorkOrders.length > 0) {
+    // 같은 데이터로 재렌더 트리거: state.allWorkOrders는 Firebase가 채워줌
+    document.dispatchEvent(new CustomEvent('hiwos-rerender-history'));
+  }
+});
+document.getElementById('history-search').addEventListener('input', (e) => {
+  state.historySearch = e.target.value.trim();
+  document.dispatchEvent(new CustomEvent('hiwos-rerender-history'));
+});
 
 render();
 
