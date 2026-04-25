@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>RECOVERIC 의뢰서 시스템 v2.5</title>
+<title>RECOVERIC 의뢰서 시스템 v2.6</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Nanum+Gothic:wght@400;700;800&family=Nanum+Myeongjo:wght@400;700;800&display=swap" rel="stylesheet">
@@ -514,6 +514,8 @@
   .dash-kpi-card.warn { border-left-color: #c00; }
   .dash-kpi-card.info { border-left-color: #1e40af; }
   .dash-kpi-card.ok   { border-left-color: #047857; }
+  .dash-kpi-card.clickable { cursor: pointer; transition: transform 0.1s, box-shadow 0.1s; }
+  .dash-kpi-card.clickable:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
   .dash-kpi-card .kpi-label {
     font-size: 11px;
     color: #777;
@@ -696,7 +698,7 @@
 <div class="app" id="main-app" style="display:none;">
   <aside class="sidebar">
     <h1>RECOVERIC</h1>
-    <div class="sub">HIWOS v2.5</div>
+    <div class="sub">HIWOS v2.6</div>
     <div id="user-info-section"></div>
     
     <!-- 모드 전환 -->
@@ -725,15 +727,12 @@
         <button class="dash-menu-btn" data-view="yarn">🧵 원사 진행</button>
         <button class="dash-menu-btn" data-view="knit">🪡 편직 진행</button>
         <button class="dash-menu-btn" data-view="finish">🎨 염색가공 진행</button>
+        <button class="dash-menu-btn" data-view="trash">🗑 휴지통</button>
       </div>
       <div class="dash-filters-side">
         <label class="dash-toggle">
           <input type="checkbox" id="show-completed">
           <span>완료 포함</span>
-        </label>
-        <label class="dash-toggle">
-          <input type="checkbox" id="show-deleted">
-          <span>삭제됨 포함</span>
         </label>
       </div>
     </div>
@@ -795,9 +794,12 @@
         </div>
       </div>
       <div class="section">
-        <div class="section-title">편직 품목 (작업지시 NO는 직접 입력)</div>
+        <div class="section-title" style="display:flex;justify-content:space-between;align-items:center;">
+          <span>편직 품목 (공유코드는 자동 생성됩니다)</span>
+          <button type="button" class="btn-add" id="open-code-map" style="margin:0;">🏷 코드 매핑 관리</button>
+        </div>
         <div class="item-row knit-row" style="font-size:10px; color:#666;">
-          <div>작업지시 NO</div><div>품목명</div><div>컬러</div><div>절</div><div>kg/절</div><div>원사 입고</div><div></div>
+          <div>공유코드</div><div>품목명</div><div>컬러</div><div>절</div><div>kg/절</div><div>원사 입고</div><div></div>
         </div>
         <div id="knit-items"></div>
         <button class="btn-add" id="add-knit">+ 품목 추가</button>
@@ -1132,16 +1134,44 @@ function addKnitRow(data={}) {
   const container = document.getElementById('knit-items');
   const row = document.createElement('div');
   row.className = 'item-row knit-row';
+  // shared_code: 새로운 v2.6 필드. wo_no는 하위호환용으로 같은 값 유지
+  const sharedCode = data.shared_code || data.wo_no || '';
   row.innerHTML = `
-    <input type="text" lang="ko" class="k-wo" placeholder="직접입력" value="${escapeHtml(data.wo_no || '')}" style="font-family:var(--font-gothic);font-size:10px;">
-    <input type="text" lang="ko" class="k-item" placeholder="프리미엄싱글" value="${escapeHtml(data.item || '')}">
+    <input type="text" lang="ko" class="k-wo" placeholder="자동생성" value="${escapeHtml(sharedCode)}" style="font-family:var(--font-gothic);font-size:10px;font-weight:700;background:#fffef0;" title="공유 코드 (예: US-LW-001) - 품목명과 컬러를 입력하면 자동 생성됩니다">
+    <input type="text" lang="ko" class="k-item" placeholder="울트라싱글" value="${escapeHtml(data.item || '')}">
     <input type="text" lang="ko" class="k-color" placeholder="로화이트" value="${escapeHtml(data.color || '')}">
-    <input type="number" class="k-jul" placeholder="300" value="${data.jul ?? ''}" step="1">
+    <input type="number" class="k-jul" placeholder="30" value="${data.jul ?? ''}" step="1">
     <input type="number" class="k-kg" placeholder="21" value="${data.kg_per_jul ?? 21}" step="0.1">
     <input type="text" lang="ko" class="k-yarn" placeholder="CM30수 20고리" value="${escapeHtml(data.yarn_input || '')}">
     <button class="btn-del">X</button>
   `;
-  row.querySelectorAll('input').forEach(inp => inp.addEventListener('input', () => { render(); markDirty(); }));
+  
+  // 공유코드 자동 생성: 품목명/컬러 둘 다 채워졌고 사용자가 직접 코드를 비웠을 때만 생성
+  const tryAutoFillCode = () => {
+    const wo = row.querySelector('.k-wo');
+    const item = row.querySelector('.k-item').value.trim();
+    const color = row.querySelector('.k-color').value.trim();
+    if (!item || !color) return;
+    if (wo.value.trim() && !wo.dataset.autogen) return;  // 사용자가 수동으로 입력한 코드는 건드리지 않음
+    // 자동 생성 시도
+    const code = buildSharedCode(item, color);
+    if (code) {
+      wo.value = code;
+      wo.dataset.autogen = '1';
+    }
+  };
+  
+  row.querySelectorAll('input').forEach(inp => {
+    inp.addEventListener('input', () => { render(); markDirty(); });
+  });
+  // 품목명/컬러는 blur 시 자동 코드 생성 시도 (input 마다 prompt 띄우면 곤란하니까)
+  row.querySelector('.k-item').addEventListener('blur', tryAutoFillCode);
+  row.querySelector('.k-color').addEventListener('blur', tryAutoFillCode);
+  // 사용자가 코드 칸을 직접 수정하면 autogen 플래그 해제
+  row.querySelector('.k-wo').addEventListener('input', () => { 
+    row.querySelector('.k-wo').dataset.autogen = ''; 
+  });
+  
   row.querySelector('.btn-del').addEventListener('click', () => { row.remove(); render(); markDirty(); });
   container.appendChild(row);
 }
@@ -1315,6 +1345,125 @@ function setStampsData(stamps) {
   });
 }
 
+// ===== 품목/컬러 코드 매핑 (localStorage 영속화) =====
+const CODE_MAP_KEY = 'hiwos_code_map_v1';
+
+function loadCodeMap() {
+  try {
+    const raw = localStorage.getItem(CODE_MAP_KEY);
+    if (!raw) return { items: {}, colors: {} };
+    return JSON.parse(raw);
+  } catch (e) { return { items: {}, colors: {} }; }
+}
+
+function saveCodeMap(map) {
+  try { localStorage.setItem(CODE_MAP_KEY, JSON.stringify(map)); }
+  catch (e) { console.error('코드 매핑 저장 실패', e); }
+}
+
+// 품목명 → 코드 조회 (없으면 사용자에게 물음)
+function getOrPromptItemCode(itemName) {
+  if (!itemName) return '';
+  const map = loadCodeMap();
+  const trimmed = itemName.trim();
+  if (map.items[trimmed]) return map.items[trimmed];
+  // 등록 안 됨 → 프롬프트
+  const code = prompt(`"${trimmed}"의 품목 코드를 입력하세요 (예: US, PS, RT)\n\n* 한 번 등록하면 자동으로 기억됩니다`);
+  if (!code) return '';
+  const upper = code.trim().toUpperCase();
+  map.items[trimmed] = upper;
+  saveCodeMap(map);
+  toast(`품목 코드 등록: ${trimmed} → ${upper}`, 'success');
+  return upper;
+}
+
+// 컬러명 → 코드 조회
+function getOrPromptColorCode(colorName) {
+  if (!colorName) return '';
+  const map = loadCodeMap();
+  const trimmed = colorName.trim();
+  if (map.colors[trimmed]) return map.colors[trimmed];
+  const code = prompt(`"${trimmed}"의 컬러 코드를 입력하세요 (예: LW, BK, 8%)\n\n* 한 번 등록하면 자동으로 기억됩니다`);
+  if (!code) return '';
+  const upper = code.trim().toUpperCase();
+  map.colors[trimmed] = upper;
+  saveCodeMap(map);
+  toast(`컬러 코드 등록: ${trimmed} → ${upper}`, 'success');
+  return upper;
+}
+
+// 같은 품목+컬러 조합의 마지막 일련번호 검색 (전체 의뢰서 스캔)
+function getNextSerialFor(itemCode, colorCode) {
+  if (!itemCode || !colorCode) return 1;
+  const prefix = `${itemCode}-${colorCode}-`;
+  let maxN = 0;
+  state.allWorkOrders.forEach(wo => {
+    (wo.items || []).forEach(it => {
+      if (it.shared_code && it.shared_code.startsWith(prefix)) {
+        const tail = it.shared_code.slice(prefix.length);
+        const n = parseInt(tail, 10);
+        if (!isNaN(n) && n > maxN) maxN = n;
+      }
+    });
+  });
+  return maxN + 1;
+}
+
+// 공유 코드 자동 생성
+function buildSharedCode(item, color) {
+  const ic = getOrPromptItemCode(item);
+  if (!ic) return '';
+  const cc = getOrPromptColorCode(color);
+  if (!cc) return '';
+  const n = getNextSerialFor(ic, cc);
+  return `${ic}-${cc}-${String(n).padStart(3, '0')}`;
+}
+
+// 코드 매핑 관리 모달
+function openCodeMapModal() {
+  const map = loadCodeMap();
+  let html = `<div style="padding:20px;font-family:var(--font-gothic);">
+    <h3 style="margin-bottom:12px;">📋 품목 코드</h3>
+    <table class="dash-table" style="margin-bottom:20px;"><thead><tr><th style="width:50%;">품목명</th><th style="width:30%;">코드</th><th style="width:20%;">삭제</th></tr></thead><tbody>`;
+  const items = Object.entries(map.items);
+  if (items.length === 0) html += `<tr><td colspan="3" style="text-align:center;color:#999;padding:20px;">등록된 품목 코드 없음</td></tr>`;
+  else items.forEach(([name, code]) => {
+    html += `<tr><td>${escapeHtml(name)}</td><td style="text-align:center;font-weight:800;">${escapeHtml(code)}</td><td style="text-align:center;"><button class="dash-action-btn danger" data-del-item="${escapeHtml(name)}">X</button></td></tr>`;
+  });
+  html += `</tbody></table>
+    <h3 style="margin-bottom:12px;">🎨 컬러 코드</h3>
+    <table class="dash-table"><thead><tr><th style="width:50%;">컬러명</th><th style="width:30%;">코드</th><th style="width:20%;">삭제</th></tr></thead><tbody>`;
+  const colors = Object.entries(map.colors);
+  if (colors.length === 0) html += `<tr><td colspan="3" style="text-align:center;color:#999;padding:20px;">등록된 컬러 코드 없음</td></tr>`;
+  else colors.forEach(([name, code]) => {
+    html += `<tr><td>${escapeHtml(name)}</td><td style="text-align:center;font-weight:800;">${escapeHtml(code)}</td><td style="text-align:center;"><button class="dash-action-btn danger" data-del-color="${escapeHtml(name)}">X</button></td></tr>`;
+  });
+  html += `</tbody></table></div>`;
+  
+  const modal = document.getElementById('dash-modal-bg');
+  document.getElementById('dash-modal-title').textContent = '🏷 코드 매핑 관리';
+  document.getElementById('dash-modal-body').innerHTML = html;
+  modal.classList.add('show');
+  
+  // 삭제 이벤트
+  document.querySelectorAll('[data-del-item]').forEach(b => {
+    b.addEventListener('click', () => {
+      const m = loadCodeMap();
+      delete m.items[b.dataset.delItem];
+      saveCodeMap(m);
+      openCodeMapModal();
+    });
+  });
+  document.querySelectorAll('[data-del-color]').forEach(b => {
+    b.addEventListener('click', () => {
+      const m = loadCodeMap();
+      delete m.colors[b.dataset.delColor];
+      saveCodeMap(m);
+      openCodeMapModal();
+    });
+  });
+}
+
 // ===== 폼 데이터 =====
 function getFormData() {
   const stamps = getStampsData();
@@ -1349,7 +1498,8 @@ function getFormData() {
       const jul = parseFloat(row.querySelector('.k-jul').value) || 0;
       const kg_per_jul = parseFloat(row.querySelector('.k-kg').value) || 21;
       const yarn_input = row.querySelector('.k-yarn').value.trim();
-      if (wo_no || item || color || jul) items.push({ wo_no, item, color, jul, kg_per_jul, yarn_input });
+      // shared_code는 wo_no와 동일 (호환성)
+      if (wo_no || item || color || jul) items.push({ wo_no, shared_code: wo_no, item, color, jul, kg_per_jul, yarn_input });
     });
     return {
       type: '편직',
@@ -1645,9 +1795,16 @@ function renderKnitOrder(d) {
   } else {
     d.items.forEach((item, idx) => {
       const totalKg = (item.jul || 0) * (item.kg_per_jul || 21);
+      // 공유 코드의 끝 3자리(일련번호) 추출 (예: US-LW-001 → 001)
+      const code = item.shared_code || item.wo_no || '';
+      const serialMatch = code.match(/-(\d{3,})$/);
+      const serial = serialMatch ? serialMatch[1] : '';
+      const factoryNote = serial 
+        ? `<div style="margin-top:4px;padding:3px 8px;background:var(--ink-bg);border-left:3px solid var(--ink-border);font-weight:700;font-size:9pt;">★ 본 의뢰는 비고에 <span style="font-size:11pt;font-weight:800;background:#fff;padding:1px 6px;border:1px solid var(--ink-border);">${escapeHtml(serial)}</span>번으로 표기 부탁드립니다.</div>` 
+        : '';
       html += `<div class="wo-knit-item">
         <div class="wo-knit-item-num">
-          ${item.wo_no ? `<span class="wo-num">${escapeHtml(item.wo_no)}</span>` : ''}
+          ${code ? `<span class="wo-num">${escapeHtml(code)}</span>` : ''}
           ${idx + 1}. ${escapeHtml(item.item) || '품목 미입력'}
         </div>
         <div class="wo-knit-detail">
@@ -1655,6 +1812,7 @@ function renderKnitOrder(d) {
           <div><span class="kd-label">ㄴ 예상 생산량</span>: ${totalKg.toFixed(1)}kg (${item.kg_per_jul || 21}KG/절)</div>
           <div><span class="kd-label">ㄴ 원사 입고</span>: ${escapeHtml(item.yarn_input) || '-'}</div>
         </div>
+        ${factoryNote}
       </div>`;
     });
     
@@ -2240,11 +2398,12 @@ function validateBlendSum(blends, label) {
   
   // 의뢰서 필터링
   function getDashWorkOrders(typeFilter) {
+    const isTrash = state.dashView === 'trash';
     return state.allWorkOrders.filter(wo => {
       if (typeFilter && wo.type !== typeFilter) return false;
-      if (!state.showDeleted && wo.deleted) return false;
-      if (state.showDeleted && !wo.deleted) return false;  // 삭제됨 보기 모드에선 삭제된 것만
-      if (!state.showCompleted && wo.completed && !wo.deleted) return false;
+      if (isTrash) return !!wo.deleted;  // 휴지통: 삭제된 것만
+      if (wo.deleted) return false;       // 일반 뷰: 삭제된 것 제외
+      if (!state.showCompleted && wo.completed) return false;
       return true;
     });
   }
@@ -2316,17 +2475,17 @@ function validateBlendSum(blends, label) {
     
     // 1행: 핵심 KPI 4개 (대표님 지정 순서)
     html += `<div class="dash-kpi-row">
-      <div class="dash-kpi-card warn">
+      <div class="dash-kpi-card warn clickable" data-jump="yarn">
         <div class="kpi-label">원사 미입고</div>
         <div class="kpi-value">${yarnPending}</div>
         <div class="kpi-sub">건 (전체 원사 발주 ${yarns.length}건 중)</div>
       </div>
-      <div class="dash-kpi-card info">
+      <div class="dash-kpi-card info clickable" data-jump="knit">
         <div class="kpi-label">편직 진행</div>
         <div class="kpi-value">${knitInProgress}</div>
         <div class="kpi-sub">건 (편직 완료일 미입력)</div>
       </div>
-      <div class="dash-kpi-card info">
+      <div class="dash-kpi-card info clickable" data-jump="finish">
         <div class="kpi-label">염색 및 가공 미완</div>
         <div class="kpi-value">${finishIncomplete}</div>
         <div class="kpi-sub">건 (몸판 ${totalBodyJul}절 + 리프 ${totalRibJul}절)</div>
@@ -2429,7 +2588,7 @@ function validateBlendSum(blends, label) {
     const list = getDashWorkOrders('원사');
     
     if (list.length === 0) {
-      return `<div class="dash-empty">${state.showDeleted ? '삭제된' : (state.showCompleted ? '' : '진행 중인 ')}원사 의뢰서가 없습니다.</div>`;
+      return `<div class="dash-empty">${state.showCompleted ? '' : '진행 중인 '}원사 의뢰서가 없습니다.</div>`;
     }
     
     let html = `<div class="dash-table-wrap"><table class="dash-table"><thead><tr>
@@ -2444,22 +2603,21 @@ function validateBlendSum(blends, label) {
       <th>납기일</th>
       <th>용도</th>
       <th class="col-date">입고일</th>
-      <th class="col-action">상태</th>
       <th class="col-action">작지</th>
       <th class="col-action">작업</th>
+      <th class="col-action">완료</th>
     </tr></thead><tbody>`;
     
     list.forEach(wo => {
       const elapsed = daysSince(wo.date);
       const overdueClass = !wo.completed && elapsed >= 5 ? 'overdue' : '';
       const completedClass = wo.completed ? 'completed' : '';
-      const deletedClass = wo.deleted ? 'deleted' : '';
       const yarns = wo.yarns || [];
       const firstYarn = yarns[0] || {};
       const moreYarns = yarns.length > 1 ? ` 외 ${yarns.length - 1}` : '';
       const totalKg = yarns.reduce((s,y) => s + (parseFloat(y.total_kg) || 0), 0);
       
-      html += `<tr class="${overdueClass} ${completedClass} ${deletedClass}">
+      html += `<tr class="${overdueClass} ${completedClass}">
         <td class="col-no">${escapeHtml(wo.wo_number || '-')}</td>
         <td class="col-stamps">${renderStampMini(wo.stamps) || '-'}</td>
         <td class="col-date">${wo.date ? new Date(wo.date).toLocaleDateString('ko-KR', {month:'numeric', day:'numeric'}) : '-'}</td>
@@ -2471,17 +2629,9 @@ function validateBlendSum(blends, label) {
         <td>${escapeHtml(wo.delivery || '-')}</td>
         <td>${escapeHtml(wo.purpose || '-')}</td>
         ${renderEditableCell(wo, 'arrival_date', wo.arrival_date, 'date')}
-        <td class="col-action">
-          ${wo.deleted 
-            ? `<button class="dash-action-btn restore" data-restore="${wo.id}">복구</button>` 
-            : `<input type="checkbox" class="dash-complete-cb" data-id="${wo.id}" ${wo.completed ? 'checked' : ''}> ${wo.completed ? '완료' : ''}`}
-        </td>
         <td class="col-action"><button class="dash-action-btn dash-view-btn" data-id="${wo.id}">보기</button></td>
-        <td class="col-action">
-          ${wo.deleted 
-            ? `<button class="dash-action-btn danger" data-purge="${wo.id}">영구삭제</button>`
-            : `<button class="dash-action-btn dash-edit-btn" data-id="${wo.id}">수정</button>`}
-        </td>
+        <td class="col-action"><button class="dash-action-btn dash-edit-btn" data-id="${wo.id}">수정</button></td>
+        <td class="col-action"><input type="checkbox" class="dash-complete-cb" data-id="${wo.id}" ${wo.completed ? 'checked' : ''}> ${wo.completed ? '완료' : ''}</td>
       </tr>`;
     });
     
@@ -2494,39 +2644,61 @@ function validateBlendSum(blends, label) {
     const list = getDashWorkOrders('편직');
     
     if (list.length === 0) {
-      return `<div class="dash-empty">${state.showDeleted ? '삭제된' : (state.showCompleted ? '' : '진행 중인 ')}편직 의뢰서가 없습니다.</div>`;
+      return `<div class="dash-empty">${state.showCompleted ? '' : '진행 중인 '}편직 의뢰서가 없습니다.</div>`;
     }
     
     let html = `<div class="dash-table-wrap"><table class="dash-table"><thead><tr>
-      <th class="col-no">NO</th>
+      <th class="col-no">공유코드</th>
       <th class="col-stamps">스탬프</th>
       <th class="col-date">의뢰일</th>
       <th>편직 공장</th>
       <th>품목</th>
       <th>컬러</th>
-      <th class="col-num">절</th>
+      <th class="col-num">의뢰 절</th>
       <th class="col-num">예상 kg</th>
       <th>원사 입고</th>
-      <th class="col-date">편직완료</th>
-      <th class="col-date">생지출고</th>
-      <th class="col-action">상태</th>
+      <th class="col-action">생지 출고</th>
+      <th class="col-num">예상 재고 절</th>
+      <th class="col-num">예상 재고 kg</th>
       <th class="col-action">작지</th>
       <th class="col-action">작업</th>
+      <th class="col-action">완료</th>
     </tr></thead><tbody>`;
     
     list.forEach(wo => {
       const elapsed = daysSince(wo.date);
       const overdueClass = !wo.completed && elapsed >= 5 ? 'overdue' : '';
       const completedClass = wo.completed ? 'completed' : '';
-      const deletedClass = wo.deleted ? 'deleted' : '';
       const items = wo.items || [];
       const first = items[0] || {};
       const moreItems = items.length > 1 ? ` 외 ${items.length - 1}` : '';
       const totalJul = items.reduce((s,i) => s + (parseFloat(i.jul) || 0), 0);
       const totalKg = items.reduce((s,i) => s + (parseFloat(i.jul) || 0) * (parseFloat(i.kg_per_jul) || 21), 0);
+      // 첫 품목의 kg/절 평균 (예상 재고 계산용)
+      const avgKgPerJul = totalJul > 0 ? totalKg / totalJul : 21;
       
-      html += `<tr class="${overdueClass} ${completedClass} ${deletedClass}">
-        <td class="col-no">${escapeHtml(wo.wo_number || '-')}</td>
+      // 생지 출고 데이터 (다회 출고 가능 - 누적)
+      const shipments = wo.greige_shipments || [];
+      const shippedJul = shipments.reduce((s,sh) => s + (parseFloat(sh.jul) || 0), 0);
+      const shippedKg = shipments.reduce((s,sh) => s + (parseFloat(sh.kg) || 0), 0);
+      const remainJul = totalJul - shippedJul;
+      const remainKg = totalKg - shippedKg;
+      
+      // 생지 출고 셀 표시: 출고 내역 있으면 요약, 없으면 "+ 입력"
+      let shipmentDisplay;
+      if (shipments.length === 0) {
+        shipmentDisplay = `<td class="col-action"><button class="dash-action-btn dash-shipment-btn" data-id="${wo.id}">+ 입력</button></td>`;
+      } else {
+        const lastSh = shipments[shipments.length - 1];
+        const lastDate = lastSh.date ? new Date(lastSh.date).toLocaleDateString('ko-KR', {month:'numeric', day:'numeric'}) : '';
+        shipmentDisplay = `<td class="col-action"><button class="dash-action-btn dash-shipment-btn" data-id="${wo.id}" title="${shipments.length}회 출고">${lastDate} (${shippedJul}절)</button></td>`;
+      }
+      
+      // 첫 품목의 코드가 있으면 표시
+      const codeDisplay = first.shared_code || first.wo_no || wo.wo_number || '-';
+      
+      html += `<tr class="${overdueClass} ${completedClass}">
+        <td class="col-no" title="${escapeHtml(wo.wo_number || '')}">${escapeHtml(codeDisplay)}</td>
         <td class="col-stamps">${renderStampMini(wo.stamps) || '-'}</td>
         <td class="col-date">${wo.date ? new Date(wo.date).toLocaleDateString('ko-KR', {month:'numeric', day:'numeric'}) : '-'}</td>
         <td>${escapeHtml(wo.recipient || '-')}</td>
@@ -2535,19 +2707,12 @@ function validateBlendSum(blends, label) {
         <td class="col-num">${totalJul}절</td>
         <td class="col-num">${totalKg.toFixed(1)}kg</td>
         <td>${escapeHtml(first.yarn_input || '-')}</td>
-        ${renderEditableCell(wo, 'knit_done_date', wo.knit_done_date, 'date')}
-        ${renderEditableCell(wo, 'greige_out_date', wo.greige_out_date, 'date')}
-        <td class="col-action">
-          ${wo.deleted 
-            ? `<button class="dash-action-btn restore" data-restore="${wo.id}">복구</button>`
-            : `<input type="checkbox" class="dash-complete-cb" data-id="${wo.id}" ${wo.completed ? 'checked' : ''}> ${wo.completed ? '완료' : ''}`}
-        </td>
+        ${shipmentDisplay}
+        <td class="col-num" style="font-weight:700;color:${remainJul < 0 ? '#c00' : remainJul === 0 ? '#047857' : '#000'};">${remainJul}절</td>
+        <td class="col-num" style="font-weight:700;color:${remainKg < 0 ? '#c00' : remainKg === 0 ? '#047857' : '#000'};">${remainKg.toFixed(1)}kg</td>
         <td class="col-action"><button class="dash-action-btn dash-view-btn" data-id="${wo.id}">보기</button></td>
-        <td class="col-action">
-          ${wo.deleted 
-            ? `<button class="dash-action-btn danger" data-purge="${wo.id}">영구삭제</button>`
-            : `<button class="dash-action-btn dash-edit-btn" data-id="${wo.id}">수정</button>`}
-        </td>
+        <td class="col-action"><button class="dash-action-btn dash-edit-btn" data-id="${wo.id}">수정</button></td>
+        <td class="col-action"><input type="checkbox" class="dash-complete-cb" data-id="${wo.id}" ${wo.completed ? 'checked' : ''}> ${wo.completed ? '완료' : ''}</td>
       </tr>`;
     });
     
@@ -2560,7 +2725,7 @@ function validateBlendSum(blends, label) {
     const list = getDashWorkOrders('염색가공');
     
     if (list.length === 0) {
-      return `<div class="dash-empty">${state.showDeleted ? '삭제된' : (state.showCompleted ? '' : '진행 중인 ')}염색가공 의뢰서가 없습니다.</div>`;
+      return `<div class="dash-empty">${state.showCompleted ? '' : '진행 중인 '}염색가공 의뢰서가 없습니다.</div>`;
     }
     
     let html = `<div class="dash-table-wrap"><table class="dash-table"><thead><tr>
@@ -2568,32 +2733,32 @@ function validateBlendSum(blends, label) {
       <th class="col-stamps">스탬프</th>
       <th class="col-date">발주일</th>
       <th>구분</th>
-      <th>최종납품</th>
-      <th>몸판 품목</th>
+      <th>최종납품처</th>
+      <th>몸판품목</th>
       <th>컬러</th>
       <th class="col-num">몸판/리프</th>
       <th>염색처</th>
-      <th class="col-date">염색투입</th>
+      <th class="col-date">생지투입</th>
       <th class="col-date">염색완료</th>
       <th>가공처</th>
       <th class="col-date">가공완료</th>
-      <th class="col-date">최종입고</th>
+      <th>후가공처</th>
+      <th class="col-date">후가공완료</th>
       <th class="col-action">LOT</th>
-      <th class="col-action">상태</th>
       <th class="col-action">작지</th>
       <th class="col-action">작업</th>
+      <th class="col-action">완료</th>
     </tr></thead><tbody>`;
     
     list.forEach(wo => {
       const elapsed = daysSince(wo.date);
       const overdueClass = !wo.completed && elapsed >= 5 ? 'overdue' : '';
       const completedClass = wo.completed ? 'completed' : '';
-      const deletedClass = wo.deleted ? 'deleted' : '';
       const colors = wo.colors || [];
       const totalBody = colors.reduce((s,c) => s + (parseFloat(c.body) || 0), 0);
       const totalRib = colors.reduce((s,c) => s + (parseFloat(c.rib) || 0), 0);
       
-      html += `<tr class="${overdueClass} ${completedClass} ${deletedClass}">
+      html += `<tr class="${overdueClass} ${completedClass}">
         <td class="col-no">${escapeHtml(wo.wo_number || '-')}</td>
         <td class="col-stamps">${renderStampMini(wo.stamps) || '-'}</td>
         <td class="col-date">${wo.date ? new Date(wo.date).toLocaleDateString('ko-KR', {month:'numeric', day:'numeric'}) : '-'}</td>
@@ -2607,19 +2772,56 @@ function validateBlendSum(blends, label) {
         ${renderEditableCell(wo, 'dye_done_date', wo.dye_done_date, 'date')}
         <td>${escapeHtml(wo.recipients?.processing || '-')}</td>
         ${renderEditableCell(wo, 'proc_done_date', wo.proc_done_date, 'date')}
-        ${renderEditableCell(wo, 'arrival_date', wo.arrival_date, 'date')}
+        <td>${escapeHtml(wo.recipients?.post || '-')}</td>
+        ${renderEditableCell(wo, 'post_done_date', wo.post_done_date, 'date')}
         ${renderEditableCell(wo, 'lot_no', wo.lot_no, 'text')}
-        <td class="col-action">
-          ${wo.deleted 
-            ? `<button class="dash-action-btn restore" data-restore="${wo.id}">복구</button>`
-            : `<input type="checkbox" class="dash-complete-cb" data-id="${wo.id}" ${wo.completed ? 'checked' : ''}> ${wo.completed ? '완료' : ''}`}
-        </td>
         <td class="col-action"><button class="dash-action-btn dash-view-btn" data-id="${wo.id}">보기</button></td>
-        <td class="col-action">
-          ${wo.deleted 
-            ? `<button class="dash-action-btn danger" data-purge="${wo.id}">영구삭제</button>`
-            : `<button class="dash-action-btn dash-edit-btn" data-id="${wo.id}">수정</button>`}
-        </td>
+        <td class="col-action"><button class="dash-action-btn dash-edit-btn" data-id="${wo.id}">수정</button></td>
+        <td class="col-action"><input type="checkbox" class="dash-complete-cb" data-id="${wo.id}" ${wo.completed ? 'checked' : ''}> ${wo.completed ? '완료' : ''}</td>
+      </tr>`;
+    });
+    
+    html += `</tbody></table></div>`;
+    return html;
+  }
+  
+  // ===== 휴지통 뷰 =====
+  function renderTrashDash() {
+    const list = state.allWorkOrders.filter(wo => wo.deleted);
+    if (list.length === 0) {
+      return `<div class="dash-empty">휴지통이 비어있습니다.</div>`;
+    }
+    
+    let html = `<div class="dash-table-wrap"><table class="dash-table"><thead><tr>
+      <th class="col-no">NO</th>
+      <th>유형</th>
+      <th class="col-date">발주일</th>
+      <th class="col-date">삭제일</th>
+      <th>삭제자</th>
+      <th>주요 정보</th>
+      <th class="col-action">작지</th>
+      <th class="col-action">복구</th>
+      <th class="col-action">영구삭제</th>
+    </tr></thead><tbody>`;
+    
+    list.forEach(wo => {
+      let summary = '-';
+      if (wo.type === '원사') summary = `${wo.supplier || '-'} / ${wo.yarns?.[0]?.type || '-'}`;
+      else if (wo.type === '편직') summary = `${wo.recipient || '-'} / ${wo.items?.[0]?.item || '-'}`;
+      else summary = `${wo.body?.item || '-'} / ${wo.final_destination || '-'}`;
+      
+      const delDate = wo.deleted_at?.toDate ? wo.deleted_at.toDate().toLocaleDateString('ko-KR', {month:'numeric', day:'numeric'}) : '-';
+      
+      html += `<tr class="deleted">
+        <td class="col-no">${escapeHtml(wo.wo_number || '-')}</td>
+        <td>${escapeHtml(wo.type || '-')}</td>
+        <td class="col-date">${wo.date ? new Date(wo.date).toLocaleDateString('ko-KR', {month:'numeric', day:'numeric'}) : '-'}</td>
+        <td class="col-date">${delDate}</td>
+        <td>${escapeHtml(wo.deleted_by || '-')}</td>
+        <td>${escapeHtml(summary)}</td>
+        <td class="col-action"><button class="dash-action-btn dash-view-btn" data-id="${wo.id}">보기</button></td>
+        <td class="col-action"><button class="dash-action-btn restore" data-restore="${wo.id}">복구</button></td>
+        <td class="col-action"><button class="dash-action-btn danger" data-purge="${wo.id}">영구삭제</button></td>
       </tr>`;
     });
     
@@ -2631,24 +2833,32 @@ function validateBlendSum(blends, label) {
   function renderDashboard() {
     const titleEl = document.getElementById('dash-title');
     const bodyEl = document.getElementById('dash-body');
+    const addBtn = document.getElementById('dash-add-btn');
     let body = '';
     let title = '';
     
     if (state.dashView === 'overview') {
       title = '📊 전체 대시보드';
       body = renderOverview();
+      addBtn.style.display = 'inline-block';
     } else if (state.dashView === 'yarn') {
       title = '🧵 원사 진행';
       body = renderYarnDash();
+      addBtn.style.display = 'inline-block';
     } else if (state.dashView === 'knit') {
       title = '🪡 편직 진행';
       body = renderKnitDash();
+      addBtn.style.display = 'inline-block';
     } else if (state.dashView === 'finish') {
       title = '🎨 염색가공 진행';
       body = renderFinishDash();
+      addBtn.style.display = 'inline-block';
+    } else if (state.dashView === 'trash') {
+      title = '🗑 휴지통';
+      body = renderTrashDash();
+      addBtn.style.display = 'none';
     }
     
-    if (state.showDeleted) title += ' (휴지통)';
     titleEl.textContent = title;
     bodyEl.innerHTML = body;
     
@@ -2657,6 +2867,13 @@ function validateBlendSum(blends, label) {
   
   // 대시보드 이벤트 핸들러 부착
   function attachDashHandlers() {
+    // KPI 카드 클릭 → 점프
+    document.querySelectorAll('#dash-body [data-jump]').forEach(card => {
+      card.addEventListener('click', () => {
+        switchDashView(card.dataset.jump);
+      });
+    });
+    
     // 인라인 편집 셀
     document.querySelectorAll('#dash-body .editable').forEach(cell => {
       cell.addEventListener('click', (e) => {
@@ -2691,19 +2908,38 @@ function validateBlendSum(blends, label) {
       });
     });
     
-    // 완료 체크박스
+    // 완료 체크박스 (확인 팝업)
     document.querySelectorAll('#dash-body .dash-complete-cb').forEach(cb => {
       cb.addEventListener('change', async (e) => {
         const id = cb.dataset.id;
+        const wo = state.allWorkOrders.find(w => w.id === id);
+        const newState = cb.checked;
+        const msg = newState 
+          ? `해당 작업을 완료 처리하시겠습니까?\n\n[${wo?.wo_number || ''}]\n완료 처리하면 진행 목록에서 사라집니다.\n("완료 포함" 체크 시 다시 볼 수 있습니다)` 
+          : `완료 상태를 해제하고 진행 중으로 되돌리시겠습니까?\n\n[${wo?.wo_number || ''}]`;
+        if (!confirm(msg)) {
+          cb.checked = !newState;  // 롤백
+          return;
+        }
         try {
           await updateDoc(doc(db, 'workorders', id), {
-            completed: cb.checked,
-            completed_at: cb.checked ? serverTimestamp() : null,
+            completed: newState,
+            completed_at: newState ? serverTimestamp() : null,
             updated_at: serverTimestamp(),
             updated_by: state.user.email
           });
-          toast(cb.checked ? '완료 처리됨' : '진행 중으로 변경', 'success');
-        } catch (e) { toast('실패: ' + e.message, 'error'); }
+          toast(newState ? '✓ 완료 처리되었습니다' : '진행 중으로 변경됨', 'success');
+        } catch (e) { 
+          cb.checked = !newState;
+          toast('실패: ' + e.message, 'error'); 
+        }
+      });
+    });
+    
+    // 생지 출고 모달 버튼
+    document.querySelectorAll('#dash-body .dash-shipment-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        openShipmentModal(btn.dataset.id);
       });
     });
     
@@ -2779,6 +3015,118 @@ function validateBlendSum(blends, label) {
     modal.classList.add('show');
   }
   
+  // 생지 출고 입력 모달
+  function openShipmentModal(woId) {
+    const wo = state.allWorkOrders.find(w => w.id === woId);
+    if (!wo) return;
+    const shipments = wo.greige_shipments || [];
+    const totalJul = (wo.items || []).reduce((s,i) => s + (parseFloat(i.jul) || 0), 0);
+    const totalKg = (wo.items || []).reduce((s,i) => s + (parseFloat(i.jul) || 0) * (parseFloat(i.kg_per_jul) || 21), 0);
+    const shippedJul = shipments.reduce((s,sh) => s + (parseFloat(sh.jul) || 0), 0);
+    const shippedKg = shipments.reduce((s,sh) => s + (parseFloat(sh.kg) || 0), 0);
+    
+    const modal = document.getElementById('dash-modal-bg');
+    document.getElementById('dash-modal-title').textContent = `🚚 생지 출고 입력 (${wo.wo_number || ''})`;
+    
+    let body = `<div style="padding:20px;font-family:var(--font-gothic);">
+      <div style="background:#f5f5f5;padding:12px;border-radius:4px;margin-bottom:16px;border-left:4px solid #000;">
+        <div style="font-size:13px;font-weight:700;margin-bottom:6px;">📋 의뢰 내역</div>
+        <div style="font-size:12px;line-height:1.6;">
+          품목: ${escapeHtml(wo.items?.[0]?.item || '-')} / 컬러: ${escapeHtml(wo.items?.[0]?.color || '-')}<br>
+          편직 공장: ${escapeHtml(wo.recipient || '-')}<br>
+          <strong>의뢰 총량: ${totalJul}절 / ${totalKg.toFixed(1)}kg</strong><br>
+          <strong style="color:${shippedJul >= totalJul ? '#047857' : '#c00'};">출고 누계: ${shippedJul}절 / ${shippedKg.toFixed(1)}kg → 잔량 ${totalJul - shippedJul}절 / ${(totalKg - shippedKg).toFixed(1)}kg</strong>
+        </div>
+      </div>
+      
+      <div style="font-size:13px;font-weight:700;margin-bottom:8px;">출고 내역</div>
+      <table class="dash-table" style="margin-bottom:14px;">
+        <thead><tr>
+          <th style="width:25%;">출고일</th>
+          <th style="width:20%;">절수</th>
+          <th style="width:20%;">중량(kg)</th>
+          <th style="width:25%;">메모</th>
+          <th style="width:10%;">삭제</th>
+        </tr></thead><tbody id="ship-list">`;
+    
+    if (shipments.length === 0) {
+      body += `<tr><td colspan="5" style="text-align:center;color:#999;padding:14px;">출고 내역 없음</td></tr>`;
+    } else {
+      shipments.forEach((sh, idx) => {
+        body += `<tr>
+          <td>${sh.date ? new Date(sh.date).toLocaleDateString('ko-KR') : '-'}</td>
+          <td style="text-align:center;">${sh.jul || 0}절</td>
+          <td style="text-align:center;">${(parseFloat(sh.kg) || 0).toFixed(1)}kg</td>
+          <td>${escapeHtml(sh.memo || '-')}</td>
+          <td style="text-align:center;"><button class="dash-action-btn danger" data-del-ship="${idx}">X</button></td>
+        </tr>`;
+      });
+    }
+    body += `</tbody></table>
+      
+      <div style="font-size:13px;font-weight:700;margin-bottom:8px;">+ 새 출고 추가</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr 2fr;gap:8px;margin-bottom:12px;">
+        <div><label style="font-size:11px;color:#666;">출고일</label><input type="date" id="new-ship-date" style="width:100%;padding:6px;border:1px solid #ccc;border-radius:3px;" value="${new Date().toISOString().slice(0,10)}"></div>
+        <div><label style="font-size:11px;color:#666;">절수</label><input type="number" id="new-ship-jul" placeholder="30" step="0.5" style="width:100%;padding:6px;border:1px solid #ccc;border-radius:3px;"></div>
+        <div><label style="font-size:11px;color:#666;">중량(kg)</label><input type="number" id="new-ship-kg" placeholder="630" step="0.1" style="width:100%;padding:6px;border:1px solid #ccc;border-radius:3px;"></div>
+        <div><label style="font-size:11px;color:#666;">메모 (선택)</label><input type="text" id="new-ship-memo" placeholder="1차 출고 등" style="width:100%;padding:6px;border:1px solid #ccc;border-radius:3px;"></div>
+      </div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;">
+        <button class="dash-action-btn" id="ship-add-btn" style="padding:8px 16px;font-size:13px;background:#000;color:#fff;">+ 출고 추가</button>
+      </div>
+      
+      <div style="font-size:11px;color:#888;margin-top:12px;background:#fff8e1;padding:8px;border-radius:3px;">
+        ※ 절수만 입력하면 평균 kg/절(${(totalJul > 0 ? totalKg/totalJul : 21).toFixed(1)})로 자동 계산됩니다.<br>
+        ※ 다회 출고 가능 - 누적되어 예상 재고가 자동 계산됩니다.
+      </div>
+    </div>`;
+    
+    document.getElementById('dash-modal-body').innerHTML = body;
+    modal.classList.add('show');
+    
+    // 출고 추가 버튼
+    document.getElementById('ship-add-btn').addEventListener('click', async () => {
+      const date = document.getElementById('new-ship-date').value;
+      const jul = parseFloat(document.getElementById('new-ship-jul').value) || 0;
+      let kg = parseFloat(document.getElementById('new-ship-kg').value) || 0;
+      const memo = document.getElementById('new-ship-memo').value.trim();
+      if (!date || !jul) { toast('출고일과 절수를 입력하세요', 'error'); return; }
+      if (!kg) {
+        // 평균 kg/절로 자동 계산
+        const avg = totalJul > 0 ? totalKg / totalJul : 21;
+        kg = jul * avg;
+      }
+      const newShipments = [...shipments, { date, jul, kg, memo, recorded_at: new Date().toISOString(), recorded_by: state.user?.email || '' }];
+      try {
+        await updateDoc(doc(db, 'workorders', woId), {
+          greige_shipments: newShipments,
+          updated_at: serverTimestamp(),
+          updated_by: state.user.email
+        });
+        toast(`출고 ${jul}절 / ${kg.toFixed(1)}kg 기록됨`, 'success');
+        openShipmentModal(woId);  // 모달 새로고침
+      } catch (e) { toast('실패: ' + e.message, 'error'); }
+    });
+    
+    // 삭제 버튼
+    document.querySelectorAll('[data-del-ship]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        if (!confirm('이 출고 내역을 삭제하시겠습니까?')) return;
+        const idx = parseInt(btn.dataset.delShip);
+        const newShipments = shipments.filter((_, i) => i !== idx);
+        try {
+          await updateDoc(doc(db, 'workorders', woId), {
+            greige_shipments: newShipments,
+            updated_at: serverTimestamp(),
+            updated_by: state.user.email
+          });
+          toast('출고 내역 삭제됨', 'success');
+          openShipmentModal(woId);
+        } catch (e) { toast('실패: ' + e.message, 'error'); }
+      });
+    });
+  }
+  
   // 모달 닫기
   document.getElementById('dash-modal-close').addEventListener('click', () => {
     document.getElementById('dash-modal-bg').classList.remove('show');
@@ -2802,18 +3150,6 @@ function validateBlendSum(blends, label) {
   // 필터 토글
   document.getElementById('show-completed').addEventListener('change', (e) => {
     state.showCompleted = e.target.checked;
-    if (e.target.checked && state.showDeleted) {
-      state.showDeleted = false;
-      document.getElementById('show-deleted').checked = false;
-    }
-    renderDashboard();
-  });
-  document.getElementById('show-deleted').addEventListener('change', (e) => {
-    state.showDeleted = e.target.checked;
-    if (e.target.checked && state.showCompleted) {
-      state.showCompleted = false;
-      document.getElementById('show-completed').checked = false;
-    }
     renderDashboard();
   });
   
@@ -2854,6 +3190,9 @@ document.getElementById('add_k_caution').addEventListener('click', () => {
   last.querySelector('.btn-del').addEventListener('click', () => { last.remove(); render(); markDirty(); });
   markDirty();
 });
+
+// 코드 매핑 관리 버튼
+document.getElementById('open-code-map').addEventListener('click', openCodeMapModal);
 
 render();
 
