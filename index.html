@@ -203,6 +203,22 @@
     border-right: 1px solid var(--ink-border);
   }
   
+  /* v2.4 단순 섹션 마커 (헤더 없는 섹션 구분) */
+  .wo-section-marker {
+    height: 6mm;
+    margin: 4px 0 2px;
+    position: relative;
+  }
+  .wo-section-marker::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 4px;
+    height: 100%;
+    background: var(--ink-border);
+  }
+  
   .wo-table { width: 100%; border-collapse: collapse; font-size: 9.5pt; font-family: var(--font-gothic); table-layout: fixed; }
   .wo-table th { background: var(--ink-bg); color: var(--ink-text); padding: 5px 6px; border: 1px solid var(--ink-border); font-weight: 800; }
   .wo-table td { border: 1px solid var(--ink-border); padding: 4px 8px; vertical-align: middle; word-break: keep-all; overflow-wrap: break-word; overflow: hidden; }
@@ -430,8 +446,8 @@
         <div class="section-title">몸판 (BODY)</div>
         <div class="field"><label>몸판 품목</label><input type="text" lang="ko" id="f_body_item" placeholder="프리미엄싱글"></div>
         <div class="row row-2">
-          <div class="field"><label>입고처</label><input type="text" lang="ko" id="f_receiving" placeholder="세원"></div>
-          <div class="field"><label>출고처</label><input type="text" lang="ko" id="f_shipping" placeholder="대흥"></div>
+          <div class="field"><label>몸판 입고처 (편직 공장)</label><input type="text" lang="ko" id="f_receiving" placeholder="세원"></div>
+          <div class="field"><label>출고처 (염색가공 공장)</label><input type="text" lang="ko" id="f_shipping" placeholder="대흥"></div>
         </div>
         <div class="field">
           <label>몸판 혼용율 (자유 추가/삭제)</label>
@@ -444,6 +460,7 @@
       <div class="section">
         <div class="section-title">리프 (RIB)</div>
         <div class="field"><label>리프 품목</label><input type="text" lang="ko" id="f_rib_item" placeholder="프리미엄싱글 1x1 RIB"></div>
+        <div class="field"><label>리프 입고처 (편직 공장)</label><input type="text" lang="ko" id="f_rib_receiving" placeholder="혜성 (몸판과 다른 공장)"></div>
         <div class="field">
           <label>리프 혼용율 (자유 추가/삭제)</label>
           <div class="blend-rows" id="rib_blends"></div>
@@ -935,6 +952,7 @@ function getFormData() {
     },
     rib: {
       item: getVal('f_rib_item'),
+      receiving: getVal('f_rib_receiving'),
       blends: getBlendData('rib_blends'),
       spec: getVal('f_rib_spec')
     },
@@ -989,6 +1007,7 @@ function setFormData(d, opts={}) {
     document.getElementById('f_shipping').value = d.body?.shipping_from || '';
     document.getElementById('f_body_spec').value = d.body?.spec || '';
     document.getElementById('f_rib_item').value = d.rib?.item || '';
+    document.getElementById('f_rib_receiving').value = d.rib?.receiving || '';
     document.getElementById('f_rib_spec').value = d.rib?.spec || '';
     document.getElementById('f_notes').value = d.notes || '';
     
@@ -1056,7 +1075,7 @@ function resetForm() {
   } else {
     document.getElementById('f_date').valueAsDate = today;
     document.getElementById('f_type').value = '오더';
-    ['f_dest','f_body_item','f_receiving','f_shipping','f_body_spec','f_rib_item','f_rib_spec','f_notes'].forEach(id => document.getElementById(id).value = '');
+    ['f_dest','f_body_item','f_receiving','f_shipping','f_body_spec','f_rib_item','f_rib_receiving','f_rib_spec','f_notes'].forEach(id => document.getElementById(id).value = '');
     document.getElementById('p_dyeing').checked = true;
     document.getElementById('p_proc').checked = true;
     document.getElementById('p_post').checked = false;
@@ -1163,7 +1182,7 @@ function renderKnitOrder(d) {
   html += `<div class="wo-title-banner">편 직 의 뢰 서</div>`;
   html += `<div class="wo-meta"><span>의뢰일 : ${dateStr}</span><span>제 목 : 편직 의뢰의 건</span></div>`;
   html += `<div class="wo-recipient-box"><span class="label">수 신</span>${escapeHtml(d.recipient) || '-'}</div>`;
-  html += `<div class="wo-section-header">■ 편직 요청 내역</div>`;
+  html += `<div class="wo-section-marker"></div>`;
   
   if (d.items.length === 0) {
     html += `<div style="padding:20px;text-align:center;color:#888;">품목을 추가하세요</div>`;
@@ -1191,7 +1210,7 @@ function renderKnitOrder(d) {
   
   // 편직 주의사항 (좌측 정렬, 사용자 수정 가능)
   if (d.cautions && d.cautions.length > 0) {
-    html += `<div class="wo-section-header">■ 편직 주의사항</div>`;
+    html += `<div class="wo-section-marker"></div>`;
     html += `<table class="wo-table">
       <colgroup><col style="width:5%"><col style="width:25%"><col style="width:70%"></colgroup>
       <tbody>`;
@@ -1264,8 +1283,8 @@ function renderFinishOrder(d) {
     html += `</div>`;
   }
   
-  // BODY / RIB 테이블 - 절반-절반 균형
-  html += `<div class="wo-section-header">■ BODY / RIB</div>`;
+  // BODY / RIB 영역 (섹션 헤더 없이, 좌측 마커만)
+  html += `<div class="wo-section-marker"></div>`;
   const bBlend = blendsToText(d.body.blends);
   const rBlend = blendsToText(d.rib?.blends);
   
@@ -1285,21 +1304,24 @@ function renderFinishOrder(d) {
     </tr>
   </table>
   <table class="wo-table" style="margin-top:-1px;">
-    <colgroup><col style="width:13%"><col style="width:20.33%"><col style="width:13%"><col style="width:20.33%"><col style="width:13%"><col style="width:20.34%"></colgroup>
+    <colgroup><col style="width:13%"><col style="width:37%"><col style="width:13%"><col style="width:37%"></colgroup>
     <tr>
-      <td class="label">입고처</td><td class="nowrap">${escapeHtml(d.body.receiving) || '-'}</td>
-      <td class="label">출고처</td><td class="nowrap">${escapeHtml(d.body.shipping_from) || '-'}</td>
-      <td class="label">최종입고</td><td class="nowrap">${escapeHtml(d.final_destination) || '-'}</td>
+      <td class="label">몸판 입고</td><td class="nowrap">${escapeHtml(d.body.receiving) || '-'}</td>
+      <td class="label">리프 입고</td><td class="nowrap">${escapeHtml(d.rib?.receiving) || '-'}</td>
+    </tr>
+    <tr>
+      <td class="label">염색가공</td><td class="nowrap">${escapeHtml(d.body.shipping_from) || '-'}</td>
+      <td class="label">최종 입고</td><td class="nowrap">${escapeHtml(d.final_destination) || '-'}</td>
     </tr>
   </table>`;
   
-  // 주의사항 (압축 디자인)
+  // 주의사항 (섹션 헤더 없이, 좌측 마커만)
   const hasCaution = (d.caution?.dyeing?.length > 0 && d.processes.dyeing) ||
                       (d.caution?.processing?.length > 0 && d.processes.processing) ||
                       (d.caution?.post?.length > 0 && d.processes.post);
   
   if (hasCaution) {
-    html += `<div class="wo-section-header">■ CAUTION (주의 : 필독)</div>`;
+    html += `<div class="wo-section-marker"></div>`;
     html += `<div class="wo-caution-grid" style="grid-template-columns: repeat(${processCount}, 1fr);">`;
     
     const renderCautionColumn = (title, rows) => {
@@ -1318,10 +1340,12 @@ function renderFinishOrder(d) {
     html += `</div>`;
   }
   
-  // COLOR - 컬러 개수에 따라 1열 / 2열 분기
+  // COLOR (섹션 헤더 없이, 좌측 마커 + 컬러 개수 표시)
   const colorCount = d.colors.length;
-  const colorCountText = colorCount > 0 ? ` · 총 ${colorCount}컬러` : '';
-  html += `<div class="wo-section-header">■ COLOR & QUANTITY (단위: 절${colorCountText})</div>`;
+  html += `<div class="wo-section-marker"></div>`;
+  if (colorCount > 0) {
+    html += `<div style="font-family:var(--font-gothic);font-size:9pt;font-weight:700;margin:0 0 3px 8px;color:var(--ink-text);">총 ${colorCount}컬러 (단위: 절)</div>`;
+  }
   
   if (colorCount === 0) {
     html += `<table class="wo-table"><tr><td class="center" style="color:#888;padding:14px;">컬러를 추가하세요</td></tr></table>`;
