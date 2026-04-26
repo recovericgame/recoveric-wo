@@ -9,7 +9,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="HIWOS">
 <meta name="mobile-web-app-capable" content="yes">
-<title>RECOVERIC HIWOS v2.13</title>
+<title>RECOVERIC HIWOS v2.14</title>
 
 <!-- PWA Manifest (인라인 data URL) -->
 <link rel="manifest" id="pwa-manifest">
@@ -39,7 +39,14 @@
   
   body { font-family: var(--font-gothic); background: #f5f5f5; color: #222; font-size: 14px; }
   
-  .app { display: grid; grid-template-columns: 240px 1fr 1fr; height: 100vh; }
+  .app { display: grid; grid-template-columns: 280px 1fr 1fr; height: 100vh; transition: grid-template-columns 0.25s ease; }
+  /* v2.14: 고해상도에선 사이드바 더 여유 있게 */
+  @media (min-width: 1400px) {
+    .app { grid-template-columns: 320px 1fr 1fr; }
+  }
+  /* v2.14: 사이드바 접힌 상태 (햄버거 토글) */
+  .app.sidebar-collapsed { grid-template-columns: 0 1fr 1fr; }
+  .app.sidebar-collapsed .sidebar { display: none; }
   .sidebar { background: #2d2d2d; color: #fff; padding: 20px; overflow-y: auto; }
   .form-panel { background: #fff; padding: 24px; overflow-y: auto; border-right: 1px solid #ddd; }
   .preview-panel { background: #e8e8e8; padding: 24px; overflow-y: auto; }
@@ -116,12 +123,29 @@
   }
   .history-search-input::placeholder { color: #777; }
   
-  .form-panel h2 { font-size: 15px; margin-bottom: 16px; padding-bottom: 8px; border-bottom: 2px solid #222; display: flex; justify-content: space-between; align-items: center; font-weight: 700; }
+  .form-panel h2 { font-size: 15px; margin-bottom: 16px; padding-bottom: 8px; border-bottom: 2px solid #222; display: flex; justify-content: space-between; align-items: center; font-weight: 700; gap: 8px; }
+  .form-panel h2 #form-title { flex: 1; }
   .form-panel h2 .type-badge { color: #fff; font-size: 11px; padding: 3px 10px; border-radius: 3px; font-weight: 700; font-family: inherit; }
   .form-panel h2 .type-badge[data-type="원사"] { background: var(--badge-yarn); }
   .form-panel h2 .type-badge[data-type="편직"] { background: var(--badge-knit); }
   .form-panel h2 .type-badge[data-type="염색가공"] { background: var(--badge-finish); }
   .form-panel h2 .type-badge[data-type="BT"] { background: var(--badge-bt); }
+  
+  /* v2.14: 사이드바 햄버거 토글 버튼 */
+  .sidebar-toggle-btn {
+    background: #fff;
+    color: #000;
+    border: 1px solid #000;
+    padding: 4px 10px;
+    border-radius: 3px;
+    cursor: pointer;
+    font-size: 14px;
+    font-family: inherit;
+    line-height: 1;
+    flex-shrink: 0;
+  }
+  .sidebar-toggle-btn:hover { background: #000; color: #fff; }
+  .app.sidebar-collapsed .sidebar-toggle-btn { background: #000; color: #fff; }
   
   .section { margin-bottom: 18px; }
   .section-title { font-size: 11px; font-weight: 700; color: #444; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; padding-bottom: 4px; border-bottom: 1px solid #eee; }
@@ -1791,7 +1815,7 @@
 <div class="app" id="main-app" style="display:none;">
   <aside class="sidebar">
     <h1>RECOVERIC</h1>
-    <div class="sub" id="hiwos-version-tag">HIWOS v2.13</div>
+    <div class="sub" id="hiwos-version-tag">HIWOS v2.14</div>
     <div id="user-info-section"></div>
     
     <!-- 모드 전환 -->
@@ -1848,6 +1872,7 @@
       <button class="m-pv-btn" data-mview="preview">👁 미리보기</button>
     </div>
     <h2>
+      <button class="sidebar-toggle-btn desktop-only" id="sidebar-toggle" title="사이드바 접기/펼치기">☰</button>
       <span id="form-title">의뢰서 입력</span>
       <span class="type-badge" id="type-badge" data-type="원사">원사 구매의뢰서</span>
     </h2>
@@ -3910,6 +3935,24 @@ document.getElementById('btn-print').addEventListener('click', () => {
   }, 50);
 });
 
+// v2.14: 사이드바 햄버거 토글 (데스크톱 전용, 상태는 localStorage에 저장)
+(function initSidebarToggle() {
+  const KEY = 'hiwos_sidebar_collapsed';
+  const app = document.querySelector('.app');
+  const btn = document.getElementById('sidebar-toggle');
+  if (!app || !btn) return;
+  // 초기 상태 복원
+  try {
+    if (localStorage.getItem(KEY) === '1') {
+      app.classList.add('sidebar-collapsed');
+    }
+  } catch (e) { /* localStorage 비활성 환경 무시 */ }
+  btn.addEventListener('click', () => {
+    const collapsed = app.classList.toggle('sidebar-collapsed');
+    try { localStorage.setItem(KEY, collapsed ? '1' : '0'); } catch (e) {}
+  });
+})();
+
 async function captureToCanvas() {
   const el = document.getElementById('wo-doc');
   return await html2canvas(el, { scale: 2, backgroundColor: '#ffffff', useCORS: true });
@@ -4959,8 +5002,9 @@ function validateBlendSum(blends, label) {
   function buildNewRowHtml(type, idx) {
     const today = new Date().toISOString().slice(0, 10);
     if (type === 'yarn') {
-      // 컬럼: NO/스탬프/발주일/수신처/사종/수량/총kg/출고처/납기일/용도/입고일/메모/작지/작업/완료
+      // 컬럼(18): 선택/NO/스탬프/발주일/수신처/사종/수량/총kg/출고처/납기일/용도/입고일/메모/작지/작업/복사/완료/삭제
       return `<tr class="new-row" data-new-idx="${idx}" data-new-type="yarn">
+        <td class="col-select">-</td>
         <td>신규</td>
         <td>-</td>
         <td><input type="date" class="nr-date" value="${today}"></td>
@@ -4973,14 +5017,15 @@ function validateBlendSum(blends, label) {
         <td><input type="text" lang="ko" class="nr-purpose" placeholder="용도"></td>
         <td><input type="date" class="nr-arrival" placeholder="입고일"></td>
         <td><input type="text" lang="ko" class="nr-memo" placeholder="메모"></td>
-        <td colspan="3"><div class="new-row-actions">
+        <td colspan="5"><div class="new-row-actions">
           <button class="save-row-btn" data-save-new="${idx}">저장</button>
           <button class="cancel-row-btn" data-cancel-new="${idx}">취소</button>
         </div></td>
       </tr>`;
     } else if (type === 'knit') {
-      // 컬럼: 공유코드/스탬프/의뢰일/편직공장/품목/컬러/의뢰절/예상kg/원사입고/생지출고/예상재고절/예상재고kg/메모/작지/작업/완료
+      // 컬럼(19): 선택/공유코드/스탬프/의뢰일/편직공장/품목/컬러/의뢰절/예상kg/원사입고/생지출고/예상재고절/예상재고kg/메모/작지/작업/복사/완료/삭제
       return `<tr class="new-row" data-new-idx="${idx}" data-new-type="knit">
+        <td class="col-select">-</td>
         <td>자동</td>
         <td>-</td>
         <td><input type="date" class="nr-date" value="${today}"></td>
@@ -4994,14 +5039,15 @@ function validateBlendSum(blends, label) {
         <td>-</td>
         <td>-</td>
         <td><input type="text" lang="ko" class="nr-memo" placeholder="메모"></td>
-        <td colspan="3"><div class="new-row-actions">
+        <td colspan="5"><div class="new-row-actions">
           <button class="save-row-btn" data-save-new="${idx}">저장</button>
           <button class="cancel-row-btn" data-cancel-new="${idx}">취소</button>
         </div></td>
       </tr>`;
     } else if (type === 'finish') {
-      // 컬럼: NO/스탬프/발주일/구분/최종납품처/몸판품목/컬러/몸판리프/염색처/생지투입/염색완료/가공처/가공완료/후가공처/후가공완료/LOT/메모/작지/작업/완료
+      // 컬럼(23): 선택/NO/스탬프/발주일/구분/최종납품처/몸판품목/컬러/몸판리프/염색처/생지투입/염색완료/가공처/가공완료/후가공처/후가공완료/LOT/메모/작지/작업/복사/완료/삭제
       return `<tr class="new-row" data-new-idx="${idx}" data-new-type="finish">
+        <td class="col-select">-</td>
         <td>신규</td>
         <td>-</td>
         <td><input type="date" class="nr-date" value="${today}"></td>
@@ -5024,15 +5070,16 @@ function validateBlendSum(blends, label) {
         <td><input type="date" class="nr-postdone"></td>
         <td><input type="text" lang="ko" class="nr-lot" placeholder="LOT"></td>
         <td><input type="text" lang="ko" class="nr-memo" placeholder="메모"></td>
-        <td colspan="3"><div class="new-row-actions">
+        <td colspan="5"><div class="new-row-actions">
           <button class="save-row-btn" data-save-new="${idx}">저장</button>
           <button class="cancel-row-btn" data-cancel-new="${idx}">취소</button>
         </div></td>
       </tr>`;
     }
     if (type === 'bt') {
-      // 컬럼: NO/스탬프/발주일/염색공장/품명/혼용율/컬러수/결과수령일/판정/메모/작지/작업/완료
+      // 컬럼(16): 선택/NO/스탬프/발주일/염색공장/품명/혼용율/컬러수/결과수령일/판정/메모/작지/작업/복사/완료/삭제
       return `<tr class="new-row" data-new-idx="${idx}" data-new-type="bt">
+        <td class="col-select">-</td>
         <td>신규</td>
         <td>-</td>
         <td><input type="date" class="nr-date" value="${today}"></td>
@@ -5043,7 +5090,7 @@ function validateBlendSum(blends, label) {
         <td><input type="date" class="nr-result-date" placeholder="결과수령일"></td>
         <td><input type="text" lang="ko" class="nr-judgment" placeholder="판정"></td>
         <td><input type="text" lang="ko" class="nr-memo" placeholder="메모"></td>
-        <td colspan="3"><div class="new-row-actions">
+        <td colspan="5"><div class="new-row-actions">
           <button class="save-row-btn" data-save-new="${idx}">저장</button>
           <button class="cancel-row-btn" data-cancel-new="${idx}">취소</button>
         </div></td>
