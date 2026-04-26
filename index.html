@@ -296,6 +296,62 @@
   }
   .lot-display.empty { background: #ccc; color: #666; }
   
+  /* v2.17: 컬러 멀티라인 표시 */
+  .dash-table td .color-line {
+    display: block;
+    padding: 2px 0;
+    border-bottom: 1px dashed #eee;
+    line-height: 1.4;
+    white-space: nowrap;
+  }
+  .dash-table td .color-line:last-child { border-bottom: none; }
+  .dash-table td .size-line {
+    display: block;
+    padding: 2px 0;
+    border-bottom: 1px dashed #eee;
+    line-height: 1.4;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+  }
+  .dash-table td .size-line:last-child { border-bottom: none; }
+  
+  /* v2.17: 공정 미선택 셀 비활성화 표시 */
+  .dash-table td.cell-disabled {
+    background: repeating-linear-gradient(
+      45deg,
+      #f5f5f5,
+      #f5f5f5 4px,
+      #ececec 4px,
+      #ececec 8px
+    );
+    color: #aaa;
+    text-align: center;
+    cursor: not-allowed;
+    font-size: 11px;
+  }
+  
+  /* v2.17: overdue 알림 범례 (상단 우측) */
+  .dash-legend {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: #555;
+    margin-left: 12px;
+    padding: 3px 8px;
+    background: #fff5f5;
+    border: 1px solid #fcc;
+    border-radius: 3px;
+    vertical-align: middle;
+  }
+  .dash-legend::before {
+    content: '';
+    display: inline-block;
+    width: 4px;
+    height: 12px;
+    background: #c00;
+  }
+  
   .section { margin-bottom: 18px; }
   .section-title { font-size: 11px; font-weight: 700; color: #444; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; padding-bottom: 4px; border-bottom: 1px solid #eee; }
   .field { margin-bottom: 10px; }
@@ -4568,6 +4624,17 @@ function validateBlendSum(blends, label) {
     return stamps.map(s => `<span class="dash-stamp-mini ${escapeHtml(s)}">${escapeHtml(s)}</span>`).join('');
   }
   
+  // v2.17: 발주일 YY.MM.DD 형식 헬퍼
+  function formatYMD(dateStr) {
+    if (!dateStr) return '-';
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return '-';
+    const yy = String(d.getFullYear()).slice(-2);
+    const mm = String(d.getMonth()+1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    return `${yy}.${mm}.${dd}`;
+  }
+  
   // 인라인 편집 가능한 셀
   function renderEditableCell(wo, field, value, type='text') {
     const hasValue = value && value !== '';
@@ -4580,11 +4647,31 @@ function validateBlendSum(blends, label) {
     return `<td class="${cls}" data-id="${wo.id}" data-field="${field}" data-type="${type}" ${titleAttr}>${display}</td>`;
   }
   
-  // 컬러 요약 (대표 컬러 + 개수)
+  // v2.17: 비활성화된 셀(공정 미선택) - 입력 불가 회색 처리
+  function renderDisabledCell(reason) {
+    return `<td class="cell-disabled" title="${escapeHtml(reason || '해당 공정 미선택')}">-</td>`;
+  }
+  
+  // 컬러 요약 (대표 컬러 + 개수) - v2.16까지의 압축 표시 (현재는 사용 X)
   function summarizeColors(colors) {
     if (!colors || colors.length === 0) return '-';
     if (colors.length === 1) return escapeHtml(colors[0].name || '-');
     return `${escapeHtml(colors[0].name || '-')} 외 ${colors.length - 1}`;
+  }
+  
+  // v2.17: 컬러 멀티라인 표시 (각 컬러별 한 줄 + 몸판/리프 수량)
+  // useSplitCells=true 면 컬러 셀과 몸판/리프 셀을 별도로 반환 (rowspan용)
+  function renderColorList(colors) {
+    if (!colors || colors.length === 0) {
+      return { colorHtml: '-', sizeHtml: '-' };
+    }
+    const colorLines = colors.map(c => `<div class="color-line">${escapeHtml(c.name || '-')}</div>`).join('');
+    const sizeLines = colors.map(c => {
+      const body = (c.body !== undefined && c.body !== null && c.body !== '') ? c.body : '-';
+      const rib = (c.rib !== undefined && c.rib !== null && c.rib !== '') ? c.rib : '-';
+      return `<div class="size-line">${body}/${rib}</div>`;
+    }).join('');
+    return { colorHtml: colorLines, sizeHtml: sizeLines };
   }
   
   // ===== 전체 대시보드 (overview) =====
@@ -4720,7 +4807,7 @@ function validateBlendSum(blends, label) {
           <td class="col-no">${escapeHtml(wo.wo_number || '-')}</td>
           <td>${escapeHtml(wo.type || '-')}</td>
           <td class="col-stamps">${renderStampMini(wo.stamps) || '-'}</td>
-          <td class="col-date">${wo.date ? new Date(wo.date).toLocaleDateString('ko-KR', {month:'numeric', day:'numeric'}) : '-'}</td>
+          <td class="col-date">${formatYMD(wo.date)}</td>
           <td class="col-num">${elapsed}일</td>
           <td>${escapeHtml(item)}</td>
           <td>${escapeHtml(color)}</td>
@@ -4740,6 +4827,8 @@ function validateBlendSum(blends, label) {
     const list = getDashWorkOrders('원사');
     
     let html = renderAddRowBar('yarn');
+    
+    html += `<div style="font-size:11px;color:#555;margin:0 0 6px 4px;"><span class="dash-legend">발주 5일 이상 경과 (납기 임박)</span></div>`;
     
     if (list.length === 0) {
       html += `<div class="dash-empty">${state.showCompleted ? '' : '진행 중인 '}원사 의뢰서가 없습니다.<br><br>위의 <strong>"+ 새 행 추가"</strong> 버튼을 눌러 직접 입력할 수 있습니다.</div>`;
@@ -4787,7 +4876,7 @@ function validateBlendSum(blends, label) {
         <td class="col-no">${escapeHtml(wo.wo_number || '-')}</td>
         <td class="col-lot">${lotDisplay}</td>
         <td class="col-stamps">${renderStampMini(wo.stamps) || '-'}</td>
-        <td class="col-date">${wo.date ? new Date(wo.date).toLocaleDateString('ko-KR', {month:'numeric', day:'numeric'}) : '-'}</td>
+        <td class="col-date">${formatYMD(wo.date)}</td>
         <td>${escapeHtml(wo.supplier || '-')}</td>
         <td>${escapeHtml((firstYarn.type || '-') + moreYarns)}</td>
         <td class="col-num">${firstYarn.qty || 0} ${escapeHtml(firstYarn.unit || '')}</td>
@@ -4814,6 +4903,8 @@ function validateBlendSum(blends, label) {
     const list = getDashWorkOrders('편직');
     
     let html = renderAddRowBar('knit');
+    
+    html += `<div style="font-size:11px;color:#555;margin:0 0 6px 4px;"><span class="dash-legend">발주 5일 이상 경과 (납기 임박)</span></div>`;
     
     if (list.length === 0) {
       html += `<div class="dash-empty">${state.showCompleted ? '' : '진행 중인 '}편직 의뢰서가 없습니다.<br><br>위의 <strong>"+ 새 행 추가"</strong> 버튼을 눌러 직접 입력할 수 있습니다.</div>`;
@@ -4874,15 +4965,26 @@ function validateBlendSum(blends, label) {
       // 첫 품목의 코드가 있으면 표시
       const codeDisplay = first.shared_code || first.wo_no || wo.wo_number || '-';
       
+      // v2.17: 편직 품목/컬러 멀티라인 (한 작지에 여러 품목/컬러일 때 다 보이게)
+      const itemLines = items.length > 0
+        ? items.map(i => `<div class="color-line">${escapeHtml(i.item || '-')}</div>`).join('')
+        : '-';
+      const colorLines = items.length > 0
+        ? items.map(i => `<div class="color-line">${escapeHtml(i.color || '-')}</div>`).join('')
+        : '-';
+      const julLines = items.length > 0
+        ? items.map(i => `<div class="size-line">${i.jul || 0}절</div>`).join('')
+        : '-';
+      
       html += `<tr class="${overdueClass} ${completedClass}" data-row-id="${wo.id}">
         <td class="col-select"><input type="checkbox" class="dash-row-cb" data-id="${wo.id}" data-list-type="편직"></td>
         <td class="col-no" title="${escapeHtml(wo.wo_number || '')}">${escapeHtml(codeDisplay)}</td>
         <td class="col-stamps">${renderStampMini(wo.stamps) || '-'}</td>
-        <td class="col-date">${wo.date ? new Date(wo.date).toLocaleDateString('ko-KR', {month:'numeric', day:'numeric'}) : '-'}</td>
+        <td class="col-date">${formatYMD(wo.date)}</td>
         <td>${escapeHtml(wo.recipient || '-')}</td>
-        <td>${escapeHtml((first.item || '-') + moreItems)}</td>
-        <td>${escapeHtml(first.color || '-')}</td>
-        <td class="col-num">${totalJul}절</td>
+        <td>${itemLines}</td>
+        <td>${colorLines}</td>
+        <td class="col-num">${julLines}</td>
         <td class="col-num">${totalKg.toFixed(1)}kg</td>
         <td>${escapeHtml(first.yarn_input || '-')}</td>
         ${shipmentDisplay}
@@ -4906,6 +5008,9 @@ function validateBlendSum(blends, label) {
     const list = getDashWorkOrders('염색가공');
     
     let html = renderAddRowBar('finish');
+    html += `<div style="font-size:11px;color:#555;margin:0 0 6px 4px;">
+      <span class="dash-legend">발주 5일 이상 경과 (납기 임박)</span>
+    </div>`;
     
     if (list.length === 0) {
       html += `<div class="dash-empty">${state.showCompleted ? '' : '진행 중인 '}염색가공 의뢰서가 없습니다.<br><br>위의 <strong>"+ 새 행 추가"</strong> 버튼을 눌러 직접 입력할 수 있습니다.</div>`;
@@ -4943,26 +5048,57 @@ function validateBlendSum(blends, label) {
       const overdueClass = !wo.completed && elapsed >= 5 ? 'overdue' : '';
       const completedClass = wo.completed ? 'completed' : '';
       const colors = wo.colors || [];
-      const totalBody = colors.reduce((s,c) => s + (parseFloat(c.body) || 0), 0);
-      const totalRib = colors.reduce((s,c) => s + (parseFloat(c.rib) || 0), 0);
+      
+      // v2.17: 컬러 멀티라인 분리
+      const { colorHtml, sizeHtml } = renderColorList(colors);
+      
+      // v2.17: 공정 선택 여부 (염색/가공/후가공)
+      const procs = wo.processes || {};
+      const hasDye = procs.dyeing !== false;  // 기본 true (구버전 호환)
+      const hasProc = procs.processing === true;
+      const hasPost = procs.post === true;
+      
+      // 생지투입 / 염색완료 → 염색 공정 선택 시에만 입력 가능
+      const dyeInCell = hasDye 
+        ? renderEditableCell(wo, 'dye_in_date', wo.dye_in_date, 'date')
+        : renderDisabledCell('염색 공정 미선택');
+      const dyeDoneCell = hasDye
+        ? renderEditableCell(wo, 'dye_done_date', wo.dye_done_date, 'date')
+        : renderDisabledCell('염색 공정 미선택');
+      
+      // 가공처 / 가공완료 → 가공 공정 선택 시에만 입력 가능
+      const procRecvCell = hasProc 
+        ? `<td>${escapeHtml(wo.recipients?.processing || '-')}</td>`
+        : renderDisabledCell('가공 공정 미선택');
+      const procDoneCell = hasProc
+        ? renderEditableCell(wo, 'proc_done_date', wo.proc_done_date, 'date')
+        : renderDisabledCell('가공 공정 미선택');
+      
+      // 후가공처 / 후가공완료 → 후가공 공정 선택 시에만 입력 가능
+      const postRecvCell = hasPost
+        ? `<td>${escapeHtml(wo.recipients?.post || '-')}</td>`
+        : renderDisabledCell('후가공 공정 미선택');
+      const postDoneCell = hasPost
+        ? renderEditableCell(wo, 'post_done_date', wo.post_done_date, 'date')
+        : renderDisabledCell('후가공 공정 미선택');
       
       html += `<tr class="${overdueClass} ${completedClass}" data-row-id="${wo.id}">
         <td class="col-select"><input type="checkbox" class="dash-row-cb" data-id="${wo.id}" data-list-type="염색가공"></td>
         <td class="col-no">${escapeHtml(wo.wo_number || '-')}</td>
         <td class="col-stamps">${renderStampMini(wo.stamps) || '-'}</td>
-        <td class="col-date">${wo.date ? new Date(wo.date).toLocaleDateString('ko-KR', {month:'numeric', day:'numeric'}) : '-'}</td>
+        <td class="col-date">${formatYMD(wo.date)}</td>
         <td>${escapeHtml(wo.production_type || '-')}</td>
         <td>${escapeHtml(wo.final_destination || '-')}</td>
         <td>${escapeHtml(wo.body?.item || '-')}</td>
-        <td>${summarizeColors(colors)}</td>
-        <td class="col-num">${totalBody}/${totalRib}</td>
+        <td>${colorHtml}</td>
+        <td class="col-num">${sizeHtml}</td>
         <td>${escapeHtml(wo.recipients?.dyeing || '-')}</td>
-        ${renderEditableCell(wo, 'dye_in_date', wo.dye_in_date, 'date')}
-        ${renderEditableCell(wo, 'dye_done_date', wo.dye_done_date, 'date')}
-        <td>${escapeHtml(wo.recipients?.processing || '-')}</td>
-        ${renderEditableCell(wo, 'proc_done_date', wo.proc_done_date, 'date')}
-        <td>${escapeHtml(wo.recipients?.post || '-')}</td>
-        ${renderEditableCell(wo, 'post_done_date', wo.post_done_date, 'date')}
+        ${dyeInCell}
+        ${dyeDoneCell}
+        ${procRecvCell}
+        ${procDoneCell}
+        ${postRecvCell}
+        ${postDoneCell}
         ${renderEditableCell(wo, 'lot_no', wo.lot_no, 'text')}
         ${renderEditableCell(wo, 'internal_memo', wo.internal_memo, 'text')}
         <td class="col-action"><button class="dash-action-btn dash-view-btn" data-id="${wo.id}">보기</button></td>
@@ -4982,6 +5118,8 @@ function validateBlendSum(blends, label) {
     const list = getDashWorkOrders('BT');
     
     let html = renderAddRowBar('bt');
+    
+    html += `<div style="font-size:11px;color:#555;margin:0 0 6px 4px;"><span class="dash-legend">발주 5일 이상 경과 (납기 임박)</span></div>`;
     
     if (list.length === 0) {
       html += `<div class="dash-empty">${state.showCompleted ? '' : '진행 중인 '}B/T 의뢰서가 없습니다.<br><br>위의 <strong>"+ 새 행 추가"</strong> 버튼을 눌러 직접 입력할 수 있습니다.</div>`;
@@ -5017,7 +5155,7 @@ function validateBlendSum(blends, label) {
         <td class="col-select"><input type="checkbox" class="dash-row-cb" data-id="${wo.id}" data-list-type="BT"></td>
         <td class="col-no">${escapeHtml(wo.wo_number || '-')}</td>
         <td class="col-stamps">${renderStampMini(wo.stamps) || '-'}</td>
-        <td class="col-date">${wo.date ? new Date(wo.date).toLocaleDateString('ko-KR', {month:'numeric', day:'numeric'}) : '-'}</td>
+        <td class="col-date">${formatYMD(wo.date)}</td>
         <td>${escapeHtml(wo.recipient || '-')}</td>
         <td>${escapeHtml(wo.item || '-')}</td>
         <td>${escapeHtml(wo.blend || '-')}</td>
@@ -5068,7 +5206,7 @@ function validateBlendSum(blends, label) {
       html += `<tr class="deleted">
         <td class="col-no">${escapeHtml(wo.wo_number || '-')}</td>
         <td>${escapeHtml(wo.type || '-')}</td>
-        <td class="col-date">${wo.date ? new Date(wo.date).toLocaleDateString('ko-KR', {month:'numeric', day:'numeric'}) : '-'}</td>
+        <td class="col-date">${formatYMD(wo.date)}</td>
         <td class="col-date">${delDate}</td>
         <td>${escapeHtml(wo.deleted_by || '-')}</td>
         <td>${escapeHtml(summary)}</td>
