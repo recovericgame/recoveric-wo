@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="HIWOS">
 <meta name="mobile-web-app-capable" content="yes">
-<title>RECOVERIC HIWOS v2.20</title>
+<title>RECOVERIC HIWOS v2.30</title>
 
 <!-- PWA Manifest (인라인 data URL) -->
 <link rel="manifest" id="pwa-manifest">
@@ -133,6 +133,40 @@
   .form-panel h2 .type-badge[data-type="편직"] { background: var(--badge-knit); }
   .form-panel h2 .type-badge[data-type="염색가공"] { background: var(--badge-finish); }
   .form-panel h2 .type-badge[data-type="BT"] { background: var(--badge-bt); }
+  
+  /* v2.30: 복사 입력 중 뱃지 (주황색 + 펄스) */
+  .form-panel h2 .copy-mode-badge {
+    display: inline-block;
+    color: #fff;
+    background: linear-gradient(135deg, #ff9800 0%, #f57c00 100%);
+    font-size: 11px;
+    padding: 3px 10px 3px 22px;
+    border-radius: 3px;
+    font-weight: 700;
+    font-family: inherit;
+    margin-left: 4px;
+    position: relative;
+    box-shadow: 0 1px 3px rgba(245, 124, 0, 0.4);
+    animation: copyModePulse 1.6s ease-in-out infinite;
+  }
+  .form-panel h2 .copy-mode-badge::before {
+    content: '';
+    position: absolute;
+    left: 8px; top: 50%;
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: #fff;
+    transform: translateY(-50%);
+    animation: copyModeDot 1.6s ease-in-out infinite;
+  }
+  @keyframes copyModePulse {
+    0%, 100% { box-shadow: 0 1px 3px rgba(245, 124, 0, 0.4); }
+    50% { box-shadow: 0 2px 8px rgba(245, 124, 0, 0.7); }
+  }
+  @keyframes copyModeDot {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
   
   /* v2.14: 사이드바 햄버거 토글 버튼 */
   .sidebar-toggle-btn {
@@ -2307,7 +2341,7 @@
 <div class="app" id="main-app" style="display:none;">
   <aside class="sidebar">
     <h1>RECOVERIC</h1>
-    <div class="sub" id="hiwos-version-tag">HIWOS v2.17</div>
+    <div class="sub" id="hiwos-version-tag">HIWOS v2.30</div>
     <div id="user-info-section"></div>
     
     <!-- 모드 전환 -->
@@ -2362,6 +2396,7 @@
       <button class="sidebar-toggle-btn desktop-only" id="sidebar-toggle" title="사이드바 접기/펼치기">☰</button>
       <span id="form-title">의뢰서 입력</span>
       <span class="type-badge" id="type-badge" data-type="원사">원사 구매의뢰서</span>
+      <span class="copy-mode-badge" id="copy-mode-badge" style="display:none;">복사 입력 중</span>
     </h2>
     
     <!-- v2.20: 잠금 모드 제거됨 (작업 흐름 방해로 폐기) -->
@@ -3545,10 +3580,19 @@ function getFormData() {
   };
 }
 
+// v2.30: 복사 입력 중 뱃지 제어
+function setCopyModeBadge(on) {
+  const el = document.getElementById('copy-mode-badge');
+  if (!el) return;
+  el.style.display = on ? 'inline-block' : 'none';
+}
+
 function setFormData(d, opts={}) {
   if (!d) return;
   switchType(d.type, true);
   const isClone = opts.clone === true;
+  // v2.30: 복사 입력 중 뱃지 표시/숨김
+  setCopyModeBadge(isClone);
   const today = new Date();
   setStampsData(d.stamps);
   
@@ -3686,6 +3730,8 @@ function resetForm() {
   state.currentWorkOrderId = null;
   state.currentWoNumber = null;
   state.isDirty = false;
+  // v2.30: 복사 모드 뱃지 숨김
+  setCopyModeBadge(false);
   const today = new Date();
   setStampsData([]);  // 스탬프 초기화
   
@@ -4795,6 +4841,8 @@ window.addEventListener('firebase-ready', () => {
     state.currentWorkOrderId = wo.id;
     state.currentWoNumber = wo.wo_number || null;
     setFormData(wo);
+    // v2.30: 기존 의뢰서 불러올 때는 복사 모드 아님
+    setCopyModeBadge(false);
     state.isDirty = false;
     document.querySelectorAll('.history-item').forEach(el => el.classList.toggle('active', el.dataset.id === wo.id));
     // v2.22: 삭제 버튼은 관리자에게만 표시
@@ -4895,6 +4943,8 @@ function validateBlendSum(blends, label) {
         });
         state.currentWorkOrderId = docRef.id;
         state.currentWoNumber = wo_number;
+        // v2.30: 신규 저장 완료 → 복사 모드 종료
+        setCopyModeBadge(false);
         // v2.22: 삭제 버튼은 관리자에게만 표시
         document.getElementById('delete-btn').style.display = isAdminUser() ? 'inline-block' : 'none';
         // 채번된 LOT을 입력칸에도 반영
@@ -7950,7 +8000,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.29';
+  const VERSION = 'v2.30';
   // title (브라우저 탭)
   document.title = 'RECOVERIC HIWOS ' + VERSION;
   // 사이드바 버전 태그
