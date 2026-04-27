@@ -948,15 +948,107 @@
   }
   .dash-table .editable:hover { background: #fff8c5; }
   .dash-table .editable.has-value { background: transparent; }
+  
+  /* v2.18: 메모 셀 멀티라인 + 확장 버튼 (하이브리드 UI) */
   .dash-table .editable[data-field="internal_memo"] {
-    max-width: 220px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    min-width: 200px;
+    max-width: 320px;
+    position: relative;
+    vertical-align: top;
+    padding: 4px 22px 4px 6px;
+    line-height: 1.45;
+    white-space: pre-wrap;
+    word-break: break-word;
   }
   .dash-table .editable[data-field="internal_memo"]:not(.has-value) {
     color: #aaa;
     font-style: italic;
+  }
+  .dash-table .editable[data-field="internal_memo"] .memo-text {
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    word-break: break-word;
+  }
+  .dash-table .editable[data-field="internal_memo"].memo-expanded .memo-text {
+    -webkit-line-clamp: unset;
+    overflow: visible;
+  }
+  .dash-table .editable[data-field="internal_memo"] .memo-expand-btn {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    border: 1px solid #ccc;
+    border-radius: 3px;
+    background: #fff;
+    color: #555;
+    font-size: 11px;
+    line-height: 1;
+    cursor: pointer;
+    opacity: 0.7;
+    transition: opacity 0.15s, background 0.15s;
+  }
+  .dash-table .editable[data-field="internal_memo"] .memo-expand-btn:hover {
+    opacity: 1;
+    background: #f0f0f0;
+    border-color: #999;
+  }
+  .dash-table .editable[data-field="internal_memo"] textarea.dash-edit-memo {
+    width: 100%;
+    min-height: 56px;
+    padding: 4px 6px;
+    border: 1px solid #000;
+    font-size: 11px;
+    font-family: inherit;
+    line-height: 1.45;
+    resize: vertical;
+    box-sizing: border-box;
+  }
+  
+  /* v2.18: 메모 모달 */
+  .memo-modal-textarea {
+    width: 100%;
+    min-height: 220px;
+    padding: 10px;
+    border: 1px solid #999;
+    border-radius: 4px;
+    font-size: 13px;
+    font-family: inherit;
+    line-height: 1.6;
+    resize: vertical;
+    box-sizing: border-box;
+  }
+  .memo-modal-toolbar {
+    display: flex;
+    gap: 6px;
+    margin: 8px 0;
+    flex-wrap: wrap;
+  }
+  .memo-modal-btn {
+    padding: 5px 10px;
+    border: 1px solid #ccc;
+    background: #f8f8f8;
+    border-radius: 3px;
+    font-size: 11px;
+    cursor: pointer;
+  }
+  .memo-modal-btn:hover { background: #ececec; border-color: #999; }
+  .memo-modal-btn.primary {
+    background: #000;
+    color: #fff;
+    border-color: #000;
+    font-weight: 700;
+  }
+  .memo-modal-btn.primary:hover { background: #333; }
+  .memo-modal-info {
+    font-size: 11px;
+    color: #666;
+    margin: 4px 0 8px;
+    line-height: 1.5;
   }
   
   .dash-table input.dash-edit-date,
@@ -1878,6 +1970,13 @@
     .dash-table input.dash-edit-text {
       font-size: 14px; padding: 8px; min-height: 36px;
     }
+    /* v2.18: 모바일 메모 textarea */
+    .dash-table textarea.dash-edit-memo {
+      font-size: 14px;
+      padding: 8px;
+      min-height: 90px;
+    }
+    .memo-modal-textarea { font-size: 14px; min-height: 180px; }
     
     .dash-table td .dash-stamp-mini { display: inline-block; margin: 1px; }
     
@@ -4666,13 +4765,22 @@ function validateBlendSum(blends, label) {
   // 인라인 편집 가능한 셀
   function renderEditableCell(wo, field, value, type='text') {
     const hasValue = value && value !== '';
+    
+    // v2.18: 메모는 전용 렌더링 (멀티라인 + 확장 버튼)
+    if (field === 'internal_memo') {
+      const cls = hasValue ? 'editable has-value' : 'editable';
+      const inner = hasValue 
+        ? `<div class="memo-text">${escapeHtml(value)}</div>`
+        : `<div class="memo-text">+ 메모</div>`;
+      const expandBtn = `<button type="button" class="memo-expand-btn" data-id="${wo.id}" data-action="expand-memo" title="크게 보기 / 편집">⤢</button>`;
+      return `<td class="${cls}" data-id="${wo.id}" data-field="${field}" data-type="textarea">${inner}${expandBtn}</td>`;
+    }
+    
     let display;
     if (hasValue) display = escapeHtml(value);
-    else if (field === 'internal_memo') display = '+ 메모';
     else display = '+';
     const cls = hasValue ? 'editable has-value' : 'editable';
-    const titleAttr = field === 'internal_memo' && hasValue ? `title="${escapeHtml(value)}"` : '';
-    return `<td class="${cls}" data-id="${wo.id}" data-field="${field}" data-type="${type}" ${titleAttr}>${display}</td>`;
+    return `<td class="${cls}" data-id="${wo.id}" data-field="${field}" data-type="${type}">${display}</td>`;
   }
   
   // v2.17: 비활성화된 셀(공정 미선택) - 입력 불가 회색 처리
@@ -5818,12 +5926,59 @@ function validateBlendSum(blends, label) {
     // 인라인 편집 셀
     document.querySelectorAll('#dash-body .editable').forEach(cell => {
       cell.addEventListener('click', (e) => {
-        if (cell.querySelector('input')) return;
+        // v2.18: 메모 확장 버튼 클릭 시 모달로 전환 (인라인 편집 안 함)
+        if (e.target && e.target.classList.contains('memo-expand-btn')) {
+          e.stopPropagation();
+          openMemoModal(e.target.dataset.id);
+          return;
+        }
+        if (cell.querySelector('input, textarea')) return;
         const id = cell.dataset.id;
         const field = cell.dataset.field;
         const type = cell.dataset.type;
         const wo = state.allWorkOrders.find(w => w.id === id);
         const current = wo?.[field] || '';
+        
+        // v2.18: 메모는 textarea (멀티라인)
+        if (field === 'internal_memo') {
+          // 빈 메모 첫 입력 시 자동 타임스탬프 prefix
+          const initVal = current || autoTimestampPrefix();
+          cell.innerHTML = `<textarea class="dash-edit-memo" rows="3">${escapeHtml(initVal)}</textarea>`;
+          const ta = cell.querySelector('textarea');
+          ta.focus();
+          // 커서를 끝으로
+          ta.setSelectionRange(ta.value.length, ta.value.length);
+          
+          const saveMemo = async () => {
+            const newVal = ta.value.trim();
+            if (newVal === current) { renderDashboard(); return; }
+            try {
+              await updateDoc(doc(db, 'workorders', id), {
+                [field]: newVal || null,
+                updated_at: serverTimestamp(),
+                updated_by: state.user.email
+              });
+              toast('메모 저장됨', 'success');
+            } catch (e) { toast('저장 실패: ' + e.message, 'error'); }
+          };
+          ta.addEventListener('blur', saveMemo);
+          ta.addEventListener('keydown', (ev) => {
+            // Ctrl+Enter 또는 Cmd+Enter = 저장
+            if ((ev.ctrlKey || ev.metaKey) && ev.key === 'Enter') {
+              ev.preventDefault();
+              ta.blur();
+            }
+            // Esc = 취소
+            if (ev.key === 'Escape') {
+              ev.preventDefault();
+              ta.value = current;  // 원본 복원해서 blur 시 변경 없음 처리
+              renderDashboard();
+            }
+          });
+          return;
+        }
+        
+        // 일반 input
         cell.innerHTML = `<input type="${type}" class="dash-edit-${type}" value="${escapeHtml(current)}">`;
         const input = cell.querySelector('input');
         input.focus();
@@ -6031,6 +6186,97 @@ function validateBlendSum(blends, label) {
     
     body.innerHTML = `<div class="wo-doc" style="margin:auto;">${html}</div>`;
     modal.classList.add('show');
+  }
+  
+  /* ==================== v2.18: 메모 자동 타임스탬프 + 모달 ==================== */
+  // [MM/DD HH:MM] 형식 prefix 생성
+  function autoTimestampPrefix() {
+    const d = new Date();
+    const mm = String(d.getMonth()+1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    const hh = String(d.getHours()).padStart(2, '0');
+    const mi = String(d.getMinutes()).padStart(2, '0');
+    return `[${mm}/${dd} ${hh}:${mi}] `;
+  }
+  
+  // 메모 모달 (큰 textarea + 타임스탬프 추가 버튼)
+  function openMemoModal(woId) {
+    const wo = state.allWorkOrders.find(w => w.id === woId);
+    if (!wo) return;
+    const current = wo.internal_memo || '';
+    
+    const modal = document.getElementById('dash-modal-bg');
+    document.getElementById('dash-modal-title').textContent = `📝 메모 편집 — ${wo.wo_number || ''}`;
+    
+    const initVal = current || autoTimestampPrefix();
+    document.getElementById('dash-modal-body').innerHTML = `
+      <div style="max-width:680px;margin:auto;">
+        <div class="memo-modal-info">
+          품목: <strong>${escapeHtml(getWoTitle(wo))}</strong><br>
+          단축키: <strong>Ctrl+Enter</strong> 저장 / <strong>Esc</strong> 취소 / 일반 Enter는 줄바꿈
+        </div>
+        <div class="memo-modal-toolbar">
+          <button type="button" class="memo-modal-btn" id="memo-add-ts">＋ 타임스탬프 [${autoTimestampPrefix().trim()}] 줄바꿈 추가</button>
+        </div>
+        <textarea class="memo-modal-textarea" id="memo-modal-input" placeholder="메모를 입력하세요. 일자별 진행 상황을 기록하면 좋습니다.">${escapeHtml(initVal)}</textarea>
+        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px;">
+          <button type="button" class="memo-modal-btn" id="memo-cancel">취소</button>
+          <button type="button" class="memo-modal-btn primary" id="memo-save">저장 (Ctrl+Enter)</button>
+        </div>
+      </div>`;
+    modal.classList.add('show');
+    
+    const ta = document.getElementById('memo-modal-input');
+    ta.focus();
+    ta.setSelectionRange(ta.value.length, ta.value.length);
+    
+    // 타임스탬프 추가 버튼
+    document.getElementById('memo-add-ts').addEventListener('click', () => {
+      const cur = ta.value;
+      const needNL = cur.length > 0 && !cur.endsWith('\n');
+      ta.value = cur + (needNL ? '\n' : '') + autoTimestampPrefix();
+      ta.focus();
+      ta.setSelectionRange(ta.value.length, ta.value.length);
+    });
+    
+    const saveMemo = async () => {
+      const newVal = ta.value.trim();
+      if (newVal === current) { modal.classList.remove('show'); return; }
+      try {
+        await updateDoc(doc(db, 'workorders', woId), {
+          internal_memo: newVal || null,
+          updated_at: serverTimestamp(),
+          updated_by: state.user.email
+        });
+        toast('메모 저장됨', 'success');
+        modal.classList.remove('show');
+        renderDashboard();
+      } catch (e) { toast('저장 실패: ' + e.message, 'error'); }
+    };
+    
+    document.getElementById('memo-save').addEventListener('click', saveMemo);
+    document.getElementById('memo-cancel').addEventListener('click', () => modal.classList.remove('show'));
+    
+    // Ctrl+Enter 저장 / Esc 취소
+    ta.addEventListener('keydown', (ev) => {
+      if ((ev.ctrlKey || ev.metaKey) && ev.key === 'Enter') {
+        ev.preventDefault();
+        saveMemo();
+      }
+      if (ev.key === 'Escape') {
+        ev.preventDefault();
+        modal.classList.remove('show');
+      }
+    });
+  }
+  
+  // 의뢰서 제목 헬퍼 (모달 표시용)
+  function getWoTitle(wo) {
+    if (!wo) return '-';
+    if (wo.type === '원사') return wo.yarns?.[0]?.type || '-';
+    if (wo.type === '편직') return `${wo.items?.[0]?.item || '-'} / ${wo.items?.[0]?.color || '-'}`;
+    if (wo.type === 'BT') return wo.item || '-';
+    return `${wo.body?.item || '-'} / ${summarizeColors(wo.colors)}`;
   }
   
   // 생지 출고 입력 모달
