@@ -42,11 +42,17 @@
   
   body { font-family: var(--font-gothic); background: #f5f5f5; color: #222; font-size: 14px; }
   
-  /* v2.32: 4컬럼 그리드 (사이드바 + 작성 + 리사이저 6px + 미리보기) */
-  .app { display: grid; grid-template-columns: 280px 1fr 6px 1fr; height: 100vh; }
+  /* v2.32: 4컬럼 그리드 (사이드바 + 작성 + 리사이저 6px + 미리보기) 
+     v2.32 hotfix: 사이드바 폭은 미디어쿼리가 관리, 작성/미리보기 비율만 JS가 CSS 변수로 조정
+     기본값은 1:1 (50:50) */
+  :root {
+    --form-fr: 50;
+    --preview-fr: 50;
+  }
+  .app { display: grid; grid-template-columns: 280px calc(var(--form-fr) * 1fr) 6px calc(var(--preview-fr) * 1fr); height: 100vh; }
   /* v2.14: 고해상도에선 사이드바 더 여유 있게 */
   @media (min-width: 1400px) {
-    .app { grid-template-columns: 320px 1fr 6px 1fr; }
+    .app { grid-template-columns: 320px calc(var(--form-fr) * 1fr) 6px calc(var(--preview-fr) * 1fr); }
   }
   .sidebar { background: #fafafa; color: #222; padding: 20px; overflow-y: auto; border-right: 1px solid #e0e0e0; }
   .form-panel { background: #fff; padding: 24px; overflow-y: auto; border-right: 1px solid #ddd; }
@@ -4761,6 +4767,10 @@ document.getElementById('btn-print').addEventListener('click', () => {
     if (window.innerWidth > 768) {
       document.body.classList.remove('m-mode-preview');
     }
+    // v2.32 hotfix: app에 잔재 인라인 gridTemplateColumns 있으면 제거 (이전 버그 자국 청소)
+    if (app && app.style.gridTemplateColumns) {
+      app.style.gridTemplateColumns = '';
+    }
   }
   rescueLayout();
   setTimeout(rescueLayout, 200);
@@ -4769,9 +4779,13 @@ document.getElementById('btn-print').addEventListener('click', () => {
   window.hiwosRescue = function() {
     document.body.classList.remove('m-mode-preview');
     rescueLayout();
-    // 리사이저 비율도 기본 50:50으로 복귀
+    // 리사이저 비율도 기본 50:50으로 복귀 (CSS 변수만 리셋, 사이드바는 안 건드림)
     try { localStorage.removeItem('hiwos_panel_ratio'); } catch (e) {}
-    applyPanelRatio(50);
+    document.documentElement.style.setProperty('--form-fr', '50');
+    document.documentElement.style.setProperty('--preview-fr', '50');
+    // app의 인라인 grid도 혹시 잔재 있으면 제거
+    const appEl = document.querySelector('.app');
+    if (appEl) appEl.style.gridTemplateColumns = '';
     console.log('[HIWOS] 레이아웃 응급 복구 완료');
   };
   
@@ -4786,20 +4800,16 @@ document.getElementById('btn-print').addEventListener('click', () => {
   const tooltip = document.getElementById('resize-tooltip');
   if (!resizer) return;
   
-  // 사이드바 폭 측정 (반응형 대응)
-  function getSidebarWidth() {
-    const sb = document.querySelector('.sidebar');
-    if (!sb) return 280;
-    return sb.offsetWidth;
-  }
-  
-  // 비율 적용 (formRatio %는 작성 패널 비율, 나머지는 미리보기)
+  // v2.32 hotfix: 사이드바 폭은 CSS가 관리하도록 절대 건드리지 않음
+  // 대신 CSS 변수 --form-fr / --preview-fr 만 조정해서 작성/미리보기 비율만 변경
+  // 이렇게 하면 모바일/데스크톱 전환, 사이드바 visibility 변화 등에도 영향 없음
   function applyPanelRatio(formRatio) {
     formRatio = Math.max(MIN_RATIO, Math.min(MAX_RATIO, formRatio));
     const previewRatio = 100 - formRatio;
-    const sbWidth = getSidebarWidth();
-    // grid: 사이드바(고정px) | 작성(fr) | 리사이저(6px) | 미리보기(fr)
-    app.style.gridTemplateColumns = `${sbWidth}px ${formRatio}fr 6px ${previewRatio}fr`;
+    // 사이드바 폭은 그대로 두고 (CSS 미디어쿼리가 알아서 처리)
+    // 작성/미리보기 fr 값만 CSS 변수로 갱신
+    document.documentElement.style.setProperty('--form-fr', String(formRatio));
+    document.documentElement.style.setProperty('--preview-fr', String(previewRatio));
     if (tooltip) {
       tooltip.textContent = `작성 ${Math.round(formRatio)}% / 미리보기 ${Math.round(previewRatio)}%`;
     }
@@ -4816,23 +4826,26 @@ document.getElementById('btn-print').addEventListener('click', () => {
   } catch (e) {}
   applyPanelRatio(currentRatio);
   
-  // 드래그 처리
+  // 드래그 처리 — 작성 패널의 실제 위치 기준으로 비율 계산
   let isDragging = false;
-  let startX = 0;
-  let startRatio = 50;
   let containerLeft = 0;
   let containerWidth = 0;
   
   resizer.addEventListener('mousedown', (e) => {
-    // 모바일에서는 작동 안 함
     if (window.innerWidth <= 768) return;
     e.preventDefault();
     isDragging = true;
-    startX = e.clientX;
-    startRatio = currentRatio;
-    const sbWidth = getSidebarWidth();
-    containerLeft = sbWidth;
-    containerWidth = window.innerWidth - sbWidth - 6;  // 리사이저 6px 제외
+    // 사이드바 폭 측정은 드래그 시작 순간만 (DOM이 안정된 시점)
+    const formPanel = document.getElementById('form-panel');
+    if (formPanel) {
+      const rect = formPanel.getBoundingClientRect();
+      containerLeft = rect.left;
+      containerWidth = window.innerWidth - rect.left - 6;
+    } else {
+      // form-panel 못 찾으면 안전하게 드래그 취소
+      isDragging = false;
+      return;
+    }
     resizer.classList.add('dragging');
     document.body.style.cursor = 'col-resize';
     document.body.style.userSelect = 'none';
@@ -4840,7 +4853,6 @@ document.getElementById('btn-print').addEventListener('click', () => {
   
   document.addEventListener('mousemove', (e) => {
     if (!isDragging) return;
-    // 마우스 X 좌표 → 작성 패널 폭 비율 계산
     const formWidth = e.clientX - containerLeft;
     const newRatio = (formWidth / containerWidth) * 100;
     currentRatio = applyPanelRatio(newRatio);
@@ -4852,7 +4864,6 @@ document.getElementById('btn-print').addEventListener('click', () => {
     resizer.classList.remove('dragging');
     document.body.style.cursor = '';
     document.body.style.userSelect = '';
-    // 비율 저장
     try { localStorage.setItem(RATIO_KEY, String(currentRatio)); } catch (e) {}
   });
   
@@ -4861,12 +4872,6 @@ document.getElementById('btn-print').addEventListener('click', () => {
     if (window.innerWidth <= 768) return;
     currentRatio = applyPanelRatio(50);
     try { localStorage.setItem(RATIO_KEY, '50'); } catch (e) {}
-  });
-  
-  // 윈도우 리사이즈 시 사이드바 폭 변동 대응
-  window.addEventListener('resize', () => {
-    if (window.innerWidth <= 768) return;
-    applyPanelRatio(currentRatio);
   });
 })();
 
