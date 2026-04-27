@@ -4502,16 +4502,51 @@ document.getElementById('btn-print').addEventListener('click', () => {
   const app = document.querySelector('.app');
   const btn = document.getElementById('sidebar-toggle');
   if (!app || !btn) return;
+  
+  // v2.29: 안전장치 — 페이지 로드 시 form-panel/preview-panel이 인라인 display:none 상태로
+  // 남아있는 경우 (이전 인쇄·모드전환 등의 잔존) 강제 복원
+  // body의 m-mode-preview 클래스도 제거 (인쇄 후 복원 실패 시 잔존 가능)
+  function rescueLayout() {
+    const fp = document.getElementById('form-panel');
+    const pp = document.querySelector('.preview-panel');
+    const dp = document.getElementById('dashboard-panel');
+    // 작성 모드일 때만 강제 복원 (대시보드 모드는 form/preview 숨김이 정상)
+    const isDashMode = dp && dp.style.display !== 'none' && dp.style.display !== '';
+    if (!isDashMode) {
+      if (fp && fp.style.display === 'none') fp.style.display = '';
+      if (pp && pp.style.display === 'none') pp.style.display = '';
+    }
+    // 인쇄 후 잔존하는 m-mode-preview 클래스 제거 (데스크톱에서는 의미 없는데 모바일 CSS가 영향 줄 수 있음)
+    if (window.innerWidth > 768) {
+      document.body.classList.remove('m-mode-preview');
+    }
+  }
+  rescueLayout();
+  // 페이지 안정화 후 한 번 더 확인 (script 실행 순서 변동 대응)
+  setTimeout(rescueLayout, 200);
+  
   // 초기 상태 복원
   try {
     if (localStorage.getItem(KEY) === '1') {
       app.classList.add('sidebar-collapsed');
     }
   } catch (e) { /* localStorage 비활성 환경 무시 */ }
+  
   btn.addEventListener('click', () => {
     const collapsed = app.classList.toggle('sidebar-collapsed');
     try { localStorage.setItem(KEY, collapsed ? '1' : '0'); } catch (e) {}
+    // v2.29: 햄버거 토글 시 form/preview 패널이 살아있는지 강제 확인
+    rescueLayout();
   });
+  
+  // v2.29: 전역 응급 복구 함수 노출 (콘솔에서 hiwosRescue() 호출 가능)
+  window.hiwosRescue = function() {
+    try { localStorage.removeItem(KEY); } catch (e) {}
+    app.classList.remove('sidebar-collapsed');
+    document.body.classList.remove('m-mode-preview');
+    rescueLayout();
+    console.log('[HIWOS] 레이아웃 응급 복구 완료');
+  };
 })();
 
 async function captureToCanvas() {
@@ -7915,7 +7950,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.28';
+  const VERSION = 'v2.29';
   // title (브라우저 탭)
   document.title = 'RECOVERIC HIWOS ' + VERSION;
   // 사이드바 버전 태그
