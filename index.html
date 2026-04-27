@@ -1216,6 +1216,34 @@
     background: #000;
     color: #fff;
     font-weight: 700;
+    gap: 12px;
+  }
+  .dash-modal-head > span:first-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dash-modal-actions {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    flex-shrink: 0;
+  }
+  .dash-modal-act-btn {
+    background: #fff;
+    color: #000;
+    border: 1px solid #fff;
+    padding: 5px 12px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    border-radius: 3px;
+    transition: all 0.15s;
+  }
+  .dash-modal-act-btn:hover {
+    background: #ffd700;
+    border-color: #ffd700;
+  }
+  .dash-modal-act-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
   }
   .dash-modal-close {
     background: transparent; color: #fff; border: 1px solid #fff;
@@ -2089,8 +2117,21 @@
     .dash-modal-head {
       padding: 14px 16px;
       padding-top: calc(14px + env(safe-area-inset-top));
+      flex-wrap: wrap;
     }
-    .dash-modal-close { padding: 8px 16px; font-size: 14px; min-height: 40px; }
+    .dash-modal-actions {
+      width: 100%;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .dash-modal-act-btn {
+      flex: 1 1 0;
+      min-width: 80px;
+      padding: 8px 8px;
+      font-size: 12px;
+      min-height: 36px;
+    }
+    .dash-modal-close { padding: 8px 16px; font-size: 14px; min-height: 36px; flex: 1 1 60px; }
     .dash-modal-body {
       flex: 1;
       max-height: none;
@@ -2537,7 +2578,13 @@
   <div class="dash-modal">
     <div class="dash-modal-head">
       <span id="dash-modal-title">의뢰서 미리보기</span>
-      <button class="dash-modal-close" id="dash-modal-close">닫기</button>
+      <div class="dash-modal-actions" id="dash-modal-actions">
+        <button class="dash-modal-act-btn" id="dash-modal-image" type="button">이미지 저장</button>
+        <button class="dash-modal-act-btn" id="dash-modal-copy" type="button">클립보드 복사</button>
+        <button class="dash-modal-act-btn" id="dash-modal-print" type="button">프린트</button>
+        <button class="dash-modal-act-btn" id="dash-modal-kakao" type="button" style="display:none;">카톡 텍스트</button>
+        <button class="dash-modal-close" id="dash-modal-close">닫기</button>
+      </div>
     </div>
     <div class="dash-modal-body" id="dash-modal-body"></div>
   </div>
@@ -3188,6 +3235,13 @@ function openCodeMapModal() {
     const modal = document.getElementById('dash-modal-bg');
     document.getElementById('dash-modal-title').textContent = '🏷 코드 매핑 관리';
     document.getElementById('dash-modal-body').innerHTML = html;
+    
+    // 미리보기 전용 액션 버튼 숨김 (이 모달은 코드 매핑 관리용)
+    ['dash-modal-image', 'dash-modal-copy', 'dash-modal-print', 'dash-modal-kakao'].forEach(id => {
+      const b = document.getElementById(id);
+      if (b) b.style.display = 'none';
+    });
+    
     modal.classList.add('show');
     
     attachHandlers();
@@ -6575,6 +6629,10 @@ function validateBlendSum(blends, label) {
     const body = document.getElementById('dash-modal-body');
     title.textContent = `${wo.type} · ${wo.wo_number || '미저장'}`;
     
+    // 액션 버튼 영역 노출 (메모/생지출고 모달에서 숨겼다 복귀할 수 있도록)
+    const actionsBox = document.getElementById('dash-modal-actions');
+    if (actionsBox) actionsBox.style.display = '';
+    
     // 미리보기 렌더 (현재 모드 상관없이 임시 렌더)
     let html = '';
     const prevWoNumber = state.currentWoNumber;
@@ -6585,8 +6643,141 @@ function validateBlendSum(blends, label) {
     else html = renderFinishOrder(wo);
     state.currentWoNumber = prevWoNumber;
     
-    body.innerHTML = `<div class="wo-doc" style="margin:auto;">${html}</div>`;
+    // BT 의뢰서는 wo-doc-bt 클래스 추가 (스타일 차이)
+    const btClass = wo.type === 'BT' ? ' wo-doc-bt' : '';
+    body.innerHTML = `<div class="wo-doc${btClass}" id="dash-modal-wo-doc" style="margin:auto;">${html}</div>`;
+    
+    // 카톡 텍스트 버튼은 편직일 때만 노출 (메인 미리보기 정책과 동일)
+    const kakaoBtn = document.getElementById('dash-modal-kakao');
+    if (kakaoBtn) kakaoBtn.style.display = wo.type === '편직' ? 'inline-block' : 'none';
+    
+    // 액션 핸들러 바인딩 (모달 열 때마다 새 wo 대상으로 갱신)
+    bindDashModalActions(wo);
+    
     modal.classList.add('show');
+  }
+  
+  // 대시보드 모달 액션 버튼 핸들러
+  // - 이미지 저장 / 클립보드 복사 / 프린트 / 카톡 텍스트
+  // - 미리보기 패널의 #wo-doc이 아닌 모달의 #dash-modal-wo-doc을 대상으로 동작
+  function bindDashModalActions(wo) {
+    // 모달 내부 의뢰서 캡처
+    const captureModal = async () => {
+      const el = document.getElementById('dash-modal-wo-doc');
+      if (!el) throw new Error('모달 미리보기 요소를 찾을 수 없습니다');
+      // 모바일에서 transform: scale 적용된 상태로 캡처되지 않도록 임시 해제
+      const prevTransform = el.style.transform;
+      el.style.transform = 'none';
+      try {
+        return await html2canvas(el, { scale: 2, backgroundColor: '#ffffff', useCORS: true });
+      } finally {
+        el.style.transform = prevTransform;
+      }
+    };
+    
+    // 파일명 생성 (메인 미리보기와 동일 규칙)
+    const buildFilename = () => {
+      const dateStr = (wo.date || new Date().toISOString().split('T')[0]).replace(/-/g, '');
+      let name = 'item';
+      if (wo.type === '원사') name = wo.supplier || 'yarn';
+      else if (wo.type === '편직') name = wo.items?.[0]?.item || 'knit';
+      else if (wo.type === 'BT') name = wo.item || 'bt';
+      else name = wo.body?.item || 'finish';
+      name = String(name).replace(/[^\w가-힣]/g, '_');
+      return `${dateStr}_${wo.type}_${name}.png`;
+    };
+    
+    // 이미지 저장
+    const imgBtn = document.getElementById('dash-modal-image');
+    if (imgBtn) {
+      imgBtn.onclick = async () => {
+        try {
+          toast('이미지 생성 중...');
+          const canvas = await captureModal();
+          canvas.toBlob(blob => {
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url; a.download = buildFilename(); a.click();
+            URL.revokeObjectURL(url);
+            toast('이미지 저장 완료', 'success');
+          });
+        } catch (e) { console.error(e); toast('이미지 생성 실패', 'error'); }
+      };
+    }
+    
+    // 클립보드 복사
+    const copyBtn = document.getElementById('dash-modal-copy');
+    if (copyBtn) {
+      copyBtn.onclick = async () => {
+        try {
+          toast('클립보드 복사 중...');
+          const canvas = await captureModal();
+          canvas.toBlob(async blob => {
+            try {
+              await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+              toast('클립보드 복사 완료. 카톡에 붙여넣으세요', 'success');
+            } catch (e) { toast('클립보드 이미지 복사 실패', 'error'); }
+          });
+        } catch (e) { toast('복사 실패', 'error'); }
+      };
+    }
+    
+    // 프린트 (모달 내용을 임시로 #wo-doc 위치에 옮겨서 인쇄하면 기존 @media print 규칙 그대로 재사용)
+    const printBtn = document.getElementById('dash-modal-print');
+    if (printBtn) {
+      printBtn.onclick = () => {
+        try {
+          // 메인 미리보기 #wo-doc을 백업 후 모달 내용으로 일시 교체
+          const mainDoc = document.getElementById('wo-doc');
+          const modalDoc = document.getElementById('dash-modal-wo-doc');
+          if (!mainDoc || !modalDoc) { toast('프린트 준비 실패', 'error'); return; }
+          
+          const mainHtmlBackup = mainDoc.innerHTML;
+          const mainClassBackup = mainDoc.className;
+          const bodyClassBackup = document.body.className;
+          
+          // 메인 미리보기에 모달 내용 복제
+          mainDoc.innerHTML = modalDoc.innerHTML;
+          // BT 클래스 동기화
+          mainDoc.className = wo.type === 'BT' ? 'wo-doc wo-doc-bt' : 'wo-doc';
+          
+          // 모달 일시 숨김 (인쇄 시 모달 자체가 페이지에 찍히지 않도록)
+          const modalBg = document.getElementById('dash-modal-bg');
+          const modalDisplay = modalBg.style.display;
+          modalBg.style.display = 'none';
+          
+          // body를 preview 모드로 전환 (메인 미리보기가 인쇄 대상이 됨)
+          document.body.classList.remove('m-mode-write');
+          document.body.classList.add('m-mode-preview');
+          
+          setTimeout(() => {
+            window.print();
+            // 인쇄 종료 후 원래 상태 복원
+            setTimeout(() => {
+              mainDoc.innerHTML = mainHtmlBackup;
+              mainDoc.className = mainClassBackup;
+              document.body.className = bodyClassBackup;
+              modalBg.style.display = modalDisplay;
+            }, 100);
+          }, 50);
+        } catch (e) { console.error(e); toast('프린트 실패', 'error'); }
+      };
+    }
+    
+    // 카톡 텍스트 (편직만)
+    const kakaoBtn = document.getElementById('dash-modal-kakao');
+    if (kakaoBtn) {
+      kakaoBtn.onclick = async () => {
+        if (wo.type !== '편직') return;
+        try {
+          const text = generateKakaoText(wo);
+          await navigator.clipboard.writeText(text);
+          toast('카톡 텍스트 복사 완료', 'success');
+        } catch (e) {
+          try { prompt('아래 텍스트를 복사하세요:', generateKakaoText(wo)); } catch (e2) {}
+        }
+      };
+    }
   }
   
   /* ==================== v2.18: 메모 자동 타임스탬프 + 모달 ==================== */
@@ -6608,6 +6799,16 @@ function validateBlendSum(blends, label) {
     
     const modal = document.getElementById('dash-modal-bg');
     document.getElementById('dash-modal-title').textContent = `📝 메모 편집 — ${wo.wo_number || ''}`;
+    
+    // 미리보기 전용 액션 버튼 숨김 (이 모달은 텍스트 편집용)
+    const actionsBox = document.getElementById('dash-modal-actions');
+    if (actionsBox) {
+      // 닫기 버튼만 남기고 액션 버튼만 숨김
+      ['dash-modal-image', 'dash-modal-copy', 'dash-modal-print', 'dash-modal-kakao'].forEach(id => {
+        const b = document.getElementById(id);
+        if (b) b.style.display = 'none';
+      });
+    }
     
     const initVal = current || autoTimestampPrefix();
     document.getElementById('dash-modal-body').innerHTML = `
@@ -6693,6 +6894,12 @@ function validateBlendSum(blends, label) {
     
     const modal = document.getElementById('dash-modal-bg');
     document.getElementById('dash-modal-title').textContent = `🚚 생지 출고 입력 (${wo.wo_number || ''})`;
+    
+    // 미리보기 전용 액션 버튼 숨김 (이 모달은 출고 입력용)
+    ['dash-modal-image', 'dash-modal-copy', 'dash-modal-print', 'dash-modal-kakao'].forEach(id => {
+      const b = document.getElementById(id);
+      if (b) b.style.display = 'none';
+    });
     
     // 모달 상태: 'list' (출고 내역 보기) | 'add' (새 출고 입력) | 'edit' (기존 출고 수정)
     let viewMode = 'list';
@@ -7496,7 +7703,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.25';
+  const VERSION = 'v2.26';
   // title (브라우저 탭)
   document.title = 'RECOVERIC HIWOS ' + VERSION;
   // 사이드바 버전 태그
