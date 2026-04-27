@@ -2346,13 +2346,8 @@
         <button class="dash-menu-btn submenu" data-view="knit">ㄴ 편직 진행</button>
         <button class="dash-menu-btn submenu" data-view="finish">ㄴ 염색가공 진행</button>
         <button class="dash-menu-btn submenu" data-view="bt">ㄴ B/T 진행</button>
+        <button class="dash-menu-btn" data-view="completed">✓ 완료된 의뢰서</button>
         <button class="dash-menu-btn" data-view="trash">🗑 휴지통</button>
-      </div>
-      <div class="dash-filters-side">
-        <label class="dash-toggle">
-          <input type="checkbox" id="show-completed">
-          <span>완료 포함</span>
-        </label>
       </div>
     </div>
   </aside>
@@ -4928,15 +4923,17 @@ function validateBlendSum(blends, label) {
   // 의뢰서 필터링
   function getDashWorkOrders(typeFilter) {
     const isTrash = state.dashView === 'trash';
+    const isCompleted = state.dashView === 'completed';
     let filtered = state.allWorkOrders.filter(wo => {
       if (typeFilter && wo.type !== typeFilter) return false;
       if (isTrash) return !!wo.deleted;  // 휴지통: 삭제된 것만
       if (wo.deleted) return false;       // 일반 뷰: 삭제된 것 제외
+      if (isCompleted) return !!wo.completed;  // v2.28: 완료 탭 — 완료된 것만
       if (!state.showCompleted && wo.completed) return false;
       return true;
     });
-    // v2.19: 발주일 필터 적용 (휴지통/메인 대시보드는 제외)
-    if (!isTrash && state.dashView !== 'overview') {
+    // v2.19: 발주일 필터 적용 (휴지통/완료/메인 대시보드는 제외)
+    if (!isTrash && !isCompleted && state.dashView !== 'overview') {
       filtered = applyDateFilter(filtered, state.dashView);
     }
     // v2.18: 정렬 적용
@@ -5383,6 +5380,9 @@ function validateBlendSum(blends, label) {
         <th class="col-num">수량</th>
         <th>거래처 (공정)</th>
         <th class="col-action">작지</th>
+        <th class="col-action">수정</th>
+        <th class="col-action">복사</th>
+        <th class="col-action">삭제</th>
       </tr></thead><tbody>`;
       
       allIngSorted.forEach(wo => {
@@ -5443,6 +5443,9 @@ function validateBlendSum(blends, label) {
           <td class="col-num">${sizeHtml}</td>
           <td>${vendorHtml}</td>
           <td class="col-action"><button class="dash-action-btn dash-view-btn" data-id="${wo.id}">보기</button></td>
+          <td class="col-action"><button class="dash-action-btn dash-edit-btn" data-id="${wo.id}">수정</button></td>
+          <td class="col-action"><button class="dash-action-btn dash-copy-btn" data-id="${wo.id}">복사</button></td>
+          <td class="col-action"><button class="dash-action-btn danger dash-delete-btn" data-id="${wo.id}">삭제</button></td>
         </tr>`;
       });
       
@@ -5894,6 +5897,111 @@ function validateBlendSum(blends, label) {
     return html;
   }
   
+  // v2.28: 완료된 의뢰서 전용 뷰 — 복사 기능 포함
+  // - 박 대표 요청: 완료된 의뢰서를 별도로 보고 거기서 [복사]로 새 의뢰서 시작
+  // - 표시: 완료일 역순 (최근 완료가 위)
+  // - 액션: [보기] 모달 / [복사] 새 의뢰서로 복제 / [수정] 작성모드 / [완료해제] 진행 복귀 / [삭제] 관리자만
+  function renderCompletedDash() {
+    const list = state.allWorkOrders.filter(wo => wo.completed && !wo.deleted);
+    
+    // 정렬: 완료일 역순. completed_at 없으면 updated_at 으로 폴백
+    list.sort((a, b) => {
+      const ta = (a.completed_at?.toMillis ? a.completed_at.toMillis() : (a.updated_at?.toMillis ? a.updated_at.toMillis() : 0)) || 0;
+      const tb = (b.completed_at?.toMillis ? b.completed_at.toMillis() : (b.updated_at?.toMillis ? b.updated_at.toMillis() : 0)) || 0;
+      return tb - ta;
+    });
+    
+    if (list.length === 0) {
+      return `<div class="dash-empty">완료된 의뢰서가 없습니다.<br><br>각 진행 화면에서 완료 체크박스를 체크하면 이 곳으로 이동합니다.</div>`;
+    }
+    
+    // 유형별 카운트 표시 (간단한 통계)
+    const cnt = { '원사':0, '편직':0, '염색가공':0, 'BT':0 };
+    list.forEach(wo => { if (cnt[wo.type] !== undefined) cnt[wo.type]++; });
+    
+    let html = `<div style="background:#f5f5f5;padding:12px 16px;border-radius:4px;margin-bottom:16px;font-size:13px;">
+      <strong>총 ${list.length}건</strong> 
+      <span style="color:#666;margin-left:12px;">
+        원사 ${cnt['원사']} · 편직 ${cnt['편직']} · 염색가공 ${cnt['염색가공']} · B/T ${cnt['BT']}
+      </span>
+      <span style="color:#666;margin-left:12px;font-size:12px;">완료일 최신순으로 정렬됨</span>
+    </div>`;
+    
+    html += `<div class="dash-table-wrap"><table class="dash-table"><thead><tr>
+      <th class="col-no">NO</th>
+      <th>유형</th>
+      <th class="col-date">발주일</th>
+      <th class="col-date">완료일</th>
+      <th>품목 / 사종</th>
+      <th>컬러</th>
+      <th class="col-num">수량</th>
+      <th>거래처</th>
+      <th class="col-action">작지</th>
+      <th class="col-action">복사</th>
+      <th class="col-action">수정</th>
+      <th class="col-action">완료해제</th>
+      <th class="col-action">삭제</th>
+    </tr></thead><tbody>`;
+    
+    list.forEach(wo => {
+      let item = '-', colorHtml = '-', sizeHtml = '-', vendorHtml = '-';
+      
+      if (wo.type === '원사') {
+        item = wo.yarns?.[0]?.type || '-';
+        if (wo.yarns?.length > 1) item += ` 외 ${wo.yarns.length - 1}`;
+        const totalKg = (wo.yarns || []).reduce((s,y) => s + (parseFloat(y.total_kg) || 0), 0);
+        sizeHtml = totalKg > 0 ? `${totalKg.toLocaleString()} kg` : '-';
+        vendorHtml = escapeHtml(wo.supplier || '-');
+        colorHtml = '-';
+      } else if (wo.type === '편직') {
+        const items = wo.items || [];
+        item = items[0]?.item || '-';
+        if (items.length > 1) item += ` 외 ${items.length - 1}`;
+        colorHtml = items.map(it => `<div class="color-line">${escapeHtml(it.color || '-')}</div>`).join('') || '-';
+        sizeHtml = items.map(it => `<div class="size-line">${escapeHtml(String(it.jul || '-'))}절</div>`).join('') || '-';
+        vendorHtml = escapeHtml(wo.recipient || '-');
+      } else if (wo.type === '염색가공') {
+        item = wo.body?.item || '-';
+        const cl = renderColorList(wo.colors);
+        colorHtml = cl.colorHtml;
+        sizeHtml = cl.sizeHtml;
+        const recList = [];
+        if (wo.processes?.dyeing && wo.recipients?.dyeing) recList.push(`<div class="vendor-line"><span class="vendor-tag">염색</span>${escapeHtml(wo.recipients.dyeing)}</div>`);
+        if (wo.processes?.processing && wo.recipients?.processing) recList.push(`<div class="vendor-line"><span class="vendor-tag">가공</span>${escapeHtml(wo.recipients.processing)}</div>`);
+        if (wo.processes?.post && wo.recipients?.post) recList.push(`<div class="vendor-line"><span class="vendor-tag">후가공</span>${escapeHtml(wo.recipients.post)}</div>`);
+        vendorHtml = recList.length > 0 ? recList.join('') : '-';
+      } else if (wo.type === 'BT') {
+        item = wo.item || '-';
+        colorHtml = summarizeColors(wo.colors);
+        sizeHtml = '-';
+        vendorHtml = escapeHtml(wo.recipient || '-');
+      }
+      
+      const completedDate = wo.completed_at?.toDate
+        ? wo.completed_at.toDate().toLocaleDateString('ko-KR', {month:'numeric', day:'numeric'})
+        : (wo.updated_at?.toDate ? wo.updated_at.toDate().toLocaleDateString('ko-KR', {month:'numeric', day:'numeric'}) : '-');
+      
+      html += `<tr class="completed">
+        <td class="col-no">${escapeHtml(wo.wo_number || '-')}</td>
+        <td>${escapeHtml(wo.type || '-')}</td>
+        <td class="col-date">${formatYMD(wo.date)}</td>
+        <td class="col-date">${completedDate}</td>
+        <td>${escapeHtml(item)}</td>
+        <td>${colorHtml}</td>
+        <td class="col-num">${sizeHtml}</td>
+        <td>${vendorHtml}</td>
+        <td class="col-action"><button class="dash-action-btn dash-view-btn" data-id="${wo.id}">보기</button></td>
+        <td class="col-action"><button class="dash-action-btn dash-copy-btn" data-id="${wo.id}">복사</button></td>
+        <td class="col-action"><button class="dash-action-btn dash-edit-btn" data-id="${wo.id}">수정</button></td>
+        <td class="col-action"><input type="checkbox" class="dash-complete-cb" data-id="${wo.id}" checked> 완료</td>
+        <td class="col-action"><button class="dash-action-btn danger dash-delete-btn" data-id="${wo.id}">삭제</button></td>
+      </tr>`;
+    });
+    
+    html += `</tbody></table></div>`;
+    return html;
+  }
+  
   // ===== v2.12: 일괄 처리 헬퍼 =====
   function getSelectedRowIds(listType) {
     const cbs = document.querySelectorAll(`#dash-body .dash-row-cb[data-list-type="${listType}"]:checked`);
@@ -6027,6 +6135,10 @@ function validateBlendSum(blends, label) {
       title = 'ㄴ B/T 진행';
       body = renderBTDash();
       addBtn.style.display = 'inline-block';
+    } else if (state.dashView === 'completed') {
+      title = '✓ 완료된 의뢰서';
+      body = renderCompletedDash();
+      addBtn.style.display = 'none';
     } else if (state.dashView === 'trash') {
       title = '🗑 휴지통';
       body = renderTrashDash();
@@ -6720,9 +6832,14 @@ function validateBlendSum(blends, label) {
     const body = document.getElementById('dash-modal-body');
     title.textContent = `${wo.type} · ${wo.wo_number || '미저장'}`;
     
-    // 액션 버튼 영역 노출 (메모/생지출고 모달에서 숨겼다 복귀할 수 있도록)
+    // v2.28: 액션 버튼 영역 + 개별 버튼들을 모두 명시적으로 다시 노출
+    // (메모/생지출고/코드매핑 모달이 개별 버튼을 display:none으로 숨겼던 것 복원)
     const actionsBox = document.getElementById('dash-modal-actions');
     if (actionsBox) actionsBox.style.display = '';
+    ['dash-modal-image', 'dash-modal-copy', 'dash-modal-print'].forEach(id => {
+      const b = document.getElementById(id);
+      if (b) b.style.display = '';  // inline-block 회복 (CSS 기본값)
+    });
     
     // 미리보기 렌더 (현재 모드 상관없이 임시 렌더)
     let html = '';
@@ -6740,7 +6857,7 @@ function validateBlendSum(blends, label) {
     
     // 카톡 텍스트 버튼은 편직일 때만 노출 (메인 미리보기 정책과 동일)
     const kakaoBtn = document.getElementById('dash-modal-kakao');
-    if (kakaoBtn) kakaoBtn.style.display = wo.type === '편직' ? 'inline-block' : 'none';
+    if (kakaoBtn) kakaoBtn.style.display = wo.type === '편직' ? '' : 'none';
     
     // 액션 핸들러 바인딩 (모달 열 때마다 새 wo 대상으로 갱신)
     bindDashModalActions(wo);
@@ -7214,11 +7331,15 @@ function validateBlendSum(blends, label) {
     btn.addEventListener('click', () => switchDashView(btn.dataset.view));
   });
   
-  // 필터 토글
-  document.getElementById('show-completed').addEventListener('change', (e) => {
-    state.showCompleted = e.target.checked;
-    renderDashboard();
-  });
+  // v2.28: '완료 포함' 토글 제거됨 — '완료된 의뢰서' 별도 탭으로 분리
+  // 이 핸들러는 토글이 다시 추가될 때를 대비해 안전 가드만 두고 비활성화
+  const showCompletedToggle = document.getElementById('show-completed');
+  if (showCompletedToggle) {
+    showCompletedToggle.addEventListener('change', (e) => {
+      state.showCompleted = e.target.checked;
+      renderDashboard();
+    });
+  }
   
   // 대시보드 새로고침/추가 버튼
   document.getElementById('dash-refresh').addEventListener('click', () => renderDashboard());
@@ -7794,7 +7915,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.27';
+  const VERSION = 'v2.28';
   // title (브라우저 탭)
   document.title = 'RECOVERIC HIWOS ' + VERSION;
   // 사이드바 버전 태그
