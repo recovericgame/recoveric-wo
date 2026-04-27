@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="HIWOS">
 <meta name="mobile-web-app-capable" content="yes">
-<title>RECOVERIC HIWOS v2.17</title>
+<title>RECOVERIC HIWOS v2.18</title>
 
 <!-- PWA Manifest (인라인 data URL) -->
 <link rel="manifest" id="pwa-manifest">
@@ -317,6 +317,31 @@
     font-variant-numeric: tabular-nums;
   }
   .dash-table td .size-line:last-child { border-bottom: none; }
+  
+  /* v2.18: 거래처 멀티라인 (염색가공의 염색/가공/후가공 동시 표시) */
+  .dash-table td .vendor-line {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 0;
+    border-bottom: 1px dashed #eee;
+    line-height: 1.4;
+    white-space: nowrap;
+  }
+  .dash-table td .vendor-line:last-child { border-bottom: none; }
+  .dash-table td .vendor-tag {
+    display: inline-block;
+    min-width: 36px;
+    padding: 1px 6px;
+    background: #f0f0f0;
+    border: 1px solid #d0d0d0;
+    border-radius: 3px;
+    font-size: 10px;
+    font-weight: 700;
+    color: #555;
+    text-align: center;
+    flex-shrink: 0;
+  }
   
   /* v2.17: 공정 미선택 셀 비활성화 표시 */
   .dash-table td.cell-disabled {
@@ -4783,27 +4808,56 @@ function validateBlendSum(blends, label) {
         <th class="col-num">경과</th>
         <th>품목 / 사종</th>
         <th>컬러</th>
-        <th>거래처</th>
+        <th class="col-num">수량</th>
+        <th>거래처 (공정)</th>
         <th class="col-action">작지</th>
       </tr></thead><tbody>`;
       
       allIngSorted.forEach(wo => {
         const elapsed = daysSince(wo.date);
         const overdueClass = elapsed >= 5 ? 'overdue' : '';
-        let item = '-', color = '-', vendor = '-';
+        let item = '-', colorHtml = '-', sizeHtml = '-', vendorHtml = '-';
+        
         if (wo.type === '원사') {
           item = wo.yarns?.[0]?.type || '-';
           if (wo.yarns?.length > 1) item += ` 외 ${wo.yarns.length - 1}`;
-          vendor = wo.supplier || '-';
+          // 원사 총 kg
+          const totalKg = (wo.yarns || []).reduce((s,y) => s + (parseFloat(y.total_kg) || 0), 0);
+          sizeHtml = totalKg > 0 ? `${totalKg.toLocaleString()} kg` : '-';
+          vendorHtml = escapeHtml(wo.supplier || '-');
+          
         } else if (wo.type === '편직') {
           item = wo.items?.[0]?.item || '-';
           if (wo.items?.length > 1) item += ` 외 ${wo.items.length - 1}`;
-          color = wo.items?.[0]?.color || '-';
-          vendor = wo.recipient || '-';
-        } else {
+          // 편직 컬러 멀티라인 + 절수 멀티라인
+          const items = wo.items || [];
+          if (items.length > 0) {
+            colorHtml = items.map(it => `<div class="color-line">${escapeHtml(it.color || '-')}</div>`).join('');
+            sizeHtml = items.map(it => {
+              const j = (it.jul !== undefined && it.jul !== '' && it.jul !== null) ? it.jul : '-';
+              return `<div class="size-line">${escapeHtml(String(j))}절</div>`;
+            }).join('');
+          }
+          vendorHtml = escapeHtml(wo.recipient || '-');
+          
+        } else if (wo.type === '염색가공') {
           item = wo.body?.item || '-';
-          color = summarizeColors(wo.colors);
-          vendor = wo.final_destination || '-';
+          // 컬러 + 몸판/리프 멀티라인 (renderColorList 재사용)
+          const cl = renderColorList(wo.colors);
+          colorHtml = cl.colorHtml;
+          sizeHtml = cl.sizeHtml;
+          // 거래처: 체크된 공정별로 한 줄씩
+          const recList = [];
+          if (wo.processes?.dyeing && wo.recipients?.dyeing) recList.push(`<div class="vendor-line"><span class="vendor-tag">염색</span>${escapeHtml(wo.recipients.dyeing)}</div>`);
+          if (wo.processes?.processing && wo.recipients?.processing) recList.push(`<div class="vendor-line"><span class="vendor-tag">가공</span>${escapeHtml(wo.recipients.processing)}</div>`);
+          if (wo.processes?.post && wo.recipients?.post) recList.push(`<div class="vendor-line"><span class="vendor-tag">후가공</span>${escapeHtml(wo.recipients.post)}</div>`);
+          vendorHtml = recList.length > 0 ? recList.join('') : '-';
+          
+        } else if (wo.type === 'BT') {
+          item = wo.item || '-';
+          colorHtml = summarizeColors(wo.colors);
+          sizeHtml = '-';
+          vendorHtml = escapeHtml(wo.recipient || '-');
         }
         
         html += `<tr class="${overdueClass}">
@@ -4813,8 +4867,9 @@ function validateBlendSum(blends, label) {
           <td class="col-date">${formatYMD(wo.date)}</td>
           <td class="col-num">${elapsed}일</td>
           <td>${escapeHtml(item)}</td>
-          <td>${escapeHtml(color)}</td>
-          <td>${escapeHtml(vendor)}</td>
+          <td>${colorHtml}</td>
+          <td class="col-num">${sizeHtml}</td>
+          <td>${vendorHtml}</td>
           <td class="col-action"><button class="dash-action-btn dash-view-btn" data-id="${wo.id}">보기</button></td>
         </tr>`;
       });
@@ -6931,7 +6986,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.17';
+  const VERSION = 'v2.18';
   // title (브라우저 탭)
   document.title = 'RECOVERIC HIWOS ' + VERSION;
   // 사이드바 버전 태그
