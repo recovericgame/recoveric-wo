@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="HIWOS">
 <meta name="mobile-web-app-capable" content="yes">
-<title>RECOVERIC HIWOS v2.34</title>
+<title>RECOVERIC HIWOS v2.35</title>
 
 <!-- PWA Manifest (인라인 data URL) -->
 <link rel="manifest" id="pwa-manifest">
@@ -2620,7 +2620,7 @@
 <div class="app" id="main-app" style="display:none;">
   <aside class="sidebar">
     <h1>RECOVERIC</h1>
-    <div class="sub" id="hiwos-version-tag">HIWOS v2.34</div>
+    <div class="sub" id="hiwos-version-tag">HIWOS v2.35</div>
     <div id="user-info-section"></div>
     
     <!-- 모드 전환 -->
@@ -6104,9 +6104,11 @@ function validateBlendSum(blends, label) {
         <th>컬러</th>
         <th class="col-num">수량</th>
         <th>거래처 (공정)</th>
+        <th>📝 메모</th>
         <th class="col-action">작지</th>
         <th class="col-action">수정</th>
         <th class="col-action">복사</th>
+        <th class="col-action">완료</th>
         <th class="col-action">삭제</th>
       </tr></thead><tbody>`;
       
@@ -6167,9 +6169,11 @@ function validateBlendSum(blends, label) {
           <td>${colorHtml}</td>
           <td class="col-num">${sizeHtml}</td>
           <td>${vendorHtml}</td>
+          ${renderEditableCell(wo, 'internal_memo', wo.internal_memo, 'text')}
           <td class="col-action"><button class="dash-action-btn dash-view-btn" data-id="${wo.id}">보기</button></td>
           <td class="col-action"><button class="dash-action-btn dash-edit-btn" data-id="${wo.id}">수정</button></td>
           <td class="col-action"><button class="dash-action-btn dash-copy-btn" data-id="${wo.id}">복사</button></td>
+          <td class="col-action"><button class="dash-action-btn dash-complete-btn" data-id="${wo.id}">완료</button></td>
           <td class="col-action"><button class="dash-action-btn danger dash-delete-btn" data-id="${wo.id}">삭제</button></td>
         </tr>`;
       });
@@ -7755,6 +7759,32 @@ function validateBlendSum(blends, label) {
         } catch (e) { 
           cb.checked = !newState;
           toast('실패: ' + e.message, 'error'); 
+        }
+      });
+    });
+    
+    // v2.35: 전체 대시보드 "완료" 버튼 (dash-complete-cb와 동일 동작, 버튼 형태)
+    document.querySelectorAll('#dash-body .dash-complete-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const id = btn.dataset.id;
+        const wo = state.allWorkOrders.find(w => w.id === id);
+        if (!wo) return;
+        const msg = `해당 작업을 완료 처리하시겠습니까?\n\n[${wo.wo_number || ''}] ${wo.type || ''}\n완료 처리하면 진행 목록에서 사라집니다.\n("완료 포함" 체크 시 다시 볼 수 있습니다)`;
+        if (!confirm(msg)) return;
+        try {
+          btn.disabled = true;
+          btn.textContent = '처리 중...';
+          await updateDoc(doc(db, 'workorders', id), {
+            completed: true,
+            completed_at: serverTimestamp(),
+            updated_at: serverTimestamp(),
+            updated_by: state.user.email
+          });
+          toast('✓ 완료 처리되었습니다', 'success');
+        } catch (e) {
+          btn.disabled = false;
+          btn.textContent = '완료';
+          toast('실패: ' + e.message, 'error');
         }
       });
     });
