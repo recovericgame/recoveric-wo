@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="HIWOS">
 <meta name="mobile-web-app-capable" content="yes">
-<title>RECOVERIC HIWOS v2.35</title>
+<title>RECOVERIC HIWOS v2.36</title>
 
 <!-- PWA Manifest (인라인 data URL) -->
 <link rel="manifest" id="pwa-manifest">
@@ -1235,6 +1235,25 @@
   .dash-table tr.overdue td { background: inherit; }
   .dash-table tr.overdue td:first-child { border-left: 4px solid #c00; }
   .dash-table tr.overdue td.col-no { color: #c00; font-weight: 800; }
+  
+  /* v2.36: 컬러별 행 그룹 (염색가공) */
+  .dash-table.dash-table-color-rows tr.wo-group-first td {
+    border-top: 2px solid #888;  /* 의뢰서 시작 — 굵은 상단 보더 */
+  }
+  .dash-table.dash-table-color-rows tr.wo-group-cont td {
+    border-top: 1px dashed #ddd;  /* 같은 의뢰서 다음 컬러 — 점선 */
+  }
+  .dash-table.dash-table-color-rows tr.wo-group-cont:hover td {
+    background: #f0f7ff;
+  }
+  /* rowspan 셀 가독성 — 세로 가운데 정렬 */
+  .dash-table.dash-table-color-rows td[rowspan] {
+    vertical-align: middle;
+    background: #fcfcfc;
+  }
+  .dash-table.dash-table-color-rows tr.completed td[rowspan] {
+    background: #f5f5f5;
+  }
   
   .dash-table .col-no { width: 110px; font-weight: 700; }
   .dash-table .col-stamps { width: 90px; }
@@ -2620,7 +2639,7 @@
 <div class="app" id="main-app" style="display:none;">
   <aside class="sidebar">
     <h1>RECOVERIC</h1>
-    <div class="sub" id="hiwos-version-tag">HIWOS v2.35</div>
+    <div class="sub" id="hiwos-version-tag">HIWOS v2.36</div>
     <div id="user-info-section"></div>
     
     <!-- 모드 전환 -->
@@ -5948,6 +5967,114 @@ function validateBlendSum(blends, label) {
     return `<td class="cell-disabled" title="${escapeHtml(reason || '해당 공정 미선택')}">-</td>`;
   }
   
+  // ==================== v2.36: 컬러별 진척 시스템 ====================
+  // 컬러별 진척 필드 7종 (의뢰서 단위 동명 필드와 fallback)
+  const COLOR_PROGRESS_FIELDS = [
+    'dye_in_date', 'dye_done_date', 'proc_done_date', 'post_done_date',
+    'lot_no', 'arrival_date', 'internal_memo'
+  ];
+  
+  // 컬러별 진척값 가져오기 (fallback: 컬러에 값 없으면 의뢰서 단위에서)
+  function getColorField(wo, colorIdx, field) {
+    const c = wo.colors?.[colorIdx];
+    if (!c) return '';
+    // 컬러에 값이 있으면 컬러 우선
+    if (c[field] !== undefined && c[field] !== null && c[field] !== '') return c[field];
+    // 없으면 의뢰서 단위 fallback (역호환)
+    if (wo[field] !== undefined && wo[field] !== null && wo[field] !== '') return wo[field];
+    return '';
+  }
+  
+  // 컬러별 완료 판정 (color.completed 우선, 없으면 의뢰서 completed)
+  function isColorCompleted(wo, colorIdx) {
+    const c = wo.colors?.[colorIdx];
+    if (!c) return false;
+    if (c.completed === true) return true;
+    if (c.completed === false) return false;
+    // color.completed 미정 → 의뢰서 completed로 판정
+    return !!wo.completed;
+  }
+  
+  // 모든 컬러 완료 여부 (자동 의뢰서 완료 판정용)
+  function areAllColorsCompleted(wo) {
+    const colors = wo.colors || [];
+    if (colors.length === 0) return false;
+    return colors.every((c, i) => isColorCompleted(wo, i));
+  }
+  
+  // 컬러별 필드 저장 (콜백/UI 별도 처리, 여기서는 Firestore 업데이트만)
+  // moreFields: 추가로 같이 업데이트할 의뢰서 단위 필드 (예: completed)
+  async function updateColorFieldFS(woId, colorIdx, field, value, moreFields = {}) {
+    const wo = state.allWorkOrders.find(w => w.id === woId);
+    if (!wo) throw new Error('의뢰서를 찾을 수 없음');
+    const colors = JSON.parse(JSON.stringify(wo.colors || []));  // 깊은 복사
+    if (!colors[colorIdx]) throw new Error('컬러 인덱스 오류');
+    colors[colorIdx][field] = value || null;
+    
+    const updates = {
+      colors,
+      updated_at: serverTimestamp(),
+      updated_by: state.user.email,
+      ...moreFields
+    };
+    await updateDoc(doc(db, 'workorders', woId), updates);
+  }
+  
+  // 컬러별 완료 토글 + 의뢰서 자동 완료 판정
+  async function toggleColorCompleted(woId, colorIdx, newState) {
+    const wo = state.allWorkOrders.find(w => w.id === woId);
+    if (!wo) throw new Error('의뢰서를 찾을 수 없음');
+    const colors = JSON.parse(JSON.stringify(wo.colors || []));
+    if (!colors[colorIdx]) throw new Error('컬러 인덱스 오류');
+    colors[colorIdx].completed = newState;
+    if (newState) colors[colorIdx].completed_at = new Date().toISOString();
+    else delete colors[colorIdx].completed_at;
+    
+    // 모든 컬러 완료 → 의뢰서 자동 완료
+    const allDone = colors.every(c => c.completed === true);
+    
+    const updates = {
+      colors,
+      updated_at: serverTimestamp(),
+      updated_by: state.user.email
+    };
+    if (allDone) {
+      updates.completed = true;
+      updates.completed_at = serverTimestamp();
+    } else if (wo.completed) {
+      // 일부 컬러 해제 → 의뢰서 완료도 해제
+      updates.completed = false;
+      updates.completed_at = null;
+    }
+    await updateDoc(doc(db, 'workorders', woId), updates);
+    return allDone;
+  }
+  
+  // 컬러별 셀 렌더링 (data-color-idx 추가)
+  function renderColorEditableCell(wo, colorIdx, field, type='text') {
+    const value = getColorField(wo, colorIdx, field);
+    const hasValue = value && value !== '';
+    
+    if (field === 'internal_memo') {
+      const cls = hasValue ? 'editable has-value' : 'editable';
+      const inner = hasValue 
+        ? `<div class="memo-text">${escapeHtml(value)}</div>`
+        : `<div class="memo-text">+ 메모</div>`;
+      const expandBtn = `<button type="button" class="memo-expand-btn" data-id="${wo.id}" data-color-idx="${colorIdx}" data-action="expand-memo-color" title="크게 보기 / 편집">⤢</button>`;
+      return `<td class="${cls}" data-id="${wo.id}" data-color-idx="${colorIdx}" data-field="${field}" data-type="textarea" data-color-cell="1">${inner}${expandBtn}</td>`;
+    }
+    
+    let display = hasValue ? escapeHtml(value) : '';
+    const cls = hasValue ? 'editable has-value' : 'editable';
+    return `<td class="${cls}" data-id="${wo.id}" data-color-idx="${colorIdx}" data-field="${field}" data-type="${type}" data-color-cell="1">${display}</td>`;
+  }
+  
+  // 컬러별 비활성화 셀 (해당 공정 미선택)
+  function renderColorDisabledCell(reason) {
+    return `<td class="cell-disabled" title="${escapeHtml(reason || '해당 공정 미선택')}">-</td>`;
+  }
+  // ============================================================
+  
   // 컬러 요약 (대표 컬러 + 개수) - v2.16까지의 압축 표시 (현재는 사용 X)
   function summarizeColors(colors) {
     if (!colors || colors.length === 0) return '-';
@@ -6389,7 +6516,7 @@ function validateBlendSum(blends, label) {
     return html;
   }
   
-  // ===== 염색가공 진행 화면 =====
+  // ===== 염색가공 진행 화면 (v2.36 컬러별 분리) =====
   function renderFinishDash() {
     const list = getDashWorkOrders('염색가공');
     const totalCount = state.allWorkOrders.filter(wo => 
@@ -6409,7 +6536,31 @@ function validateBlendSum(blends, label) {
       </label>
     </div>`;
     
-    if (list.length === 0) {
+    // v2.36: 컬러별로 표시할 행 미리 계산 (미완료 컬러만)
+    const rowsToShow = [];
+    list.forEach(wo => {
+      const colors = wo.colors || [];
+      if (colors.length === 0) {
+        // 컬러가 없는 의뢰서: 의뢰서 1행으로 표시 (의뢰서 완료 상태로 판정)
+        if (state.showCompleted || !wo.completed) {
+          rowsToShow.push({ wo, colorIdx: -1, isFirstRow: true, totalRows: 1 });
+        }
+        return;
+      }
+      // 미완료 컬러만 추출 (showCompleted 켜지면 모두)
+      const visibleColorIdxs = colors.map((c, i) => i).filter(i => state.showCompleted || !isColorCompleted(wo, i));
+      if (visibleColorIdxs.length === 0) return;  // 이 의뢰서의 모든 컬러가 완료됨 → 행 스킵
+      visibleColorIdxs.forEach((cIdx, n) => {
+        rowsToShow.push({
+          wo,
+          colorIdx: cIdx,
+          isFirstRow: n === 0,
+          totalRows: visibleColorIdxs.length
+        });
+      });
+    });
+    
+    if (rowsToShow.length === 0) {
       const emptyMsg = isFiltered 
         ? `필터 조건에 맞는 염색가공 의뢰서가 없습니다.<br><br>상단 <strong>"전체"</strong> 버튼을 눌러 필터를 해제할 수 있습니다.`
         : `${state.showCompleted ? '' : '진행 중인 '}염색가공 의뢰서가 없습니다.<br><br>위의 <strong>"+ 새 행 추가"</strong> 버튼을 눌러 직접 입력할 수 있습니다.`;
@@ -6417,7 +6568,7 @@ function validateBlendSum(blends, label) {
       return html;
     }
     
-    html += `<div class="dash-bulk-bar-slot" data-type="염색가공"></div><div class="dash-table-wrap"><table class="dash-table" data-list-type="염색가공"><thead><tr>
+    html += `<div class="dash-bulk-bar-slot" data-type="염색가공"></div><div class="dash-table-wrap"><table class="dash-table dash-table-color-rows" data-list-type="염색가공"><thead><tr>
       <th class="col-select"><input type="checkbox" class="dash-all-cb" data-list-type="염색가공" title="전체 선택"></th>
       <th class="col-no">NO</th>
       <th class="col-stamps">스탬프</th>
@@ -6435,6 +6586,7 @@ function validateBlendSum(blends, label) {
       ${sortableTh('finish', 'recipients_post', '후가공처')}
       <th class="col-date">후가공완료</th>
       <th class="col-action">LOT</th>
+      <th class="col-date">입고일</th>
       <th>📝 메모</th>
       <th class="col-action">작지</th>
       <th class="col-action">작업</th>
@@ -6443,69 +6595,103 @@ function validateBlendSum(blends, label) {
       <th class="col-action">삭제</th>
     </tr></thead><tbody>`;
     
-    list.forEach(wo => {
+    rowsToShow.forEach(({ wo, colorIdx, isFirstRow, totalRows }) => {
       const elapsed = daysSince(wo.date);
       const overdueClass = !wo.completed && elapsed >= 5 ? 'overdue' : '';
-      const completedClass = wo.completed ? 'completed' : '';
-      const colors = wo.colors || [];
+      const colorCompleted = colorIdx >= 0 && isColorCompleted(wo, colorIdx);
+      const completedClass = colorCompleted ? 'completed' : '';
+      const groupBoundaryClass = isFirstRow ? 'wo-group-first' : 'wo-group-cont';
       
-      // v2.17: 컬러 멀티라인 분리
-      const { colorHtml, sizeHtml } = renderColorList(colors);
-      
-      // v2.17: 공정 선택 여부 (염색/가공/후가공)
       const procs = wo.processes || {};
-      const hasDye = procs.dyeing !== false;  // 기본 true (구버전 호환)
+      const hasDye = procs.dyeing !== false;
       const hasProc = procs.processing === true;
       const hasPost = procs.post === true;
       
-      // 생지투입 / 염색완료 → 염색 공정 선택 시에만 입력 가능
+      // 컬러 정보
+      const c = wo.colors?.[colorIdx];
+      const colorName = c ? (c.name || '-') : '-';
+      const sizeText = c ? `${c.body !== '' && c.body !== null && c.body !== undefined ? c.body : '-'}/${c.rib !== '' && c.rib !== null && c.rib !== undefined ? c.rib : '-'}` : '-';
+      
+      // ★ 의뢰서 단위 셀 (rowspan으로 첫 행에만, 같은 의뢰서의 다른 컬러 행은 생략)
+      // 의뢰서 단위: 선택, NO, 스탬프, 발주일, [구분, 최종납품처], 몸판품목, 염색처, 가공처, 후가공처, 작지, 작업, 복사, 삭제
+      const woUnitCells = isFirstRow ? `
+        <td class="col-select" rowspan="${totalRows}"><input type="checkbox" class="dash-row-cb" data-id="${wo.id}" data-list-type="염색가공"></td>
+        <td class="col-no" rowspan="${totalRows}">${escapeHtml(wo.wo_number || '-')}</td>
+        <td class="col-stamps" rowspan="${totalRows}">${renderStampMini(wo.stamps) || '-'}</td>
+        <td class="col-date" rowspan="${totalRows}">${formatYMD(wo.date)}</td>
+        ${compact ? '' : `<td rowspan="${totalRows}">${escapeHtml(wo.production_type || '-')}</td>`}
+        ${compact ? '' : `<td rowspan="${totalRows}">${escapeHtml(wo.final_destination || '-')}</td>`}
+        <td rowspan="${totalRows}">${escapeHtml(wo.body?.item || '-')}</td>` : '';
+      
+      // ★ 컬러 단위 셀 (매 행)
+      const colorCell = `<td>${escapeHtml(colorName)}</td>`;
+      const sizeCell = `<td class="col-num">${escapeHtml(sizeText)}</td>`;
+      
+      // 염색처/가공처/후가공처 (의뢰서 단위, rowspan 첫 행에만)
+      const dyeRecvCell = isFirstRow ? `<td rowspan="${totalRows}">${escapeHtml(wo.recipients?.dyeing || '-')}</td>` : '';
+      
+      // 컬러별 진척 셀
       const dyeInCell = hasDye 
-        ? renderEditableCell(wo, 'dye_in_date', wo.dye_in_date, 'date')
-        : renderDisabledCell('염색 공정 미선택');
+        ? renderColorEditableCell(wo, colorIdx, 'dye_in_date', 'date')
+        : renderColorDisabledCell('염색 공정 미선택');
       const dyeDoneCell = hasDye
-        ? renderEditableCell(wo, 'dye_done_date', wo.dye_done_date, 'date')
-        : renderDisabledCell('염색 공정 미선택');
+        ? renderColorEditableCell(wo, colorIdx, 'dye_done_date', 'date')
+        : renderColorDisabledCell('염색 공정 미선택');
       
-      // 가공처 / 가공완료 → 가공 공정 선택 시에만 입력 가능
-      const procRecvCell = hasProc 
-        ? `<td>${escapeHtml(wo.recipients?.processing || '-')}</td>`
-        : renderDisabledCell('가공 공정 미선택');
+      const procRecvCell = isFirstRow 
+        ? (hasProc 
+          ? `<td rowspan="${totalRows}">${escapeHtml(wo.recipients?.processing || '-')}</td>`
+          : `<td class="cell-disabled" rowspan="${totalRows}" title="가공 공정 미선택">-</td>`)
+        : '';
       const procDoneCell = hasProc
-        ? renderEditableCell(wo, 'proc_done_date', wo.proc_done_date, 'date')
-        : renderDisabledCell('가공 공정 미선택');
+        ? renderColorEditableCell(wo, colorIdx, 'proc_done_date', 'date')
+        : renderColorDisabledCell('가공 공정 미선택');
       
-      // 후가공처 / 후가공완료 → 후가공 공정 선택 시에만 입력 가능
-      const postRecvCell = hasPost
-        ? `<td>${escapeHtml(wo.recipients?.post || '-')}</td>`
-        : renderDisabledCell('후가공 공정 미선택');
+      const postRecvCell = isFirstRow 
+        ? (hasPost 
+          ? `<td rowspan="${totalRows}">${escapeHtml(wo.recipients?.post || '-')}</td>`
+          : `<td class="cell-disabled" rowspan="${totalRows}" title="후가공 공정 미선택">-</td>`)
+        : '';
       const postDoneCell = hasPost
-        ? renderEditableCell(wo, 'post_done_date', wo.post_done_date, 'date')
-        : renderDisabledCell('후가공 공정 미선택');
+        ? renderColorEditableCell(wo, colorIdx, 'post_done_date', 'date')
+        : renderColorDisabledCell('후가공 공정 미선택');
       
-      html += `<tr class="${overdueClass} ${completedClass}" data-row-id="${wo.id}">
-        <td class="col-select"><input type="checkbox" class="dash-row-cb" data-id="${wo.id}" data-list-type="염색가공"></td>
-        <td class="col-no">${escapeHtml(wo.wo_number || '-')}</td>
-        <td class="col-stamps">${renderStampMini(wo.stamps) || '-'}</td>
-        <td class="col-date">${formatYMD(wo.date)}</td>
-        ${compact ? '' : `<td>${escapeHtml(wo.production_type || '-')}</td>`}
-        ${compact ? '' : `<td>${escapeHtml(wo.final_destination || '-')}</td>`}
-        <td>${escapeHtml(wo.body?.item || '-')}</td>
-        <td>${colorHtml}</td>
-        <td class="col-num">${sizeHtml}</td>
-        <td>${escapeHtml(wo.recipients?.dyeing || '-')}</td>
+      const lotCell = renderColorEditableCell(wo, colorIdx, 'lot_no', 'text');
+      const arrivalCell = renderColorEditableCell(wo, colorIdx, 'arrival_date', 'date');
+      const memoCell = renderColorEditableCell(wo, colorIdx, 'internal_memo', 'text');
+      
+      // 액션 버튼 (의뢰서 단위, rowspan 첫 행에만)
+      const actionCells = isFirstRow ? `
+        <td class="col-action" rowspan="${totalRows}"><button class="dash-action-btn dash-view-btn" data-id="${wo.id}">보기</button></td>
+        <td class="col-action" rowspan="${totalRows}"><button class="dash-action-btn dash-edit-btn" data-id="${wo.id}">수정</button></td>
+        <td class="col-action" rowspan="${totalRows}"><button class="dash-action-btn dash-copy-btn" data-id="${wo.id}">복사</button></td>` : '';
+      
+      // 완료 체크박스 (컬러 단위)
+      const completeCell = colorIdx >= 0
+        ? `<td class="col-action"><input type="checkbox" class="dash-color-complete-cb" data-id="${wo.id}" data-color-idx="${colorIdx}" ${colorCompleted ? 'checked' : ''}> ${colorCompleted ? '완료' : ''}</td>`
+        : `<td class="col-action"><input type="checkbox" class="dash-complete-cb" data-id="${wo.id}" ${wo.completed ? 'checked' : ''}> ${wo.completed ? '완료' : ''}</td>`;
+      
+      const deleteCell = isFirstRow 
+        ? `<td class="col-action" rowspan="${totalRows}"><button class="dash-action-btn danger dash-delete-btn" data-id="${wo.id}">삭제</button></td>` 
+        : '';
+      
+      html += `<tr class="${overdueClass} ${completedClass} ${groupBoundaryClass}" data-row-id="${wo.id}" data-color-idx="${colorIdx}">
+        ${woUnitCells}
+        ${colorCell}
+        ${sizeCell}
+        ${dyeRecvCell}
         ${dyeInCell}
         ${dyeDoneCell}
         ${procRecvCell}
         ${procDoneCell}
         ${postRecvCell}
         ${postDoneCell}
-        ${renderEditableCell(wo, 'lot_no', wo.lot_no, 'text')}
-        ${renderEditableCell(wo, 'internal_memo', wo.internal_memo, 'text')}
-        <td class="col-action"><button class="dash-action-btn dash-view-btn" data-id="${wo.id}">보기</button></td>
-        <td class="col-action"><button class="dash-action-btn dash-edit-btn" data-id="${wo.id}">수정</button></td>
-        <td class="col-action"><button class="dash-action-btn dash-copy-btn" data-id="${wo.id}">복사</button></td>
-        <td class="col-action"><input type="checkbox" class="dash-complete-cb" data-id="${wo.id}" ${wo.completed ? 'checked' : ''}> ${wo.completed ? '완료' : ''}</td>
-        <td class="col-action"><button class="dash-action-btn danger dash-delete-btn" data-id="${wo.id}">삭제</button></td>
+        ${lotCell}
+        ${arrivalCell}
+        ${memoCell}
+        ${actionCells}
+        ${completeCell}
+        ${deleteCell}
       </tr>`;
     });
     
@@ -6990,6 +7176,88 @@ function validateBlendSum(blends, label) {
     </tr></thead><tbody>`;
     
     list.forEach(wo => {
+      // v2.36: 염색가공은 완료된 컬러만 분리 표시 (rowspan)
+      if (wo.type === '염색가공') {
+        const colors = wo.colors || [];
+        // 컬러가 있으면: 의뢰서 자체 완료(=모든 컬러 완료) → 모든 컬러 표시
+        //                   부분 완료 → completed=true인 컬러만 표시
+        const completedColorIdxs = colors.length > 0
+          ? (wo.completed 
+            ? colors.map((_, i) => i)  // 의뢰서 통째 완료: 모두 표시
+            : colors.map((c, i) => i).filter(i => isColorCompleted(wo, i)))  // 부분: 완료된 것만
+          : [];
+        
+        if (completedColorIdxs.length === 0) {
+          // 컬러가 없는 옛 의뢰서 호환 — 기존 단일 행
+          const item = wo.body?.item || '-';
+          const cl = renderColorList(wo.colors);
+          const recList = [];
+          if (wo.processes?.dyeing && wo.recipients?.dyeing) recList.push(`<div class="vendor-line"><span class="vendor-tag">염색</span>${escapeHtml(wo.recipients.dyeing)}</div>`);
+          if (wo.processes?.processing && wo.recipients?.processing) recList.push(`<div class="vendor-line"><span class="vendor-tag">가공</span>${escapeHtml(wo.recipients.processing)}</div>`);
+          if (wo.processes?.post && wo.recipients?.post) recList.push(`<div class="vendor-line"><span class="vendor-tag">후가공</span>${escapeHtml(wo.recipients.post)}</div>`);
+          const vendorHtml = recList.length > 0 ? recList.join('') : '-';
+          const completedDate = wo.completed_at?.toDate
+            ? wo.completed_at.toDate().toLocaleDateString('ko-KR', {month:'numeric', day:'numeric'})
+            : (wo.updated_at?.toDate ? wo.updated_at.toDate().toLocaleDateString('ko-KR', {month:'numeric', day:'numeric'}) : '-');
+          html += `<tr class="completed">
+            <td class="col-no">${escapeHtml(wo.wo_number || '-')}</td>
+            <td>${escapeHtml(wo.type || '-')}</td>
+            <td class="col-date">${formatYMD(wo.date)}</td>
+            <td class="col-date">${completedDate}</td>
+            <td>${escapeHtml(item)}</td>
+            <td>${cl.colorHtml}</td>
+            <td class="col-num">${cl.sizeHtml}</td>
+            <td>${vendorHtml}</td>
+            <td class="col-action"><button class="dash-action-btn dash-view-btn" data-id="${wo.id}">보기</button></td>
+            <td class="col-action"><button class="dash-action-btn dash-copy-btn" data-id="${wo.id}">복사</button></td>
+            <td class="col-action"><button class="dash-action-btn dash-edit-btn" data-id="${wo.id}">수정</button></td>
+            <td class="col-action"><input type="checkbox" class="dash-complete-cb" data-id="${wo.id}" checked> 완료</td>
+            <td class="col-action"><button class="dash-action-btn danger dash-delete-btn" data-id="${wo.id}">삭제</button></td>
+          </tr>`;
+          return;
+        }
+        
+        // 컬러별 N행
+        const totalRows = completedColorIdxs.length;
+        const item = wo.body?.item || '-';
+        const recList = [];
+        if (wo.processes?.dyeing && wo.recipients?.dyeing) recList.push(`<div class="vendor-line"><span class="vendor-tag">염색</span>${escapeHtml(wo.recipients.dyeing)}</div>`);
+        if (wo.processes?.processing && wo.recipients?.processing) recList.push(`<div class="vendor-line"><span class="vendor-tag">가공</span>${escapeHtml(wo.recipients.processing)}</div>`);
+        if (wo.processes?.post && wo.recipients?.post) recList.push(`<div class="vendor-line"><span class="vendor-tag">후가공</span>${escapeHtml(wo.recipients.post)}</div>`);
+        const vendorHtml = recList.length > 0 ? recList.join('') : '-';
+        const woCompletedDate = wo.completed_at?.toDate
+          ? wo.completed_at.toDate().toLocaleDateString('ko-KR', {month:'numeric', day:'numeric'})
+          : (wo.updated_at?.toDate ? wo.updated_at.toDate().toLocaleDateString('ko-KR', {month:'numeric', day:'numeric'}) : '-');
+        
+        completedColorIdxs.forEach((cIdx, n) => {
+          const isFirst = n === 0;
+          const c = wo.colors[cIdx];
+          // 컬러 완료일: c.completed_at 우선, 없으면 의뢰서 단위
+          const cDate = c.completed_at 
+            ? new Date(c.completed_at).toLocaleDateString('ko-KR', {month:'numeric', day:'numeric'})
+            : woCompletedDate;
+          const sizeText = `${c.body !== '' && c.body !== null && c.body !== undefined ? c.body : '-'}/${c.rib !== '' && c.rib !== null && c.rib !== undefined ? c.rib : '-'}`;
+          
+          html += `<tr class="completed ${isFirst ? 'wo-group-first' : 'wo-group-cont'}">
+            ${isFirst ? `<td class="col-no" rowspan="${totalRows}">${escapeHtml(wo.wo_number || '-')}</td>` : ''}
+            ${isFirst ? `<td rowspan="${totalRows}">${escapeHtml(wo.type)}</td>` : ''}
+            ${isFirst ? `<td class="col-date" rowspan="${totalRows}">${formatYMD(wo.date)}</td>` : ''}
+            <td class="col-date">${cDate}</td>
+            ${isFirst ? `<td rowspan="${totalRows}">${escapeHtml(item)}</td>` : ''}
+            <td>${escapeHtml(c.name || '-')}</td>
+            <td class="col-num">${escapeHtml(sizeText)}</td>
+            ${isFirst ? `<td rowspan="${totalRows}">${vendorHtml}</td>` : ''}
+            ${isFirst ? `<td class="col-action" rowspan="${totalRows}"><button class="dash-action-btn dash-view-btn" data-id="${wo.id}">보기</button></td>` : ''}
+            ${isFirst ? `<td class="col-action" rowspan="${totalRows}"><button class="dash-action-btn dash-copy-btn" data-id="${wo.id}">복사</button></td>` : ''}
+            ${isFirst ? `<td class="col-action" rowspan="${totalRows}"><button class="dash-action-btn dash-edit-btn" data-id="${wo.id}">수정</button></td>` : ''}
+            <td class="col-action"><input type="checkbox" class="dash-color-complete-cb" data-id="${wo.id}" data-color-idx="${cIdx}" checked> 완료</td>
+            ${isFirst ? `<td class="col-action" rowspan="${totalRows}"><button class="dash-action-btn danger dash-delete-btn" data-id="${wo.id}">삭제</button></td>` : ''}
+          </tr>`;
+        });
+        return;
+      }
+      
+      // 그 외 유형 (원사/편직/BT) — 기존 그대로
       let item = '-', colorHtml = '-', sizeHtml = '-', vendorHtml = '-';
       
       if (wo.type === '원사') {
@@ -7116,12 +7384,24 @@ function validateBlendSum(blends, label) {
     msg += `\n\n완료 처리하면 진행 목록에서 사라집니다.\n("완료 포함" 체크 시 다시 볼 수 있습니다)`;
     if (!confirm(msg)) return;
     try {
-      await Promise.all(targets.map(w => updateDoc(doc(db, 'workorders', w.id), {
-        completed: true,
-        completed_at: serverTimestamp(),
-        updated_at: serverTimestamp(),
-        updated_by: state.user.email
-      })));
+      await Promise.all(targets.map(w => {
+        const updates = {
+          completed: true,
+          completed_at: serverTimestamp(),
+          updated_at: serverTimestamp(),
+          updated_by: state.user.email
+        };
+        // v2.36: 염색가공은 모든 컬러도 completed: true 처리 (일관성)
+        if (w.type === '염색가공' && Array.isArray(w.colors) && w.colors.length > 0) {
+          const newColors = w.colors.map(c => ({
+            ...c,
+            completed: true,
+            completed_at: c.completed_at || new Date().toISOString()
+          }));
+          updates.colors = newColors;
+        }
+        return updateDoc(doc(db, 'workorders', w.id), updates);
+      }));
       toast(`✓ ${targets.length}건 일괄 완료 처리됨`, 'success');
     } catch (e) {
       toast('일괄 완료 실패: ' + e.message, 'error');
@@ -7660,7 +7940,13 @@ function validateBlendSum(blends, label) {
         // v2.18: 메모 확장 버튼 클릭 시 모달로 전환 (인라인 편집 안 함)
         if (e.target && e.target.classList.contains('memo-expand-btn')) {
           e.stopPropagation();
-          openMemoModal(e.target.dataset.id);
+          const action = e.target.dataset.action;
+          if (action === 'expand-memo-color') {
+            // v2.36: 컬러별 메모 모달
+            openColorMemoModal(e.target.dataset.id, parseInt(e.target.dataset.colorIdx, 10));
+          } else {
+            openMemoModal(e.target.dataset.id);
+          }
           return;
         }
         if (cell.querySelector('input, textarea')) return;
@@ -7668,7 +7954,12 @@ function validateBlendSum(blends, label) {
         const field = cell.dataset.field;
         const type = cell.dataset.type;
         const wo = state.allWorkOrders.find(w => w.id === id);
-        const current = wo?.[field] || '';
+        // v2.36: 컬러 셀이면 컬러별 값 사용
+        const isColorCell = cell.dataset.colorCell === '1';
+        const colorIdx = isColorCell ? parseInt(cell.dataset.colorIdx, 10) : -1;
+        const current = isColorCell 
+          ? getColorField(wo, colorIdx, field) 
+          : (wo?.[field] || '');
         
         // v2.18: 메모는 textarea (멀티라인)
         if (field === 'internal_memo') {
@@ -7684,11 +7975,15 @@ function validateBlendSum(blends, label) {
             const newVal = ta.value.trim();
             if (newVal === current) { renderDashboard(); return; }
             try {
-              await updateDoc(doc(db, 'workorders', id), {
-                [field]: newVal || null,
-                updated_at: serverTimestamp(),
-                updated_by: state.user.email
-              });
+              if (isColorCell) {
+                await updateColorFieldFS(id, colorIdx, field, newVal || null);
+              } else {
+                await updateDoc(doc(db, 'workorders', id), {
+                  [field]: newVal || null,
+                  updated_at: serverTimestamp(),
+                  updated_by: state.user.email
+                });
+              }
               toast('메모 저장됨', 'success');
             } catch (e) { toast('저장 실패: ' + e.message, 'error'); }
           };
@@ -7719,11 +8014,15 @@ function validateBlendSum(blends, label) {
           const newVal = input.value.trim();
           if (newVal === current) { renderDashboard(); return; }
           try {
-            await updateDoc(doc(db, 'workorders', id), {
-              [field]: newVal || null,
-              updated_at: serverTimestamp(),
-              updated_by: state.user.email
-            });
+            if (isColorCell) {
+              await updateColorFieldFS(id, colorIdx, field, newVal || null);
+            } else {
+              await updateDoc(doc(db, 'workorders', id), {
+                [field]: newVal || null,
+                updated_at: serverTimestamp(),
+                updated_by: state.user.email
+              });
+            }
             toast('저장됨', 'success');
           } catch (e) { toast('저장 실패: ' + e.message, 'error'); }
         };
@@ -7732,6 +8031,37 @@ function validateBlendSum(blends, label) {
           if (ev.key === 'Enter') input.blur();
           if (ev.key === 'Escape') renderDashboard();
         });
+      });
+    });
+    
+    // v2.36: 컬러별 완료 체크박스 (염색가공 진행 표 / 완료된 의뢰서 화면)
+    document.querySelectorAll('#dash-body .dash-color-complete-cb').forEach(cb => {
+      cb.addEventListener('change', async (e) => {
+        const id = cb.dataset.id;
+        const colorIdx = parseInt(cb.dataset.colorIdx, 10);
+        const wo = state.allWorkOrders.find(w => w.id === id);
+        const c = wo?.colors?.[colorIdx];
+        if (!wo || !c) { cb.checked = !cb.checked; return; }
+        const newState = cb.checked;
+        const cName = c.name || `컬러 #${colorIdx + 1}`;
+        const msg = newState 
+          ? `[${wo.wo_number || ''}] "${cName}" 완료 처리하시겠습니까?\n\n해당 컬러는 진행 목록에서 사라지고\n완료된 의뢰서 화면으로 이동합니다.\n\n(모든 컬러가 완료되면 의뢰서 자체도 자동 완료됩니다)` 
+          : `[${wo.wo_number || ''}] "${cName}" 완료 해제하시겠습니까?\n\n진행 목록에 다시 표시됩니다.`;
+        if (!confirm(msg)) {
+          cb.checked = !newState;
+          return;
+        }
+        try {
+          const allDone = await toggleColorCompleted(id, colorIdx, newState);
+          if (newState && allDone) {
+            toast(`✓ "${cName}" 완료 — 모든 컬러 완료로 의뢰서 자동 완료됨`, 'success');
+          } else {
+            toast(newState ? `✓ "${cName}" 완료 처리됨` : `"${cName}" 진행 중으로 변경됨`, 'success');
+          }
+        } catch (e) {
+          cb.checked = !newState;
+          toast('실패: ' + e.message, 'error');
+        }
       });
     });
     
@@ -7749,12 +8079,22 @@ function validateBlendSum(blends, label) {
           return;
         }
         try {
-          await updateDoc(doc(db, 'workorders', id), {
+          const updates = {
             completed: newState,
             completed_at: newState ? serverTimestamp() : null,
             updated_at: serverTimestamp(),
             updated_by: state.user.email
-          });
+          };
+          // v2.36: 염색가공이면 colors[].completed 동기화
+          if (wo && wo.type === '염색가공' && Array.isArray(wo.colors) && wo.colors.length > 0) {
+            updates.colors = wo.colors.map(c => {
+              const next = { ...c, completed: newState };
+              if (newState) next.completed_at = c.completed_at || new Date().toISOString();
+              else delete next.completed_at;
+              return next;
+            });
+          }
+          await updateDoc(doc(db, 'workorders', id), updates);
           toast(newState ? '✓ 완료 처리되었습니다' : '진행 중으로 변경됨', 'success');
         } catch (e) { 
           cb.checked = !newState;
@@ -7774,12 +8114,21 @@ function validateBlendSum(blends, label) {
         try {
           btn.disabled = true;
           btn.textContent = '처리 중...';
-          await updateDoc(doc(db, 'workorders', id), {
+          const updates = {
             completed: true,
             completed_at: serverTimestamp(),
             updated_at: serverTimestamp(),
             updated_by: state.user.email
-          });
+          };
+          // v2.36: 염색가공이면 모든 컬러도 completed: true 동기화
+          if (wo.type === '염색가공' && Array.isArray(wo.colors) && wo.colors.length > 0) {
+            updates.colors = wo.colors.map(c => ({
+              ...c,
+              completed: true,
+              completed_at: c.completed_at || new Date().toISOString()
+            }));
+          }
+          await updateDoc(doc(db, 'workorders', id), updates);
           toast('✓ 완료 처리되었습니다', 'success');
         } catch (e) {
           btn.disabled = false;
@@ -8267,6 +8616,82 @@ function validateBlendSum(blends, label) {
     document.getElementById('memo-cancel').addEventListener('click', () => modal.classList.remove('show'));
     
     // Ctrl+Enter 저장 / Esc 취소
+    ta.addEventListener('keydown', (ev) => {
+      if ((ev.ctrlKey || ev.metaKey) && ev.key === 'Enter') {
+        ev.preventDefault();
+        saveMemo();
+      }
+      if (ev.key === 'Escape') {
+        ev.preventDefault();
+        modal.classList.remove('show');
+      }
+    });
+  }
+  
+  // v2.36: 컬러별 메모 편집 모달
+  function openColorMemoModal(woId, colorIdx) {
+    const wo = state.allWorkOrders.find(w => w.id === woId);
+    if (!wo) return;
+    const c = wo.colors?.[colorIdx];
+    if (!c) return;
+    const current = getColorField(wo, colorIdx, 'internal_memo') || '';
+    
+    const modal = document.getElementById('dash-modal-bg');
+    document.getElementById('dash-modal-title').textContent = `📝 컬러 메모 — ${wo.wo_number || ''} / ${c.name || `컬러 #${colorIdx + 1}`}`;
+    
+    const actionsBox = document.getElementById('dash-modal-actions');
+    if (actionsBox) {
+      ['dash-modal-image', 'dash-modal-copy', 'dash-modal-print', 'dash-modal-kakao'].forEach(id => {
+        const b = document.getElementById(id);
+        if (b) b.style.display = 'none';
+      });
+    }
+    
+    const initVal = current || autoTimestampPrefix();
+    document.getElementById('dash-modal-body').innerHTML = `
+      <div style="max-width:680px;margin:auto;">
+        <div class="memo-modal-info">
+          의뢰서: <strong>${escapeHtml(getWoTitle(wo))}</strong><br>
+          컬러: <strong>${escapeHtml(c.name || '-')}</strong> (몸판 ${c.body || 0}절 / 리프 ${c.rib || 0}절)<br>
+          단축키: <strong>Ctrl+Enter</strong> 저장 / <strong>Esc</strong> 취소 / 일반 Enter는 줄바꿈
+        </div>
+        <div class="memo-modal-toolbar">
+          <button type="button" class="memo-modal-btn" id="memo-add-ts">＋ 타임스탬프 [${autoTimestampPrefix().trim()}] 줄바꿈 추가</button>
+        </div>
+        <textarea class="memo-modal-textarea" id="memo-modal-input" placeholder="이 컬러에 대한 메모를 입력하세요.">${escapeHtml(initVal)}</textarea>
+        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px;">
+          <button type="button" class="memo-modal-btn" id="memo-cancel">취소</button>
+          <button type="button" class="memo-modal-btn primary" id="memo-save">저장 (Ctrl+Enter)</button>
+        </div>
+      </div>`;
+    modal.classList.add('show');
+    
+    const ta = document.getElementById('memo-modal-input');
+    ta.focus();
+    ta.setSelectionRange(ta.value.length, ta.value.length);
+    
+    document.getElementById('memo-add-ts').addEventListener('click', () => {
+      const cur = ta.value;
+      const needNL = cur.length > 0 && !cur.endsWith('\n');
+      ta.value = cur + (needNL ? '\n' : '') + autoTimestampPrefix();
+      ta.focus();
+      ta.setSelectionRange(ta.value.length, ta.value.length);
+    });
+    
+    const saveMemo = async () => {
+      const newVal = ta.value.trim();
+      if (newVal === current) { modal.classList.remove('show'); return; }
+      try {
+        await updateColorFieldFS(woId, colorIdx, 'internal_memo', newVal || null);
+        toast('컬러 메모 저장됨', 'success');
+        modal.classList.remove('show');
+        renderDashboard();
+      } catch (e) { toast('저장 실패: ' + e.message, 'error'); }
+    };
+    
+    document.getElementById('memo-save').addEventListener('click', saveMemo);
+    document.getElementById('memo-cancel').addEventListener('click', () => modal.classList.remove('show'));
+    
     ta.addEventListener('keydown', (ev) => {
       if ((ev.ctrlKey || ev.metaKey) && ev.key === 'Enter') {
         ev.preventDefault();
