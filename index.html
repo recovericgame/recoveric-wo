@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="HIWOS">
 <meta name="mobile-web-app-capable" content="yes">
-<title>RECOVERIC HIWOS v2.38</title>
+<title>RECOVERIC HIWOS v2.39</title>
 
 <!-- PWA Manifest (인라인 data URL) -->
 <link rel="manifest" id="pwa-manifest">
@@ -1082,11 +1082,9 @@
     border: 1px solid #ddd;
     border-radius: 3px;
     overflow-x: auto;
-    overflow-y: auto;
-    /* v2.37: 가로 스크롤바를 viewport 안쪽에 항상 노출 — 표 끝까지 안 내려가도 잡힘 */
-    max-height: calc(100vh - 260px);
+    /* v2.39: max-height/overflow-y 제거 — 페이지 전체 스크롤만 사용해 이중 스크롤바 방지 */
   }
-  /* v2.37: 좌측 핵심 컬럼(.col-select, .col-no) 가로 스크롤 시 고정 */
+  /* v2.37: 좌측 핵심 컬럼(.col-select, .col-no) 가로 스크롤 시 고정 — 유지 */
   /* col-select(36px)가 있으면 left: 0, col-no는 left: 36px */
   /* col-select 없으면 col-no가 left: 0 */
   .dash-table th.col-select,
@@ -1397,7 +1395,9 @@
   /* v2.18: 메모 모달 */
   .memo-modal-textarea {
     width: 100%;
-    min-height: 220px;
+    min-height: 180px;
+    /* v2.39: 작은 화면에서도 저장/취소 버튼이 보이게 max-height 추가 */
+    max-height: calc(60vh);
     padding: 10px;
     border: 1px solid #999;
     border-radius: 4px;
@@ -1406,6 +1406,25 @@
     line-height: 1.6;
     resize: vertical;
     box-sizing: border-box;
+  }
+  /* v2.39: 메모 모달 본문 컨테이너 — 좌우상하 여백 + footer 버튼 들고 있게 */
+  .memo-modal-container {
+    max-width: 680px;
+    margin: auto;
+    padding: 18px 20px 16px;
+    box-sizing: border-box;
+  }
+  .memo-modal-footer {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+    margin-top: 14px;
+    /* v2.39: footer가 항상 모달 하단에 보이게 (textarea가 길어도) */
+    position: sticky;
+    bottom: 0;
+    background: #fff;
+    padding-top: 8px;
+    z-index: 2;
   }
   .memo-modal-toolbar {
     display: flex;
@@ -2068,11 +2087,7 @@
     .desktop-only { display: none !important; }
     .mobile-only { display: block !important; }
     
-    /* v2.37: 모바일은 카드 뷰라 좌측 sticky / max-height 둘 다 비활성화 */
-    .dash-table-wrap {
-      max-height: none !important;
-      overflow-y: visible !important;
-    }
+    /* v2.39: 모바일은 카드 뷰라 좌측 sticky 비활성화 (max-height는 PC에서도 제거됨) */
     .dash-table th.col-select,
     .dash-table th.col-no,
     .dash-table td.col-select,
@@ -2488,7 +2503,8 @@
       padding: 8px;
       min-height: 90px;
     }
-    .memo-modal-textarea { font-size: 14px; min-height: 180px; }
+    .memo-modal-textarea { font-size: 14px; min-height: 140px; max-height: 50vh; }
+    .memo-modal-container { padding: 14px 14px 12px; }
     
     .dash-table td .dash-stamp-mini { display: inline-block; margin: 1px; }
     
@@ -2693,7 +2709,7 @@
 <div class="app" id="main-app" style="display:none;">
   <aside class="sidebar">
     <h1>RECOVERIC</h1>
-    <div class="sub" id="hiwos-version-tag">HIWOS v2.38</div>
+    <div class="sub" id="hiwos-version-tag">HIWOS v2.39</div>
     <div id="user-info-section"></div>
     
     <!-- 모드 전환 -->
@@ -6029,12 +6045,16 @@ function validateBlendSum(blends, label) {
   ];
   
   // 컬러별 진척값 가져오기 (fallback: 컬러에 값 없으면 의뢰서 단위에서)
+  // v2.39: 명시적으로 null 또는 ''로 저장된 경우(= 사용자가 의도적으로 지움) fallback 무시
+  //        undefined(= 한 번도 입력 안 함)인 경우만 fallback
   function getColorField(wo, colorIdx, field) {
     const c = wo.colors?.[colorIdx];
     if (!c) return '';
-    // 컬러에 값이 있으면 컬러 우선
-    if (c[field] !== undefined && c[field] !== null && c[field] !== '') return c[field];
-    // 없으면 의뢰서 단위 fallback (역호환)
+    // 컬러 필드가 명시적으로 정의되어 있으면 (null/''포함) 컬러 값 그대로 반환 — fallback 안 함
+    if (c[field] !== undefined) {
+      return c[field] || '';
+    }
+    // undefined인 경우만 의뢰서 단위 fallback (역호환)
     if (wo[field] !== undefined && wo[field] !== null && wo[field] !== '') return wo[field];
     return '';
   }
@@ -8733,7 +8753,7 @@ function validateBlendSum(blends, label) {
     
     const initVal = current || autoTimestampPrefix();
     document.getElementById('dash-modal-body').innerHTML = `
-      <div style="max-width:680px;margin:auto;">
+      <div class="memo-modal-container">
         <div class="memo-modal-info">
           품목: <strong>${escapeHtml(getWoTitle(wo))}</strong><br>
           단축키: <strong>Ctrl+Enter</strong> 저장 / <strong>Esc</strong> 취소 / 일반 Enter는 줄바꿈
@@ -8742,7 +8762,7 @@ function validateBlendSum(blends, label) {
           <button type="button" class="memo-modal-btn" id="memo-add-ts">＋ 타임스탬프 [${autoTimestampPrefix().trim()}] 줄바꿈 추가</button>
         </div>
         <textarea class="memo-modal-textarea" id="memo-modal-input" placeholder="메모를 입력하세요. 일자별 진행 상황을 기록하면 좋습니다.">${escapeHtml(initVal)}</textarea>
-        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px;">
+        <div class="memo-modal-footer">
           <button type="button" class="memo-modal-btn" id="memo-cancel">취소</button>
           <button type="button" class="memo-modal-btn primary" id="memo-save">저장 (Ctrl+Enter)</button>
         </div>
@@ -8814,7 +8834,7 @@ function validateBlendSum(blends, label) {
     
     const initVal = current || autoTimestampPrefix();
     document.getElementById('dash-modal-body').innerHTML = `
-      <div style="max-width:680px;margin:auto;">
+      <div class="memo-modal-container">
         <div class="memo-modal-info">
           의뢰서: <strong>${escapeHtml(getWoTitle(wo))}</strong><br>
           컬러: <strong>${escapeHtml(c.name || '-')}</strong> (몸판 ${c.body || 0}절 / 리프 ${c.rib || 0}절)<br>
@@ -8824,7 +8844,7 @@ function validateBlendSum(blends, label) {
           <button type="button" class="memo-modal-btn" id="memo-add-ts">＋ 타임스탬프 [${autoTimestampPrefix().trim()}] 줄바꿈 추가</button>
         </div>
         <textarea class="memo-modal-textarea" id="memo-modal-input" placeholder="이 컬러에 대한 메모를 입력하세요.">${escapeHtml(initVal)}</textarea>
-        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px;">
+        <div class="memo-modal-footer">
           <button type="button" class="memo-modal-btn" id="memo-cancel">취소</button>
           <button type="button" class="memo-modal-btn primary" id="memo-save">저장 (Ctrl+Enter)</button>
         </div>
@@ -9707,7 +9727,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.38';
+  const VERSION = 'v2.39';
   // title (브라우저 탭)
   document.title = 'RECOVERIC HIWOS ' + VERSION;
   // 사이드바 버전 태그
