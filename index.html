@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="HIWOS">
 <meta name="mobile-web-app-capable" content="yes">
-<title>RECOVERIC HIWOS v2.36</title>
+<title>RECOVERIC HIWOS v2.37</title>
 
 <!-- PWA Manifest (인라인 data URL) -->
 <link rel="manifest" id="pwa-manifest">
@@ -1082,6 +1082,47 @@
     border: 1px solid #ddd;
     border-radius: 3px;
     overflow-x: auto;
+    overflow-y: auto;
+    /* v2.37: 가로 스크롤바를 viewport 안쪽에 항상 노출 — 표 끝까지 안 내려가도 잡힘 */
+    max-height: calc(100vh - 260px);
+  }
+  /* v2.37: 좌측 핵심 컬럼(.col-select, .col-no) 가로 스크롤 시 고정 */
+  /* col-select(36px)가 있으면 left: 0, col-no는 left: 36px */
+  /* col-select 없으면 col-no가 left: 0 */
+  .dash-table th.col-select,
+  .dash-table td.col-select {
+    position: sticky;
+    left: 0;
+    z-index: 3;
+    background: #fff;
+  }
+  .dash-table th.col-select { background: #f0f0f0; z-index: 7; }
+  .dash-table tr:nth-child(even) td.col-select { background: #fafafa; }
+  .dash-table tr:hover td.col-select { background: #f0f7ff; }
+  .dash-table tr.completed td.col-select { background: #f5f5f5; }
+  
+  /* col-no는 col-select 옆에 위치 (있으면 left: 36px, 없으면 left: 0) */
+  .dash-table th.col-no,
+  .dash-table td.col-no {
+    position: sticky;
+    z-index: 3;
+    background: #fff;
+  }
+  .dash-table th.col-no { background: #f0f0f0; z-index: 7; }
+  .dash-table tr:nth-child(even) td.col-no { background: #fafafa; }
+  .dash-table tr:hover td.col-no { background: #f0f7ff; }
+  .dash-table tr.completed td.col-no { background: #f5f5f5; }
+  /* col-select가 같은 행에 있으면 col-no는 left: 36px, 없으면 left: 0 */
+  /* CSS 선택자만으로 다른 셀 존재 여부 판단이 어려워 두 케이스 모두 left: 36px 베이스로 두되,
+     overview처럼 col-select가 없는 케이스는 표에 col-select가 아예 없으므로 NO가 첫 컬럼.
+     이 경우는 별도 클래스 .dash-table-no-select-col으로 처리 */
+  .dash-table th.col-no,
+  .dash-table td.col-no {
+    left: 36px;
+  }
+  .dash-table.dash-table-no-select th.col-no,
+  .dash-table.dash-table-no-select td.col-no {
+    left: 0;
   }
   .dash-table {
     width: 100%;
@@ -2027,6 +2068,19 @@
     .desktop-only { display: none !important; }
     .mobile-only { display: block !important; }
     
+    /* v2.37: 모바일은 카드 뷰라 좌측 sticky / max-height 둘 다 비활성화 */
+    .dash-table-wrap {
+      max-height: none !important;
+      overflow-y: visible !important;
+    }
+    .dash-table th.col-select,
+    .dash-table th.col-no,
+    .dash-table td.col-select,
+    .dash-table td.col-no {
+      position: static !important;
+      left: auto !important;
+    }
+    
     /* iOS 자동 줌 방지 + 터치 최소 높이 */
     body { font-size: 15px; -webkit-text-size-adjust: 100%; }
     input, select, textarea, button {
@@ -2639,7 +2693,7 @@
 <div class="app" id="main-app" style="display:none;">
   <aside class="sidebar">
     <h1>RECOVERIC</h1>
-    <div class="sub" id="hiwos-version-tag">HIWOS v2.36</div>
+    <div class="sub" id="hiwos-version-tag">HIWOS v2.37</div>
     <div id="user-info-section"></div>
     
     <!-- 모드 전환 -->
@@ -6221,7 +6275,38 @@ function validateBlendSum(blends, label) {
         : `진행 중인 ${tf} 의뢰서가 없습니다. <strong>"전체"</strong> 버튼을 눌러 다른 유형도 확인할 수 있습니다.`;
       html += `<div class="dash-empty">${emptyMsg}</div>`;
     } else {
-      html += `<div class="dash-table-wrap"><table class="dash-table"><thead><tr>
+      // v2.37: 염색가공은 컬러별 N행 분리, 그 외 유형은 1행
+      // 표시할 행 미리 계산
+      const overviewRows = [];
+      allIngSorted.forEach(wo => {
+        if (wo.type !== '염색가공') {
+          overviewRows.push({ wo, colorIdx: -1, isFirstRow: true, totalRows: 1 });
+          return;
+        }
+        // 염색가공
+        const colors = wo.colors || [];
+        if (colors.length === 0) {
+          overviewRows.push({ wo, colorIdx: -1, isFirstRow: true, totalRows: 1 });
+          return;
+        }
+        // 미완료 컬러만 (의뢰서 자체가 미완료이므로 모든 컬러 후보지만, 컬러 단위 완료 처리된 것은 제외)
+        const visibleColorIdxs = colors.map((c, i) => i).filter(i => !isColorCompleted(wo, i));
+        if (visibleColorIdxs.length === 0) {
+          // 모든 컬러가 컬러 단위로 완료되었으나 의뢰서 자체는 아직 미완료 → 의뢰서 1행으로 표시
+          overviewRows.push({ wo, colorIdx: -1, isFirstRow: true, totalRows: 1 });
+          return;
+        }
+        visibleColorIdxs.forEach((cIdx, n) => {
+          overviewRows.push({
+            wo,
+            colorIdx: cIdx,
+            isFirstRow: n === 0,
+            totalRows: visibleColorIdxs.length
+          });
+        });
+      });
+      
+      html += `<div class="dash-table-wrap"><table class="dash-table dash-table-color-rows dash-table-no-select"><thead><tr>
         <th class="col-no">NO</th>
         <th>유형</th>
         <th class="col-stamps">스탬프</th>
@@ -6239,15 +6324,17 @@ function validateBlendSum(blends, label) {
         <th class="col-action">삭제</th>
       </tr></thead><tbody>`;
       
-      allIngSorted.forEach(wo => {
+      overviewRows.forEach(({ wo, colorIdx, isFirstRow, totalRows }) => {
         const elapsed = daysSince(wo.date);
         const overdueClass = elapsed >= 5 ? 'overdue' : '';
+        const groupBoundaryClass = isFirstRow ? 'wo-group-first' : 'wo-group-cont';
+        const isFinishWithColor = wo.type === '염색가공' && colorIdx >= 0;
+        
         let item = '-', colorHtml = '-', sizeHtml = '-', vendorHtml = '-';
         
         if (wo.type === '원사') {
           item = wo.yarns?.[0]?.type || '-';
           if (wo.yarns?.length > 1) item += ` 외 ${wo.yarns.length - 1}`;
-          // 원사 총 kg
           const totalKg = (wo.yarns || []).reduce((s,y) => s + (parseFloat(y.total_kg) || 0), 0);
           sizeHtml = totalKg > 0 ? `${totalKg.toLocaleString()} kg` : '-';
           vendorHtml = escapeHtml(wo.supplier || '-');
@@ -6255,7 +6342,6 @@ function validateBlendSum(blends, label) {
         } else if (wo.type === '편직') {
           item = wo.items?.[0]?.item || '-';
           if (wo.items?.length > 1) item += ` 외 ${wo.items.length - 1}`;
-          // 편직 컬러 멀티라인 + 절수 멀티라인
           const items = wo.items || [];
           if (items.length > 0) {
             colorHtml = items.map(it => `<div class="color-line">${escapeHtml(it.color || '-')}</div>`).join('');
@@ -6268,11 +6354,19 @@ function validateBlendSum(blends, label) {
           
         } else if (wo.type === '염색가공') {
           item = wo.body?.item || '-';
-          // 컬러 + 몸판/리프 멀티라인 (renderColorList 재사용)
-          const cl = renderColorList(wo.colors);
-          colorHtml = cl.colorHtml;
-          sizeHtml = cl.sizeHtml;
-          // 거래처: 체크된 공정별로 한 줄씩
+          if (isFinishWithColor) {
+            // 컬러별 1행
+            const c = wo.colors[colorIdx];
+            colorHtml = escapeHtml(c?.name || '-');
+            const bodyV = (c?.body !== '' && c?.body !== null && c?.body !== undefined) ? c.body : '-';
+            const ribV = (c?.rib !== '' && c?.rib !== null && c?.rib !== undefined) ? c.rib : '-';
+            sizeHtml = `${bodyV}/${ribV}`;
+          } else {
+            // 컬러 0개인 염색가공 → 의뢰서 1행 (fallback)
+            const cl = renderColorList(wo.colors);
+            colorHtml = cl.colorHtml;
+            sizeHtml = cl.sizeHtml;
+          }
           const recList = [];
           if (wo.processes?.dyeing && wo.recipients?.dyeing) recList.push(`<div class="vendor-line"><span class="vendor-tag">염색</span>${escapeHtml(wo.recipients.dyeing)}</div>`);
           if (wo.processes?.processing && wo.recipients?.processing) recList.push(`<div class="vendor-line"><span class="vendor-tag">가공</span>${escapeHtml(wo.recipients.processing)}</div>`);
@@ -6286,22 +6380,52 @@ function validateBlendSum(blends, label) {
           vendorHtml = escapeHtml(wo.recipient || '-');
         }
         
-        html += `<tr class="${overdueClass}">
-          <td class="col-no">${escapeHtml(wo.wo_number || '-')}</td>
-          <td>${escapeHtml(wo.type || '-')}</td>
-          <td class="col-stamps">${renderStampMini(wo.stamps) || '-'}</td>
-          <td class="col-date">${formatYMD(wo.date)}</td>
-          <td class="col-num">${elapsed}일</td>
-          <td>${escapeHtml(item)}</td>
-          <td>${colorHtml}</td>
-          <td class="col-num">${sizeHtml}</td>
-          <td>${vendorHtml}</td>
-          ${renderEditableCell(wo, 'internal_memo', wo.internal_memo, 'text')}
-          <td class="col-action"><button class="dash-action-btn dash-view-btn" data-id="${wo.id}">보기</button></td>
-          <td class="col-action"><button class="dash-action-btn dash-edit-btn" data-id="${wo.id}">수정</button></td>
-          <td class="col-action"><button class="dash-action-btn dash-copy-btn" data-id="${wo.id}">복사</button></td>
-          <td class="col-action"><button class="dash-action-btn dash-complete-btn" data-id="${wo.id}">완료</button></td>
-          <td class="col-action"><button class="dash-action-btn danger dash-delete-btn" data-id="${wo.id}">삭제</button></td>
+        // 의뢰서 단위 셀 (rowspan 첫 행에만, 컬러별 분리된 염색가공만)
+        const rs = (totalRows > 1) ? ` rowspan="${totalRows}"` : '';
+        const woUnitCells = isFirstRow ? `
+          <td class="col-no"${rs}>${escapeHtml(wo.wo_number || '-')}</td>
+          <td${rs}>${escapeHtml(wo.type || '-')}</td>
+          <td class="col-stamps"${rs}>${renderStampMini(wo.stamps) || '-'}</td>
+          <td class="col-date"${rs}>${formatYMD(wo.date)}</td>
+          <td class="col-num"${rs}>${elapsed}일</td>
+          <td${rs}>${escapeHtml(item)}</td>` : '';
+        
+        // 컬러/수량 셀 (컬러별 분리 염색가공이면 매 행, 아니면 첫 행에만 rowspan)
+        let colorSizeCells;
+        if (isFinishWithColor) {
+          // 매 행
+          colorSizeCells = `<td>${colorHtml}</td><td class="col-num">${sizeHtml}</td>`;
+        } else {
+          // 첫 행 1번만
+          colorSizeCells = isFirstRow ? `<td>${colorHtml}</td><td class="col-num">${sizeHtml}</td>` : '';
+        }
+        
+        // 거래처 (의뢰서 단위, rowspan 첫 행에만)
+        const vendorCell = isFirstRow ? `<td${rs}>${vendorHtml}</td>` : '';
+        
+        // 메모 (염색가공 컬러별이면 컬러별 메모, 아니면 의뢰서 단위)
+        let memoCell;
+        if (isFinishWithColor) {
+          memoCell = renderColorEditableCell(wo, colorIdx, 'internal_memo', 'text');
+        } else {
+          // 의뢰서 단위 메모 (totalRows는 항상 1인 케이스)
+          memoCell = isFirstRow ? renderEditableCell(wo, 'internal_memo', wo.internal_memo, 'text') : '';
+        }
+        
+        // 액션 (의뢰서 단위, rowspan 첫 행에만)
+        const actionCells = isFirstRow ? `
+          <td class="col-action"${rs}><button class="dash-action-btn dash-view-btn" data-id="${wo.id}">보기</button></td>
+          <td class="col-action"${rs}><button class="dash-action-btn dash-edit-btn" data-id="${wo.id}">수정</button></td>
+          <td class="col-action"${rs}><button class="dash-action-btn dash-copy-btn" data-id="${wo.id}">복사</button></td>
+          <td class="col-action"${rs}><button class="dash-action-btn dash-complete-btn" data-id="${wo.id}">완료</button></td>
+          <td class="col-action"${rs}><button class="dash-action-btn danger dash-delete-btn" data-id="${wo.id}">삭제</button></td>` : '';
+        
+        html += `<tr class="${overdueClass} ${groupBoundaryClass}" data-row-id="${wo.id}" data-color-idx="${colorIdx}">
+          ${woUnitCells}
+          ${colorSizeCells}
+          ${vendorCell}
+          ${memoCell}
+          ${actionCells}
         </tr>`;
       });
       
@@ -9542,7 +9666,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.34';
+  const VERSION = 'v2.37';
   // title (브라우저 탭)
   document.title = 'RECOVERIC HIWOS ' + VERSION;
   // 사이드바 버전 태그
