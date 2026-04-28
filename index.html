@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="HIWOS">
 <meta name="mobile-web-app-capable" content="yes">
-<title>RECOVERIC HIWOS v2.40</title>
+<title>RECOVERIC HIWOS v2.41</title>
 
 <!-- PWA Manifest (인라인 data URL) -->
 <link rel="manifest" id="pwa-manifest">
@@ -751,8 +751,8 @@
   
   /* v2.34: Overview 유형 필터 버튼 */
   .overview-type-filter-btn {
-    padding: 4px 10px; font-size: 12px; font-weight: 700;
-    border: 1px solid #ccc; border-radius: 3px; cursor: pointer;
+    padding: 6px 14px; font-size: 12px; font-weight: 700;
+    border: 1.5px solid #ccc; border-radius: 4px; cursor: pointer;
     background: #fff; color: #555;
     transition: all 0.15s;
   }
@@ -760,6 +760,11 @@
   .overview-type-filter-btn.active {
     background: #1f2937; color: #fff; border-color: #1f2937;
   }
+  /* v2.41: 유형별 active 색상 — 배지 색상과 매칭하여 시각적 일관성 ↑ */
+  .overview-type-filter-btn.active[data-type-filter="원사"]    { background: var(--badge-yarn);   border-color: var(--badge-yarn); }
+  .overview-type-filter-btn.active[data-type-filter="편직"]    { background: var(--badge-knit);   border-color: var(--badge-knit); }
+  .overview-type-filter-btn.active[data-type-filter="염색가공"] { background: var(--badge-finish); border-color: var(--badge-finish); }
+  .overview-type-filter-btn.active[data-type-filter="BT"]      { background: var(--badge-bt);     border-color: var(--badge-bt); }
   
   /* ===== 미리보기 스탬프 ===== */
   .wo-stamps { 
@@ -1302,6 +1307,21 @@
   .dash-table tr.overdue td { background: inherit; }
   .dash-table tr.overdue td:first-child { border-left: 4px solid #c00; }
   .dash-table tr.overdue td.col-no { color: #c00; font-weight: 800; }
+  
+  /* v2.41: 전체 대시보드(overview)에서는 빨간 강조 노이즈 제거
+     모든 의뢰서가 5일 넘다 보니 전부 빨개져서 헷갈림 → 강조 효과 무효화 */
+  .dash-table.dash-table-overview tr.overdue td:first-child { border-left: 0 !important; }
+  .dash-table.dash-table-overview tr.overdue td.col-no { color: #c00000 !important; font-weight: 700 !important; }
+  /* 다시 정상 색상으로 — 빨간색 자체 제거 */
+  .dash-table.dash-table-overview tr.overdue td.col-no { color: inherit !important; font-weight: inherit !important; }
+  
+  /* v2.41: overview 표 행 구분선 강화 — 의뢰서끼리 명확히 구별 */
+  .dash-table.dash-table-overview tbody tr.wo-group-first td {
+    border-top: 2px solid #999;
+  }
+  .dash-table.dash-table-overview tbody tr td {
+    border-bottom: 1px solid #ccc;
+  }
   
   /* v2.36: 컬러별 행 그룹 (염색가공) */
   .dash-table.dash-table-color-rows tr.wo-group-first td {
@@ -2737,7 +2757,7 @@
 <div class="app" id="main-app" style="display:none;">
   <aside class="sidebar">
     <h1>RECOVERIC</h1>
-    <div class="sub" id="hiwos-version-tag">HIWOS v2.40</div>
+    <div class="sub" id="hiwos-version-tag">HIWOS v2.41</div>
     <div id="user-info-section"></div>
     
     <!-- 모드 전환 -->
@@ -5932,6 +5952,33 @@ function validateBlendSum(blends, label) {
         return (wo.recipients?.processing || '~').toString();
       case 'recipients_post':
         return (wo.recipients?.post || '~').toString();
+      // v2.41: overview 컬럼 정렬용 추가
+      case 'type': {
+        // 유형 정렬: 원사(1) → 편직(2) → 염색가공(3) → BT(4)
+        const order = { '원사': 1, '편직': 2, '염색가공': 3, 'BT': 4 };
+        return order[wo.type] || 99;
+      }
+      case 'stamps': {
+        // 스탬프 정렬: 마스터의 order(우선순위) 따라 — 가장 높은 우선순위 스탬프의 order 반환
+        // 스탬프 없는 의뢰서는 가장 뒤로 (큰 숫자)
+        const stamps = wo.stamps || [];
+        if (stamps.length === 0) return 9999;
+        const allMasters = [...(state.stampMasters?.common || []), ...(state.stampMasters?.bt || [])];
+        let minOrder = 9999;
+        stamps.forEach(s => {
+          const m = allMasters.find(x => x.name === s);
+          if (m && typeof m.order === 'number' && m.order < minOrder) minOrder = m.order;
+        });
+        return minOrder;
+      }
+      case 'item': {
+        // 품목/사종 정렬: 유형별로 적절한 품목 필드 사용
+        if (wo.type === '원사') return wo.yarns?.[0]?.type || '~';
+        if (wo.type === '편직') return wo.items?.[0]?.item || '~';
+        if (wo.type === '염색가공') return wo.body?.item || '~';
+        if (wo.type === 'BT') return wo.item || '~';
+        return '~';
+      }
       default:
         return '';
     }
@@ -6362,13 +6409,13 @@ function validateBlendSum(blends, label) {
         });
       });
       
-      html += `<div class="dash-table-wrap"><table class="dash-table dash-table-color-rows dash-table-no-select"><thead><tr>
+      html += `<div class="dash-table-wrap"><table class="dash-table dash-table-color-rows dash-table-no-select dash-table-overview"><thead><tr>
         <th class="col-no">NO</th>
-        <th>유형</th>
-        <th class="col-stamps">스탬프</th>
+        ${sortableTh('overview', 'type', '유형')}
+        ${sortableTh('overview', 'stamps', '스탬프', 'col-stamps')}
         ${sortableTh('overview', 'date', '발주일', 'col-date')}
         <th class="col-num">경과</th>
-        <th>품목 / 사종</th>
+        ${sortableTh('overview', 'item', '품목 / 사종')}
         <th>컬러</th>
         <th class="col-num">수량</th>
         <th>거래처 (공정)</th>
@@ -9763,7 +9810,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.40';
+  const VERSION = 'v2.41';
   // title (브라우저 탭)
   document.title = 'RECOVERIC HIWOS ' + VERSION;
   // 사이드바 버전 태그
