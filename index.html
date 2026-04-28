@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="HIWOS">
 <meta name="mobile-web-app-capable" content="yes">
-<title>RECOVERIC HIWOS v2.37</title>
+<title>RECOVERIC HIWOS v2.38</title>
 
 <!-- PWA Manifest (인라인 data URL) -->
 <link rel="manifest" id="pwa-manifest">
@@ -2693,7 +2693,7 @@
 <div class="app" id="main-app" style="display:none;">
   <aside class="sidebar">
     <h1>RECOVERIC</h1>
-    <div class="sub" id="hiwos-version-tag">HIWOS v2.37</div>
+    <div class="sub" id="hiwos-version-tag">HIWOS v2.38</div>
     <div id="user-info-section"></div>
     
     <!-- 모드 전환 -->
@@ -6412,20 +6412,33 @@ function validateBlendSum(blends, label) {
           memoCell = isFirstRow ? renderEditableCell(wo, 'internal_memo', wo.internal_memo, 'text') : '';
         }
         
-        // 액션 (의뢰서 단위, rowspan 첫 행에만)
-        const actionCells = isFirstRow ? `
+        // 액션 (의뢰서 단위, rowspan 첫 행에만): 작지/수정/복사/삭제
+        const actionCellsLeft = isFirstRow ? `
           <td class="col-action"${rs}><button class="dash-action-btn dash-view-btn" data-id="${wo.id}">보기</button></td>
           <td class="col-action"${rs}><button class="dash-action-btn dash-edit-btn" data-id="${wo.id}">수정</button></td>
-          <td class="col-action"${rs}><button class="dash-action-btn dash-copy-btn" data-id="${wo.id}">복사</button></td>
-          <td class="col-action"${rs}><button class="dash-action-btn dash-complete-btn" data-id="${wo.id}">완료</button></td>
-          <td class="col-action"${rs}><button class="dash-action-btn danger dash-delete-btn" data-id="${wo.id}">삭제</button></td>` : '';
+          <td class="col-action"${rs}><button class="dash-action-btn dash-copy-btn" data-id="${wo.id}">복사</button></td>` : '';
+        
+        // v2.38: 완료 버튼 — 염색가공 컬러별 분리 시 매 행에 컬러별 완료, 그 외 의뢰서 단위
+        let completeCell;
+        if (isFinishWithColor) {
+          // 컬러별 완료 버튼 (매 행)
+          completeCell = `<td class="col-action"><button class="dash-action-btn dash-color-complete-btn" data-id="${wo.id}" data-color-idx="${colorIdx}">완료</button></td>`;
+        } else {
+          // 의뢰서 단위 완료 버튼 (rowspan 첫 행에만)
+          completeCell = isFirstRow ? `<td class="col-action"${rs}><button class="dash-action-btn dash-complete-btn" data-id="${wo.id}">완료</button></td>` : '';
+        }
+        
+        // 삭제 (의뢰서 단위, rowspan 첫 행에만)
+        const deleteCell = isFirstRow ? `<td class="col-action"${rs}><button class="dash-action-btn danger dash-delete-btn" data-id="${wo.id}">삭제</button></td>` : '';
         
         html += `<tr class="${overdueClass} ${groupBoundaryClass}" data-row-id="${wo.id}" data-color-idx="${colorIdx}">
           ${woUnitCells}
           ${colorSizeCells}
           ${vendorCell}
           ${memoCell}
-          ${actionCells}
+          ${actionCellsLeft}
+          ${completeCell}
+          ${deleteCell}
         </tr>`;
       });
       
@@ -8262,6 +8275,34 @@ function validateBlendSum(blends, label) {
       });
     });
     
+    // v2.38: 전체 대시보드 컬러별 완료 버튼 (염색가공만)
+    document.querySelectorAll('#dash-body .dash-color-complete-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const id = btn.dataset.id;
+        const colorIdx = parseInt(btn.dataset.colorIdx, 10);
+        const wo = state.allWorkOrders.find(w => w.id === id);
+        const c = wo?.colors?.[colorIdx];
+        if (!wo || !c) return;
+        const cName = c.name || `컬러 #${colorIdx + 1}`;
+        const msg = `[${wo.wo_number || ''}] "${cName}" 완료 처리하시겠습니까?\n\n해당 컬러는 진행 목록에서 사라지고\n완료된 의뢰서 화면으로 이동합니다.\n\n(모든 컬러가 완료되면 의뢰서 자체도 자동 완료됩니다)`;
+        if (!confirm(msg)) return;
+        try {
+          btn.disabled = true;
+          btn.textContent = '처리 중...';
+          const allDone = await toggleColorCompleted(id, colorIdx, true);
+          if (allDone) {
+            toast(`✓ "${cName}" 완료 — 모든 컬러 완료로 의뢰서 자동 완료됨`, 'success');
+          } else {
+            toast(`✓ "${cName}" 완료 처리됨`, 'success');
+          }
+        } catch (e) {
+          btn.disabled = false;
+          btn.textContent = '완료';
+          toast('실패: ' + e.message, 'error');
+        }
+      });
+    });
+    
     // 생지 출고 모달 버튼
     document.querySelectorAll('#dash-body .dash-shipment-btn').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -9666,7 +9707,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.37';
+  const VERSION = 'v2.38';
   // title (브라우저 탭)
   document.title = 'RECOVERIC HIWOS ' + VERSION;
   // 사이드바 버전 태그
