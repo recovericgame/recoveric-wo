@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="HIWOS">
 <meta name="mobile-web-app-capable" content="yes">
-<title>RECOVERIC HIWOS v2.43</title>
+<title>RECOVERIC HIWOS v2.44</title>
 
 <!-- PWA Manifest (인라인 data URL) -->
 <link rel="manifest" id="pwa-manifest">
@@ -1263,6 +1263,37 @@
   .dash-filter-count strong {
     color: #1a1a1a;
     font-weight: 700;
+  }
+  
+  /* v2.44: 거래처 콤보박스 (5개 진행 화면) */
+  .dash-vendor-filter {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: 8px;
+    padding: 4px 8px;
+    background: #fff;
+    border: 1px solid #ccc;
+    border-radius: 3px;
+    font-size: 11px;
+  }
+  .dash-vendor-label {
+    color: #555;
+    font-weight: 600;
+  }
+  .dash-vendor-select {
+    padding: 3px 6px;
+    border: 1px solid #aaa;
+    border-radius: 2px;
+    font-size: 11px;
+    font-family: inherit;
+    background: #fff;
+    cursor: pointer;
+    max-width: 200px;
+  }
+  .dash-vendor-select:focus {
+    outline: 1px solid #555;
+    outline-offset: -1px;
   }
   
   @media (max-width: 768px) {
@@ -2761,7 +2792,7 @@
 <div class="app" id="main-app" style="display:none;">
   <aside class="sidebar">
     <h1>RECOVERIC</h1>
-    <div class="sub" id="hiwos-version-tag">HIWOS v2.43</div>
+    <div class="sub" id="hiwos-version-tag">HIWOS v2.44</div>
     <div id="user-info-section"></div>
     
     <!-- 모드 전환 -->
@@ -3298,7 +3329,15 @@ const state = {
     loaded: false
   },
   // v2.34: 전체 대시보드 유형 필터 (overview)
-  overviewTypeFilter: 'all'  // 'all' | '원사' | '편직' | '염색가공' | 'BT'
+  overviewTypeFilter: 'all',  // 'all' | '원사' | '편직' | '염색가공' | 'BT'
+  // v2.44: 거래처 필터 (5개 화면 각자 — 콤보박스로 거래처별 의뢰서만 표시)
+  vendorFilter: {
+    overview: 'all',
+    yarn:     'all',
+    knit:     'all',
+    finish:   'all',
+    bt:       'all'
+  }
 };
 
 function toast(msg, type='') {
@@ -5773,6 +5812,10 @@ function validateBlendSum(blends, label) {
     if (!isTrash && !isCompleted && state.dashView !== 'overview') {
       filtered = applyDateFilter(filtered, state.dashView);
     }
+    // v2.44: 거래처 필터 적용 (휴지통/완료 제외, overview는 'overview' 키로 적용)
+    if (!isTrash && !isCompleted) {
+      filtered = applyVendorFilter(filtered, state.dashView);
+    }
     // v2.18: 정렬 적용
     return sortWorkOrders(filtered, state.dashView);
   }
@@ -5888,6 +5931,78 @@ function validateBlendSum(blends, label) {
   }
   loadDateFilter();
   
+  // ===== v2.44: 거래처 필터 (5개 화면) =====
+  // 의뢰서에서 거래처명 배열 추출 (콤보 옵션 / 필터 매칭에 사용)
+  // 염색가공은 dyeing/processing/post를 모두 별도 옵션으로 노출
+  function getWoVendorNames(wo) {
+    if (!wo) return [];
+    if (wo.type === '원사') return wo.supplier ? [wo.supplier] : [];
+    if (wo.type === '편직') return wo.recipient ? [wo.recipient] : [];
+    if (wo.type === '염색가공') {
+      const r = wo.recipients || {};
+      return [r.dyeing, r.processing, r.post].filter(Boolean);
+    }
+    if (wo.type === 'BT') return wo.recipient ? [wo.recipient] : [];
+    return [];
+  }
+  // 정렬용 대표 거래처명 (가장 앞 것 기준)
+  function getWoVendorSortKey(wo) {
+    const arr = getWoVendorNames(wo);
+    return arr.length ? arr[0] : '~';  // 거래처 없는 의뢰서는 가장 뒤로
+  }
+  // 콤보 옵션 추출 (해당 viewKey에 해당하는 의뢰서들에서 거래처 모음)
+  function extractVendorOptions(list) {
+    const set = new Set();
+    list.forEach(wo => {
+      getWoVendorNames(wo).forEach(v => { if (v) set.add(v); });
+    });
+    return Array.from(set).sort((a,b) => a.localeCompare(b, 'ko'));
+  }
+  // 필터 적용
+  function applyVendorFilter(list, viewKey) {
+    const v = state.vendorFilter?.[viewKey];
+    if (!v || v === 'all') return list;
+    return list.filter(wo => getWoVendorNames(wo).includes(v));
+  }
+  // 콤보박스 HTML 렌더
+  function renderVendorFilterBar(viewKey, optionList) {
+    const cur = state.vendorFilter?.[viewKey] || 'all';
+    const opts = optionList.map(v => 
+      `<option value="${escapeHtml(v)}"${cur===v?' selected':''}>${escapeHtml(v)}</option>`
+    ).join('');
+    return `<span class="dash-vendor-filter">
+      <span class="dash-vendor-label">거래처:</span>
+      <select class="dash-vendor-select" data-vendor-view="${viewKey}">
+        <option value="all"${cur==='all'?' selected':''}>전체 (${optionList.length})</option>
+        ${opts}
+      </select>
+    </span>`;
+  }
+  // localStorage 저장/복원
+  function saveVendorFilter() {
+    try { localStorage.setItem('hiwos_vendor_filter_v1', JSON.stringify(state.vendorFilter)); } catch(e) {}
+  }
+  function loadVendorFilter() {
+    try {
+      const raw = localStorage.getItem('hiwos_vendor_filter_v1');
+      if (!raw) return;
+      const saved = JSON.parse(raw);
+      if (saved && typeof saved === 'object') {
+        Object.keys(state.vendorFilter).forEach(k => {
+          if (typeof saved[k] === 'string') state.vendorFilter[k] = saved[k];
+        });
+      }
+    } catch(e) {}
+  }
+  loadVendorFilter();
+  // 변경 핸들러 (이벤트 위임용)
+  function handleVendorFilterChange(viewKey, value) {
+    if (!state.vendorFilter[viewKey]) state.vendorFilter[viewKey] = 'all';
+    state.vendorFilter[viewKey] = value || 'all';
+    saveVendorFilter();
+    renderDashboard();
+  }
+  
   // 프리셋 라벨 (사용자 표시용)
   function presetLabel(preset) {
     const labels = {
@@ -5982,6 +6097,10 @@ function validateBlendSum(blends, label) {
         if (wo.type === '염색가공') return wo.body?.item || '~';
         if (wo.type === 'BT') return wo.item || '~';
         return '~';
+      }
+      case 'vendor': {
+        // v2.44: 거래처(공정) 정렬 — 의뢰서별 대표 거래처명(가나다 순)
+        return getWoVendorSortKey(wo);
       }
       default:
         return '';
@@ -6360,8 +6479,13 @@ function validateBlendSum(blends, label) {
       const active = tf === val;
       return `<button class="overview-type-filter-btn ${active ? 'active' : ''}" data-type-filter="${val}">${label} <span style="opacity:0.7;font-weight:500;">${cnt}</span></button>`;
     };
+    // v2.44: overview 거래처 콤보 옵션 (유형 필터 적용 후 기준)
+    const overviewVendorOptions = extractVendorOptions(
+      tf === 'all' ? allIng : allIng.filter(wo => wo.type === tf)
+    );
     html += `<div style="display:flex;align-items:center;gap:8px;margin:18px 0 8px;flex-wrap:wrap;">
       <div style="font-weight:800;font-size:14px;">📋 진행 중 의뢰서</div>
+      ${renderVendorFilterBar('overview', overviewVendorOptions)}
       <div class="overview-type-filter-bar" style="display:flex;gap:4px;margin-left:auto;">
         ${typeBtn('all', '전체')}
         ${typeBtn('원사', '원사')}
@@ -6374,6 +6498,8 @@ function validateBlendSum(blends, label) {
     // v2.18: 통합 정렬 시스템 사용 (overview 키) + v2.34: 유형 필터 적용
     let filteredIng = allIng;
     if (tf !== 'all') filteredIng = filteredIng.filter(wo => wo.type === tf);
+    // v2.44: 거래처 필터 적용 (overview는 getDashList 비사용이므로 직접 적용)
+    filteredIng = applyVendorFilter(filteredIng, 'overview');
     const allIngSorted = sortWorkOrders(filteredIng, 'overview');
     
     if (allIngSorted.length === 0) {
@@ -6422,7 +6548,7 @@ function validateBlendSum(blends, label) {
         ${sortableTh('overview', 'item', '품목 / 사종')}
         <th>컬러</th>
         <th class="col-num">수량</th>
-        <th>거래처 (공정)</th>
+        ${sortableTh('overview', 'vendor', '거래처 (공정)')}
         <th>📝 메모</th>
         <th class="col-action">작지</th>
         <th class="col-action">수정</th>
@@ -6563,6 +6689,12 @@ function validateBlendSum(blends, label) {
       wo.type === '원사' && !wo.deleted && (state.showCompleted || !wo.completed)
     ).length;
     const isFiltered = state.dateFilter?.yarn?.preset && state.dateFilter.yarn.preset !== 'all';
+    // v2.44: 거래처 콤보 옵션 (거래처 필터 적용 전 전체 원사 의뢰서 기준)
+    const yarnVendorOptions = extractVendorOptions(
+      state.allWorkOrders.filter(wo => 
+        wo.type === '원사' && !wo.deleted && (state.showCompleted || !wo.completed)
+      )
+    );
     
     let html = renderAddRowBar('yarn');
     
@@ -6571,6 +6703,7 @@ function validateBlendSum(blends, label) {
     html += `<div style="font-size:11px;color:#555;margin:0 0 6px 4px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
       <span class="dash-legend">발주 5일 이상 경과 (납기 임박)</span>
       ${renderFilterSummary('yarn', totalCount, list.length)}
+      ${renderVendorFilterBar('yarn', yarnVendorOptions)}
     </div>`;
     
     if (list.length === 0) {
@@ -6587,7 +6720,7 @@ function validateBlendSum(blends, label) {
       <th class="col-lot">LOT</th>
       <th class="col-stamps">스탬프</th>
       ${sortableTh('yarn', 'date', '발주일', 'col-date')}
-      <th>수신처</th>
+      ${sortableTh('yarn', 'vendor', '수신처')}
       <th>사종</th>
       <th class="col-num">수량</th>
       <th class="col-num">총 kg</th>
@@ -6651,6 +6784,12 @@ function validateBlendSum(blends, label) {
       wo.type === '편직' && !wo.deleted && (state.showCompleted || !wo.completed)
     ).length;
     const isFiltered = state.dateFilter?.knit?.preset && state.dateFilter.knit.preset !== 'all';
+    // v2.44: 거래처 콤보 옵션
+    const knitVendorOptions = extractVendorOptions(
+      state.allWorkOrders.filter(wo => 
+        wo.type === '편직' && !wo.deleted && (state.showCompleted || !wo.completed)
+      )
+    );
     
     let html = renderAddRowBar('knit');
     
@@ -6658,6 +6797,7 @@ function validateBlendSum(blends, label) {
     html += `<div style="font-size:11px;color:#555;margin:0 0 6px 4px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
       <span class="dash-legend">발주 5일 이상 경과 (납기 임박)</span>
       ${renderFilterSummary('knit', totalCount, list.length)}
+      ${renderVendorFilterBar('knit', knitVendorOptions)}
     </div>`;
     
     if (list.length === 0) {
@@ -6673,7 +6813,7 @@ function validateBlendSum(blends, label) {
       <th class="col-no">공유코드</th>
       <th class="col-stamps">스탬프</th>
       ${sortableTh('knit', 'date', '의뢰일', 'col-date')}
-      <th>편직 공장</th>
+      ${sortableTh('knit', 'vendor', '편직 공장')}
       <th>품목</th>
       <th>컬러</th>
       <th class="col-num">의뢰 절</th>
@@ -6768,11 +6908,18 @@ function validateBlendSum(blends, label) {
     ).length;
     const isFiltered = state.dateFilter?.finish?.preset && state.dateFilter.finish.preset !== 'all';
     const compact = !!state.finishCompact;  // v2.33
+    // v2.44: 거래처 콤보 옵션 (염색가공은 dyeing/processing/post 모두 노출)
+    const finishVendorOptions = extractVendorOptions(
+      state.allWorkOrders.filter(wo => 
+        wo.type === '염색가공' && !wo.deleted && (state.showCompleted || !wo.completed)
+      )
+    );
     
     let html = renderAddRowBar('finish');
     html += renderDateFilterBar('finish');
     html += `<div style="font-size:11px;color:#555;margin:0 0 6px 4px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
       ${renderFilterSummary('finish', totalCount, list.length)}
+      ${renderVendorFilterBar('finish', finishVendorOptions)}
       <label style="margin-left:auto;display:inline-flex;align-items:center;gap:4px;cursor:pointer;user-select:none;font-size:11px;color:#333;">
         <input type="checkbox" id="finish-compact-toggle" ${compact ? 'checked' : ''} style="margin:0;">
         간단히 보기 <span style="color:#888;">(구분 · 최종납품처 숨김)</span>
@@ -6949,6 +7096,12 @@ function validateBlendSum(blends, label) {
       wo.type === 'BT' && !wo.deleted && (state.showCompleted || !wo.completed)
     ).length;
     const isFiltered = state.dateFilter?.bt?.preset && state.dateFilter.bt.preset !== 'all';
+    // v2.44: 거래처 콤보 옵션
+    const btVendorOptions = extractVendorOptions(
+      state.allWorkOrders.filter(wo => 
+        wo.type === 'BT' && !wo.deleted && (state.showCompleted || !wo.completed)
+      )
+    );
     
     let html = renderAddRowBar('bt');
     
@@ -6956,6 +7109,7 @@ function validateBlendSum(blends, label) {
     html += `<div style="font-size:11px;color:#555;margin:0 0 6px 4px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
       <span class="dash-legend">발주 5일 이상 경과 (납기 임박)</span>
       ${renderFilterSummary('bt', totalCount, list.length)}
+      ${renderVendorFilterBar('bt', btVendorOptions)}
     </div>`;
     
     if (list.length === 0) {
@@ -6971,7 +7125,7 @@ function validateBlendSum(blends, label) {
       <th class="col-no">NO</th>
       <th class="col-stamps">스탬프</th>
       ${sortableTh('bt', 'date', '발주일', 'col-date')}
-      <th>염색공장</th>
+      ${sortableTh('bt', 'vendor', '염색공장')}
       <th>품명</th>
       <th>혼용율</th>
       <th class="col-num">컬러수</th>
@@ -8160,6 +8314,14 @@ function validateBlendSum(blends, label) {
           return;
         }
         setDateFilterCustom(view, from, to);
+      });
+    });
+    
+    // v2.44: 거래처 콤보박스 변경 핸들러 (5개 화면 공통)
+    document.querySelectorAll('#dash-body .dash-vendor-select[data-vendor-view]').forEach(sel => {
+      sel.addEventListener('change', () => {
+        const view = sel.dataset.vendorView;
+        if (view) handleVendorFilterChange(view, sel.value);
       });
     });
     
@@ -9813,7 +9975,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.43';
+  const VERSION = 'v2.44';
   // title (브라우저 탭)
   document.title = 'RECOVERIC HIWOS ' + VERSION;
   // 사이드바 버전 태그
