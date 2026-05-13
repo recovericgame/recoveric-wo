@@ -4228,11 +4228,16 @@
   }
   .dr-table th,
   .dr-table td {
-    padding: 7px 8px;
+    padding: 7px 10px;
     border-bottom: 1px solid #e5e7eb;
+    border-right: 1px solid #f0f0f0;   /* hotfix2: 컬럼별 세로선 */
     text-align: left;
     vertical-align: middle;
-    white-space: nowrap;          /* v2.51 hotfix1: 모든 셀 줄바꿈 차단 */
+    white-space: nowrap;          /* 줄바꿈 차단 */
+  }
+  .dr-table th:last-child,
+  .dr-table td:last-child {
+    border-right: none;
   }
   .dr-table th {
     background: #f3f4f6;
@@ -4240,6 +4245,17 @@
     color: #374151;
     border-bottom: 2px solid #111827;
     font-size: 11px;
+    text-align: center;           /* hotfix2: 컬럼명 가운데 정렬 */
+    letter-spacing: 0.3px;
+  }
+  /* hotfix2: 2행 1줄씩 옅은 줄무늬 (zebra striping) */
+  .dr-table tbody tr:nth-child(even) td {
+    background: #fafafa;
+  }
+  /* 긴급 행 — 분홍 배경 (줄무늬보다 우선) */
+  .dr-table tbody tr.dr-urgent td,
+  .dr-table tbody tr.dr-urgent:nth-child(even) td {
+    background: #fef2f2;
   }
   /* 긴급 아이콘 컬럼 (좌측 첫 번째) */
   .dr-table th.dr-urgent-col,
@@ -4249,28 +4265,66 @@
     padding: 7px 4px;
     font-size: 14px;
   }
-  .dr-table th.dr-stamps { width: 1%; }
   .dr-table th.dr-date { width: 1%; }
-  .dr-table th.dr-elapsed { width: 1%; text-align: center; }
   .dr-table th.dr-item { width: auto; }   /* 가변, 가장 넓게 */
   .dr-table th.dr-color { width: auto; }
-  .dr-table th.dr-qty { width: 1%; text-align: right; }
+  .dr-table th.dr-qty { width: 1%; }
   .dr-table td.dr-date,
-  .dr-table td.dr-elapsed,
   .dr-table td.dr-qty {
     font-variant-numeric: tabular-nums;
   }
-  .dr-table td.dr-elapsed { text-align: center; color: #4b5563; }
-  .dr-table td.dr-qty { text-align: right; font-weight: 600; }
-  .dr-table td.dr-stamps {
-    padding-right: 4px;
+  .dr-table td.dr-date {
+    color: #4b5563;
   }
-  /* 긴급 행 — 분홍 배경 (행 앞 ::before 자동 🚨는 제거, 별도 컬럼이 그 역할) */
-  .dr-table tr.dr-urgent td {
-    background: #fef2f2;
+  .dr-table td.dr-qty {
+    text-align: right;
+    font-weight: 700;
+    color: #111827;
   }
-  .dr-table tr.dr-urgent td.dr-urgent-col {
+  .dr-table tbody tr.dr-urgent td.dr-urgent-col {
     color: #dc2626;
+  }
+  
+  /* 보고서 하단 수량 합계 박스 */
+  .dr-summary {
+    margin-top: 10px;
+    padding: 10px 14px;
+    background: #f9fafb;
+    border: 1px solid #e5e7eb;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 12px;
+    flex-wrap: wrap;
+  }
+  .dr-summary-item {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 4px;
+    color: #4b5563;
+  }
+  .dr-summary-label {
+    font-weight: 600;
+    color: #6b7280;
+  }
+  .dr-summary-item strong {
+    font-size: 14px;
+    font-weight: 800;
+    color: #111827;
+    font-variant-numeric: tabular-nums;
+    margin: 0 2px;
+  }
+  .dr-summary-sep {
+    color: #d1d5db;
+    margin: 0 2px;
+  }
+  .dr-summary-total {
+    color: #b45309;
+  }
+  .dr-summary-total strong {
+    color: #b45309;
+    font-size: 15px;
   }
   
   /* 보고서 행의 공정 태그 */
@@ -4357,7 +4411,7 @@
 <div class="app" id="main-app" style="display:none;">
   <aside class="sidebar">
     <h1>RECOVERIC</h1>
-    <div class="sub" id="hiwos-version-tag">HIWOS v2.51 step3 hotfix1</div>
+    <div class="sub" id="hiwos-version-tag">HIWOS v2.51 step3 hotfix2</div>
     <div id="user-info-section"></div>
     
     <!-- 모드 전환 -->
@@ -9117,7 +9171,7 @@ function validateBlendSum(blends, label) {
   }
   
   // 한 항목(거래처 카드 한 행)을 보고서 행으로 렌더
-  // v2.51 step3 hotfix1: 메모 제거 + 긴급 아이콘 컬럼 추가 + 염색가공 전용으로 간소화
+  // v2.51 step3 hotfix2: 스탬프/경과 컬럼 제거 + 수량 단위 "절" 명시
   function renderReportRow(item) {
     const { wo, colorIdx, processTag } = item;
     const c = (wo.colors || [])[colorIdx] || {};
@@ -9130,20 +9184,21 @@ function validateBlendSum(blends, label) {
     const blend = wo.body?.blend || wo.blend || '';
     const item_text = blend ? `${bodyItem} / ${blend}` : bodyItem;
     
-    // 컬러 / 수량
+    // 컬러 / 수량 (수량은 "몸판/리브" 절 단위)
     const color_text = c.name || '';
     const body = c.body || '';
     const rib = c.rib || '';
-    const qty_text = body && rib ? `${body}/${rib}` : (body || rib || '');
+    let qty_text = '';
+    if (body && rib) qty_text = `${body} / ${rib}`;
+    else if (body) qty_text = `${body}`;
+    else if (rib) qty_text = `0 / ${rib}`;
     
     const rowCls = 'dr-row' + (urgent ? ' dr-urgent' : '');
     const tagHtml = processTag ? `<span class="dr-process-tag dr-tag-${processTag === '염색' ? 'dye' : (processTag === '가공' ? 'proc' : 'both')}">[${processTag}]</span>` : '';
     
     return `<tr class="${rowCls}">
       <td class="dr-urgent-col">${urgent ? '🚨' : ''}</td>
-      <td class="dr-stamps">${renderStampsInline(wo.stamps)}</td>
       <td class="dr-date">${escapeHtml(shortOrderDate(wo.date))}</td>
-      <td class="dr-elapsed">${daysSinceOrder(wo)}일</td>
       <td class="dr-item">${tagHtml}${escapeHtml(item_text)}</td>
       <td class="dr-color">${escapeHtml(color_text)}</td>
       <td class="dr-qty">${escapeHtml(qty_text)}</td>
@@ -9167,16 +9222,14 @@ function validateBlendSum(blends, label) {
     
     return `<div class="dr-report" id="dr-capture-${escapeHtml(recipient).replace(/\s+/g, '_')}">
       <div class="dr-header">
-        <div class="dr-title">RECOVERIC × ${escapeHtml(recipient)}</div>
-        <div class="dr-subtitle">진행 의뢰서 (${todayStr})</div>
+        <div class="dr-title">현일텍스(주) × ${escapeHtml(recipient)}</div>
+        <div class="dr-subtitle">확인 요청일 (${todayStr})</div>
       </div>
       <table class="dr-table">
         <thead>
           <tr>
             <th class="dr-urgent-col"></th>
-            <th class="dr-stamps">스탬프</th>
             <th class="dr-date">발주일</th>
-            <th class="dr-elapsed">경과</th>
             <th class="dr-item">품목 / 사종</th>
             <th class="dr-color">컬러</th>
             <th class="dr-qty">수량</th>
@@ -9184,10 +9237,35 @@ function validateBlendSum(blends, label) {
         </thead>
         <tbody>${sorted.map(renderReportRow).join('')}</tbody>
       </table>
+      ${renderReportSummary(sorted)}
       <div class="dr-footer">
         <span>총 ${sorted.length}건</span>
         <span>현일텍스 주식회사 드림</span>
       </div>
+    </div>`;
+  }
+  
+  // 보고서 하단 수량 합계 (몸판/리브/총)
+  // 컬러의 body, rib 필드는 "절" 단위
+  function renderReportSummary(items) {
+    let totalBody = 0, totalRib = 0;
+    items.forEach(it => {
+      const c = (it.wo.colors || [])[it.colorIdx] || {};
+      totalBody += parseFloat(c.body) || 0;
+      totalRib += parseFloat(c.rib) || 0;
+    });
+    // 정수면 정수, 소수 있으면 소수1자리
+    const fmt = (n) => {
+      if (n === 0) return '0';
+      return Number.isInteger(n) ? String(n) : n.toFixed(1);
+    };
+    const total = totalBody + totalRib;
+    return `<div class="dr-summary">
+      <span class="dr-summary-item"><span class="dr-summary-label">몸판 합계</span> <strong>${fmt(totalBody)}</strong> 절</span>
+      <span class="dr-summary-sep">/</span>
+      <span class="dr-summary-item"><span class="dr-summary-label">리브 합계</span> <strong>${fmt(totalRib)}</strong> 절</span>
+      <span class="dr-summary-sep">/</span>
+      <span class="dr-summary-item dr-summary-total"><span class="dr-summary-label">총 수량</span> <strong>${fmt(total)}</strong> 절</span>
     </div>`;
   }
   
@@ -14172,7 +14250,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.51 step3 hotfix1';
+  const VERSION = 'v2.51 step3 hotfix2';
   // title (브라우저 탭)
   document.title = 'RECOVERIC HIWOS ' + VERSION;
   // 사이드바 버전 태그
