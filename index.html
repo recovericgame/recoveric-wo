@@ -6326,9 +6326,17 @@ function migrateColorReceipts(c) {
   
   // shortage_history(부분 입고 이력)가 있으면 그걸 기반으로 receipts 생성
   if (Array.isArray(c.shortage_history) && c.shortage_history.length > 0) {
+    // v2.53 hotfix1: 옛 컬러의 c.qc_status가 이미 'done'/'accept'/'discard'였다면
+    // 박 대표가 이미 작업 끝낸 데이터 → 모든 receipt를 같은 상태로 마이그레이션
+    // (이전 v2.52까지는 차수별 QC가 없었으므로, 옛 단일 QC는 전체 대표값으로 간주)
+    const oldStatus = c.qc_status;
+    const propagateDone = (oldStatus === 'done' || oldStatus === 'accept' || oldStatus === 'discard');
+    
     c.receipts = c.shortage_history.map((h, idx) => {
-      // 첫 입고에만 기존 QC 데이터 부착 (단일 QC 객체였으므로 1차에 귀속)
       const isFirst = idx === 0;
+      // 첫 입고에는 QC 원본 데이터 + 메타데이터 모두 매핑
+      // 나머지 입고에는: propagateDone이면 같은 상태(데이터 없이 상태만)로 추정 표시,
+      //                  아니면 'none'
       return {
         receipt_no: idx + 1,
         received_body: h.received_body || 0,
@@ -6336,17 +6344,21 @@ function migrateColorReceipts(c) {
         received_at: h.received_at || null,
         received_by: h.received_by || null,
         memo: h.memo || (isFirst ? '최초 입고' : `${idx + 1}차 입고`),
-        qc: isFirst ? (c.qc || null) : null,
-        qc_status: isFirst ? (c.qc_status || 'none') : 'none',
-        qc_done_at: isFirst ? (c.qc_done_at || null) : null,
-        qc_done_by: isFirst ? (c.qc_done_by || null) : null,
+        qc: isFirst ? (c.qc || null) : (propagateDone ? (c.qc || null) : null),
+        qc_status: isFirst
+          ? (c.qc_status || 'none')
+          : (propagateDone ? oldStatus : 'none'),
+        qc_done_at: isFirst ? (c.qc_done_at || null) : (propagateDone ? (c.qc_done_at || null) : null),
+        qc_done_by: isFirst ? (c.qc_done_by || null) : (propagateDone ? (c.qc_done_by || null) : null),
         defect_at: isFirst ? (c.defect_at || null) : null,
         defect_by: isFirst ? (c.defect_by || null) : null,
-        accept_at: isFirst ? (c.accept_at || null) : null,
-        accept_by: isFirst ? (c.accept_by || null) : null,
-        discard_at: isFirst ? (c.discard_at || null) : null,
-        discard_by: isFirst ? (c.discard_by || null) : null,
-        claim: isFirst ? (c.claim || null) : null
+        accept_at: isFirst ? (c.accept_at || null) : (propagateDone && oldStatus==='accept' ? (c.accept_at || null) : null),
+        accept_by: isFirst ? (c.accept_by || null) : (propagateDone && oldStatus==='accept' ? (c.accept_by || null) : null),
+        discard_at: isFirst ? (c.discard_at || null) : (propagateDone && oldStatus==='discard' ? (c.discard_at || null) : null),
+        discard_by: isFirst ? (c.discard_by || null) : (propagateDone && oldStatus==='discard' ? (c.discard_by || null) : null),
+        claim: isFirst ? (c.claim || null) : null,
+        // v2.53 hotfix1: 옛 데이터 추정 변환임을 표시 (UI에서 "추정 QC" 같은 라벨로 사용 가능)
+        legacy_inferred: !isFirst && propagateDone ? true : false
       };
     });
   } else if (c.qc || c.qc_status || c.received_body !== undefined || c.completed) {
@@ -6390,6 +6402,77 @@ function migrateWorkOrderReceipts(wo) {
   return wo;
 }
 
+// v2.53 hotfix1: 옛 데이터(v2.52까지) 자동 완료 복구
+// 컬러 c.qc_status가 'done'/'accept'/'discard'이고 부족분 정산 끝났는데
+// 마이그레이션 후 receipts에 'none'이 남아 컬러가 미완료로 보이는 의뢰서를 자동 복구.
+// 백그라운드로 Firestore에 1회 쓰기 후 다시 호출되지 않도록 플래그.
+async function autoRepairLegacyCompletedColors(woList) {
+  const repairs = [];
+  woList.forEach(wo => {
+    if (!wo || wo.type !== '염색가공') return;
+    if (wo.completed) return;  // 이미 완료된 의뢰서는 스킵
+    if (wo._legacy_repair_done) return;  // 이미 시도한 의뢰서 스킵
+    if (!Array.isArray(wo.colors)) return;
+    
+    let needsRepair = false;
+    const newColors = wo.colors.map(c => {
+      if (!c) return c;
+      migrateColorReceipts(c);
+      // 옛 컬러: c.completed!==true이지만 c.qc_status가 완료 상태였고 부족분 정산 끝남
+      const oldDoneStatus = c.qc_status === 'done' || c.qc_status === 'accept' || c.qc_status === 'discard';
+      const shortageSettled = !c.shortage_status || c.shortage_status === 'closed' || c.shortage_status === 'discard';
+      const someReceiptsNone = Array.isArray(c.receipts) && c.receipts.some(r => !r.qc_status || r.qc_status === 'none');
+      
+      if (oldDoneStatus && shortageSettled && someReceiptsNone && c.completed !== true) {
+        // receipts 모두 c.qc_status로 승급
+        const newReceipts = c.receipts.map(r => {
+          if (!r.qc_status || r.qc_status === 'none') {
+            return { ...r, qc_status: c.qc_status, legacy_inferred: true,
+                     qc: r.qc || c.qc || null,
+                     qc_done_at: r.qc_done_at || c.qc_done_at || null,
+                     qc_done_by: r.qc_done_by || c.qc_done_by || null };
+          }
+          return r;
+        });
+        needsRepair = true;
+        // accept/discard는 즉시 완료 처리. done도 부족분 closed니까 완료 처리.
+        return {
+          ...c,
+          receipts: newReceipts,
+          completed: true,
+          completed_at: c.completed_at || new Date().toISOString()
+        };
+      }
+      return c;
+    });
+    
+    if (needsRepair) {
+      const allDone = newColors.every(c => c.completed === true);
+      wo._legacy_repair_done = true;  // 중복 호출 방지
+      repairs.push({ woId: wo.id, newColors, allDone });
+    }
+  });
+  
+  // Firestore에 비동기 1회 쓰기 (사용자 액션과 분리)
+  for (const rep of repairs) {
+    try {
+      const updates = {
+        colors: rep.newColors,
+        updated_at: serverTimestamp(),
+        updated_by: state.user.email
+      };
+      if (rep.allDone) {
+        updates.completed = true;
+        updates.completed_at = serverTimestamp();
+      }
+      await updateDoc(doc(db, 'workorders', rep.woId), updates);
+      console.log('[HIWOS v2.53 hotfix1] 옛 의뢰서 자동 복구:', rep.woId, '의뢰서 자동 완료:', rep.allDone);
+    } catch (e) {
+      console.warn('[HIWOS v2.53 hotfix1] 자동 복구 실패:', rep.woId, e.message);
+    }
+  }
+}
+
 // 현재 활성 receipt = 가장 최근에 추가됐고 아직 미완료(none/pending/defect)인 receipt
 // 완료된 receipt(done/accept/discard)는 active 아님
 // 모두 완료됐으면 마지막 receipt 반환 (편집/조회용)
@@ -6427,6 +6510,29 @@ function getReceiptQcStatus(r) {
 function areAllReceiptsResolved(c) {
   migrateColorReceipts(c);
   if (!Array.isArray(c.receipts) || c.receipts.length === 0) return false;
+  
+  // v2.53 hotfix1: 옛 데이터 자동 복구
+  // 옛 컬러가 이미 c.qc_status='done'/'accept'/'discard'였고, 부족분도 정산됐으면
+  // (closed/discard) 박 대표가 v2.52 시절에 이미 완료시킨 컬러임.
+  // 마이그레이션 후 일부 receipt가 'none'으로 남아있어도 박 대표 운영 의도상 '완료'로 간주.
+  const oldDoneStatus = c.qc_status === 'done' || c.qc_status === 'accept' || c.qc_status === 'discard';
+  const shortageSettled = !c.shortage_status || c.shortage_status === 'closed' || c.shortage_status === 'discard';
+  if (oldDoneStatus && shortageSettled) {
+    // 'none' receipts를 c.qc_status와 같은 상태로 자동 승급
+    let upgraded = false;
+    c.receipts.forEach(r => {
+      if (!r.qc_status || r.qc_status === 'none') {
+        r.qc_status = c.qc_status;
+        r.legacy_inferred = true;
+        upgraded = true;
+      }
+    });
+    if (upgraded && !c._legacy_upgraded_logged) {
+      c._legacy_upgraded_logged = true;
+      console.log('[HIWOS v2.53 hotfix1] 옛 데이터 자동 복구:', c.name, c.receipts.map(r => r.qc_status));
+    }
+  }
+  
   return c.receipts.every(r => {
     const s = r.qc_status || 'none';
     return s === 'done' || s === 'accept' || s === 'discard';
@@ -12153,6 +12259,12 @@ function validateBlendSum(blends, label) {
     const list = getDashWorkOrders('염색가공');
     // v2.53: 의뢰서 렌더링 시 receipts 마이그레이션 (lazy)
     list.forEach(wo => migrateWorkOrderReceipts(wo));
+    
+    // v2.53 hotfix1: 옛 데이터 자동 완료 복구
+    // c.qc_status='done'+shortage closed인 옛 컬러를 receipts done으로 승급한 결과,
+    // 컬러 자체가 완료 가능 상태가 됐다면 Firestore에 자동 반영
+    autoRepairLegacyCompletedColors(list);
+    
     const totalCount = state.allWorkOrders.filter(wo => 
       wo.type === '염색가공' && !wo.deleted && (state.showCompleted || !wo.completed)
     ).length;
@@ -16767,7 +16879,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53';
+  const VERSION = 'v2.53 hotfix1';
   // title (브라우저 탭)
   document.title = 'RECOVERIC HIWOS ' + VERSION;
   // 사이드바 버전 태그
