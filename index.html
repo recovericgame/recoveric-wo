@@ -6296,6 +6296,157 @@ function getFormData() {
 //   - 기존에만 존재 + 진행 중 → 폼에서 의도적으로 지운 것으로 보고 제외
 // ============================================================
 const PROTECTED_WO_FIELDS = ['internal_memo', 'urgent_memo'];
+// ==================== v2.53: 입고 차수별 QC 데이터 분리 ====================
+// 박 대표 발견 이슈: 같은 컬러여도 입고 차수가 다르면 다른 탕에서 염색된 다른 원단
+//   - 1차 5절 → A탕 → 폭 76, 야드중량 195
+//   - 2차 3절 → B탕 → 폭 75.5, 야드중량 197
+//   - 3차 2절 → C탕 → 폭 76.2, 야드중량 196
+// v2.52까지는 colors[i].qc 1개 객체에 덮어쓰기 → 차수별 QC 데이터 손실
+// v2.53부터는 colors[i].receipts[] 배열에 차수별 QC 데이터 보관
+//
+// 데이터 모델:
+//   colors[i].receipts = [
+//     {
+//       receipt_no: 1,
+//       received_body, received_rib, received_at, received_by, memo,
+//       qc: { width_inch, weight_g_per_y, ... 6필드 + judgment + defect_* },
+//       qc_status: 'none' | 'pending' | 'done' | 'defect' | 'accept' | 'discard',
+//       qc_done_at, qc_done_by, defect_at/by, accept_at/by, discard_at/by, claim
+//     },
+//     { receipt_no: 2, ... },
+//   ]
+//
+// 마이그레이션: lazy — 의뢰서 렌더링 직전 자동 변환, Firestore에는 사용자 액션 시에만 저장
+
+// Lazy 마이그레이션: colors[i]에 receipts[] 없으면 기존 데이터로 생성
+// 메모리 객체를 직접 수정. 같은 객체에 두 번 호출돼도 안전.
+function migrateColorReceipts(c) {
+  if (!c) return c;
+  if (Array.isArray(c.receipts) && c.receipts.length > 0) return c;
+  
+  // shortage_history(부분 입고 이력)가 있으면 그걸 기반으로 receipts 생성
+  if (Array.isArray(c.shortage_history) && c.shortage_history.length > 0) {
+    c.receipts = c.shortage_history.map((h, idx) => {
+      // 첫 입고에만 기존 QC 데이터 부착 (단일 QC 객체였으므로 1차에 귀속)
+      const isFirst = idx === 0;
+      return {
+        receipt_no: idx + 1,
+        received_body: h.received_body || 0,
+        received_rib: h.received_rib || 0,
+        received_at: h.received_at || null,
+        received_by: h.received_by || null,
+        memo: h.memo || (isFirst ? '최초 입고' : `${idx + 1}차 입고`),
+        qc: isFirst ? (c.qc || null) : null,
+        qc_status: isFirst ? (c.qc_status || 'none') : 'none',
+        qc_done_at: isFirst ? (c.qc_done_at || null) : null,
+        qc_done_by: isFirst ? (c.qc_done_by || null) : null,
+        defect_at: isFirst ? (c.defect_at || null) : null,
+        defect_by: isFirst ? (c.defect_by || null) : null,
+        accept_at: isFirst ? (c.accept_at || null) : null,
+        accept_by: isFirst ? (c.accept_by || null) : null,
+        discard_at: isFirst ? (c.discard_at || null) : null,
+        discard_by: isFirst ? (c.discard_by || null) : null,
+        claim: isFirst ? (c.claim || null) : null
+      };
+    });
+  } else if (c.qc || c.qc_status || c.received_body !== undefined || c.completed) {
+    // 부분 입고는 없지만 QC/입고 활동이 있던 컬러 — 1차 단일 입고로 받기
+    c.receipts = [{
+      receipt_no: 1,
+      received_body: (c.received_body !== undefined && c.received_body !== null)
+        ? c.received_body
+        : (c.body || 0),
+      received_rib: (c.received_rib !== undefined && c.received_rib !== null)
+        ? c.received_rib
+        : (c.rib || 0),
+      received_at: c.qc_pending_at || c.completed_at || null,
+      received_by: null,
+      memo: '최초 입고',
+      qc: c.qc || null,
+      qc_status: c.qc_status || 'none',
+      qc_done_at: c.qc_done_at || null,
+      qc_done_by: c.qc_done_by || null,
+      defect_at: c.defect_at || null,
+      defect_by: c.defect_by || null,
+      accept_at: c.accept_at || null,
+      accept_by: c.accept_by || null,
+      discard_at: c.discard_at || null,
+      discard_by: c.discard_by || null,
+      claim: c.claim || null
+    }];
+  } else {
+    // 아무 활동도 없는 신규 컬러 — receipts 빈 배열 (입고 전)
+    c.receipts = [];
+  }
+  
+  return c;
+}
+
+// 의뢰서의 모든 컬러에 마이그레이션 일괄 적용 (렌더링 진입점에서 호출)
+function migrateWorkOrderReceipts(wo) {
+  if (!wo || wo.type !== '염색가공') return wo;
+  if (!Array.isArray(wo.colors)) return wo;
+  wo.colors.forEach(c => migrateColorReceipts(c));
+  return wo;
+}
+
+// 현재 활성 receipt = 가장 최근에 추가됐고 아직 미완료(none/pending/defect)인 receipt
+// 완료된 receipt(done/accept/discard)는 active 아님
+// 모두 완료됐으면 마지막 receipt 반환 (편집/조회용)
+function getActiveReceipt(c) {
+  migrateColorReceipts(c);
+  if (!Array.isArray(c.receipts) || c.receipts.length === 0) return null;
+  // 뒤에서부터 검색 → 가장 최근 미완료
+  for (let i = c.receipts.length - 1; i >= 0; i--) {
+    const r = c.receipts[i];
+    const s = r.qc_status || 'none';
+    if (s === 'none' || s === 'pending' || s === 'defect') return r;
+  }
+  // 모두 완료된 상태 → 마지막 receipt
+  return c.receipts[c.receipts.length - 1];
+}
+
+function getActiveReceiptIndex(c) {
+  migrateColorReceipts(c);
+  if (!Array.isArray(c.receipts) || c.receipts.length === 0) return -1;
+  for (let i = c.receipts.length - 1; i >= 0; i--) {
+    const r = c.receipts[i];
+    const s = r.qc_status || 'none';
+    if (s === 'none' || s === 'pending' || s === 'defect') return i;
+  }
+  return c.receipts.length - 1;
+}
+
+// 특정 receipt의 QC 상태
+function getReceiptQcStatus(r) {
+  if (!r) return 'none';
+  return r.qc_status || 'none';
+}
+
+// 모든 receipt이 처리 완료(done/accept/discard)인지 — 컬러 완료 판정용
+function areAllReceiptsResolved(c) {
+  migrateColorReceipts(c);
+  if (!Array.isArray(c.receipts) || c.receipts.length === 0) return false;
+  return c.receipts.every(r => {
+    const s = r.qc_status || 'none';
+    return s === 'done' || s === 'accept' || s === 'discard';
+  });
+}
+
+// 누적 입고량 (receipts 합산) — 기존 received_body 필드 대체
+function getReceiptsTotalBody(c) {
+  migrateColorReceipts(c);
+  if (!Array.isArray(c.receipts) || c.receipts.length === 0) return 0;
+  return c.receipts.reduce((s, r) => s + (parseFloat(r.received_body) || 0), 0);
+}
+
+function getReceiptsTotalRib(c) {
+  migrateColorReceipts(c);
+  if (!Array.isArray(c.receipts) || c.receipts.length === 0) return 0;
+  return c.receipts.reduce((s, r) => s + (parseFloat(r.received_rib) || 0), 0);
+}
+// ==================== v2.53 입고 차수 헬퍼 끝 ====================
+
 const PROTECTED_COLOR_FIELDS = [
   'completed', 'completed_at',
   'internal_memo', 'urgent',
@@ -6309,7 +6460,9 @@ const PROTECTED_COLOR_FIELDS = [
   'received_body', 'received_rib',
   'shortage_status', 'shortage_reason',
   'shortage_resolved_at', 'shortage_resolved_by',
-  'shortage_history'
+  'shortage_history',
+  // v2.53: 입고 차수별 QC 데이터 분리
+  'receipts'
 ];
 
 // 컬러가 "보호 대상"인지 (완료됐거나 QC/땡처리 어떤 상태든 들어간 컬러)
@@ -6321,6 +6474,8 @@ function isProtectedColor(c) {
   if (c.dye_in_at || c.dye_done_at) return true;
   // v2.52: 부분 입고가 발생한 컬러도 보호
   if (c.shortage_status) return true;
+  // v2.53: 입고 차수 데이터가 있는 컬러도 보호
+  if (Array.isArray(c.receipts) && c.receipts.length > 0) return true;
   return false;
 }
 
@@ -8728,17 +8883,55 @@ function validateBlendSum(blends, label) {
   }
   
   // 컬러별 완료 토글 + 의뢰서 자동 완료 판정
+  // v2.53: 완료해제 시 qc_status='pending'으로 되돌림 (QC 데이터 보존, 상태만 대기로)
+  //  → 진행 화면에 [✓ QC 대기] + [완료] 버튼 같이 표시 (이전엔 [✓ QC]만 보였던 버그 fix)
   async function toggleColorCompleted(woId, colorIdx, newState) {
     const wo = state.allWorkOrders.find(w => w.id === woId);
     if (!wo) throw new Error('의뢰서를 찾을 수 없음');
     const colors = JSON.parse(JSON.stringify(wo.colors || []));
     if (!colors[colorIdx]) throw new Error('컬러 인덱스 오류');
-    colors[colorIdx].completed = newState;
-    if (newState) colors[colorIdx].completed_at = new Date().toISOString();
-    else delete colors[colorIdx].completed_at;
+    const c = colors[colorIdx];
+    
+    c.completed = newState;
+    if (newState) {
+      c.completed_at = new Date().toISOString();
+    } else {
+      delete c.completed_at;
+      // v2.53 이슈 1: 완료해제 시 QC 상태도 같이 되돌림
+      // QC 데이터(폭/야드중량/축률 등)는 그대로 보존, 상태만 'pending'(QC 대기)으로
+      // 'done' → 'pending' (정상 완료된 컬러의 완료해제)
+      // 'accept' → 'defect' (그대로사용 해제 시 다시 불량 상태로 되돌림)
+      // 'discard'는 그대로 둠 (땡처리는 별도 해제 절차 필요)
+      if (c.qc_status === 'done') {
+        c.qc_status = 'pending';
+        delete c.qc_done_at;
+        delete c.qc_done_by;
+        c.qc_pending_at = new Date().toISOString();
+      } else if (c.qc_status === 'accept') {
+        c.qc_status = 'defect';
+        delete c.accept_at;
+        delete c.accept_by;
+      }
+      // 긴급 자동 해제 정보는 살려둠 (사용자 의도 보존)
+      
+      // v2.53: receipts 배열이 있으면 마지막 receipt의 qc_status도 같이 되돌림
+      // (UI는 진행 화면에서 활성 receipt 기준으로 표시)
+      if (Array.isArray(c.receipts) && c.receipts.length > 0) {
+        const lastR = c.receipts[c.receipts.length - 1];
+        if (lastR.qc_status === 'done') {
+          lastR.qc_status = 'pending';
+          delete lastR.qc_done_at;
+          delete lastR.qc_done_by;
+        } else if (lastR.qc_status === 'accept') {
+          lastR.qc_status = 'defect';
+          delete lastR.accept_at;
+          delete lastR.accept_by;
+        }
+      }
+    }
     
     // 모든 컬러 완료 → 의뢰서 자동 완료
-    const allDone = colors.every(c => c.completed === true);
+    const allDone = colors.every(cc => cc.completed === true);
     
     const updates = {
       colors,
@@ -8920,20 +9113,55 @@ function validateBlendSum(blends, label) {
   }
   
   // QC 대기 상태로 진입 (1차 클릭 — 진행 중 → QC 대기)
+  // v2.53: 활성 receipt(가장 최근 미완료)에 pending 적용
+  //        receipt가 하나도 없는 컬러(초기 상태)는 1차 receipt를 의뢰량 그대로 생성
   async function setColorQcPending(woId, colorIdx) {
     const wo = state.allWorkOrders.find(w => w.id === woId);
     if (!wo) throw new Error('의뢰서를 찾을 수 없음');
     const colors = JSON.parse(JSON.stringify(wo.colors || []));
     if (!colors[colorIdx]) throw new Error('컬러 인덱스 오류');
-    colors[colorIdx].qc_status = 'pending';
-    colors[colorIdx].qc_pending_at = new Date().toISOString();
-    // 컬러 완료 상태 초기화 (혹시 직전이 done이었다면)
-    colors[colorIdx].completed = false;
-    delete colors[colorIdx].completed_at;
-    delete colors[colorIdx].qc_done_at;
-    delete colors[colorIdx].qc_done_by;
+    const c = colors[colorIdx];
+    const now = new Date().toISOString();
     
-    // 의뢰서 단위 completed가 true였다면 해제 (QC 대기는 진행 중 상태)
+    migrateColorReceipts(c);
+    
+    if (c.receipts.length === 0) {
+      // 부분 입고 없이 바로 [완료] 시도하는 컬러 — 의뢰량 그대로 1차 receipt 생성
+      c.receipts.push({
+        receipt_no: 1,
+        received_body: c.body || 0,
+        received_rib: c.rib || 0,
+        received_at: now,
+        received_by: state.user.email,
+        memo: '최초 입고',
+        qc: null,
+        qc_status: 'pending',
+        qc_pending_at: now,
+        qc_done_at: null, qc_done_by: null,
+        defect_at: null, defect_by: null,
+        accept_at: null, accept_by: null,
+        discard_at: null, discard_by: null,
+        claim: null
+      });
+    } else {
+      // 활성(미완료) receipt에 pending 부여
+      const activeIdx = getActiveReceiptIndex(c);
+      const r = c.receipts[activeIdx];
+      r.qc_status = 'pending';
+      r.qc_pending_at = r.qc_pending_at || now;
+      // 직전 done이었다면 done 데이터 클리어
+      r.qc_done_at = null;
+      r.qc_done_by = null;
+    }
+    
+    // 의뢰서 단위 동기화 (컬러 미완료)
+    c.qc_status = 'pending';
+    c.qc_pending_at = c.qc_pending_at || now;
+    c.completed = false;
+    delete c.completed_at;
+    delete c.qc_done_at;
+    delete c.qc_done_by;
+    
     const updates = {
       colors,
       updated_at: serverTimestamp(),
@@ -8962,14 +9190,43 @@ function validateBlendSum(blends, label) {
   }
   
   // QC 완료 처리 (검수 데이터 저장 + qc_status: 'done' + 컬러 완료 + 의뢰서 자동 완료 판정)
-  async function setColorQcDone(woId, colorIdx, qcData) {
+  // v2.53: receiptNo 인자 추가 — 특정 차수 receipt에 QC 저장
+  //        receiptNo 미지정 시 활성(미완료) receipt 자동 선택
+  async function setColorQcDone(woId, colorIdx, qcData, receiptNo) {
     const wo = state.allWorkOrders.find(w => w.id === woId);
     if (!wo) throw new Error('의뢰서를 찾을 수 없음');
     const colors = JSON.parse(JSON.stringify(wo.colors || []));
     if (!colors[colorIdx]) throw new Error('컬러 인덱스 오류');
+    const c = colors[colorIdx];
+    const now = new Date().toISOString();
     
-    const prevQc = colors[colorIdx].qc || {};
-    colors[colorIdx].qc = {
+    migrateColorReceipts(c);
+    
+    // 대상 receipt 결정
+    let targetIdx;
+    if (receiptNo !== undefined && receiptNo !== null) {
+      targetIdx = c.receipts.findIndex(r => r.receipt_no === receiptNo);
+      if (targetIdx < 0) throw new Error(`${receiptNo}차 입고 데이터를 찾을 수 없음`);
+    } else {
+      targetIdx = getActiveReceiptIndex(c);
+      if (targetIdx < 0) {
+        // 입고 없이 [완료] 누른 경우 — 의뢰량 그대로 1차 receipt 생성
+        c.receipts.push({
+          receipt_no: 1,
+          received_body: c.body || 0,
+          received_rib: c.rib || 0,
+          received_at: now,
+          received_by: state.user.email,
+          memo: '최초 입고',
+          qc: null, qc_status: 'none'
+        });
+        targetIdx = 0;
+      }
+    }
+    const r = c.receipts[targetIdx];
+    
+    const prevQc = r.qc || {};
+    r.qc = {
       width_inch: qcData.width_inch === '' ? null : (parseFloat(qcData.width_inch) || null),
       width_double: !!qcData.width_double,
       weight_g_per_y: qcData.weight_g_per_y === '' ? null : (parseFloat(qcData.weight_g_per_y) || null),
@@ -8981,31 +9238,36 @@ function validateBlendSum(blends, label) {
       defect_flags: prevQc.defect_flags || makeEmptyDefectFlags(),
       defect_memo: prevQc.defect_memo || ''
     };
-    colors[colorIdx].qc_status = 'done';
-    colors[colorIdx].qc_done_at = new Date().toISOString();
-    colors[colorIdx].qc_done_by = state.user.email;
+    r.qc_status = 'done';
+    r.qc_done_at = now;
+    r.qc_done_by = state.user.email;
     
-    // v2.52 hotfix2: 부족분이 active(pending/expected)면 QC 끝나도 컬러 완료 금지
-    // 부족분 정산 끝나야(closed/discard) 또는 부족분 없어야 진짜 완료
-    const c = colors[colorIdx];
-    if (isShortageActive(c)) {
-      // QC 데이터만 저장, 완료는 보류
-      c.completed = false;
-      delete c.completed_at;
-    } else {
-      // 부족분 없음 또는 closed/discard — 정상 완료 처리
+    // 의뢰서 단위(c.qc, c.qc_status)는 활성 receipt 기준으로 동기화 (검색/필터용)
+    // 일관성을 위해 가장 마지막 receipt 또는 활성 receipt 데이터 반영
+    c.qc = r.qc;
+    c.qc_status = r.qc_status;
+    c.qc_done_at = r.qc_done_at;
+    c.qc_done_by = r.qc_done_by;
+    
+    // 컬러 완료 판정: 모든 receipts 처리 완료 + 부족분 정산
+    const allReceiptsResolved = areAllReceiptsResolved(c);
+    const shortageBlocked = isShortageActive(c);
+    
+    if (allReceiptsResolved && !shortageBlocked) {
       c.completed = true;
-      c.completed_at = c.completed_at || new Date().toISOString();
-      // 컬러 완료 시 긴급 플래그 자동 해제 (v2.51 step3)
+      c.completed_at = c.completed_at || now;
       if (c.urgent) {
         c.urgent = false;
-        c.urgent_cleared_at = new Date().toISOString();
+        c.urgent_cleared_at = now;
         c.urgent_cleared_reason = 'auto_on_complete';
       }
+    } else {
+      c.completed = false;
+      delete c.completed_at;
     }
     
-    // 모든 컬러 QC 완료 → 의뢰서 자동 완료
-    const allDone = colors.every(c => c.completed === true);
+    // 모든 컬러 완료 → 의뢰서 자동 완료
+    const allDone = colors.every(cc => cc.completed === true);
     
     const updates = {
       colors,
@@ -9128,6 +9390,7 @@ function validateBlendSum(blends, label) {
 
   // [부족] 액션 - 1차 입고 수량 + 부족분 사유 저장 (QC 대기로 자동 전환)
   // colorIdx의 컬러를 9절 입고/1절 부족으로 정리하고 QC 단계로 넘김
+  // v2.53: receipts[0] 생성 / 이미 receipts 있으면 마지막 receipt 갱신
   async function setColorShortage(woId, colorIdx, payload) {
     const wo = state.allWorkOrders.find(w => w.id === woId);
     if (!wo) throw new Error('의뢰서를 찾을 수 없음');
@@ -9153,15 +9416,49 @@ function validateBlendSum(blends, label) {
     c.received_body = rec_body;
     c.received_rib = rec_rib;
 
-    // 1차 입고 이력 push
+    // v2.53: receipts[0] 1차 입고로 등록
+    migrateColorReceipts(c);
+    if (c.receipts.length === 0) {
+      c.receipts.push({
+        receipt_no: 1,
+        received_body: rec_body,
+        received_rib: rec_rib,
+        received_at: now,
+        received_by: state.user.email,
+        memo: payload.memo || '최초 입고',
+        qc: null,
+        qc_status: 'pending',
+        qc_pending_at: now,
+        qc_done_at: null, qc_done_by: null,
+        defect_at: null, defect_by: null,
+        accept_at: null, accept_by: null,
+        discard_at: null, discard_by: null,
+        claim: null
+      });
+    } else {
+      // 이미 receipts가 있는 경우 (역호환 마이그레이션) — 1차 갱신
+      const r0 = c.receipts[0];
+      r0.received_body = rec_body;
+      r0.received_rib = rec_rib;
+      if (!r0.received_at) r0.received_at = now;
+      if (!r0.received_by) r0.received_by = state.user.email;
+      if (!r0.qc_status || r0.qc_status === 'none') {
+        r0.qc_status = 'pending';
+        r0.qc_pending_at = now;
+      }
+    }
+    
+    // 옛 shortage_history 동기화 (검색·하위호환용)
     if (!Array.isArray(c.shortage_history)) c.shortage_history = [];
-    c.shortage_history.push({
-      received_body: rec_body,
-      received_rib: rec_rib,
-      received_at: now,
-      received_by: state.user.email,
-      memo: payload.memo || '최초 입고'
-    });
+    if (c.shortage_history.length === 0) {
+      c.shortage_history.push({
+        received_body: rec_body,
+        received_rib: rec_rib,
+        received_at: now,
+        received_by: state.user.email,
+        memo: payload.memo || '최초 입고'
+      });
+    }
 
     if (totalShortage > 0) {
       // 부족분 발생 → 상태 + 사유 저장
@@ -9205,6 +9502,7 @@ function validateBlendSum(blends, label) {
   }
 
   // 추가 입고 처리 (회색 잔류 컬러에 추가로 들어온 수량 합산)
+  // v2.53: 새 receipt 추가 (차수 증가) — 이 receipt는 별도 QC 데이터 가짐
   async function addShortageReceipt(woId, colorIdx, payload) {
     const wo = state.allWorkOrders.find(w => w.id === woId);
     if (!wo) throw new Error('의뢰서를 찾을 수 없음');
@@ -9230,6 +9528,29 @@ function validateBlendSum(blends, label) {
     c.received_body = new_rec_body;
     c.received_rib = new_rec_rib;
 
+    // v2.53: 새 receipt push — 별도 차수, 별도 QC 데이터
+    migrateColorReceipts(c);
+    const nextReceiptNo = c.receipts.length > 0
+      ? Math.max(...c.receipts.map(r => r.receipt_no || 0)) + 1
+      : 1;
+    c.receipts.push({
+      receipt_no: nextReceiptNo,
+      received_body: add_body,
+      received_rib: add_rib,
+      received_at: payload.received_at || now,
+      received_by: state.user.email,
+      memo: payload.memo || `${nextReceiptNo}차 입고`,
+      qc: null,
+      qc_status: 'pending',  // 추가 입고 = 새로 QC 검수 필요
+      qc_pending_at: now,
+      qc_done_at: null, qc_done_by: null,
+      defect_at: null, defect_by: null,
+      accept_at: null, accept_by: null,
+      discard_at: null, discard_by: null,
+      claim: null
+    });
+
+    // 옛 shortage_history 동기화 (검색·하위호환용)
     if (!Array.isArray(c.shortage_history)) c.shortage_history = [];
     c.shortage_history.push({
       received_body: add_body,
@@ -9249,40 +9570,34 @@ function validateBlendSum(blends, label) {
         : '추가 입고로 종결';
       c.shortage_resolved_at = now;
       c.shortage_resolved_by = state.user.email;
-      
-      // v2.52 hotfix2: 부족분 0이고 QC done 상태면 → 컬러 자동 완료 전환
-      // (QC 데이터가 이미 있는 상태에서 부족분이 정산되면 완료 처리)
-      if (c.qc_status === 'done' && !c.completed) {
-        c.completed = true;
-        c.completed_at = c.completed_at || now;
-        if (c.urgent) {
-          c.urgent = false;
-          c.urgent_cleared_at = now;
-          c.urgent_cleared_reason = 'auto_on_complete';
-        }
-        autoCompleted = true;
-      }
+      // 부족분 정산 — 다만 새 receipt는 QC pending 상태이므로 자동 완료는 아직 안 됨
+      // (모든 receipts QC 완료될 때 setColorQcDone에서 컬러 완료 처리)
     }
     // 부족분 일부 남으면 기존 상태(expected 등) 유지
+    
+    // 새 receipt 추가됐으므로 컬러는 미완료 상태 유지 (QC 다시 받아야 함)
+    c.completed = false;
+    delete c.completed_at;
+    // 의뢰서 단위 qc_status — 새 receipt가 pending이므로 pending으로 동기화
+    c.qc_status = 'pending';
+    delete c.qc_done_at;
+    delete c.qc_done_by;
 
-    // v2.52 hotfix2: 자동 완료된 컬러가 있으면 의뢰서 전체 완료 여부도 재계산
     const updates = {
       colors,
       updated_at: serverTimestamp(),
       updated_by: state.user.email
     };
-    if (autoCompleted) {
-      const allDone = colors.every(cc => cc.completed === true);
-      if (allDone && !wo.completed) {
-        updates.completed = true;
-        updates.completed_at = serverTimestamp();
-      }
+    if (wo.completed) {
+      updates.completed = false;
+      updates.completed_at = null;
     }
     await updateDoc(doc(db, 'workorders', woId), updates);
     return { new_rec_body, new_rec_rib, remaining, autoCompleted };
   }
 
   // 부족분 상태 변경 (pending → expected → closed/discard 등)
+  // v2.53: 모든 receipts QC 완료 + 부족분 정산되면 컬러 자동 완료
   async function changeShortageStatus(woId, colorIdx, newStatus, reason) {
     const wo = state.allWorkOrders.find(w => w.id === woId);
     if (!wo) throw new Error('의뢰서를 찾을 수 없음');
@@ -9290,13 +9605,15 @@ function validateBlendSum(blends, label) {
     if (!colors[colorIdx]) throw new Error('컬러 인덱스 오류');
     const c = colors[colorIdx];
     const now = new Date().toISOString();
+    
+    migrateColorReceipts(c);
 
     const valid = ['pending', 'expected', 'closed', 'discard'];
     if (!valid.includes(newStatus)) throw new Error('잘못된 상태값');
 
     // 이미 추가 입고 이력이 있는 컬러는 discard로 못 감 (클레임 충돌 방지)
     if (newStatus === 'discard') {
-      const receiptCount = Array.isArray(c.shortage_history) ? c.shortage_history.length : 0;
+      const receiptCount = Array.isArray(c.receipts) ? c.receipts.length : 0;
       if (receiptCount > 1) throw new Error('이미 추가 입고된 컬러는 땡처리 전환 불가');
     }
 
@@ -9307,8 +9624,9 @@ function validateBlendSum(blends, label) {
       c.shortage_resolved_at = now;
       c.shortage_resolved_by = state.user.email;
       
-      // v2.52 hotfix2: 부족분 정산 + QC done이면 자동 완료 전환
-      if (c.qc_status === 'done' && !c.completed) {
+      // v2.53: 모든 receipts QC 처리 완료 + 부족분 정산 → 컬러 자동 완료
+      const allResolved = areAllReceiptsResolved(c);
+      if (allResolved && !c.completed) {
         c.completed = true;
         c.completed_at = c.completed_at || now;
         if (c.urgent) {
@@ -9339,6 +9657,7 @@ function validateBlendSum(blends, label) {
   }
 
   // 부족분 처리 완전 취소 (잘못 입력했을 때 — received 필드까지 다 지움)
+  // v2.53: receipts 배열도 같이 정리
   async function revertShortage(woId, colorIdx) {
     const wo = state.allWorkOrders.find(w => w.id === woId);
     if (!wo) throw new Error('의뢰서를 찾을 수 없음');
@@ -9353,6 +9672,7 @@ function validateBlendSum(blends, label) {
     delete c.shortage_resolved_at;
     delete c.shortage_resolved_by;
     delete c.shortage_history;
+    delete c.receipts;  // v2.53: 차수 데이터도 삭제 (마이그레이션 다시 진행)
 
     await updateDoc(doc(db, 'workorders', woId), {
       colors,
@@ -9371,16 +9691,41 @@ function validateBlendSum(blends, label) {
 
   // ==================== v2.51: 불량 / 그대로사용 / 땡처리 처리 함수 ====================
   // 불량 처리 (QC 검수 결과 불량 판정 → 컬러는 진행 화면 잔존, 빨간 시각 표시)
-  async function setColorQcDefect(woId, colorIdx, qcData) {
+  // v2.53: receiptNo 인자 추가 — 특정 차수 receipt에 불량 처리
+  async function setColorQcDefect(woId, colorIdx, qcData, receiptNo) {
     const wo = state.allWorkOrders.find(w => w.id === woId);
     if (!wo) throw new Error('의뢰서를 찾을 수 없음');
     const colors = JSON.parse(JSON.stringify(wo.colors || []));
     if (!colors[colorIdx]) throw new Error('컬러 인덱스 오류');
-
-    const prevQc = colors[colorIdx].qc || {};
-    const reworkCount = (colors[colorIdx].rework_count || 0);
-
-    colors[colorIdx].qc = {
+    const c = colors[colorIdx];
+    const now = new Date().toISOString();
+    
+    migrateColorReceipts(c);
+    
+    // 대상 receipt 결정
+    let targetIdx;
+    if (receiptNo !== undefined && receiptNo !== null) {
+      targetIdx = c.receipts.findIndex(r => r.receipt_no === receiptNo);
+      if (targetIdx < 0) throw new Error(`${receiptNo}차 입고 데이터를 찾을 수 없음`);
+    } else {
+      targetIdx = getActiveReceiptIndex(c);
+      if (targetIdx < 0) {
+        c.receipts.push({
+          receipt_no: 1,
+          received_body: c.body || 0,
+          received_rib: c.rib || 0,
+          received_at: now,
+          received_by: state.user.email,
+          memo: '최초 입고',
+          qc: null, qc_status: 'none'
+        });
+        targetIdx = 0;
+      }
+    }
+    const r = c.receipts[targetIdx];
+    
+    const prevQc = r.qc || {};
+    r.qc = {
       width_inch: qcData.width_inch === '' ? null : (parseFloat(qcData.width_inch) || null),
       width_double: !!qcData.width_double,
       weight_g_per_y: qcData.weight_g_per_y === '' ? null : (parseFloat(qcData.weight_g_per_y) || null),
@@ -9393,14 +9738,19 @@ function validateBlendSum(blends, label) {
       defect_meta: qcData.defect_meta !== undefined ? qcData.defect_meta : (prevQc.defect_meta || {}),
       defect_memo: qcData.defect_memo !== undefined ? qcData.defect_memo : (prevQc.defect_memo || '')
     };
-    colors[colorIdx].qc_status = 'defect';
-    colors[colorIdx].defect_at = new Date().toISOString();
-    colors[colorIdx].defect_by = state.user.email;
-    // 불량 처리 시 컬러는 미완료
-    colors[colorIdx].completed = false;
-    delete colors[colorIdx].completed_at;
-    delete colors[colorIdx].qc_done_at;
-    delete colors[colorIdx].qc_done_by;
+    r.qc_status = 'defect';
+    r.defect_at = now;
+    r.defect_by = state.user.email;
+    
+    // 의뢰서 단위 컬러 필드 동기화
+    c.qc = r.qc;
+    c.qc_status = 'defect';
+    c.defect_at = now;
+    c.defect_by = state.user.email;
+    c.completed = false;
+    delete c.completed_at;
+    delete c.qc_done_at;
+    delete c.qc_done_by;
 
     const updates = {
       colors,
@@ -9416,14 +9766,40 @@ function validateBlendSum(blends, label) {
   }
 
   // 그대로 사용 (불량인데 양해해서 출하) — 컬러 완료, 단 qc_status='accept'로 추적
-  async function setColorQcAccept(woId, colorIdx, qcData) {
+  // v2.53: receiptNo 인자 추가
+  async function setColorQcAccept(woId, colorIdx, qcData, receiptNo) {
     const wo = state.allWorkOrders.find(w => w.id === woId);
     if (!wo) throw new Error('의뢰서를 찾을 수 없음');
     const colors = JSON.parse(JSON.stringify(wo.colors || []));
     if (!colors[colorIdx]) throw new Error('컬러 인덱스 오류');
+    const c = colors[colorIdx];
+    const now = new Date().toISOString();
+    
+    migrateColorReceipts(c);
+    
+    let targetIdx;
+    if (receiptNo !== undefined && receiptNo !== null) {
+      targetIdx = c.receipts.findIndex(r => r.receipt_no === receiptNo);
+      if (targetIdx < 0) throw new Error(`${receiptNo}차 입고 데이터를 찾을 수 없음`);
+    } else {
+      targetIdx = getActiveReceiptIndex(c);
+      if (targetIdx < 0) {
+        c.receipts.push({
+          receipt_no: 1,
+          received_body: c.body || 0,
+          received_rib: c.rib || 0,
+          received_at: now,
+          received_by: state.user.email,
+          memo: '최초 입고',
+          qc: null, qc_status: 'none'
+        });
+        targetIdx = 0;
+      }
+    }
+    const r = c.receipts[targetIdx];
 
-    const prevQc = colors[colorIdx].qc || {};
-    colors[colorIdx].qc = {
+    const prevQc = r.qc || {};
+    r.qc = {
       width_inch: qcData.width_inch === '' ? null : (parseFloat(qcData.width_inch) || null),
       width_double: !!qcData.width_double,
       weight_g_per_y: qcData.weight_g_per_y === '' ? null : (parseFloat(qcData.weight_g_per_y) || null),
@@ -9436,13 +9812,29 @@ function validateBlendSum(blends, label) {
       defect_meta: qcData.defect_meta !== undefined ? qcData.defect_meta : (prevQc.defect_meta || {}),
       defect_memo: qcData.defect_memo !== undefined ? qcData.defect_memo : (prevQc.defect_memo || '')
     };
-    colors[colorIdx].qc_status = 'accept';
-    colors[colorIdx].accept_at = new Date().toISOString();
-    colors[colorIdx].accept_by = state.user.email;
-    colors[colorIdx].completed = true;
-    colors[colorIdx].completed_at = new Date().toISOString();
+    r.qc_status = 'accept';
+    r.accept_at = now;
+    r.accept_by = state.user.email;
+    
+    // 의뢰서 단위 컬러 필드 동기화
+    c.qc = r.qc;
+    c.qc_status = 'accept';
+    c.accept_at = now;
+    c.accept_by = state.user.email;
+    
+    // 컬러 완료 판정: 모든 receipts 처리 완료 + 부족분 정산
+    const allResolved = areAllReceiptsResolved(c);
+    const shortageBlocked = isShortageActive(c);
+    
+    if (allResolved && !shortageBlocked) {
+      c.completed = true;
+      c.completed_at = now;
+    } else {
+      c.completed = false;
+      delete c.completed_at;
+    }
 
-    const allDone = colors.every(c => c.completed === true);
+    const allDone = colors.every(cc => cc.completed === true);
     const updates = {
       colors,
       updated_at: serverTimestamp(),
@@ -9451,20 +9843,48 @@ function validateBlendSum(blends, label) {
     if (allDone) {
       updates.completed = true;
       updates.completed_at = serverTimestamp();
+    } else if (wo.completed) {
+      updates.completed = false;
+      updates.completed_at = null;
     }
     await updateDoc(doc(db, 'workorders', woId), updates);
     return allDone;
   }
 
   // 땡처리 (클레임 진입) — 컬러 종결, 클레임 데이터 저장
-  async function setColorQcDiscard(woId, colorIdx, qcData, claimData) {
+  async function setColorQcDiscard(woId, colorIdx, qcData, claimData, receiptNo) {
     const wo = state.allWorkOrders.find(w => w.id === woId);
     if (!wo) throw new Error('의뢰서를 찾을 수 없음');
     const colors = JSON.parse(JSON.stringify(wo.colors || []));
     if (!colors[colorIdx]) throw new Error('컬러 인덱스 오류');
+    const c = colors[colorIdx];
+    const now = new Date().toISOString();
+    
+    migrateColorReceipts(c);
+    
+    let targetIdx;
+    if (receiptNo !== undefined && receiptNo !== null) {
+      targetIdx = c.receipts.findIndex(r => r.receipt_no === receiptNo);
+      if (targetIdx < 0) throw new Error(`${receiptNo}차 입고 데이터를 찾을 수 없음`);
+    } else {
+      targetIdx = getActiveReceiptIndex(c);
+      if (targetIdx < 0) {
+        c.receipts.push({
+          receipt_no: 1,
+          received_body: c.body || 0,
+          received_rib: c.rib || 0,
+          received_at: now,
+          received_by: state.user.email,
+          memo: '최초 입고',
+          qc: null, qc_status: 'none'
+        });
+        targetIdx = 0;
+      }
+    }
+    const r = c.receipts[targetIdx];
 
-    const prevQc = colors[colorIdx].qc || {};
-    colors[colorIdx].qc = {
+    const prevQc = r.qc || {};
+    r.qc = {
       width_inch: qcData.width_inch === '' ? null : (parseFloat(qcData.width_inch) || null),
       width_double: !!qcData.width_double,
       weight_g_per_y: qcData.weight_g_per_y === '' ? null : (parseFloat(qcData.weight_g_per_y) || null),
@@ -9477,14 +9897,29 @@ function validateBlendSum(blends, label) {
       defect_meta: qcData.defect_meta !== undefined ? qcData.defect_meta : (prevQc.defect_meta || {}),
       defect_memo: qcData.defect_memo !== undefined ? qcData.defect_memo : (prevQc.defect_memo || '')
     };
-    colors[colorIdx].qc_status = 'discard';
-    colors[colorIdx].discard_at = new Date().toISOString();
-    colors[colorIdx].discard_by = state.user.email;
-    colors[colorIdx].claim = claimData || colors[colorIdx].claim || {};
-    colors[colorIdx].completed = true;
-    colors[colorIdx].completed_at = new Date().toISOString();
+    r.qc_status = 'discard';
+    r.discard_at = now;
+    r.discard_by = state.user.email;
+    r.claim = claimData || r.claim || {};
+    
+    // 의뢰서 단위 동기화
+    c.qc = r.qc;
+    c.qc_status = 'discard';
+    c.discard_at = now;
+    c.discard_by = state.user.email;
+    c.claim = r.claim;
+    
+    // 컬러 완료 판정
+    const allResolved = areAllReceiptsResolved(c);
+    if (allResolved) {
+      c.completed = true;
+      c.completed_at = c.completed_at || now;
+    } else {
+      c.completed = false;
+      delete c.completed_at;
+    }
 
-    const allDone = colors.every(c => c.completed === true);
+    const allDone = colors.every(cc => cc.completed === true);
     const updates = {
       colors,
       updated_at: serverTimestamp(),
@@ -10439,7 +10874,7 @@ function validateBlendSum(blends, label) {
           defect_memo: latestQc.defect_memo
         };
         
-        const allDone = await setColorQcDiscard(woId, colorIdx, qcDataForDiscard, claimData);
+        const allDone = await setColorQcDiscard(woId, colorIdx, qcDataForDiscard, claimData, window.__qcModalReceiptNo);
         modal.classList.remove('show');
         toast(`"${cName}" 땡처리 확정${allDone ? ' · 의뢰서 자동 완료' : ''}`, 'success');
       } catch (e) {
@@ -11113,6 +11548,8 @@ function validateBlendSum(blends, label) {
   // ===== 전체 대시보드 (overview) =====
   function renderOverview() {
     const all = state.allWorkOrders.filter(wo => !wo.deleted);
+    // v2.53: 염색가공 의뢰서 receipts 마이그레이션 (lazy)
+    all.forEach(wo => { if (wo.type === '염색가공') migrateWorkOrderReceipts(wo); });
     const yarns = all.filter(wo => wo.type === '원사' && !wo.completed);
     const knits = all.filter(wo => wo.type === '편직' && !wo.completed);
     const finishes = all.filter(wo => wo.type === '염색가공' && !wo.completed);
@@ -11714,6 +12151,8 @@ function validateBlendSum(blends, label) {
   // ===== 염색가공 진행 화면 (v2.36 컬러별 분리) =====
   function renderFinishDash() {
     const list = getDashWorkOrders('염색가공');
+    // v2.53: 의뢰서 렌더링 시 receipts 마이그레이션 (lazy)
+    list.forEach(wo => migrateWorkOrderReceipts(wo));
     const totalCount = state.allWorkOrders.filter(wo => 
       wo.type === '염색가공' && !wo.deleted && (state.showCompleted || !wo.completed)
     ).length;
@@ -11909,23 +12348,32 @@ function validateBlendSum(blends, label) {
       // v2.48 hotfix2: 'none' 상태도 체크박스에서 버튼으로 변경 (전체 대시보드와 통일)
       // v2.51: defect/accept/discard 상태 추가
       // v2.52: [부족] 버튼 (none 상태) + [+입고] 버튼 (부족분 활성 시)
+      // v2.53: 차수 라벨 추가 — 활성 receipt 차수가 2 이상이면 버튼에 "(N차)" 표시
       let completeCell;
       if (colorIdx >= 0) {
         const qcSt = getColorQcStatus(wo, colorIdx);
         const c = wo.colors[colorIdx];
+        // v2.53: 활성 receipt 차수 라벨 (2차 이상일 때만 표시)
+        let receiptLabel = '';
+        if (c && Array.isArray(c.receipts) && c.receipts.length > 0) {
+          const activeR = getActiveReceipt(c);
+          if (activeR && activeR.receipt_no >= 2) {
+            receiptLabel = ` <span style="font-size:9px;color:#fff;background:#2563eb;padding:1px 5px;border-radius:8px;font-weight:700;">${activeR.receipt_no}차</span>`;
+          }
+        }
         const shortageBtn = (c && isShortageActive(c))
           ? `<button class="dash-action-btn dash-shortage-add-btn" data-id="${wo.id}" data-color-idx="${colorIdx}" title="미입고분이 추가로 들어왔을 때 (우클릭/Shift+클릭: 상태 변경)">+입고</button>`
           : '';
         if (qcSt === 'discard') {
           completeCell = `<td class="col-action"><span class="dash-discard-stamp">⚠ 땡처리</span></td>`;
         } else if (qcSt === 'accept') {
-          completeCell = `<td class="col-action"><button class="dash-action-btn dash-defect-btn" style="background:#fbbf24;color:#000;border-color:#d97706;" data-id="${wo.id}" data-color-idx="${colorIdx}" data-qc-action="open" title="그대로 사용 처리됨">⚠ 수용</button>${shortageBtn}</td>`;
+          completeCell = `<td class="col-action"><button class="dash-action-btn dash-defect-btn" style="background:#fbbf24;color:#000;border-color:#d97706;" data-id="${wo.id}" data-color-idx="${colorIdx}" data-qc-action="open" title="그대로 사용 처리됨">⚠ 수용${receiptLabel}</button>${shortageBtn}</td>`;
         } else if (qcSt === 'defect') {
-          completeCell = `<td class="col-action"><button class="dash-action-btn dash-defect-btn" data-id="${wo.id}" data-color-idx="${colorIdx}" data-qc-action="open" title="불량 처리됨">⚠ 불량</button>${shortageBtn}</td>`;
+          completeCell = `<td class="col-action"><button class="dash-action-btn dash-defect-btn" data-id="${wo.id}" data-color-idx="${colorIdx}" data-qc-action="open" title="불량 처리됨">⚠ 불량${receiptLabel}</button>${shortageBtn}</td>`;
         } else if (qcSt === 'pending') {
-          completeCell = `<td class="col-action"><button class="dash-action-btn qc-pending-btn" data-id="${wo.id}" data-color-idx="${colorIdx}" data-qc-action="open">QC 대기</button>${shortageBtn}</td>`;
+          completeCell = `<td class="col-action"><button class="dash-action-btn qc-pending-btn" data-id="${wo.id}" data-color-idx="${colorIdx}" data-qc-action="open">QC 대기${receiptLabel}</button>${shortageBtn}</td>`;
         } else if (qcSt === 'done') {
-          completeCell = `<td class="col-action"><button class="dash-action-btn qc-done-btn" data-id="${wo.id}" data-color-idx="${colorIdx}" data-qc-action="open">✓ QC</button>${shortageBtn}</td>`;
+          completeCell = `<td class="col-action"><button class="dash-action-btn qc-done-btn" data-id="${wo.id}" data-color-idx="${colorIdx}" data-qc-action="open">✓ QC${receiptLabel}</button>${shortageBtn}</td>`;
         } else {
           // 진행 중 (none) — [완료] + [부족] 버튼
           completeCell = `<td class="col-action"><button class="dash-action-btn dash-color-qc-init-btn" data-id="${wo.id}" data-color-idx="${colorIdx}">완료</button><button class="dash-action-btn dash-shortage-btn" data-id="${wo.id}" data-color-idx="${colorIdx}" title="입고 수량이 의뢰량과 다른 경우">부족</button></td>`;
@@ -12884,6 +13332,8 @@ function validateBlendSum(blends, label) {
     list.forEach(wo => {
       // v2.36: 염색가공은 완료된 컬러만 분리 표시 (rowspan)
       if (wo.type === '염색가공') {
+        // v2.53: receipts 마이그레이션 (lazy)
+        migrateWorkOrderReceipts(wo);
         const colors = wo.colors || [];
         // 컬러가 있으면: 의뢰서 자체 완료(=모든 컬러 완료) → 모든 컬러 표시
         //                   부분 완료 → completed=true인 컬러만 표시
@@ -12944,13 +13394,45 @@ function validateBlendSum(blends, label) {
             : woCompletedDate;
           const sizeText = `${c.body !== '' && c.body !== null && c.body !== undefined ? c.body : '-'}/${c.rib !== '' && c.rib !== null && c.rib !== undefined ? c.rib : '-'}`;
           
+          // v2.53: 차수별 QC 버튼 N개 표시 (이슈 3 해결)
+          // receipts에 데이터가 있고 QC가 들어간 receipt가 1개라도 있으면 모두 표시
+          // receipts 없는 옛 데이터는 기존 단일 [QC] 버튼 유지
+          let qcButtonsHtml = '';
+          if (Array.isArray(c.receipts) && c.receipts.length > 0) {
+            const withQc = c.receipts.filter(r => r.qc || r.qc_status === 'done' || r.qc_status === 'accept' || r.qc_status === 'defect' || r.qc_status === 'discard');
+            if (withQc.length > 0) {
+              qcButtonsHtml = withQc.map(r => {
+                const icon = r.qc_status === 'accept' ? '⚠'
+                  : r.qc_status === 'defect' ? '✗'
+                  : r.qc_status === 'discard' ? '⚠'
+                  : '✓';
+                const bgColor = r.qc_status === 'accept' ? '#fbbf24'
+                  : r.qc_status === 'defect' ? '#ef4444'
+                  : r.qc_status === 'discard' ? '#1f2937'
+                  : '#22c55e';
+                const fgColor = r.qc_status === 'discard' ? '#fff' : (r.qc_status === 'accept' ? '#000' : '#fff');
+                const tipLabel = (r.qc?.width_inch || r.qc?.weight_g_per_y)
+                  ? `${r.receipt_no}차 (${r.received_body || 0}/${r.received_rib || 0}절) — 폭${r.qc.width_inch||'-'}/야드중량${r.qc.weight_g_per_y||'-'}`
+                  : `${r.receipt_no}차 QC 데이터`;
+                return `<button class="qc-done-btn"
+                  style="font-size:10px;padding:1px 6px;margin-left:4px;background:${bgColor};color:${fgColor};border-color:${bgColor};"
+                  data-id="${wo.id}" data-color-idx="${cIdx}" data-receipt-no="${r.receipt_no}"
+                  data-qc-action="open"
+                  title="${escapeHtml(tipLabel)}">${icon} ${r.receipt_no}차</button>`;
+              }).join('');
+            }
+          } else if (c.qc) {
+            // 옛 데이터 — 마이그레이션 전 또는 receipt 없음
+            qcButtonsHtml = ` <button class="qc-done-btn" style="font-size:10px;padding:1px 6px;margin-left:4px;" data-id="${wo.id}" data-color-idx="${cIdx}" data-qc-action="open" title="QC 데이터 보기/수정">QC</button>`;
+          }
+          
           html += `<tr class="completed ${isFirst ? 'wo-group-first' : 'wo-group-cont'}">
             ${isFirst ? `<td class="col-no" rowspan="${totalRows}">${escapeHtml(wo.wo_number || '-')}</td>` : ''}
             ${isFirst ? `<td rowspan="${totalRows}">${escapeHtml(wo.type)}</td>` : ''}
             ${isFirst ? `<td class="col-date" rowspan="${totalRows}">${formatYMD(wo.date)}</td>` : ''}
             <td class="col-date">${cDate}</td>
             ${isFirst ? `<td rowspan="${totalRows}">${escapeHtml(item)}</td>` : ''}
-            <td>${escapeHtml(c.name || '-')}${c.qc ? ` <button class="qc-done-btn" style="font-size:10px;padding:1px 6px;margin-left:4px;" data-id="${wo.id}" data-color-idx="${cIdx}" data-qc-action="open" title="QC 데이터 보기/수정">QC</button>` : ''}</td>
+            <td>${escapeHtml(c.name || '-')}${qcButtonsHtml}</td>
             <td class="col-num">${escapeHtml(sizeText)}</td>
             ${isFirst ? `<td rowspan="${totalRows}">${vendorHtml}</td>` : ''}
             ${isFirst ? `<td class="col-action" rowspan="${totalRows}"><button class="dash-action-btn dash-view-btn" data-id="${wo.id}">보기</button></td>` : ''}
@@ -13976,7 +14458,10 @@ function validateBlendSum(blends, label) {
       btn.addEventListener('click', () => {
         const id = btn.dataset.id;
         const colorIdx = parseInt(btn.dataset.colorIdx, 10);
-        openQcModal(id, colorIdx);
+        // v2.53: data-receipt-no 있으면 해당 차수로 모달 열기
+        const receiptNoStr = btn.dataset.receiptNo;
+        const receiptNo = receiptNoStr ? parseInt(receiptNoStr, 10) : undefined;
+        openQcModal(id, colorIdx, receiptNo);
       });
     });
 
@@ -14752,11 +15237,53 @@ function validateBlendSum(blends, label) {
   //  - 정상/불량 라디오 → 불량 시 18개 사유 체크박스 + 불량 메모
   //  - 더블 누락 안전 다이얼로그 (폭 < 60 인치 + 더블 미체크 시)
   //  - 불량/그대로사용/땡처리/재작업 다중 액션
-  function openQcModal(woId, colorIdx) {
+  function openQcModal(woId, colorIdx, viewReceiptNo) {
     const wo = state.allWorkOrders.find(w => w.id === woId);
     if (!wo) return;
-    const c = wo.colors?.[colorIdx];
-    if (!c) return;
+    const cOrig = wo.colors?.[colorIdx];
+    if (!cOrig) return;
+    
+    // v2.53: 차수별 데이터를 표시하기 위해 c의 메모리 사본 생성
+    // 1) wo의 컬러 데이터 마이그레이션 (lazy)
+    // 2) viewReceiptNo가 있으면 해당 receipt 데이터로 c 필드 덮어쓰기
+    // 3) 없으면 활성(가장 최근 미완료) receipt 데이터 사용
+    migrateColorReceipts(cOrig);
+    const c = JSON.parse(JSON.stringify(cOrig));
+    
+    let activeReceiptNo = null;
+    let activeReceipt = null;
+    if (Array.isArray(c.receipts) && c.receipts.length > 0) {
+      if (viewReceiptNo !== undefined && viewReceiptNo !== null) {
+        activeReceipt = c.receipts.find(r => r.receipt_no === viewReceiptNo);
+        if (activeReceipt) activeReceiptNo = viewReceiptNo;
+      }
+      if (!activeReceipt) {
+        // 활성(가장 최근 미완료) receipt 우선, 없으면 마지막
+        const idx = getActiveReceiptIndex(c);
+        if (idx >= 0) {
+          activeReceipt = c.receipts[idx];
+          activeReceiptNo = activeReceipt.receipt_no;
+        }
+      }
+      
+      if (activeReceipt) {
+        // 표시용 c 객체에 receipt의 QC 데이터 주입
+        c.qc = activeReceipt.qc || {};
+        c.qc_status = activeReceipt.qc_status || 'none';
+        c.qc_done_at = activeReceipt.qc_done_at;
+        c.qc_done_by = activeReceipt.qc_done_by;
+        c.defect_at = activeReceipt.defect_at;
+        c.defect_by = activeReceipt.defect_by;
+        c.accept_at = activeReceipt.accept_at;
+        c.accept_by = activeReceipt.accept_by;
+        c.discard_at = activeReceipt.discard_at;
+        c.discard_by = activeReceipt.discard_by;
+      }
+    }
+    // 저장 시 사용할 receipt_no를 모달 전역 변수에 저장
+    window.__qcModalReceiptNo = activeReceiptNo;
+    window.__qcModalWoId = woId;
+    window.__qcModalColorIdx = colorIdx;
     
     const qc = c.qc || {};
     const qcStatus = getColorQcStatus(wo, colorIdx);
@@ -14866,11 +15393,50 @@ function validateBlendSum(blends, label) {
       ? `→ <strong>${initActualWidth}</strong>인치 ${initDouble ? '(더블)' : ''}`
       : '';
     
+    // v2.53: 차수 탭 HTML 생성 (receipts 2개 이상일 때만 표시)
+    let receiptTabsHtml = '';
+    if (Array.isArray(c.receipts) && c.receipts.length >= 2) {
+      const tabs = c.receipts.map(r => {
+        const isActive = r.receipt_no === activeReceiptNo;
+        const dateLabel = r.received_at
+          ? new Date(r.received_at).toLocaleDateString('ko-KR', {month:'numeric', day:'numeric'})
+          : '';
+        const qtyLabel = `${r.received_body || 0}/${r.received_rib || 0}`;
+        const statusIcon = (() => {
+          const s = r.qc_status || 'none';
+          if (s === 'done') return '✓';
+          if (s === 'accept') return '⚠';
+          if (s === 'defect') return '✗';
+          if (s === 'discard') return '⚠';
+          if (s === 'pending') return '⏳';
+          return '·';
+        })();
+        return `<button type="button" class="qc-receipt-tab ${isActive ? 'active' : ''}"
+          data-receipt-no="${r.receipt_no}"
+          data-wo-id="${woId}"
+          data-color-idx="${colorIdx}"
+          style="padding:6px 12px;border:1px solid ${isActive ? '#1e40af' : '#cbd5e1'};
+                 background:${isActive ? '#1e40af' : '#f8fafc'};
+                 color:${isActive ? '#fff' : '#334155'};
+                 border-radius:6px;cursor:pointer;font-weight:${isActive ? '700' : '500'};
+                 font-size:12px;display:inline-flex;align-items:center;gap:6px;">
+          ${statusIcon} ${r.receipt_no}차 (${qtyLabel}절${dateLabel ? `, ${dateLabel}` : ''})
+        </button>`;
+      }).join('');
+      receiptTabsHtml = `
+        <div style="padding:10px 14px;background:#eff6ff;border-bottom:2px solid #2563eb;display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+          <span style="font-size:11px;color:#1e40af;font-weight:700;margin-right:4px;">입고 차수별 QC:</span>
+          ${tabs}
+        </div>`;
+    }
+    
     document.getElementById('dash-modal-body').innerHTML = `
+      ${receiptTabsHtml}
       <div class="qc-modal-container">
         <div class="qc-modal-header-info">
           의뢰서: <strong>${escapeHtml(wo.wo_number || '-')}</strong> · ${escapeHtml(item)} ${reworkBadge}<br>
           <span class="qc-color-name">${escapeHtml(c.name || '-')}</span> · ${sizeText}
+          ${activeReceiptNo ? `<div style="margin-top:6px;font-weight:700;color:#1e40af;">📦 현재 ${activeReceiptNo}차 탕 QC 데이터 (${activeReceipt?.received_body || 0}/${activeReceipt?.received_rib || 0}절${activeReceipt?.received_at ? ', ' + new Date(activeReceipt.received_at).toLocaleDateString('ko-KR', {month:'numeric', day:'numeric'}) : ''})</div>` : ''}
           ${pendingInfo}
           ${doneInfo}
           ${defectInfo}
@@ -15188,7 +15754,7 @@ function validateBlendSum(blends, label) {
         if (!confirm(finalMsg)) return;
         
         try {
-          const allDone = await setColorQcDone(woId, colorIdx, data);
+          const allDone = await setColorQcDone(woId, colorIdx, data, window.__qcModalReceiptNo);
           if (allDone) {
             toast(`✓ "${cName}" QC 완료 — 모든 컬러 완료로 의뢰서 자동 완료됨`, 'success');
           } else {
@@ -15232,7 +15798,7 @@ function validateBlendSum(blends, label) {
         if (!confirm(msg)) return;
         
         try {
-          await setColorQcDefect(woId, colorIdx, data);
+          await setColorQcDefect(woId, colorIdx, data, window.__qcModalReceiptNo);
           toast(`⚠ "${cName}" 불량 처리됨 (${checkedCount}개 사유)`, 'success');
           modal.classList.remove('show');
         } catch (e) {
@@ -15279,7 +15845,7 @@ function validateBlendSum(blends, label) {
         
         try {
           const currentInput = collect();
-          const allDone = await setColorQcAccept(woId, colorIdx, currentInput);
+          const allDone = await setColorQcAccept(woId, colorIdx, currentInput, window.__qcModalReceiptNo);
           toast(`⚠ "${cName}" 그대로 사용 처리됨${allDone ? ' — 의뢰서 완료' : ''}`, 'success');
           modal.classList.remove('show');
         } catch (e) {
@@ -15311,6 +15877,19 @@ function validateBlendSum(blends, label) {
     }
     
     document.getElementById('qc-cancel').addEventListener('click', () => modal.classList.remove('show'));
+    
+    // v2.53: 차수 탭 클릭 이벤트 → 해당 차수 데이터로 모달 재렌더
+    document.querySelectorAll('.qc-receipt-tab').forEach(tab => {
+      tab.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        const receiptNo = parseInt(tab.dataset.receiptNo, 10);
+        const tabWoId = tab.dataset.woId;
+        const tabColorIdx = parseInt(tab.dataset.colorIdx, 10);
+        if (isNaN(receiptNo)) return;
+        // 모달 재호출 — 해당 차수 데이터로
+        openQcModal(tabWoId, tabColorIdx, receiptNo);
+      });
+    });
     
     // v2.48 hotfix5: 진행 중으로 복귀 (pending 상태일 때만 버튼 노출)
     const revertBtn = document.getElementById('qc-revert');
@@ -16188,7 +16767,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.52 hotfix2';
+  const VERSION = 'v2.53';
   // title (브라우저 탭)
   document.title = 'RECOVERIC HIWOS ' + VERSION;
   // 사이드바 버전 태그
