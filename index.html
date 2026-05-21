@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="HIWOS">
 <meta name="mobile-web-app-capable" content="yes">
-<title>RECOVERIC HIWOS v2.51 step3 hotfix8</title>
+<title>RECOVERIC HIWOS v2.51 step3 hotfix9</title>
 
 <!-- PWA Manifest (인라인 data URL) -->
 <link rel="manifest" id="pwa-manifest">
@@ -1174,6 +1174,21 @@
   .dash-table tr:hover td.col-no { background: #f0f7ff; }
   .dash-table tr.completed td.col-no { background: #f5f5f5; }
   /* color-rows 표는 더 이상 별도 처리 불필요 (좌측 sticky 자체가 사라졌으므로) */
+  
+  /* v2.51 hotfix9: 부분 완료 진행률 배지 (컬러 N개 중 M개 완료) */
+  .wo-progress-badge {
+    display: inline-block;
+    margin-top: 3px;
+    padding: 1px 6px;
+    background: #fef3c7;
+    border: 1px solid #fbbf24;
+    color: #92400e;
+    border-radius: 8px;
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1.4;
+    white-space: nowrap;
+  }
   .dash-table {
     width: 100%;
     border-collapse: collapse;
@@ -4427,7 +4442,7 @@
 <div class="app" id="main-app" style="display:none;">
   <aside class="sidebar">
     <h1>RECOVERIC</h1>
-    <div class="sub" id="hiwos-version-tag">HIWOS v2.51 step3 hotfix8</div>
+    <div class="sub" id="hiwos-version-tag">HIWOS v2.51 step3 hotfix9</div>
     <div id="user-info-section"></div>
     
     <!-- 모드 전환 -->
@@ -4909,6 +4924,29 @@ window.dispatchEvent(new Event('firebase-ready'));
  *     · [✕ 삭제] 버튼 신설 (관리자 + 본인 작성 한정)
  *     · 옵션 A: 청구만 취소 (땡처리 완료 상태 유지)
  *     · 옵션 B: 땡처리 자체 되돌리기 (컬러를 QC 대기로 복귀, 자동완료 해제)
+ *
+ * hotfix9 (2026-05-21):
+ *   - [중대 버그] 의뢰서 수정 저장 시 데이터 손실 보호
+ *     기존: updateDoc({...d}) 형태로 폼 데이터만 그대로 덮어써서
+ *           internal_memo, urgent_memo, colors[].qc, colors[].claim,
+ *           colors[].completed, colors[].discard_at 등 폼이 안 다루는
+ *           필드가 모두 사라지는 버그
+ *     수정: buildEditPayload(d, existing) 머지 함수 도입.
+ *           폼 필드는 그대로, 보호 필드는 기존 의뢰서에서 보존.
+ *           컬러는 이름 기준 매칭 + 완료/QC/땡처리된 컬러는 폼에서
+ *           빠져도 자동 보존 (실수 방지)
+ *   - [부분 완료] 부분 완료 의뢰서의 완료된 컬러 잔류 표시
+ *     기존: 컬러 하나 완료되면 그 행이 진행 화면에서 즉시 사라져
+ *           "어딘가에 떠도는" 상태가 됨 (전체 완료 전까지 안 보임)
+ *     수정: 부분 완료 의뢰서의 완료된 컬러도 회색으로 잔류 표시
+ *           NO 컬럼에 진행률 배지 (예: 2/3) 추가
+ *           [완료 컬러 접기] 토글로 박 대표님이 원하면 숨김 가능
+ *   - [클레임 삭제 동작] hotfix8의 클레임 삭제 모달이 화면에 안 보였던
+ *     문제 수정. createElement + 미존재 CSS(qc-modal-backdrop) 패턴을
+ *     기존 dash-modal-bg 인프라 재활용으로 변경
+ *   - [VERSION] syncVersion() 상수를 hotfix9로 갱신
+ *     (hotfix8에서 이 상수를 빠뜨려 title/사이드바/콘솔이 모두 hotfix7로
+ *     덮어써지는 사고 재발 방지)
  * ============================================================ */
 const KORI_KG = 181.44;
 
@@ -5050,6 +5088,13 @@ const state = {
   // v2.33: 염색가공 진행 [간단히 보기] 토글 (구분/최종납품처 컬럼 숨김)
   finishCompact: (function(){
     try { return localStorage.getItem('hiwos_finish_compact') === '1'; }
+    catch(e) { return false; }
+  })(),
+  // v2.51 hotfix9: 부분 완료된 컬러 접기 토글 (염색가공 진행 화면)
+  // false (기본): 부분 완료 의뢰서의 완료된 컬러도 회색으로 잔류 표시
+  // true: 부분 완료 의뢰서에서도 완료된 컬러는 숨김 (진행 중인 것만 표시)
+  finishHideCompletedColors: (function(){
+    try { return localStorage.getItem('hiwos_finish_hide_completed_colors') === '1'; }
     catch(e) { return false; }
   })(),
   // v2.34: 스탬프 마스터 (Firestore settings/stamps_common · stamps_bt 구독)
@@ -5843,6 +5888,120 @@ function getFormData() {
     notes: getVal('f_notes'),
     stamps
   };
+}
+
+// ============================================================
+// v2.51 hotfix9: 수정 저장 시 데이터 보호 머지
+// ----------------------------------------------------------------
+// 문제: 작성 폼 [수정] → [저장] 시 getFormData 결과로 전체 덮어쓰면
+//       폼이 다루지 않는 필드(internal_memo, urgent_memo, color의 qc/
+//       qc_status/discard_at/claim/completed 등)가 모두 사라짐.
+//
+// 해결: getFormData 결과(d)를 받아 기존 의뢰서(existing)에서 보존해야
+//       할 필드를 다시 채워 update payload를 만든다.
+//
+// 보호 대상:
+//   [의뢰서 레벨] internal_memo, urgent_memo, lot_no(원사 외 유형)
+//   [컬러 레벨]   completed, completed_at, internal_memo, urgent,
+//                 qc, qc_status, defect_at, defect_by, defect_resolution,
+//                 accept_at, accept_by, discard_at, discard_by, claim,
+//                 dye_in_at, dye_done_at, proc_done_at, post_done_at,
+//                 rework_count, last_rework_at, last_rework_by
+//
+// 컬러 매칭: 폼의 컬러 객체와 기존 컬러 객체를 "이름(name)" 기준으로 매칭.
+//   - 폼+기존 둘 다 존재 → 라이프사이클 필드 보존, body/rib는 폼값
+//   - 폼에만 존재 → 신규 컬러로 그대로 추가
+//   - 기존에만 존재 + 완료/QC/땡처리 상태 → 안전을 위해 자동 보존
+//   - 기존에만 존재 + 진행 중 → 폼에서 의도적으로 지운 것으로 보고 제외
+// ============================================================
+const PROTECTED_WO_FIELDS = ['internal_memo', 'urgent_memo'];
+const PROTECTED_COLOR_FIELDS = [
+  'completed', 'completed_at',
+  'internal_memo', 'urgent',
+  'qc', 'qc_status',
+  'defect_at', 'defect_by', 'defect_resolution',
+  'accept_at', 'accept_by',
+  'discard_at', 'discard_by', 'claim',
+  'dye_in_at', 'dye_done_at', 'proc_done_at', 'post_done_at',
+  'rework_count', 'last_rework_at', 'last_rework_by'
+];
+
+// 컬러가 "보호 대상"인지 (완료됐거나 QC/땡처리 어떤 상태든 들어간 컬러)
+function isProtectedColor(c) {
+  if (!c) return false;
+  if (c.completed === true) return true;
+  if (c.qc_status) return true;          // pending/done/defect/accept/discard
+  if (c.discard_at) return true;
+  if (c.dye_in_at || c.dye_done_at) return true;
+  return false;
+}
+
+function buildEditPayload(d, existing) {
+  const payload = { ...d };
+  // 1. 의뢰서 레벨 보호 필드 채워넣기 (폼이 안 다루는 필드)
+  PROTECTED_WO_FIELDS.forEach(field => {
+    if (existing[field] !== undefined && payload[field] === undefined) {
+      payload[field] = existing[field];
+    }
+  });
+  // 원사가 아닌 유형의 lot_no는 폼에 입력칸 없음 → 보존
+  if (d.type !== '원사' && existing.lot_no !== undefined && payload.lot_no === undefined) {
+    payload.lot_no = existing.lot_no;
+  }
+  // 의뢰서 전체 완료 상태는 폼에서 다루지 않음 → 보존
+  if (existing.completed !== undefined && payload.completed === undefined) {
+    payload.completed = existing.completed;
+  }
+  if (existing.completed_at !== undefined && payload.completed_at === undefined) {
+    payload.completed_at = existing.completed_at;
+  }
+
+  // 2. 컬러 머지 (염색가공 / BT — colors 배열 가진 유형만)
+  if (Array.isArray(d.colors) && Array.isArray(existing.colors)) {
+    const formColors = d.colors;
+    const oldColors = existing.colors;
+    const oldByName = {};
+    oldColors.forEach((oc, idx) => {
+      if (oc && oc.name) {
+        // 같은 이름 중복 시 첫 번째만 저장 (실무상 중복 컬러명은 없음)
+        if (!oldByName[oc.name]) oldByName[oc.name] = { color: oc, originalIdx: idx };
+      }
+    });
+
+    const mergedColors = [];
+    const matchedOldIndices = new Set();
+
+    formColors.forEach(fc => {
+      const matched = oldByName[fc.name];
+      if (matched) {
+        // 매칭: 라이프사이클 필드 보존, body/rib/name은 폼값
+        const merged = { ...fc };
+        PROTECTED_COLOR_FIELDS.forEach(field => {
+          if (matched.color[field] !== undefined) {
+            merged[field] = matched.color[field];
+          }
+        });
+        mergedColors.push(merged);
+        matchedOldIndices.add(matched.originalIdx);
+      } else {
+        // 폼에만 존재 → 신규 컬러
+        mergedColors.push(fc);
+      }
+    });
+
+    // 기존에만 존재 + 보호 대상 컬러 → 자동 보존 (실수 방지)
+    oldColors.forEach((oc, idx) => {
+      if (matchedOldIndices.has(idx)) return;
+      if (isProtectedColor(oc)) {
+        mergedColors.push(oc);
+      }
+      // 진행 중 컬러가 폼에서 빠짐 → 박 대표님이 의도적으로 지운 것으로 보고 제외
+    });
+
+    payload.colors = mergedColors;
+  }
+
+  return payload;
 }
 
 // v2.30: 복사 입력 중 뱃지 제어
@@ -7572,8 +7731,11 @@ function validateBlendSum(blends, label) {
       if (d.type === '공문' && !d.body) { toast('본문 내용을 입력하세요', 'error'); return; }
       
       if (state.currentWorkOrderId) {
+        // v2.51 hotfix9: 수정 저장 시 메모/긴급/컬러 라이프사이클 보호
+        const existing = state.allWorkOrders.find(w => w.id === state.currentWorkOrderId);
+        const payload = existing ? buildEditPayload(d, existing) : d;
         await updateDoc(doc(db, 'workorders', state.currentWorkOrderId), {
-          ...d, updated_at: serverTimestamp(), updated_by: state.user.email
+          ...payload, updated_at: serverTimestamp(), updated_by: state.user.email
         });
         // v2.32: 수정 저장 완료 → 수정 모드 종료
         setEditModeBadge(false);
@@ -10197,12 +10359,21 @@ function validateBlendSum(blends, label) {
       ${renderFilterSummary('finish', totalCount, list.length)}
       ${renderVendorFilterBar('finish', finishVendorOptions)}
       <label style="margin-left:auto;display:inline-flex;align-items:center;gap:4px;cursor:pointer;user-select:none;font-size:11px;color:#333;">
+        <input type="checkbox" id="finish-hide-completed-colors-toggle" ${state.finishHideCompletedColors ? 'checked' : ''} style="margin:0;">
+        완료 컬러 접기 <span style="color:#888;">(부분 완료 의뢰서의 ✓ 컬러 숨김)</span>
+      </label>
+      <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;user-select:none;font-size:11px;color:#333;">
         <input type="checkbox" id="finish-compact-toggle" ${compact ? 'checked' : ''} style="margin:0;">
         간단히 보기 <span style="color:#888;">(구분 · 최종납품처 숨김)</span>
       </label>
     </div>`;
     
-    // v2.36: 컬러별로 표시할 행 미리 계산 (미완료 컬러만)
+    // v2.36 + v2.51 hotfix9: 컬러별로 표시할 행 미리 계산
+    //   - showCompleted 켜짐: 모든 컬러 표시 (기존 동작)
+    //   - showCompleted 꺼짐 (기본): 부분 완료 의뢰서는 완료된 컬러도 회색으로 표시
+    //     (의뢰서 전체가 완료된 건 어차피 (state.showCompleted || !wo.completed)에서 걸러짐)
+    //   - hotfix9: 사용자가 명시적으로 완료 컬러 접기를 켜면 부분 완료 의뢰서에서도 완료 컬러 숨김
+    const hideCompletedInPartial = !!state.finishHideCompletedColors;
     const rowsToShow = [];
     list.forEach(wo => {
       const colors = wo.colors || [];
@@ -10213,9 +10384,18 @@ function validateBlendSum(blends, label) {
         }
         return;
       }
-      // 미완료 컬러만 추출 (showCompleted 켜지면 모두)
-      const visibleColorIdxs = colors.map((c, i) => i).filter(i => state.showCompleted || !isColorCompleted(wo, i));
-      if (visibleColorIdxs.length === 0) return;  // 이 의뢰서의 모든 컬러가 완료됨 → 행 스킵
+      let visibleColorIdxs;
+      if (state.showCompleted) {
+        visibleColorIdxs = colors.map((c, i) => i);
+      } else if (hideCompletedInPartial) {
+        // 접기 모드: 완료된 컬러는 모두 숨김 (기존 동작)
+        visibleColorIdxs = colors.map((c, i) => i).filter(i => !isColorCompleted(wo, i));
+      } else {
+        // 기본 모드 (hotfix9): 부분 완료 의뢰서는 완료 컬러도 표시
+        // 단, 의뢰서 전체가 완료된 경우는 위에서 이미 필터됨
+        visibleColorIdxs = colors.map((c, i) => i);
+      }
+      if (visibleColorIdxs.length === 0) return;  // 표시할 컬러 0개 → 행 스킵
       visibleColorIdxs.forEach((cIdx, n) => {
         rowsToShow.push({
           wo,
@@ -10280,9 +10460,17 @@ function validateBlendSum(blends, label) {
       
       // ★ 의뢰서 단위 셀 (rowspan으로 첫 행에만, 같은 의뢰서의 다른 컬러 행은 생략)
       // 의뢰서 단위: 선택, NO, 스탬프, 발주일, [구분, 최종납품처], 몸판품목, 염색처, 가공처, 후가공처, 작지, 작업, 복사, 삭제
+      // v2.51 hotfix9: 부분 완료 진행률 배지 (컬러 N개 중 M개 완료)
+      const allColors = wo.colors || [];
+      const doneCnt = allColors.filter((_, i) => isColorCompleted(wo, i)).length;
+      const totalCnt = allColors.length;
+      const progressBadge = (totalCnt >= 2 && doneCnt > 0 && doneCnt < totalCnt)
+        ? `<div class="wo-progress-badge" title="컬러 진행률: ${doneCnt}/${totalCnt} 완료">${doneCnt}/${totalCnt}</div>`
+        : '';
+      
       const woUnitCells = isFirstRow ? `
         <td class="col-select" rowspan="${totalRows}"><input type="checkbox" class="dash-row-cb" data-id="${wo.id}" data-list-type="염색가공"></td>
-        <td class="col-no" rowspan="${totalRows}">${escapeHtml(wo.wo_number || '-')}</td>
+        <td class="col-no" rowspan="${totalRows}">${escapeHtml(wo.wo_number || '-')}${progressBadge}</td>
         <td class="col-stamps" rowspan="${totalRows}">${renderStampMini(wo.stamps) || '-'}</td>
         <td class="col-date" rowspan="${totalRows}">${formatYMD(wo.date)}</td>
         ${compact ? '' : `<td rowspan="${totalRows}">${escapeHtml(wo.production_type || '-')}</td>`}
@@ -10513,10 +10701,13 @@ function validateBlendSum(blends, label) {
     return html;
   }
   
-  // v2.51 hotfix8: 클레임 삭제 모달 — 2옵션 선택형
+  // v2.51 hotfix9: 클레임 삭제 모달 — 2옵션 선택형
+  // (hotfix8에서 createElement + 존재하지 않는 qc-modal-backdrop CSS 사용해
+  //  화면에 안 보였던 문제를 dash-modal-bg 인프라 재활용으로 수정)
   // - 옵션 A: 청구만 취소 (땡처리 완료 상태 유지, claim 데이터만 비움)
   // - 옵션 B: 땡처리 자체 되돌리기 (컬러를 QC 대기로 복귀)
   function openClaimDeleteModal(woId, colorIdx) {
+    console.log('[claim-delete] opening for', woId, 'color idx', colorIdx);
     const wo = state.allWorkOrders.find(w => w.id === woId);
     if (!wo) { toast('의뢰서를 찾을 수 없습니다', 'error'); return; }
     const c = (wo.colors || [])[colorIdx];
@@ -10534,19 +10725,22 @@ function validateBlendSum(blends, label) {
     const recipient = claim.recipient || '(미입력)';
     const amount = claim.amount || 0;
     
-    // 기존 모달 제거 (중복 방지)
-    const existing = document.getElementById('claim-delete-modal-backdrop');
-    if (existing) existing.remove();
+    // 기존 dash-modal-bg 인프라 재활용
+    const modal = document.getElementById('dash-modal-bg');
+    if (!modal) { toast('모달 요소 없음', 'error'); return; }
     
-    const backdrop = document.createElement('div');
-    backdrop.id = 'claim-delete-modal-backdrop';
-    backdrop.className = 'qc-modal-backdrop';
-    backdrop.innerHTML = `
-      <div class="claim-modal-container" style="max-width:480px;">
+    document.getElementById('dash-modal-title').textContent = '✕ 클레임 삭제';
+    // 미리보기 전용 외곽 액션 버튼 숨김 (이 모달은 선택 폼 전용)
+    ['dash-modal-image', 'dash-modal-copy', 'dash-modal-print', 'dash-modal-kakao'].forEach(id => {
+      const b = document.getElementById(id);
+      if (b) b.style.display = 'none';
+    });
+    document.getElementById('dash-modal-body').innerHTML = `
+      <div class="claim-modal-container" style="max-width:560px;margin:0 auto;">
         <div class="claim-modal-header">
           <div class="claim-modal-info">
-            <div>클레임 삭제</div>
-            <div class="qc-color-name" style="margin-top:4px;">${escapeHtml(wo_no)} · ${escapeHtml(colorName)}</div>
+            의뢰서: <strong>${escapeHtml(wo_no)}</strong><br>
+            <span class="qc-color-name">${escapeHtml(colorName)}</span>
           </div>
         </div>
         <div style="padding:14px 0 4px;font-size:13px;color:#374151;line-height:1.6;">
@@ -10554,14 +10748,14 @@ function validateBlendSum(blends, label) {
             <div>청구 대상: <strong>${escapeHtml(recipient)}</strong></div>
             <div>청구액: <strong>₩${formatMoney(amount)}</strong></div>
           </div>
-          어떤 방식으로 삭제하시겠습니까?
+          <div style="font-weight:700;margin-bottom:10px;">어떤 방식으로 삭제하시겠습니까?</div>
         </div>
-        <div style="display:flex;flex-direction:column;gap:10px;margin-top:14px;">
-          <button type="button" id="claim-del-opt-a" style="text-align:left;padding:12px 14px;border:1px solid #d1d5db;border-radius:4px;background:#fff;cursor:pointer;transition:all 0.15s;">
+        <div style="display:flex;flex-direction:column;gap:10px;">
+          <button type="button" id="claim-del-opt-a" style="text-align:left;padding:12px 14px;border:1px solid #d1d5db;border-radius:4px;background:#fff;cursor:pointer;transition:all 0.15s;font-family:inherit;">
             <div style="font-weight:700;color:#111;font-size:13px;margin-bottom:4px;">✕ 청구만 취소</div>
             <div style="font-size:12px;color:#6b7280;line-height:1.5;">클레임 목록에서 사라집니다. 컬러는 ⚠ 땡처리 완료 상태 그대로 유지됩니다.<br>거래처와 협의해서 청구 안 하기로 한 경우 / 청구 정보를 잘못 입력한 경우.</div>
           </button>
-          <button type="button" id="claim-del-opt-b" style="text-align:left;padding:12px 14px;border:1px solid #d1d5db;border-radius:4px;background:#fff;cursor:pointer;transition:all 0.15s;">
+          <button type="button" id="claim-del-opt-b" style="text-align:left;padding:12px 14px;border:1px solid #d1d5db;border-radius:4px;background:#fff;cursor:pointer;transition:all 0.15s;font-family:inherit;">
             <div style="font-weight:700;color:#111;font-size:13px;margin-bottom:4px;">↺ 땡처리 자체 되돌리기</div>
             <div style="font-size:12px;color:#6b7280;line-height:1.5;">땡처리 결정을 취소하고 컬러를 QC 대기 상태로 복귀시킵니다. 진행 화면에 다시 나타나고 재검수가 가능합니다.<br>땡처리를 잘못 누른 경우 / 재논의 후 재작업으로 전환하는 경우.</div>
           </button>
@@ -10571,10 +10765,10 @@ function validateBlendSum(blends, label) {
         </div>
       </div>
     `;
-    document.body.appendChild(backdrop);
+    modal.classList.add('show');
     
-    // 옵션 hover 효과 (인라인 스타일 보강)
-    backdrop.querySelectorAll('#claim-del-opt-a, #claim-del-opt-b').forEach(btn => {
+    // 옵션 hover 효과
+    document.querySelectorAll('#claim-del-opt-a, #claim-del-opt-b').forEach(btn => {
       btn.addEventListener('mouseenter', () => {
         btn.style.background = '#f3f4f6';
         btn.style.borderColor = '#9ca3af';
@@ -10585,26 +10779,27 @@ function validateBlendSum(blends, label) {
       });
     });
     
-    const close = () => { backdrop.remove(); };
+    const closeModal = () => { modal.classList.remove('show'); };
     
-    document.getElementById('claim-del-cancel').addEventListener('click', close);
-    backdrop.addEventListener('click', e => { if (e.target === backdrop) close(); });
+    document.getElementById('claim-del-cancel').addEventListener('click', closeModal);
     
     // 옵션 A: 청구만 취소
     document.getElementById('claim-del-opt-a').addEventListener('click', async () => {
+      console.log('[claim-delete] option A: cancel claim only');
       if (!confirm(`청구만 취소합니다.\n\n· ${wo_no} / ${colorName}\n· 청구액 ₩${formatMoney(amount)}\n\n계속하시겠습니까?\n(컬러는 ⚠ 땡처리 완료 상태로 유지됩니다)`)) return;
       try {
         await cancelClaimOnly(woId, colorIdx);
-        close();
+        closeModal();
         toast('청구가 취소되었습니다', 'success');
       } catch (e) {
-        console.error('청구 취소 실패:', e);
+        console.error('[claim-delete] 청구 취소 실패:', e);
         toast('처리 중 오류가 발생했습니다: ' + (e.message || e), 'error');
       }
     });
     
     // 옵션 B: 땡처리 자체 되돌리기
     document.getElementById('claim-del-opt-b').addEventListener('click', async () => {
+      console.log('[claim-delete] option B: revert discard');
       const wasAutoCompleted = wo.completed === true;
       const warnText = wasAutoCompleted 
         ? '\n\n※ 의뢰서가 자동완료된 상태였으나, 이 컬러를 되돌리면\n   의뢰서 완료도 자동 해제되어 진행 화면으로 돌아갑니다.'
@@ -10612,10 +10807,10 @@ function validateBlendSum(blends, label) {
       if (!confirm(`땡처리를 되돌립니다.\n\n· ${wo_no} / ${colorName}\n· 청구액 ₩${formatMoney(amount)} (함께 삭제됨)\n\n컬러가 QC 대기 상태로 복귀하고 진행 화면에 다시 나타납니다.${warnText}\n\n계속하시겠습니까?`)) return;
       try {
         await revertDiscard(woId, colorIdx);
-        close();
+        closeModal();
         toast('땡처리가 취소되었습니다. QC 대기 상태로 복귀했습니다.', 'success');
       } catch (e) {
-        console.error('땡처리 되돌리기 실패:', e);
+        console.error('[claim-delete] 땡처리 되돌리기 실패:', e);
         toast('처리 중 오류가 발생했습니다: ' + (e.message || e), 'error');
       }
     });
@@ -12054,6 +12249,17 @@ function validateBlendSum(blends, label) {
       compactToggle.addEventListener('change', () => {
         state.finishCompact = compactToggle.checked;
         try { localStorage.setItem('hiwos_finish_compact', state.finishCompact ? '1' : '0'); }
+        catch(e) {}
+        renderDashboard();
+      });
+    }
+    
+    // v2.51 hotfix9: 완료 컬러 접기 토글
+    const hideCompletedColorsToggle = document.getElementById('finish-hide-completed-colors-toggle');
+    if (hideCompletedColorsToggle) {
+      hideCompletedColorsToggle.addEventListener('change', () => {
+        state.finishHideCompletedColors = hideCompletedColorsToggle.checked;
+        try { localStorage.setItem('hiwos_finish_hide_completed_colors', state.finishHideCompletedColors ? '1' : '0'); }
         catch(e) {}
         renderDashboard();
       });
@@ -14516,7 +14722,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.51 step3 hotfix7';
+  const VERSION = 'v2.51 step3 hotfix9';
   // title (브라우저 탭)
   document.title = 'RECOVERIC HIWOS ' + VERSION;
   // 사이드바 버전 태그
