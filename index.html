@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="HIWOS">
 <meta name="mobile-web-app-capable" content="yes">
-<title>RECOVERIC HIWOS v2.51 step1 hotfix2</title>
+<title>RECOVERIC HIWOS v2.51 step3 hotfix8</title>
 
 <!-- PWA Manifest (인라인 data URL) -->
 <link rel="manifest" id="pwa-manifest">
@@ -3874,8 +3874,18 @@
     border-left: 3px solid #f59e0b;
   }
   .claims-act-report,
-  .claims-act-edit {
+  .claims-act-edit,
+  .claims-act-delete {
     margin-right: 4px;
+  }
+  /* v2.51 hotfix8: 클레임 삭제 버튼 (빨강 — 기존 [삭제]·[땡처리] 톤과 통일) */
+  .claims-act-delete {
+    background: #dc2626 !important;
+    border-color: #991b1b !important;
+    color: #fff !important;
+  }
+  .claims-act-delete:hover {
+    background: #b91c1c !important;
   }
   
   /* 정산 내역서 */
@@ -4417,7 +4427,7 @@
 <div class="app" id="main-app" style="display:none;">
   <aside class="sidebar">
     <h1>RECOVERIC</h1>
-    <div class="sub" id="hiwos-version-tag">HIWOS v2.51 step3 hotfix7</div>
+    <div class="sub" id="hiwos-version-tag">HIWOS v2.51 step3 hotfix8</div>
     <div id="user-info-section"></div>
     
     <!-- 모드 전환 -->
@@ -4846,6 +4856,60 @@ window.dispatchEvent(new Event('firebase-ready'));
 </script>
 
 <script>
+/* ============================================================
+ * HIWOS 데이터 단위 가이드 (박 대표님 확정 — 2026-05-21)
+ * ------------------------------------------------------------
+ * 이 가이드는 단위 혼동 버그를 막기 위해 명시적으로 정리한 것입니다.
+ * 새 코드 작성/수정 시 반드시 이 가이드를 따르세요.
+ *
+ * [염색가공 의뢰서 — 컬러 단위]
+ *   colors[i].body  → 항상 "절" (몸판 수량, 단위명 "절")
+ *   colors[i].rib   → 항상 "절" (부속 수량 — 시스템에서 "부속"으로 통일,
+ *                         단 변수명은 기존 호환을 위해 rib 유지)
+ *
+ * [염색가공 QC]
+ *   colors[i].qc.width_inch          → "인치" (실측, 더블이면 ÷2가 실폭)
+ *   colors[i].qc.weight_g_per_y      → "g/y" (야드중량)
+ *   colors[i].qc.weight_g_per_sqm    → "g/㎡" (스퀘어중량)
+ *   colors[i].qc.shrink_width_pct    → "%" (폭축률, 소수1)
+ *   colors[i].qc.shrink_length_pct   → "%" (장축률, 소수1)
+ *
+ * [편직 의뢰서]
+ *   items[i].jul          → "절" (편직 절수)
+ *   items[i].kg_per_jul   → "KG/절" (절당 무게, 기본값 21)
+ *   items[i].yarn_input   → "kg" (원사 투입량)
+ *   items[i].kg (계산값)  → "kg" (예상 생산량 = jul * kg_per_jul)
+ *
+ * [원사 의뢰서]
+ *   yarns[i].qty + unit   → 단위는 yarns[i].unit (kg/박스/고리)
+ *   고리 단위는 KORI_KG(181.44) 곱해서 kg 환산
+ *
+ * [출고/생지 입고]
+ *   shipment.jul, shipment.kg → 절 + kg 병기
+ *
+ * [클레임]
+ *   claim.amount       → "원" (정수, 콤마 표기는 표시 시점에)
+ *   claim.unit_price   → "원" (정수, 선택적)
+ *
+ * [변수명 단위 접미사 규칙]
+ *   _kg  → kg 단위만 (예: kg_per_jul, totalKg)
+ *   _jul → 절 단위만 (예: body_jul, rib_jul, totalJul)
+ *   _pct → % 단위만
+ *   _inch → 인치 단위만
+ *   접미사 없는 필드(body, rib, jul 등)는 위 가이드에서 단위 확인
+ *
+ * 단위 혼동 사례:
+ *   - 2026-05-21 hotfix7: 정산 내역서에 "몸판 1kg" 잘못 표기 (절이 맞음)
+ *     변수명도 body_kg/rib_kg로 잘못 명명되어 있어 body_jul/rib_jul로 변경
+ *
+ * hotfix8 (2026-05-21):
+ *   - 완료된 의뢰서 검색·필터 버그 수정 (render() → renderDashboard(), 6곳)
+ *     기존 render()는 의뢰서 작성 폼만 다시 그리는 함수 → 대시보드 갱신 안 됨
+ *   - 클레임(땡처리) 삭제 기능 추가
+ *     · [✕ 삭제] 버튼 신설 (관리자 + 본인 작성 한정)
+ *     · 옵션 A: 청구만 취소 (땡처리 완료 상태 유지)
+ *     · 옵션 B: 땡처리 자체 되돌리기 (컬러를 QC 대기로 복귀, 자동완료 해제)
+ * ============================================================ */
 const KORI_KG = 181.44;
 
 const DEFAULT_CAUTIONS = {
@@ -8523,6 +8587,62 @@ function validateBlendSum(blends, label) {
     return allDone;
   }
 
+  // v2.51 hotfix8: 클레임 삭제 — 옵션 A: 청구만 취소
+  // 컬러는 땡처리 완료 상태 유지, claim 데이터(거래처/사유/청구액)만 비움
+  // 클레임 목록에서는 사라지지만, 의뢰서/대시보드의 ⚠ 땡처리 스탬프는 유지
+  async function cancelClaimOnly(woId, colorIdx) {
+    const wo = state.allWorkOrders.find(w => w.id === woId);
+    if (!wo) throw new Error('의뢰서를 찾을 수 없음');
+    const colors = JSON.parse(JSON.stringify(wo.colors || []));
+    if (!colors[colorIdx]) throw new Error('컬러 인덱스 오류');
+
+    // claim 데이터 비움 (재청구 가능하도록 객체 자체는 유지하되 내용만 비움)
+    colors[colorIdx].claim = {};
+
+    await updateDoc(doc(db, 'workorders', woId), {
+      colors,
+      updated_at: serverTimestamp(),
+      updated_by: state.user.email
+    });
+  }
+
+  // v2.51 hotfix8: 클레임 삭제 — 옵션 B: 땡처리 자체 되돌리기
+  // 컬러를 QC 대기 상태로 복귀 (qc_status 제거, completed 해제)
+  // qc 데이터는 보존하되 judgment만 제거하여 QC 모달에서 재검수 가능
+  // 의뢰서가 자동완료된 상태였으면 의뢰서 완료도 자동 해제
+  async function revertDiscard(woId, colorIdx) {
+    const wo = state.allWorkOrders.find(w => w.id === woId);
+    if (!wo) throw new Error('의뢰서를 찾을 수 없음');
+    const colors = JSON.parse(JSON.stringify(wo.colors || []));
+    if (!colors[colorIdx]) throw new Error('컬러 인덱스 오류');
+
+    // 땡처리 관련 필드 모두 제거
+    delete colors[colorIdx].qc_status;
+    delete colors[colorIdx].discard_at;
+    delete colors[colorIdx].discard_by;
+    delete colors[colorIdx].claim;
+    colors[colorIdx].completed = false;
+    delete colors[colorIdx].completed_at;
+    // qc 데이터 보존하되 judgment 제거 → QC 대기 상태로 자연스럽게 복귀
+    if (colors[colorIdx].qc) {
+      delete colors[colorIdx].qc.judgment;
+    }
+
+    // 의뢰서 자동완료 해제 판정
+    const allDone = colors.every(c => c.completed === true);
+    const updates = {
+      colors,
+      updated_at: serverTimestamp(),
+      updated_by: state.user.email
+    };
+    // 다른 컬러가 모두 완료된 상태에서 이 컬러만 되돌리는 거라면 의뢰서 완료도 해제
+    if (!allDone && wo.completed) {
+      updates.completed = false;
+      updates.completed_at = null;
+    }
+    await updateDoc(doc(db, 'workorders', woId), updates);
+  }
+
   // 재작업 요청 — 불량 컬러를 다시 진행 중으로 되돌림 (재입고 후 재QC)
   async function setColorQcReWork(woId, colorIdx) {
     const wo = state.allWorkOrders.find(w => w.id === woId);
@@ -8595,8 +8715,10 @@ function validateBlendSum(blends, label) {
       item: wo?.body?.item || wo?.item || '',
       blend: wo?.body?.blend || wo?.blend || '',
       color_name: c.name || '',
-      body_kg: c.body || '',
-      rib_kg: c.rib || '',
+      // 염색가공 의뢰서의 컬러 body/rib은 항상 "절" 단위
+      // (hotfix7 변경 사유: 변수명 body_kg/rib_kg가 단위 혼동 유발 → body_jul/rib_jul로 명확화)
+      body_jul: c.body || '',
+      rib_jul: c.rib || '',
       defect_reasons: flatDefectReasons(qc.defect_flags, qc.defect_meta),
       defect_memo: qc.defect_memo || '',
       qc_width: qc.width_inch != null ? qc.width_inch : '',
@@ -8681,8 +8803,8 @@ function validateBlendSum(blends, label) {
             의뢰서: <strong>${escapeHtml(ctx.wo_number || '-')}</strong>
             ${ctx.lot_no ? ` · LOT <strong>${escapeHtml(ctx.lot_no)}</strong>` : ''}<br>
             <span class="qc-color-name">${escapeHtml(ctx.color_name || '-')}</span>
-            ${ctx.body_kg ? ` · 몸판 ${escapeHtml(String(ctx.body_kg))}절` : ''}
-            ${ctx.rib_kg ? ` · 부속 ${escapeHtml(String(ctx.rib_kg))}절` : ''}
+            ${ctx.body_jul ? ` · 몸판 ${escapeHtml(String(ctx.body_jul))}절` : ''}
+            ${ctx.rib_jul ? ` · 부속 ${escapeHtml(String(ctx.rib_jul))}절` : ''}
           </div>
           ${ctx.rework_count > 0 ? `<div class="claim-modal-rework">재작업 시도: <strong>${ctx.rework_count}회</strong></div>` : '<div class="claim-modal-rework">재작업 시도: 0회 (1차 불량 즉시 땡처리)</div>'}
           ${ctx.defect_reasons ? `<div class="claim-modal-reasons">불량 사유: ${escapeHtml(ctx.defect_reasons)}</div>` : ''}
@@ -8857,8 +8979,8 @@ function validateBlendSum(blends, label) {
     
     // 몸판/부속 표시
     const sizeText = [
-      ctx.body_kg ? `몸판 ${ctx.body_kg}절` : '',
-      ctx.rib_kg ? `부속 ${ctx.rib_kg}절` : ''
+      ctx.body_jul ? `몸판 ${ctx.body_jul}절` : '',
+      ctx.rib_jul ? `부속 ${ctx.rib_jul}절` : ''
     ].filter(Boolean).join(' · ');
     
     return `
@@ -10391,6 +10513,114 @@ function validateBlendSum(blends, label) {
     return html;
   }
   
+  // v2.51 hotfix8: 클레임 삭제 모달 — 2옵션 선택형
+  // - 옵션 A: 청구만 취소 (땡처리 완료 상태 유지, claim 데이터만 비움)
+  // - 옵션 B: 땡처리 자체 되돌리기 (컬러를 QC 대기로 복귀)
+  function openClaimDeleteModal(woId, colorIdx) {
+    const wo = state.allWorkOrders.find(w => w.id === woId);
+    if (!wo) { toast('의뢰서를 찾을 수 없습니다', 'error'); return; }
+    const c = (wo.colors || [])[colorIdx];
+    if (!c) { toast('컬러 정보를 찾을 수 없습니다', 'error'); return; }
+    
+    // 권한 재확인 (UI 우회 방지)
+    if (!isAdminUser() && c.discard_by !== state.user.email) {
+      toast('관리자 또는 본인이 처리한 클레임만 삭제할 수 있습니다', 'error');
+      return;
+    }
+    
+    const claim = c.claim || {};
+    const wo_no = wo.wo_number || '-';
+    const colorName = c.name || '-';
+    const recipient = claim.recipient || '(미입력)';
+    const amount = claim.amount || 0;
+    
+    // 기존 모달 제거 (중복 방지)
+    const existing = document.getElementById('claim-delete-modal-backdrop');
+    if (existing) existing.remove();
+    
+    const backdrop = document.createElement('div');
+    backdrop.id = 'claim-delete-modal-backdrop';
+    backdrop.className = 'qc-modal-backdrop';
+    backdrop.innerHTML = `
+      <div class="claim-modal-container" style="max-width:480px;">
+        <div class="claim-modal-header">
+          <div class="claim-modal-info">
+            <div>클레임 삭제</div>
+            <div class="qc-color-name" style="margin-top:4px;">${escapeHtml(wo_no)} · ${escapeHtml(colorName)}</div>
+          </div>
+        </div>
+        <div style="padding:14px 0 4px;font-size:13px;color:#374151;line-height:1.6;">
+          <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:4px;padding:10px 12px;margin-bottom:14px;font-size:12px;">
+            <div>청구 대상: <strong>${escapeHtml(recipient)}</strong></div>
+            <div>청구액: <strong>₩${formatMoney(amount)}</strong></div>
+          </div>
+          어떤 방식으로 삭제하시겠습니까?
+        </div>
+        <div style="display:flex;flex-direction:column;gap:10px;margin-top:14px;">
+          <button type="button" id="claim-del-opt-a" style="text-align:left;padding:12px 14px;border:1px solid #d1d5db;border-radius:4px;background:#fff;cursor:pointer;transition:all 0.15s;">
+            <div style="font-weight:700;color:#111;font-size:13px;margin-bottom:4px;">✕ 청구만 취소</div>
+            <div style="font-size:12px;color:#6b7280;line-height:1.5;">클레임 목록에서 사라집니다. 컬러는 ⚠ 땡처리 완료 상태 그대로 유지됩니다.<br>거래처와 협의해서 청구 안 하기로 한 경우 / 청구 정보를 잘못 입력한 경우.</div>
+          </button>
+          <button type="button" id="claim-del-opt-b" style="text-align:left;padding:12px 14px;border:1px solid #d1d5db;border-radius:4px;background:#fff;cursor:pointer;transition:all 0.15s;">
+            <div style="font-weight:700;color:#111;font-size:13px;margin-bottom:4px;">↺ 땡처리 자체 되돌리기</div>
+            <div style="font-size:12px;color:#6b7280;line-height:1.5;">땡처리 결정을 취소하고 컬러를 QC 대기 상태로 복귀시킵니다. 진행 화면에 다시 나타나고 재검수가 가능합니다.<br>땡처리를 잘못 누른 경우 / 재논의 후 재작업으로 전환하는 경우.</div>
+          </button>
+        </div>
+        <div class="claim-modal-actions">
+          <button type="button" class="claim-btn-cancel" id="claim-del-cancel">취소</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(backdrop);
+    
+    // 옵션 hover 효과 (인라인 스타일 보강)
+    backdrop.querySelectorAll('#claim-del-opt-a, #claim-del-opt-b').forEach(btn => {
+      btn.addEventListener('mouseenter', () => {
+        btn.style.background = '#f3f4f6';
+        btn.style.borderColor = '#9ca3af';
+      });
+      btn.addEventListener('mouseleave', () => {
+        btn.style.background = '#fff';
+        btn.style.borderColor = '#d1d5db';
+      });
+    });
+    
+    const close = () => { backdrop.remove(); };
+    
+    document.getElementById('claim-del-cancel').addEventListener('click', close);
+    backdrop.addEventListener('click', e => { if (e.target === backdrop) close(); });
+    
+    // 옵션 A: 청구만 취소
+    document.getElementById('claim-del-opt-a').addEventListener('click', async () => {
+      if (!confirm(`청구만 취소합니다.\n\n· ${wo_no} / ${colorName}\n· 청구액 ₩${formatMoney(amount)}\n\n계속하시겠습니까?\n(컬러는 ⚠ 땡처리 완료 상태로 유지됩니다)`)) return;
+      try {
+        await cancelClaimOnly(woId, colorIdx);
+        close();
+        toast('청구가 취소되었습니다', 'success');
+      } catch (e) {
+        console.error('청구 취소 실패:', e);
+        toast('처리 중 오류가 발생했습니다: ' + (e.message || e), 'error');
+      }
+    });
+    
+    // 옵션 B: 땡처리 자체 되돌리기
+    document.getElementById('claim-del-opt-b').addEventListener('click', async () => {
+      const wasAutoCompleted = wo.completed === true;
+      const warnText = wasAutoCompleted 
+        ? '\n\n※ 의뢰서가 자동완료된 상태였으나, 이 컬러를 되돌리면\n   의뢰서 완료도 자동 해제되어 진행 화면으로 돌아갑니다.'
+        : '';
+      if (!confirm(`땡처리를 되돌립니다.\n\n· ${wo_no} / ${colorName}\n· 청구액 ₩${formatMoney(amount)} (함께 삭제됨)\n\n컬러가 QC 대기 상태로 복귀하고 진행 화면에 다시 나타납니다.${warnText}\n\n계속하시겠습니까?`)) return;
+      try {
+        await revertDiscard(woId, colorIdx);
+        close();
+        toast('땡처리가 취소되었습니다. QC 대기 상태로 복귀했습니다.', 'success');
+      } catch (e) {
+        console.error('땡처리 되돌리기 실패:', e);
+        toast('처리 중 오류가 발생했습니다: ' + (e.message || e), 'error');
+      }
+    });
+  }
+  
   // ===== 클레임(땡처리) 뷰 — v2.51 step2 =====
   function renderClaimsDash() {
     const claims = listAllDiscardClaims();
@@ -10559,6 +10789,7 @@ function validateBlendSum(blends, label) {
           <td class="col-act">
             <button class="dash-act-btn claims-act-report" data-id="${wo.id}" data-color-idx="${x.colorIdx}" title="정산 내역서 출력">📄 내역서</button>
             <button class="dash-act-btn claims-act-edit" data-id="${wo.id}" data-color-idx="${x.colorIdx}" title="클레임 정보 수정">✎ 수정</button>
+            ${(isAdminUser() || c.discard_by === state.user.email) ? `<button class="dash-act-btn claims-act-delete" data-id="${wo.id}" data-color-idx="${x.colorIdx}" title="클레임 삭제">✕ 삭제</button>` : ''}
           </td>
         </tr>`;
       });
@@ -11809,6 +12040,12 @@ function validateBlendSum(blends, label) {
           openDiscardModal(btn.dataset.id, parseInt(btn.dataset.colorIdx, 10));
         });
       });
+      // v2.51 hotfix8: 클레임 삭제
+      document.querySelectorAll('.claims-act-delete').forEach(btn => {
+        btn.addEventListener('click', () => {
+          openClaimDeleteModal(btn.dataset.id, parseInt(btn.dataset.colorIdx, 10));
+        });
+      });
     }
     
     // v2.33: 염색가공 [간단히 보기] 토글
@@ -12384,7 +12621,7 @@ function validateBlendSum(blends, label) {
         clearTimeout(cfTimer);
         cfTimer = setTimeout(() => {
           state.completedFilter.search = cfSearch.value;
-          render();
+          renderDashboard();
           // 리렌더 후 포커스 복원
           requestAnimationFrame(() => {
             const el = document.getElementById('cf-search');
@@ -12399,27 +12636,27 @@ function validateBlendSum(blends, label) {
     const cfType = document.getElementById('cf-type');
     if (cfType) cfType.addEventListener('change', () => {
       state.completedFilter.type = cfType.value;
-      render();
+      renderDashboard();
     });
     const cfItem = document.getElementById('cf-item');
     if (cfItem) cfItem.addEventListener('change', () => {
       state.completedFilter.item = cfItem.value;
-      render();
+      renderDashboard();
     });
     const cfVendor = document.getElementById('cf-vendor');
     if (cfVendor) cfVendor.addEventListener('change', () => {
       state.completedFilter.vendor = cfVendor.value;
-      render();
+      renderDashboard();
     });
     const cfPeriod = document.getElementById('cf-period');
     if (cfPeriod) cfPeriod.addEventListener('change', () => {
       state.completedFilter.period = cfPeriod.value;
-      render();
+      renderDashboard();
     });
     const cfReset = document.getElementById('cf-reset');
     if (cfReset) cfReset.addEventListener('click', () => {
       state.completedFilter = { search: '', type: 'all', item: 'all', vendor: 'all', period: 'all' };
-      render();
+      renderDashboard();
     });
     // 보이는 결과 전체 삭제 (관리자만, 2단계 확인)
     const cfDeleteAll = document.getElementById('cf-delete-all');
