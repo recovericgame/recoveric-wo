@@ -9318,9 +9318,11 @@ function validateBlendSum(blends, label) {
     });
   }
   
-  // v2.53 hotfix4: 특정 차수(receipt)만 진행 중으로 복귀
-  //  - done/accept/discard → pending (QC 데이터는 보존, 상태만 대기로)
-  //  - 컬러 전체 completed도 해제, 의뢰서 완료도 해제
+  // v2.53 hotfix6: 특정 차수(receipt)를 입고 기록에서 완전 삭제
+  //  - 박 대표 정의: "복귀" = 그 차수를 입고/생산 기록에서 빼버리는 것 (입고 취소)
+  //  - 2차를 복귀하면 1차/3차만 남음 (번호 그대로 유지, 재배열 안 함)
+  //  - 누적 입고량(received_body/rib)도 그 차수만큼 차감
+  //  - 부족분 상태 재계산
   async function revertReceiptToPending(woId, colorIdx, receiptNo) {
     const wo = state.allWorkOrders.find(w => w.id === woId);
     if (!wo) throw new Error('의뢰서를 찾을 수 없음');
@@ -9332,73 +9334,130 @@ function validateBlendSum(blends, label) {
     migrateColorReceipts(c);
     const idx = c.receipts.findIndex(r => r.receipt_no === receiptNo);
     if (idx < 0) throw new Error(`${receiptNo}차 입고 데이터를 찾을 수 없음`);
-    const r = c.receipts[idx];
     
-    // 차수 상태를 pending으로 되돌림 (QC 입력값 r.qc는 보존)
-    r.qc_status = 'pending';
-    r.qc_pending_at = now;
-    r.qc_done_at = null;
-    r.qc_done_by = null;
-    r.accept_at = null;
-    r.accept_by = null;
-    // discard였던 경우 클레임 데이터까지 건드리진 않음 (땡처리 되돌리기는 별도 절차)
-    r.legacy_inferred = false;
+    // 삭제 대상 차수의 입고량 기억
+    const removed = c.receipts[idx];
     
-    // 컬러 완료 해제 (한 차수라도 pending이면 컬러 미완료)
+    // receipts 배열에서 해당 차수만 제거 (번호 재배열 안 함 — 1,3차 남으면 1,3차 그대로)
+    c.receipts.splice(idx, 1);
+    
+    // shortage_history에서도 동일하게 제거 (대응되는 항목 — received_at + 입고량 매칭)
+    if (Array.isArray(c.shortage_history)) {
+      const shIdx = c.shortage_history.findIndex(h =>
+        h.received_at === removed.received_at &&
+        (h.received_body || 0) === (removed.received_body || 0) &&
+        (h.received_rib || 0) === (removed.received_rib || 0)
+      );
+      if (shIdx >= 0) c.shortage_history.splice(shIdx, 1);
+    }
+    
+    // 누적 입고량 재계산 (남은 receipts 합산)
+    const newRecBody = c.receipts.reduce((s, r) => s + (parseFloat(r.received_body) || 0), 0);
+    const newRecRib = c.receipts.reduce((s, r) => s + (parseFloat(r.received_rib) || 0), 0);
+    c.received_body = newRecBody;
+    c.received_rib = newRecRib;
+    
+    // 부족분 상태 재계산
+    const orderedBody = parseFloat(c.body) || 0;
+    const orderedRib = parseFloat(c.rib) || 0;
+    const totalShortage = (orderedBody - newRecBody) + (orderedRib - newRecRib);
+    if (c.receipts.length === 0) {
+      // 차수가 하나도 안 남음 → 입고 전 상태로 완전 초기화
+      delete c.received_body;
+      delete c.received_rib;
+      delete c.shortage_status;
+      delete c.shortage_reason;
+      delete c.shortage_resolved_at;
+      delete c.shortage_resolved_by;
+      delete c.qc_status;
+      delete c.qc;
+      delete c.qc_done_at;
+      delete c.qc_done_by;
+      delete c.qc_pending_at;
+    } else if (totalShortage > 0) {
+      // 부족분 다시 발생 → 추가 입고 대기 상태로
+      c.shortage_status = 'expected';
+      c.shortage_reason = (c.shortage_reason || '') + ` / ${receiptNo}차 입고 취소로 부족분 재발생`;
+      delete c.shortage_resolved_at;
+      delete c.shortage_resolved_by;
+    }
+    
+    // 컬러 완료 해제
     c.completed = false;
     delete c.completed_at;
-    // 의뢰서 단위 동기화 — 컬러 상태 재계산
-    const allResolved = areAllReceiptsResolved(c);
-    c.qc_status = allResolved ? c.qc_status : 'pending';
-    delete c.qc_done_at;
-    delete c.qc_done_by;
+    // 의뢰서 단위 qc_status 동기화 — 남은 receipts 기준 재계산
+    if (c.receipts.length > 0) {
+      const allResolved = areAllReceiptsResolved(c);
+      c.qc_status = allResolved ? (c.qc_status || 'done') : 'pending';
+      delete c.qc_done_at;
+      delete c.qc_done_by;
+    }
     
     const updates = {
       colors,
       updated_at: serverTimestamp(),
       updated_by: state.user.email
     };
-    // 의뢰서가 완료 상태였으면 해제
     if (wo.completed) {
       updates.completed = false;
       updates.completed_at = null;
     }
     await updateDoc(doc(db, 'workorders', woId), updates);
-    // v2.53 hotfix5: 로컬 state 즉시 반영 (onSnapshot 도착 전에도 화면 정확하게)
+    // 로컬 state 즉시 반영
     wo.colors = colors;
     if (updates.completed === false) { wo.completed = false; wo.completed_at = null; }
   }
   
-  // v2.53 hotfix4: 컬러의 모든 차수를 한 번에 진행 중으로 복귀 (전체 복귀)
-  //  - 모든 receipt를 pending으로 (QC 데이터 보존)
-  //  - 컬러 completed 해제, 의뢰서 완료 해제
+  // v2.53 hotfix6: 컬러의 모든 차수 입고 기록을 완전 삭제 (전체 복귀)
+  //  - 모든 receipts 제거, received_body/rib 0(미입력)으로
+  //  - 부족분/QC 상태 모두 초기화 → 입고 전 진행 중 상태로 리셋
+  //  - 단, 땡처리(discard)된 차수는 클레임 연동 때문에 보존
   async function revertAllReceiptsToPending(woId, colorIdx) {
     const wo = state.allWorkOrders.find(w => w.id === woId);
     if (!wo) throw new Error('의뢰서를 찾을 수 없음');
     const colors = JSON.parse(JSON.stringify(wo.colors || []));
     if (!colors[colorIdx]) throw new Error('컬러 인덱스 오류');
     const c = colors[colorIdx];
-    const now = new Date().toISOString();
     
     migrateColorReceipts(c);
     
-    c.receipts.forEach(r => {
-      // discard(땡처리)는 클레임 연동이 있으므로 전체 복귀에서도 건드리지 않음
-      if (r.qc_status === 'discard') return;
-      r.qc_status = 'pending';
-      r.qc_pending_at = now;
-      r.qc_done_at = null;
-      r.qc_done_by = null;
-      r.accept_at = null;
-      r.accept_by = null;
-      r.legacy_inferred = false;
-    });
+    // 땡처리된 차수만 남기고 나머지 입고 기록 전부 삭제
+    const keptReceipts = c.receipts.filter(r => r.qc_status === 'discard');
+    c.receipts = keptReceipts;
+    
+    if (keptReceipts.length === 0) {
+      // 입고 전 진행 중 상태로 완전 초기화
+      delete c.received_body;
+      delete c.received_rib;
+      delete c.shortage_status;
+      delete c.shortage_reason;
+      delete c.shortage_resolved_at;
+      delete c.shortage_resolved_by;
+      delete c.shortage_history;
+      delete c.qc_status;
+      delete c.qc;
+      delete c.qc_done_at;
+      delete c.qc_done_by;
+      delete c.qc_pending_at;
+    } else {
+      // 땡처리 차수만 남음 → 누적 입고량 재계산
+      const newRecBody = keptReceipts.reduce((s, r) => s + (parseFloat(r.received_body) || 0), 0);
+      const newRecRib = keptReceipts.reduce((s, r) => s + (parseFloat(r.received_rib) || 0), 0);
+      c.received_body = newRecBody;
+      c.received_rib = newRecRib;
+      // shortage_history도 땡처리 차수 것만 남김
+      if (Array.isArray(c.shortage_history)) {
+        c.shortage_history = c.shortage_history.filter(h =>
+          keptReceipts.some(r =>
+            r.received_at === h.received_at &&
+            (r.received_body || 0) === (h.received_body || 0)
+          )
+        );
+      }
+    }
     
     c.completed = false;
     delete c.completed_at;
-    c.qc_status = 'pending';
-    delete c.qc_done_at;
-    delete c.qc_done_by;
     
     const updates = {
       colors,
@@ -9410,7 +9469,7 @@ function validateBlendSum(blends, label) {
       updates.completed_at = null;
     }
     await updateDoc(doc(db, 'workorders', woId), updates);
-    // v2.53 hotfix5: 로컬 state 즉시 반영
+    // 로컬 state 즉시 반영
     wo.colors = colors;
     if (updates.completed === false) { wo.completed = false; wo.completed_at = null; }
   }
@@ -15798,17 +15857,18 @@ function validateBlendSum(blends, label) {
             <button type="button" class="qc-modal-btn" id="qc-cancel">취소</button>
             ${qcStatus === 'pending' ? '<button type="button" class="qc-modal-btn revert" id="qc-revert" title="QC 대기를 취소하고 진행 중으로 되돌립니다 (입력값은 보존)">진행 중으로 복귀</button>' : ''}
             ${(() => {
-              // v2.53 hotfix4: 현재 보고 있는 차수가 완료 상태(done/accept/discard)면 [이 차수 복귀] 버튼
+              // v2.53 hotfix6: 복귀 = 그 차수 입고 기록 삭제
+              // 현재 보고 있는 차수가 땡처리(discard)만 아니면 [이 차수 입고 취소] 버튼
               const curStatus = activeReceipt ? (activeReceipt.qc_status || 'none') : null;
-              const canRevertThis = activeReceiptNo && (curStatus === 'done' || curStatus === 'accept');
-              const hasMultiReceipts = Array.isArray(c.receipts) && c.receipts.length >= 2;
-              const anyResolved = Array.isArray(c.receipts) && c.receipts.some(r => ['done','accept'].includes(r.qc_status));
+              const canRevertThis = activeReceiptNo && curStatus !== 'discard';
+              const receiptsCount = Array.isArray(c.receipts) ? c.receipts.length : 0;
+              const hasMultiReceipts = receiptsCount >= 2;
               let btns = '';
               if (canRevertThis) {
-                btns += `<button type="button" class="qc-modal-btn revert" id="qc-revert-receipt" data-receipt-no="${activeReceiptNo}" title="${activeReceiptNo}차 탕만 진행 중으로 되돌립니다 (입력값 보존)">↩ ${activeReceiptNo}차 복귀</button>`;
+                btns += `<button type="button" class="qc-modal-btn revert" id="qc-revert-receipt" data-receipt-no="${activeReceiptNo}" title="${activeReceiptNo}차 입고를 기록에서 삭제합니다 (다른 차수는 그대로 유지)">↩ ${activeReceiptNo}차 입고 취소</button>`;
               }
-              if (hasMultiReceipts && anyResolved) {
-                btns += `<button type="button" class="qc-modal-btn revert" id="qc-revert-all" title="모든 차수를 한 번에 진행 중으로 되돌립니다 (입력값 보존)">↩↩ 전체 복귀</button>`;
+              if (hasMultiReceipts) {
+                btns += `<button type="button" class="qc-modal-btn revert" id="qc-revert-all" title="모든 차수 입고 기록을 삭제하고 입고 전 상태로 되돌립니다">↩↩ 전체 입고 취소</button>`;
               }
               return btns;
             })()}
@@ -16219,50 +16279,52 @@ function validateBlendSum(blends, label) {
       });
     }
     
-    // v2.53 hotfix4: [↩ N차 복귀] — 현재 보고 있는 차수만 진행 중으로 되돌림
+    // v2.53 hotfix6: [↩ N차 입고 취소] — 그 차수 입고 기록 삭제
     const revertReceiptBtn = document.getElementById('qc-revert-receipt');
     if (revertReceiptBtn) {
       revertReceiptBtn.addEventListener('click', async () => {
         const cName = c.name || `컬러 #${colorIdx + 1}`;
         const rno = parseInt(revertReceiptBtn.dataset.receiptNo, 10);
-        const msg = `[${wo.wo_number || ''}] "${cName}" ${rno}차 탕만\n진행 중(QC 대기)으로 되돌리시겠습니까?\n\n· ${rno}차 검수 입력값은 보존됩니다\n· 다른 차수는 그대로 유지됩니다\n· 컬러는 미완료 상태로 돌아갑니다`;
+        const targetR = (c.receipts || []).find(r => r.receipt_no === rno);
+        const qtyStr = targetR ? `${targetR.received_body || 0}/${targetR.received_rib || 0}절` : '';
+        const msg = `[${wo.wo_number || ''}] "${cName}" ${rno}차 입고(${qtyStr})를\n기록에서 삭제하시겠습니까?\n\n· ${rno}차 입고량이 누적 입고에서 빠집니다\n· ${rno}차 QC 데이터도 함께 삭제됩니다\n· 다른 차수는 그대로 유지됩니다\n· 부족분이 다시 발생하면 추가 입고 대기로 전환됩니다\n\n⚠ 이 작업은 되돌릴 수 없습니다 (백업 없음)`;
         if (!confirm(msg)) return;
         try {
           revertReceiptBtn.disabled = true;
-          revertReceiptBtn.textContent = '복귀 중...';
+          revertReceiptBtn.textContent = '삭제 중...';
           await revertReceiptToPending(woId, colorIdx, rno);
-          toast(`"${cName}" ${rno}차 진행 중으로 복귀됨`, 'success');
+          toast(`"${cName}" ${rno}차 입고 기록 삭제됨`, 'success');
           modal.classList.remove('show');
-          renderDashboard();  // v2.53 hotfix5: 즉시 화면 갱신
+          renderDashboard();  // 즉시 화면 갱신
         } catch (e) {
           revertReceiptBtn.disabled = false;
-          revertReceiptBtn.textContent = `↩ ${rno}차 복귀`;
-          toast('복귀 실패: ' + e.message, 'error');
+          revertReceiptBtn.textContent = `↩ ${rno}차 입고 취소`;
+          toast('입고 취소 실패: ' + e.message, 'error');
         }
       });
     }
     
-    // v2.53 hotfix4: [↩↩ 전체 복귀] — 모든 차수를 한 번에 진행 중으로 되돌림
+    // v2.53 hotfix6: [↩↩ 전체 입고 취소] — 모든 차수 입고 기록 삭제
     const revertAllBtn = document.getElementById('qc-revert-all');
     if (revertAllBtn) {
       revertAllBtn.addEventListener('click', async () => {
         const cName = c.name || `컬러 #${colorIdx + 1}`;
         const receiptCount = Array.isArray(c.receipts) ? c.receipts.length : 0;
         const hasDiscard = Array.isArray(c.receipts) && c.receipts.some(r => r.qc_status === 'discard');
-        const discardNote = hasDiscard ? '\n\n※ 땡처리(클레임)된 차수는 복귀 대상에서 제외됩니다.\n  땡처리 되돌리기는 클레임 화면에서 별도로 진행하세요.' : '';
-        const msg = `[${wo.wo_number || ''}] "${cName}" 의 모든 차수(${receiptCount}개)를\n한 번에 진행 중(QC 대기)으로 되돌리시겠습니까?\n\n· 모든 차수의 검수 입력값은 보존됩니다\n· 컬러는 미완료 상태로 돌아갑니다\n· 처음부터 각 차수를 다시 검수할 수 있습니다${discardNote}`;
+        const discardNote = hasDiscard ? '\n\n※ 땡처리(클레임)된 차수는 삭제 대상에서 제외됩니다.\n  땡처리 되돌리기는 클레임 화면에서 별도로 진행하세요.' : '';
+        const msg = `[${wo.wo_number || ''}] "${cName}" 의 모든 입고 기록(${receiptCount}개 차수)을\n삭제하고 입고 전 상태로 되돌리시겠습니까?\n\n· 모든 차수의 입고량과 QC 데이터가 삭제됩니다\n· 누적 입고량이 0으로 초기화됩니다\n· 부족분/완료 상태도 모두 초기화됩니다\n· 처음부터 다시 입고/검수할 수 있습니다${discardNote}\n\n⚠ 이 작업은 되돌릴 수 없습니다 (백업 없음)`;
         if (!confirm(msg)) return;
         try {
           revertAllBtn.disabled = true;
-          revertAllBtn.textContent = '복귀 중...';
+          revertAllBtn.textContent = '삭제 중...';
           await revertAllReceiptsToPending(woId, colorIdx);
-          toast(`"${cName}" 전체 차수 진행 중으로 복귀됨`, 'success');
+          toast(`"${cName}" 전체 입고 기록 삭제됨 — 입고 전 상태로 초기화`, 'success');
           modal.classList.remove('show');
-          renderDashboard();  // v2.53 hotfix5: 즉시 화면 갱신
+          renderDashboard();  // 즉시 화면 갱신
         } catch (e) {
           revertAllBtn.disabled = false;
-          revertAllBtn.textContent = '↩↩ 전체 복귀';
-          toast('전체 복귀 실패: ' + e.message, 'error');
+          revertAllBtn.textContent = '↩↩ 전체 입고 취소';
+          toast('전체 입고 취소 실패: ' + e.message, 'error');
         }
       });
     }
@@ -17120,7 +17182,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix5';
+  const VERSION = 'v2.53 hotfix6';
   // title (브라우저 탭)
   document.title = 'RECOVERIC HIWOS ' + VERSION;
   // 사이드바 버전 태그
