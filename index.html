@@ -9063,12 +9063,35 @@ function validateBlendSum(blends, label) {
   function getColorQcStatus(wo, colorIdx) {
     const c = wo.colors?.[colorIdx];
     if (!c) return 'none';
+    
+    // v2.53 hotfix3: receipts 배열을 진실로 삼아 상태 판정
+    // (기존 c.qc_status 단일 필드와 receipts가 어긋나면 화면이 막히는 버그 해결)
+    migrateColorReceipts(c);
+    if (Array.isArray(c.receipts) && c.receipts.length > 0) {
+      // 우선순위: discard > defect > accept > pending(미완료) > done(전부 완료)
+      const statuses = c.receipts.map(r => r.qc_status || 'none');
+      if (statuses.includes('discard')) return 'discard';
+      if (statuses.includes('defect')) return 'defect';
+      // 미완료(none/pending) receipt가 하나라도 있으면 → 진행해야 할 게 남음
+      const hasUnresolved = statuses.some(s => s === 'none' || s === 'pending');
+      if (hasUnresolved) {
+        // 어떤 receipt이라도 pending이거나, QC 입력이 필요한 상태
+        // 전부 none이면 'none'(아직 QC 시작 전), 하나라도 진행됐으면 'pending'
+        const anyStarted = statuses.some(s => s !== 'none');
+        return anyStarted ? 'pending' : 'none';
+      }
+      // 미완료 없음 — 전부 done/accept/discard
+      if (statuses.every(s => s === 'accept')) return 'accept';
+      if (statuses.includes('accept')) return 'accept';  // done+accept 혼합 시 accept 우선 표시
+      return 'done';  // 전부 done
+    }
+    
+    // receipts 없는 경우 — 기존 단일 필드 판정 (역호환)
     if (c.qc_status === 'discard') return 'discard';
     if (c.qc_status === 'accept') return 'accept';
     if (c.qc_status === 'defect') return 'defect';
     if (c.qc_status === 'done') return 'done';
     if (c.qc_status === 'pending') return 'pending';
-    // 역호환: qc_status 없는 옛 데이터는 c.completed로 판정
     if (c.completed === true) return 'done';
     return 'none';
   }
@@ -16916,7 +16939,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix2';
+  const VERSION = 'v2.53 hotfix3';
   // title (브라우저 탭)
   document.title = 'RECOVERIC HIWOS ' + VERSION;
   // 사이드바 버전 태그
