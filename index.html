@@ -12485,7 +12485,16 @@ function validateBlendSum(blends, label) {
         } else if (qcSt === 'pending') {
           completeCell = `<td class="col-action"><button class="dash-action-btn qc-pending-btn" data-id="${wo.id}" data-color-idx="${colorIdx}" data-qc-action="open">QC 대기${receiptLabel}</button>${shortageBtn}</td>`;
         } else if (qcSt === 'done') {
-          completeCell = `<td class="col-action"><button class="dash-action-btn qc-done-btn" data-id="${wo.id}" data-color-idx="${colorIdx}" data-qc-action="open">✓ QC${receiptLabel}</button>${shortageBtn}</td>`;
+          // v2.53 hotfix2: QC done인데 컬러가 아직 미완료(completed!==true)면
+          // [완료 확정] 버튼 같이 노출 — 부족분 정산이 꼬였거나 차수 판정이 막혔을 때 탈출구
+          const colorDone = c && c.completed === true;
+          const allReceiptsOk = c && areAllReceiptsResolved(c);
+          const noShortage = c && !isShortageActive(c);
+          const canForceComplete = !colorDone && allReceiptsOk && noShortage;
+          const forceBtn = canForceComplete
+            ? `<button class="dash-action-btn dash-color-force-complete-btn" data-id="${wo.id}" data-color-idx="${colorIdx}" style="background:#16a34a;color:#fff;border-color:#15803d;" title="QC가 모두 끝났으니 이 컬러를 완료 처리합니다">완료 확정</button>`
+            : '';
+          completeCell = `<td class="col-action"><button class="dash-action-btn qc-done-btn" data-id="${wo.id}" data-color-idx="${colorIdx}" data-qc-action="open">✓ QC${receiptLabel}</button>${forceBtn}${shortageBtn}</td>`;
         } else {
           // 진행 중 (none) — [완료] + [부족] 버튼
           completeCell = `<td class="col-action"><button class="dash-action-btn dash-color-qc-init-btn" data-id="${wo.id}" data-color-idx="${colorIdx}">완료</button><button class="dash-action-btn dash-shortage-btn" data-id="${wo.id}" data-color-idx="${colorIdx}" title="입고 수량이 의뢰량과 다른 경우">부족</button></td>`;
@@ -14574,6 +14583,34 @@ function validateBlendSum(blends, label) {
         const receiptNoStr = btn.dataset.receiptNo;
         const receiptNo = receiptNoStr ? parseInt(receiptNoStr, 10) : undefined;
         openQcModal(id, colorIdx, receiptNo);
+      });
+    });
+    
+    // v2.53 hotfix2: [완료 확정] 버튼 — QC done인데 막힌 컬러를 직접 완료 처리
+    document.querySelectorAll('#dash-body .dash-color-force-complete-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const id = btn.dataset.id;
+        const colorIdx = parseInt(btn.dataset.colorIdx, 10);
+        const wo = state.allWorkOrders.find(w => w.id === id);
+        const c = wo?.colors?.[colorIdx];
+        if (!wo || !c) return;
+        const cName = c.name || `컬러 #${colorIdx + 1}`;
+        const msg = `[${wo.wo_number || ''}] "${cName}" 을(를) 완료 처리하시겠습니까?\n\nQC가 모두 끝난 상태입니다.\n이 컬러는 진행 목록에서 사라지고\n완료된 의뢰서 화면으로 이동합니다.\n\n(모든 컬러가 완료되면 의뢰서 자체도 자동 완료됩니다)`;
+        if (!confirm(msg)) return;
+        try {
+          btn.disabled = true;
+          btn.textContent = '처리 중...';
+          const allDone = await toggleColorCompleted(id, colorIdx, true);
+          if (allDone) {
+            toast(`✓ "${cName}" 완료 — 모든 컬러 완료로 의뢰서 자동 완료됨`, 'success');
+          } else {
+            toast(`✓ "${cName}" 완료 처리됨`, 'success');
+          }
+        } catch (e) {
+          btn.disabled = false;
+          btn.textContent = '완료 확정';
+          toast('완료 처리 실패: ' + e.message, 'error');
+        }
       });
     });
 
@@ -16879,7 +16916,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix1';
+  const VERSION = 'v2.53 hotfix2';
   // title (브라우저 탭)
   document.title = 'RECOVERIC HIWOS ' + VERSION;
   // 사이드바 버전 태그
