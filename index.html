@@ -8141,8 +8141,10 @@ window.addEventListener('firebase-ready', () => {
       document.getElementById('main-app').style.display = 'grid';
       renderUserInfo();
       loadWorkOrders();
-      // v2.53 hotfix7: 데이터 저장소 연결 차단(광고 차단 확장) 감지
-      detectFirestoreBlock();
+      // v2.53 hotfix10: 차단 감지 빨간 창 비활성화 (오판 잦음 — 인터넷 지연에도 떴음)
+      //   저장 타임아웃 래퍼(__withWriteTimeout)는 그대로 유지 → "처리 중" 무한 멈춤은 계속 방어.
+      //   함수 정의(detectFirestoreBlock/showFirestoreBlockNotice)는 남겨두되 호출만 끔.
+      // detectFirestoreBlock();
       // v2.34: 스탬프 마스터 시드(없을 시) + 실시간 구독 시작
       seedStampMastersIfNeeded().then(() => subscribeStampMasters());
       resetForm();
@@ -9584,13 +9586,28 @@ function validateBlendSum(blends, label) {
     if (!wo) throw new Error('의뢰서를 찾을 수 없음');
     const colors = JSON.parse(JSON.stringify(wo.colors || []));
     if (!colors[colorIdx]) throw new Error('컬러 인덱스 오류');
-    delete colors[colorIdx].qc_status;
-    delete colors[colorIdx].qc_pending_at;
-    await updateDoc(doc(db, 'workorders', woId), {
+    const c = colors[colorIdx];
+    // QC 대기 표식 제거 → 진행 중으로 복귀
+    delete c.qc_status;
+    delete c.qc_pending_at;
+    // v2.53 hotfix10: 복귀인데 컬러가 [완료]로 닫혀 있으면 같이 풀어줘야 진행 중으로 돌아옴
+    //   (기존 버그: qc_status만 지우고 completed=true가 남아 화면이 QC 대기/완료에 머묾)
+    c.completed = false;
+    delete c.completed_at;
+    const updates = {
       colors,
       updated_at: serverTimestamp(),
       updated_by: state.user.email
-    });
+    };
+    // 의뢰서 전체가 완료로 닫혀 있었으면 같이 해제 (입고 취소 함수와 동일 패턴)
+    if (wo.completed) {
+      updates.completed = false;
+      updates.completed_at = null;
+    }
+    await updateDoc(doc(db, 'workorders', woId), updates);
+    // v2.53 hotfix10: 로컬 state 즉시 반영 (onSnapshot 도착 전에도 화면 바로 갱신)
+    wo.colors = colors;
+    if (updates.completed === false) { wo.completed = false; wo.completed_at = null; }
   }
   
   // v2.53 hotfix6: 특정 차수(receipt)를 입고 기록에서 완전 삭제
@@ -16817,6 +16834,7 @@ function validateBlendSum(blends, label) {
           await unsetColorQcPending(woId, colorIdx);
           toast(`"${cName}" 진행 중으로 복귀됨`, 'success');
           modal.classList.remove('show');
+          renderDashboard();  // v2.53 hotfix10: 즉시 화면 갱신 (입고 취소 핸들러와 동일 — 누락분 보강)
         } catch (e) {
           revertBtn.disabled = false;
           revertBtn.textContent = '진행 중으로 복귀';
@@ -17728,7 +17746,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix9';
+  const VERSION = 'v2.53 hotfix10';
   // title (브라우저 탭)
   document.title = 'RECOVERIC HIWOS ' + VERSION;
   // 사이드바 버전 태그
