@@ -8663,10 +8663,11 @@ function validateBlendSum(blends, label) {
         const existing = state.allWorkOrders.find(w => w.id === state.currentWorkOrderId);
         const payload = existing ? buildEditPayload(d, existing) : d;
         // v2.53 hotfix13: 염색가공 의뢰서는 저장 시 자동 완료 판정.
-        //   모든 컬러가 닫혔으면(정상완료/재염/땡처리로 c.completed===true) 의뢰서 [완료],
+        //   v2.53 hotfix14: "닫힘" 기준을 isColorClosed로 변경 — 정상완료뿐 아니라
+        //   재염 이관/땡처리로 닫힌 컬러(completed 플래그 빠져 있어도)도 닫힘으로 인정.
         //   하나라도 진행 중이면 [진행 중]으로 자동 정리. (재염/땡처리로 닫힌 002 같은 케이스 [저장] 한 번에 정리)
         if (existing && existing.type === '염색가공' && Array.isArray(payload.colors) && payload.colors.length > 0) {
-          const allDone = payload.colors.every(cc => cc.completed === true);
+          const allDone = payload.colors.every(cc => isColorClosed(cc));
           if (allDone) {
             payload.completed = true;
             if (!existing.completed) payload.completed_at = serverTimestamp();
@@ -9925,6 +9926,16 @@ function validateBlendSum(blends, label) {
     return false;
   }
 
+  // v2.53 hotfix14: 컬러가 "닫혔는지"(더 진행할 일이 없는지) 판정 — 의뢰서 자동 완료 판정용.
+  //   닫힘 = ① 정상 완료(completed===true)  OR  ② 재염 이관됨  OR  ③ 땡처리됨
+  //   ②③은 completed 플래그가 (저장 차단 등으로) 빠져 있어도 "닫힌 것"으로 인정.
+  //   → 002처럼 재염은 갔는데 completed=false로 남은 데이터도 [저장] 한 번에 자동 완료됨.
+  function isColorClosed(c) {
+    if (!c) return false;
+    if (c.completed === true) return true;
+    return isShortageResolvedByTransfer(c);
+  }
+
   // 부족분 활성 상태 (후속 처리 필요)
   function isShortageActive(c) {
     if (!c) return false;
@@ -10525,7 +10536,7 @@ function validateBlendSum(blends, label) {
       delete c.completed_at;
     }
 
-    const allDone = colors.every(cc => cc.completed === true);
+    const allDone = colors.every(cc => isColorClosed(cc)); // v2.53 hotfix14: 닫힘 기준 통일
     const updates = {
       colors,
       updated_at: serverTimestamp(),
@@ -11425,8 +11436,8 @@ function validateBlendSum(blends, label) {
 
     // v2.53 hotfix12: 재염 이관으로 이 컬러가 닫힌 뒤,
     //   다른 컬러까지 전부 닫혔으면 의뢰서를 자동 [완료]로 넘김 (땡처리 setColorQcDiscard와 동일 방식).
-    //   "닫힘" = c.completed === true (재염은 위에서 oc.completed=true 달았으므로 포함됨)
-    const allDone = colors.every(cc => cc.completed === true);
+    //   v2.53 hotfix14: "닫힘" 기준 isColorClosed로 통일 (정상완료/재염/땡처리 모두 닫힘 인정)
+    const allDone = colors.every(cc => isColorClosed(cc));
 
     const updates = {
       colors,
@@ -17788,7 +17799,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix13';
+  const VERSION = 'v2.53 hotfix14';
   // title (브라우저 탭)
   document.title = 'RECOVERIC HIWOS ' + VERSION;
   // 사이드바 버전 태그
