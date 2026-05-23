@@ -5408,8 +5408,10 @@ function __withWriteTimeout(fn) {
         const err = new Error('저장 응답이 없습니다. 데이터 저장소 연결이 차단되었거나 인터넷이 불안정합니다. 광고 차단 프로그램을 꺼주세요.');
         err.__hiwosWriteTimeout = true;
         reject(err);
-        // 차단 안내창 자동 표시 (함수가 로드돼 있으면)
-        try { if (typeof window.__showFsBlockNotice === 'function') window.__showFsBlockNotice(); } catch (_) {}
+        // v2.53 hotfix11: 빨간 차단 안내창 호출 제거 (오판 잦아 박 대표 지시로 완전 비활성화).
+        //   타임아웃 에러(reject)는 그대로 유지 → "처리 중..." 무한 멈춤 방지는 계속 작동.
+        //   toast로 가볍게만 알림 (화면 가리는 모달 X). 다른 스크립트 블록이라 window.toast로 접근.
+        try { if (typeof window.toast === 'function') window.toast('저장 응답 지연 — 인터넷/연결을 확인하고 다시 시도해 주세요.', 'error'); } catch (_) {}
       }, TIMEOUT_MS)
     );
     return Promise.race([p, timeout]);
@@ -5675,6 +5677,8 @@ function toast(msg, type='') {
   el.className = 'toast show ' + type;
   setTimeout(() => el.className = 'toast', 2500);
 }
+// v2.53 hotfix11: toast를 전역 노출 — Firebase 모듈 블록(타임아웃 래퍼)에서 window.toast로 호출
+try { window.toast = toast; } catch (_) {}
 
 function escapeHtml(s) {
   if (s == null) return '';
@@ -8212,7 +8216,8 @@ window.addEventListener('firebase-ready', () => {
         msg.includes('blocked') ||
         (e && e.code === 'unavailable');
       if (looksBlocked) {
-        showFirestoreBlockNotice();
+        // v2.53 hotfix11: 빨간 창 완전 비활성화 (박 대표 지시). 함수가 되살아나도 안 뜨게 호출 차단.
+        // showFirestoreBlockNotice();
       }
       // 그 외 에러는 무시 (정상 권한 흐름에서 발생 가능)
     }
@@ -17746,7 +17751,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix10';
+  const VERSION = 'v2.53 hotfix11';
   // title (브라우저 탭)
   document.title = 'RECOVERIC HIWOS ' + VERSION;
   // 사이드바 버전 태그
