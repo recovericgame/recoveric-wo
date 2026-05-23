@@ -8611,6 +8611,104 @@ window.addEventListener('firebase-ready', () => {
   
   // 외부에 노출 (잠금 모드 등에서 활용 가능)
   window.__hiwosGenerateYarnLotNo = generateYarnLotNo;
+
+  // ==================== v2.53 hotfix18: 손상 데이터 진단/정리 콘솔 헬퍼 ====================
+  // 박 대표 콘솔 전용. 모듈 IIFE 안쪽이라 state / db / 헬퍼 전부 접근 가능.
+  //   __hiwosDiag('FN-20260523-004')  → 읽기 전용. 컬러별 실제 저장 상태를 보여줌(데이터 안 건드림).
+  //   __hiwosFixRedyeKeep('FN-20260523-004', colorIdx)
+  //                                   → 그 컬러에서 땡처리(discard) 흔적만 제거하고 재염은 유지.
+  //                                     (재염 살리고 땡처리 제거 — 004 test 컬러 정리용)
+  //   둘 다 깊은복사 + window.firebase(타임아웃 래퍼) 경유 + PROTECTED 패턴 보존.
+
+  // 읽기 전용 진단 — 데이터 한 글자도 안 바꿈
+  window.__hiwosDiag = function(woNumber) {
+    const wo = state.allWorkOrders.find(w => w.wo_number === woNumber);
+    if (!wo) { console.warn('[진단] 의뢰서를 못 찾음:', woNumber, '— 화면에 해당 의뢰서가 떠 있는지 확인'); return; }
+    console.log('%c[진단] ' + woNumber, 'color:#fff;background:#1a73e8;font-weight:700;padding:2px 8px;border-radius:3px;');
+    console.log('  docId:', wo.id, '| type:', wo.type, '| wo.completed:', wo.completed);
+    (wo.colors || []).forEach((c, i) => {
+      const recSummary = Array.isArray(c.receipts)
+        ? c.receipts.map(r => `${r.receipt_no}차:${r.received_body||0}/${r.received_rib||0}(${r.qc_status||'none'})`).join(', ')
+        : '(receipts 없음)';
+      console.log(`  [컬러${i}] ${c.name}`);
+      console.log(`     의뢰 body/rib: ${c.body}/${c.rib} | 누적입고: ${c.received_body}/${c.received_rib}`);
+      console.log(`     컬러 qc_status: ${c.qc_status} | completed: ${c.completed}`);
+      console.log(`     재염: redye_to=${c.redye_transferred_to||'(없음)'} redye_body/rib=${c.redye_body||0}/${c.redye_rib||0}`);
+      console.log(`     땡처리흔적: discard_at=${c.discard_at||'(없음)'} claim=${c.claim ? JSON.stringify(c.claim) : '(없음)'}`);
+      console.log(`     receipts: ${recSummary}`);
+      console.log(`     >> 판정: getColorQcStatus='${getColorQcStatus(wo, i)}' isColorClosed=${isColorClosed(c)} 미처리부족body/rib=${getUnresolvedShortageBody(c)}/${getUnresolvedShortageRib(c)}`);
+    });
+    console.log('  ※ 정리하려면: __hiwosFixRedyeKeep(\'' + woNumber + '\', 컬러번호) 를 호출하세요. (재염 유지 + 땡처리 제거)');
+    return '진단 완료 (데이터 변경 없음)';
+  };
+
+  // 정리 — 지정 컬러에서 땡처리(discard) 흔적만 제거하고 재염은 유지
+  //   제거: 컬러 c.qc_status==='discard'면 삭제 + discard_at/by + claim + qc.judgment(defect)
+  //         + receipts 안 qc_status==='discard' 차수의 discard 흔적
+  //   유지: redye_transferred_to / redye_body/rib / redye_origin / received_* / 입고 차수 자체
+  //   완료재판정: isColorClosed 기준으로 c.completed, wo.completed 재계산 (덮어쓰기 X, 깊은복사 머지)
+  window.__hiwosFixRedyeKeep = async function(woNumber, colorIdx) {
+    const fb = window.firebase;
+    const wo = state.allWorkOrders.find(w => w.wo_number === woNumber);
+    if (!wo) { console.warn('[정리] 의뢰서를 못 찾음:', woNumber); return; }
+    if (colorIdx === undefined || colorIdx === null) { console.warn('[정리] 컬러 번호를 지정하세요. 예: __hiwosFixRedyeKeep(\'' + woNumber + '\', 1)'); return; }
+    const colors = JSON.parse(JSON.stringify(wo.colors || []));
+    const c = colors[colorIdx];
+    if (!c) { console.warn('[정리] 컬러 인덱스 오류:', colorIdx); return; }
+
+    console.log('%c[정리 전] ' + woNumber + ' 컬러' + colorIdx + ' (' + c.name + ')', 'color:#fff;background:#d93025;padding:2px 8px;border-radius:3px;');
+    console.log('  변경 전 qc_status:', c.qc_status, '| 재염 redye_to:', c.redye_transferred_to, '| redye_body/rib:', c.redye_body, '/', c.redye_rib);
+
+    if (!c.redye_transferred_to) {
+      console.warn('[정리 중단] 이 컬러엔 재염 흔적이 없습니다. 재염을 살릴 대상이 아닙니다. 먼저 __hiwosDiag로 확인하세요.');
+      return;
+    }
+
+    // 1) 컬러 레벨 땡처리 흔적 제거 (재염 필드는 손대지 않음)
+    if (c.qc_status === 'discard') delete c.qc_status;
+    delete c.discard_at;
+    delete c.discard_by;
+    delete c.claim;
+    if (c.qc && c.qc.judgment === 'defect') delete c.qc.judgment;
+
+    // 2) receipts 안 discard 차수의 땡처리 흔적 제거 (입고 수량/차수는 보존)
+    if (Array.isArray(c.receipts)) {
+      c.receipts.forEach(r => {
+        if (r.qc_status === 'discard') {
+          r.qc_status = 'pending';      // 다시 QC 대기로 (입고 수량은 그대로)
+          delete r.discard_at;
+          delete r.discard_by;
+          delete r.claim;
+          if (r.qc && r.qc.judgment === 'defect') delete r.qc.judgment;
+        }
+      });
+    }
+
+    // 3) 완료 재판정 (isColorClosed 단일 기준 — hotfix17/14 통일 로직)
+    if (isColorClosed(c)) {
+      c.completed = true;
+      c.completed_at = c.completed_at || new Date().toISOString();
+    } else {
+      c.completed = false;
+      delete c.completed_at;
+    }
+
+    const allDone = colors.every(cc => isColorClosed(cc));
+    const updates = { colors, updated_at: fb.serverTimestamp(), updated_by: (state.user && state.user.email) || 'console-fix' };
+    if (allDone) {
+      updates.completed = true;
+      updates.completed_at = fb.serverTimestamp();
+    } else if (wo.completed) {
+      updates.completed = false;
+      updates.completed_at = null;
+    }
+
+    await fb.updateDoc(fb.doc(fb.db, 'workorders', wo.id), updates);
+    console.log('%c[정리 완료] 땡처리 제거 + 재염 유지', 'color:#fff;background:#188038;padding:2px 8px;border-radius:3px;');
+    console.log('  변경 후 컬러 판정:', getColorQcStatus(wo, colorIdx), '(곧 실시간 반영). 화면 새로고침 후 __hiwosDiag로 재확인 권장.');
+    return '정리 완료';
+  };
+  // ==================== hotfix18 진단/정리 헬퍼 끝 ====================
   
 // ===== 혼용율 100% 검증 =====
 // 입력값이 하나라도 있으면 합계가 정확히 100이어야 함. 전부 비어있으면 통과.
@@ -10510,6 +10608,11 @@ function validateBlendSum(blends, label) {
     if (!colors[colorIdx]) throw new Error('컬러 인덱스 오류');
     const c = colors[colorIdx];
     const now = new Date().toISOString();
+
+    // v2.53 hotfix18: 한 컬러 = 한 처리 — 재염 이관된 컬러엔 땡처리 금지 (이중 방어)
+    if (c.redye_transferred_to) {
+      throw new Error(`이미 재염 이관(${c.redye_transferred_to})된 컬러입니다. 재염과 땡처리는 함께 적용할 수 없습니다.`);
+    }
     
     migrateColorReceipts(c);
     
@@ -11264,6 +11367,12 @@ function validateBlendSum(blends, label) {
     const lack_body = getShortageBody(c);
     const lack_rib = getShortageRib(c);
 
+    // v2.53 hotfix18: 한 컬러 = 한 처리 — 이미 땡처리된 컬러는 재염 불가 (재염+땡처리 혼합 차단)
+    if (c.qc_status === 'discard' || (Array.isArray(c.receipts) && c.receipts.some(r => r.qc_status === 'discard'))) {
+      toast(`"${cName}"는 이미 땡처리된 컬러입니다. 한 컬러는 재염과 땡처리 중 하나만 처리할 수 있습니다. 재염하려면 먼저 땡처리를 되돌리세요.`, 'error');
+      return;
+    }
+
     // 이미 재염 이관된 컬러는 중복 처리 방지
     if (c.redye_transferred_to) {
       if (!confirm(`"${cName}"는 이미 재염 이관(${c.redye_transferred_to})된 컬러입니다.\n그래도 한 번 더 재염하시겠습니까?`)) return;
@@ -11396,6 +11505,11 @@ function validateBlendSum(blends, label) {
     if (wo.type !== '염색가공') throw new Error('염색가공 의뢰서만 재염할 수 있습니다');
     const origColor = (wo.colors || [])[colorIdx];
     if (!origColor) throw new Error('컬러 인덱스 오류');
+
+    // v2.53 hotfix18: 한 컬러 = 한 처리 — 땡처리된 컬러엔 재염 금지 (이중 방어)
+    if (origColor.qc_status === 'discard' || (Array.isArray(origColor.receipts) && origColor.receipts.some(r => r.qc_status === 'discard'))) {
+      throw new Error('이미 땡처리된 컬러입니다. 재염과 땡처리는 함께 적용할 수 없습니다.');
+    }
 
     const redye_body = num(opts.redye_body) || 0;
     const redye_rib = num(opts.redye_rib) || 0;
@@ -11665,6 +11779,13 @@ function validateBlendSum(blends, label) {
     if (!wo) { toast('의뢰서를 찾을 수 없음', 'error'); return; }
     const c = (wo.colors || [])[colorIdx];
     if (!c) { toast('컬러 인덱스 오류', 'error'); return; }
+
+    // v2.53 hotfix18: 한 컬러 = 한 처리 — 이미 재염 이관된 컬러는 땡처리 불가 (재염+땡처리 혼합 차단)
+    if (c.redye_transferred_to) {
+      const cName = c.name || `컬러 #${colorIdx + 1}`;
+      toast(`"${cName}"는 이미 재염 이관(${c.redye_transferred_to})된 컬러입니다. 한 컬러는 재염과 땡처리 중 하나만 처리할 수 있습니다.`, 'error');
+      return;
+    }
     
     const ctx = pickClaimContext(wo, colorIdx);
     const prevClaim = c.claim || {};
@@ -17887,7 +18008,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix17';
+  const VERSION = 'v2.53 hotfix18';
   // title (브라우저 탭)
   document.title = 'RECOVERIC HIWOS ' + VERSION;
   // 사이드바 버전 태그
