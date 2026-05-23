@@ -8662,6 +8662,19 @@ function validateBlendSum(blends, label) {
         // v2.51 hotfix9: 수정 저장 시 메모/긴급/컬러 라이프사이클 보호
         const existing = state.allWorkOrders.find(w => w.id === state.currentWorkOrderId);
         const payload = existing ? buildEditPayload(d, existing) : d;
+        // v2.53 hotfix13: 염색가공 의뢰서는 저장 시 자동 완료 판정.
+        //   모든 컬러가 닫혔으면(정상완료/재염/땡처리로 c.completed===true) 의뢰서 [완료],
+        //   하나라도 진행 중이면 [진행 중]으로 자동 정리. (재염/땡처리로 닫힌 002 같은 케이스 [저장] 한 번에 정리)
+        if (existing && existing.type === '염색가공' && Array.isArray(payload.colors) && payload.colors.length > 0) {
+          const allDone = payload.colors.every(cc => cc.completed === true);
+          if (allDone) {
+            payload.completed = true;
+            if (!existing.completed) payload.completed_at = serverTimestamp();
+          } else {
+            payload.completed = false;
+            payload.completed_at = null;
+          }
+        }
         await updateDoc(doc(db, 'workorders', state.currentWorkOrderId), {
           ...payload, updated_at: serverTimestamp(), updated_by: state.user.email
         });
@@ -17775,7 +17788,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix12';
+  const VERSION = 'v2.53 hotfix13';
   // title (브라우저 탭)
   document.title = 'RECOVERIC HIWOS ' + VERSION;
   // 사이드바 버전 태그
