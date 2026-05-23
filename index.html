@@ -9610,14 +9610,28 @@ function validateBlendSum(blends, label) {
   
   // QC 검수 데이터 부분 저장 (모달 [저장] 버튼) — 상태 변경 없음
   // v2.51: 더블/판정/사유/불량메모 함께 저장
-  async function saveQcData(woId, colorIdx, qcData) {
+  // v2.53 hotfix19: [저장만]/[재작업]/[땡처리]/[복귀]에서 호출하는 부분 QC 저장.
+  //   ★버그 수정: 기존엔 QC를 컬러 단위 c.qc 한 칸에만 저장해서
+  //     (1) 차수별로 표시하는 화면과 어긋나 "저장이 안 된 것처럼" 보이고
+  //     (2) 2차/3차 저장 시 같은 칸을 덮어써 앞 차수 QC가 사라졌다.
+  //   ★수정: setColorQcDone과 동일하게 receiptNo를 받아 해당 차수 receipt.qc에 저장.
+  //     상태(qc_status)는 [저장만]이므로 절대 바꾸지 않는다(내용만 갱신).
+  async function saveQcData(woId, colorIdx, qcData, receiptNo) {
     const wo = state.allWorkOrders.find(w => w.id === woId);
     if (!wo) throw new Error('의뢰서를 찾을 수 없음');
     const colors = JSON.parse(JSON.stringify(wo.colors || []));
     if (!colors[colorIdx]) throw new Error('컬러 인덱스 오류');
-    // QC 객체 통째로 갱신 (입력된 값만, 빈값은 null)
-    const prevQc = colors[colorIdx].qc || {};
-    colors[colorIdx].qc = {
+    const c = colors[colorIdx];
+    migrateColorReceipts(c);
+
+    // 저장 대상 차수(receipt) 결정 — setColorQcDone과 동일 규칙
+    let targetIdx = -1;
+    if (receiptNo !== undefined && receiptNo !== null) {
+      targetIdx = c.receipts.findIndex(r => r.receipt_no === receiptNo);
+    }
+    if (targetIdx < 0) targetIdx = getActiveReceiptIndex(c); // 차수 미지정 시 활성 차수
+
+    const buildQc = (prevQc) => ({
       width_inch: qcData.width_inch === '' ? null : (parseFloat(qcData.width_inch) || null),
       width_double: !!qcData.width_double,
       weight_g_per_y: qcData.weight_g_per_y === '' ? null : (parseFloat(qcData.weight_g_per_y) || null),
@@ -9625,11 +9639,23 @@ function validateBlendSum(blends, label) {
       shrink_width_pct: qcData.shrink_width_pct === '' ? null : (parseFloat(qcData.shrink_width_pct) || null),
       shrink_length_pct: qcData.shrink_length_pct === '' ? null : (parseFloat(qcData.shrink_length_pct) || null),
       notes: qcData.notes || '',
-      judgment: qcData.judgment || prevQc.judgment || 'normal',  // 'normal' | 'defect'
-      defect_flags: qcData.defect_flags || prevQc.defect_flags || makeEmptyDefectFlags(),
-      defect_meta: qcData.defect_meta !== undefined ? qcData.defect_meta : (prevQc.defect_meta || {}),
-      defect_memo: qcData.defect_memo !== undefined ? qcData.defect_memo : (prevQc.defect_memo || '')
-    };
+      judgment: qcData.judgment || (prevQc && prevQc.judgment) || 'normal',  // 'normal' | 'defect'
+      defect_flags: qcData.defect_flags || (prevQc && prevQc.defect_flags) || makeEmptyDefectFlags(),
+      defect_meta: qcData.defect_meta !== undefined ? qcData.defect_meta : ((prevQc && prevQc.defect_meta) || {}),
+      defect_memo: qcData.defect_memo !== undefined ? qcData.defect_memo : ((prevQc && prevQc.defect_memo) || '')
+    });
+
+    if (targetIdx >= 0 && c.receipts[targetIdx]) {
+      // 차수별 칸에 저장 (정상 경로)
+      const r = c.receipts[targetIdx];
+      r.qc = buildQc(r.qc || {});
+      // 의뢰서 단위(c.qc)도 활성 차수 기준으로 동기화 (검색/필터 호환용 — 상태는 그대로)
+      c.qc = r.qc;
+    } else {
+      // 차수가 하나도 없는 경우(역호환) — 기존처럼 컬러 단위에 저장
+      c.qc = buildQc(c.qc || {});
+    }
+
     await updateDoc(doc(db, 'workorders', woId), {
       colors,
       updated_at: serverTimestamp(),
@@ -16443,6 +16469,15 @@ function validateBlendSum(blends, label) {
       if (activeReceipt) {
         // 표시용 c 객체에 receipt의 QC 데이터 주입
         c.qc = activeReceipt.qc || {};
+        // v2.53 hotfix19: 옛 데이터 안전망 — 이 차수 칸이 비었는데(과거 [저장만]이
+        //   컬러 단위 cOrig.qc에만 저장한 경우) 활성(미완료) 차수면 컬러 칸 값을 표시용으로 끌어옴.
+        //   (완료된 차수에는 섞지 않는다 — 활성 차수일 때만)
+        const _activeStatus = activeReceipt.qc_status || 'none';
+        const _qcEmpty = !c.qc || Object.keys(c.qc).length === 0;
+        if (_qcEmpty && (_activeStatus === 'none' || _activeStatus === 'pending' || _activeStatus === 'defect')
+            && cOrig.qc && Object.keys(cOrig.qc).length > 0) {
+          c.qc = JSON.parse(JSON.stringify(cOrig.qc));
+        }
         c.qc_status = activeReceipt.qc_status || 'none';
         c.qc_done_at = activeReceipt.qc_done_at;
         c.qc_done_by = activeReceipt.qc_done_by;
@@ -16894,7 +16929,7 @@ function validateBlendSum(blends, label) {
     document.getElementById('qc-save').addEventListener('click', async () => {
       try {
         const data = collect();
-        await saveQcData(woId, colorIdx, data);
+        await saveQcData(woId, colorIdx, data, window.__qcModalReceiptNo);
         toast('QC 데이터 저장됨 (상태는 그대로)', 'success');
         modal.classList.remove('show');
       } catch (e) {
@@ -17015,7 +17050,7 @@ function validateBlendSum(blends, label) {
         try {
           // 모달의 현재 입력값(불량 메모 포함) 먼저 저장
           const currentInput = collect();
-          await saveQcData(woId, colorIdx, currentInput);
+          await saveQcData(woId, colorIdx, currentInput, window.__qcModalReceiptNo);
           await setColorQcReWork(woId, colorIdx, window.__qcModalReceiptNo);
           toast(`↻ "${cName}" 재작업 요청 (${nextRework}회) — 진행 중으로 복귀`, 'success');
           modal.classList.remove('show');
@@ -17051,7 +17086,7 @@ function validateBlendSum(blends, label) {
         // 현재 입력값을 먼저 저장 (불량 메모 포함)
         try {
           const currentInput = collect();
-          await saveQcData(woId, colorIdx, currentInput);
+          await saveQcData(woId, colorIdx, currentInput, window.__qcModalReceiptNo);
         } catch (e) {
           toast('저장 실패: ' + e.message, 'error');
           return;
@@ -17092,7 +17127,7 @@ function validateBlendSum(blends, label) {
           revertBtn.disabled = true;
           revertBtn.textContent = '복귀 중...';
           const currentInput = collect();
-          await saveQcData(woId, colorIdx, currentInput);
+          await saveQcData(woId, colorIdx, currentInput, window.__qcModalReceiptNo);
           await unsetColorQcPending(woId, colorIdx);
           toast(`"${cName}" 진행 중으로 복귀됨`, 'success');
           modal.classList.remove('show');
@@ -18008,7 +18043,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix18';
+  const VERSION = 'v2.53 hotfix19';
   // title (브라우저 탭)
   document.title = 'RECOVERIC HIWOS ' + VERSION;
   // 사이드바 버전 태그
