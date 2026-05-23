@@ -5247,7 +5247,36 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 const provider = new GoogleAuthProvider();
 
-window.firebase = { auth, db, provider, signInWithPopup, signOut, onAuthStateChanged, collection, addDoc, updateDoc, deleteDoc, doc, getDoc, setDoc, query, orderBy, onSnapshot, serverTimestamp };
+// v2.53 hotfix7: Firestore 쓰기 타임아웃 래퍼
+// ------------------------------------------------------------
+// 광고 차단(ERR_BLOCKED_BY_CLIENT) 등으로 저장 요청이 응답 없이
+// 멈추면(hang) 버튼이 "처리 중..."에서 영영 정지하고 데이터도
+// 저장되지 않음. 모든 쓰기를 이 래퍼로 감싸 일정 시간 응답이
+// 없으면 에러를 던져 → 버튼이 풀리고 사용자가 재시도/조치 가능.
+// (window.firebase에서 한 번만 감싸면 내부 구조분해 사용처 전체에 적용)
+function __withWriteTimeout(fn) {
+  const TIMEOUT_MS = 15000; // 15초 (느린 공장 인터넷 감안, 차단은 즉시 hang)
+  return function (...args) {
+    const p = fn.apply(this, args);
+    if (!p || typeof p.then !== 'function') return p; // 비동기 아니면 그대로
+    const timeout = new Promise((_, reject) =>
+      setTimeout(() => {
+        const err = new Error('저장 응답이 없습니다. 데이터 저장소 연결이 차단되었거나 인터넷이 불안정합니다. 광고 차단 프로그램을 꺼주세요.');
+        err.__hiwosWriteTimeout = true;
+        reject(err);
+        // 차단 안내창 자동 표시 (함수가 로드돼 있으면)
+        try { if (typeof window.__showFsBlockNotice === 'function') window.__showFsBlockNotice(); } catch (_) {}
+      }, TIMEOUT_MS)
+    );
+    return Promise.race([p, timeout]);
+  };
+}
+const __wrappedAddDoc = __withWriteTimeout(addDoc);
+const __wrappedUpdateDoc = __withWriteTimeout(updateDoc);
+const __wrappedSetDoc = __withWriteTimeout(setDoc);
+const __wrappedDeleteDoc = __withWriteTimeout(deleteDoc);
+
+window.firebase = { auth, db, provider, signInWithPopup, signOut, onAuthStateChanged, collection, addDoc: __wrappedAddDoc, updateDoc: __wrappedUpdateDoc, deleteDoc: __wrappedDeleteDoc, doc, getDoc, setDoc: __wrappedSetDoc, query, orderBy, onSnapshot, serverTimestamp };
 window.dispatchEvent(new Event('firebase-ready'));
 </script>
 
@@ -7963,6 +7992,8 @@ window.addEventListener('firebase-ready', () => {
       document.getElementById('main-app').style.display = 'grid';
       renderUserInfo();
       loadWorkOrders();
+      // v2.53 hotfix7: 데이터 저장소 연결 차단(광고 차단 확장) 감지
+      detectFirestoreBlock();
       // v2.34: 스탬프 마스터 시드(없을 시) + 실시간 구독 시작
       seedStampMastersIfNeeded().then(() => subscribeStampMasters());
       resetForm();
@@ -7996,6 +8027,98 @@ window.addEventListener('firebase-ready', () => {
   function isAdminUser() {
     return state.user && state.user.email === ADMIN_EMAIL;
   }
+
+  // ============================================================
+  // v2.53 hotfix7: 데이터 저장소(Firestore) 연결 차단 감지
+  // ------------------------------------------------------------
+  // 광고 차단 확장(uBlock 등)이 firestore.googleapis.com 통신을
+  // ERR_BLOCKED_BY_CLIENT 로 막으면, 저장 요청이 응답 없이 멈춰
+  // 화면이 "처리 중..."에서 정지하고 데이터가 저장되지 않음.
+  // → 로그인 직후 가벼운 읽기 요청 + 타임아웃 경쟁으로 막힘을 감지.
+  //   막힌 것으로 보이면 빨간 안내창을 띄워 직원이 즉시 조치하도록 함.
+  // (네트워크가 느린 경우 오판 가능 → 문구를 "차단 또는 연결 불안정"으로 부드럽게)
+  // ============================================================
+  let __fsBlockNoticeShown = false;  // 세션당 1회만 안내
+
+  async function detectFirestoreBlock() {
+    if (__fsBlockNoticeShown) return;
+    const PROBE_TIMEOUT_MS = 10000;  // 10초 (느린 공장 인터넷 감안)
+    try {
+      // 이미 존재하는 settings 문서를 가볍게 읽어 연결 확인
+      const probe = getDoc(doc(db, 'settings', 'stamps_common'));
+      const timeout = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('__FS_PROBE_TIMEOUT__')), PROBE_TIMEOUT_MS)
+      );
+      await Promise.race([probe, timeout]);
+      // 정상 응답 — 연결 OK, 아무것도 안 함
+    } catch (e) {
+      const msg = (e && e.message) || '';
+      // 타임아웃 = 응답 자체가 안 옴 → 차단 또는 연결 불안정 의심
+      // (permission-denied 등 Firestore 정식 에러는 차단이 아니므로 제외)
+      const looksBlocked =
+        msg === '__FS_PROBE_TIMEOUT__' ||
+        msg.includes('ERR_BLOCKED') ||
+        msg.includes('blocked') ||
+        (e && e.code === 'unavailable');
+      if (looksBlocked) {
+        showFirestoreBlockNotice();
+      }
+      // 그 외 에러는 무시 (정상 권한 흐름에서 발생 가능)
+    }
+  }
+
+  function showFirestoreBlockNotice() {
+    if (__fsBlockNoticeShown) return;
+    __fsBlockNoticeShown = true;
+
+    // 기존 안내창 있으면 제거
+    const old = document.getElementById('fs-block-notice');
+    if (old) old.remove();
+
+    const overlay = document.createElement('div');
+    overlay.id = 'fs-block-notice';
+    overlay.style.cssText =
+      'position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,0.55);' +
+      'display:flex;align-items:center;justify-content:center;padding:20px;';
+    overlay.innerHTML =
+      '<div style="background:#fff;max-width:520px;width:100%;border-radius:14px;' +
+      'border:3px solid #dc2626;box-shadow:0 20px 60px rgba(0,0,0,0.35);overflow:hidden;">' +
+        '<div style="background:#dc2626;color:#fff;padding:16px 22px;font-size:17px;font-weight:800;">' +
+          '\u26A0 데이터 저장소 연결이 차단되었습니다' +
+        '</div>' +
+        '<div style="padding:22px;color:#1f2937;font-size:14px;line-height:1.7;">' +
+          '<p style="margin:0 0 14px;">' +
+            '현재 브라우저에서 <b>데이터 저장소(Firebase) 연결이 막혀</b> 있습니다.<br>' +
+            '이 상태에서는 <b style="color:#dc2626;">입력·수정 내용이 저장되지 않고</b> 화면이 ' +
+            '"처리 중..."에서 멈출 수 있습니다.' +
+          '</p>' +
+          '<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:10px;padding:14px 16px;margin:0 0 16px;">' +
+            '<div style="font-weight:800;color:#991b1b;margin-bottom:8px;">조치 방법</div>' +
+            '<div style="color:#7f1d1d;">' +
+              '1. 주소창 오른쪽의 <b>광고 차단 확장 프로그램</b>(uBlock, AdBlock 등) 아이콘 클릭<br>' +
+              '2. <b>"이 사이트에서 사용 안 함"</b> 선택<br>' +
+              '3. 화면 새로고침 (F5)' +
+            '</div>' +
+          '</div>' +
+          '<p style="margin:0 0 18px;color:#6b7280;font-size:13px;">' +
+            '※ 인터넷이 일시적으로 느린 경우에도 이 안내가 나타날 수 있습니다. ' +
+            '광고 차단 프로그램이 없다면 새로고침 후 다시 시도해 주세요.' +
+          '</p>' +
+          '<div style="display:flex;gap:10px;justify-content:flex-end;">' +
+            '<button id="fs-block-reload" style="padding:10px 20px;border:none;border-radius:8px;' +
+              'background:#dc2626;color:#fff;font-weight:700;font-size:14px;cursor:pointer;">새로고침</button>' +
+            '<button id="fs-block-close" style="padding:10px 20px;border:1px solid #d1d5db;border-radius:8px;' +
+              'background:#fff;color:#374151;font-weight:700;font-size:14px;cursor:pointer;">닫기</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(overlay);
+
+    document.getElementById('fs-block-reload').addEventListener('click', () => location.reload());
+    document.getElementById('fs-block-close').addEventListener('click', () => overlay.remove());
+  }
+  // 쓰기 타임아웃 래퍼(전역 스코프)에서 호출할 수 있도록 노출
+  window.__showFsBlockNotice = showFirestoreBlockNotice;
 
   // ============================================================
   // v2.34: 스탬프 마스터 (Firestore settings 컬렉션)
@@ -12630,7 +12753,10 @@ function validateBlendSum(blends, label) {
       
       // ★ 컬러 단위 셀 (매 행)
       const colorCell = `<td>${escapeHtml(colorName)}</td>`;
-      const sizeCell = `<td class="col-num">${escapeHtml(sizeText)}</td>`;
+      // v2.53 hotfix7: sizeText는 부족분 시 이미 HTML(size-shortage div)로 만들어지므로
+      //   escapeHtml로 감싸면 코드가 글자 그대로 노출됨 → escape 제거.
+      //   (순수 텍스트 경우는 body/rib 숫자뿐이라 escape 불필요·안전)
+      const sizeCell = `<td class="col-num">${sizeText}</td>`;
       
       // v2.48 hotfix2: 염색처/가공처/후가공처를 전체 대시보드처럼 한 컬럼에 통합 표시
       // (의뢰서 단위, rowspan 첫 행에만)
@@ -17182,7 +17308,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix6';
+  const VERSION = 'v2.53 hotfix7';
   // title (브라우저 탭)
   document.title = 'RECOVERIC HIWOS ' + VERSION;
   // 사이드바 버전 태그
