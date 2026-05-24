@@ -6750,7 +6750,9 @@ const PROTECTED_COLOR_FIELDS = [
   'redye_transferred_to', 'redye_transferred_at', 'redye_transferred_by',
   'redye_body', 'redye_rib',
   // v2.53 hotfix19: 처리 이력(재염/땡처리/종결 타임라인)
-  'redye_history', 'discard_history', 'shortage_settle_history'
+  'redye_history', 'discard_history', 'shortage_settle_history',
+  // v2.53 hotfix19: 부분 땡처리 누적량
+  'discard_body', 'discard_rib'
 ];
 
 // 컬러가 "보호 대상"인지 (완료됐거나 QC/땡처리 어떤 상태든 들어간 컬러)
@@ -10056,22 +10058,28 @@ function validateBlendSum(blends, label) {
     if (c.qc_status === 'discard') return true;          // 땡처리 (단일 필드)
     if (Array.isArray(c.receipts) && c.receipts.some(r => r.qc_status === 'discard')) return true; // 땡처리 (차수)
     if (c.redye_transferred_to && !hasUnresolvedShortage(c)) return true; // 재염으로 부족분 전부 해소
+    // v2.53 hotfix19: 재염/부분땡처리 조합으로 미처리 부족 0이면 해소
+    const hasProcessing = c.redye_transferred_to || (num(c.discard_body) || 0) > 0 || (num(c.discard_rib) || 0) > 0;
+    if (hasProcessing && !hasUnresolvedShortage(c)) return true;
     return false;
   }
 
   // v2.53 hotfix17: 재염으로 보낸 양(redye_body/rib)을 "처리된 수량"으로 인정해
   //   진짜 남은(미처리) 부족분을 계산. 재염은 부족분 전부가 아니라 일부만 보낼 수 있으므로
   //   "재염 갔다=닫힘"이 아니라 "입고+재염으로 의뢰량을 다 채웠나"로 판정해야 함.
-  //   미처리 부족 = 의뢰량 - 입고량 - 재염보낸양  (0 미만은 0)
+  //   v2.53 hotfix19: 땡처리분(discard_body/rib)도 "처리된 수량"으로 차감.
+  //   미처리 부족 = 의뢰량 - 입고량 - 재염보낸양 - 땡처리량  (0 미만은 0)
   function getUnresolvedShortageBody(c) {
     if (!c) return 0;
     const redye = num(c.redye_body) || 0;
-    return Math.max(0, (num(c.body) || 0) - getReceivedBody(c) - redye);
+    const discard = num(c.discard_body) || 0;
+    return Math.max(0, (num(c.body) || 0) - getReceivedBody(c) - redye - discard);
   }
   function getUnresolvedShortageRib(c) {
     if (!c) return 0;
     const redye = num(c.redye_rib) || 0;
-    return Math.max(0, (num(c.rib) || 0) - getReceivedRib(c) - redye);
+    const discard = num(c.discard_rib) || 0;
+    return Math.max(0, (num(c.rib) || 0) - getReceivedRib(c) - redye - discard);
   }
   // 재염/입고로도 아직 다 못 채운 부족분이 남아있는지
   function hasUnresolvedShortage(c) {
@@ -10093,6 +10101,9 @@ function validateBlendSum(blends, label) {
     if (Array.isArray(c.receipts) && c.receipts.some(r => r.qc_status === 'discard')) return true;
     // 재염 이관됐고, 입고+재염으로 의뢰량을 다 채웠으면 닫힘 (남은 부족분 없을 때만)
     if (c.redye_transferred_to && !hasUnresolvedShortage(c)) return true;
+    // v2.53 hotfix19: 재염/부분땡처리로 부족분 전부 정산(미처리 부족 0)되면 닫힘
+    const hasProcessing = c.redye_transferred_to || (num(c.discard_body) || 0) > 0 || (num(c.discard_rib) || 0) > 0;
+    if (hasProcessing && !hasUnresolvedShortage(c)) return true;
     return false;
   }
 
@@ -10713,6 +10724,70 @@ function validateBlendSum(blends, label) {
     return allDone;
   }
 
+  // v2.53 hotfix19: 부족분 부분 땡처리(종결) — 재염처럼 수량 기반.
+  //   부족분 중 일부를 "수율 부족/거래처 미입고분 종결"로 처리. discard_body/rib 누적 + 이력 기록.
+  //   재염과 공존 가능(부족분 안에서 쪼개 처리). 미처리 부족 0이면 컬러 완료.
+  async function partialDiscardShortage(woId, colorIdx, opts) {
+    const wo = state.allWorkOrders.find(w => w.id === woId);
+    if (!wo) throw new Error('의뢰서를 찾을 수 없음');
+    const colors = JSON.parse(JSON.stringify(wo.colors || []));
+    if (!colors[colorIdx]) throw new Error('컬러 인덱스 오류');
+    const c = colors[colorIdx];
+    const now = new Date().toISOString();
+    migrateColorReceipts(c);
+
+    const dBody = num(opts.discard_body) || 0;
+    const dRib = num(opts.discard_rib) || 0;
+    if (dBody <= 0 && dRib <= 0) throw new Error('땡처리할 수량을 입력하세요');
+
+    // 미처리 부족분 범위 검증 (재염/이전 땡처리 반영)
+    const maxBody = getUnresolvedShortageBody(c);
+    const maxRib = getUnresolvedShortageRib(c);
+    if (dBody > maxBody) throw new Error(`몸판 땡처리량이 남은 부족분(${maxBody}절)을 초과합니다`);
+    if (dRib > maxRib) throw new Error(`리프 땡처리량이 남은 부족분(${maxRib}절)을 초과합니다`);
+
+    // 땡처리량 누적
+    c.discard_body = (num(c.discard_body) || 0) + dBody;
+    c.discard_rib = (num(c.discard_rib) || 0) + dRib;
+
+    // 이력 기록
+    if (!Array.isArray(c.discard_history)) c.discard_history = [];
+    c.discard_history.push({
+      at: now,
+      by: state.user.email,
+      body: dBody,
+      rib: dRib,
+      memo: opts.memo || '',
+      claim: opts.claim || null
+    });
+
+    // 부족분 정산 상태 갱신
+    const stillShort = hasUnresolvedShortage(c);
+    let autoCompleted = false;
+    if (!stillShort) {
+      // 입고+재염+땡처리로 의뢰량 모두 정산 → 컬러 종결 (모든 차수 QC 완료 시)
+      c.shortage_status = 'closed';
+      c.shortage_resolved_at = now;
+      c.shortage_resolved_by = state.user.email;
+      if (areAllReceiptsResolved(c) && !c.completed) {
+        c.completed = true;
+        c.completed_at = c.completed_at || now;
+        if (c.urgent) { c.urgent = false; c.urgent_cleared_at = now; c.urgent_cleared_reason = 'auto_on_complete'; }
+        autoCompleted = true;
+      }
+    } else {
+      // 부족분 일부만 땡처리 — 진행 중 유지
+      if (!c.shortage_status || c.shortage_status === 'closed') c.shortage_status = 'expected';
+    }
+
+    const allDone = colors.every(cc => isColorClosed(cc));
+    const updates = { colors, updated_at: serverTimestamp(), updated_by: state.user.email };
+    if (allDone) { updates.completed = true; updates.completed_at = serverTimestamp(); }
+    else if (wo.completed) { updates.completed = false; updates.completed_at = null; }
+    await updateDoc(doc(db, 'workorders', woId), updates);
+    return { autoCompleted, all_done: allDone, remaining_body: getUnresolvedShortageBody(c), remaining_rib: getUnresolvedShortageRib(c) };
+  }
+
   // v2.51 hotfix8: 클레임 삭제 — 옵션 A: 청구만 취소
   // 컬러는 땡처리 완료 상태 유지, claim 데이터(거래처/사유/청구액)만 비움
   // 클레임 목록에서는 사라지지만, 의뢰서/대시보드의 ⚠ 땡처리 스탬프는 유지
@@ -11174,8 +11249,14 @@ function validateBlendSum(blends, label) {
     const ordered_rib = num(c.rib) || 0;
     const cur_rec_body = getReceivedBody(c);
     const cur_rec_rib = getReceivedRib(c);
-    const lack_body = getShortageBody(c);
-    const lack_rib = getShortageRib(c);
+    // v2.53 hotfix19: 잔여 부족분 = 의뢰 - 입고 - 재염 - 땡처리(미처리 부족분).
+    //   기존 getShortageBody는 재염/땡처리 미반영 → 재염 보내도 부족이 안 줄던 버그.
+    const redye_b = num(c.redye_body) || 0;
+    const redye_r = num(c.redye_rib) || 0;
+    const discard_b = num(c.discard_body) || 0;
+    const discard_r = num(c.discard_rib) || 0;
+    const lack_body = getUnresolvedShortageBody(c);
+    const lack_rib = getUnresolvedShortageRib(c);
     const cName = c.name || `컬러 #${colorIdx + 1}`;
     const woNo = wo.wo_number || '-';
     const item = wo.body?.item || '-';
@@ -11353,13 +11434,9 @@ function validateBlendSum(blends, label) {
       openRedyeModal(woId, colorIdx);
     });
 
-    // v2.53 hotfix8: [땡처리] — 기존 클레임 모달 연동
+    // v2.53 hotfix19: [땡처리] — 부족분 부분 땡처리(수량 기반 종결). 재염과 공존 가능.
     document.getElementById('sh-discard').addEventListener('click', () => {
-      if (typeof openDiscardModal === 'function') {
-        openDiscardModal(woId, colorIdx);
-      } else {
-        toast('땡처리 모달을 불러올 수 없습니다', 'error');
-      }
+      openPartialDiscardModal(woId, colorIdx);
     });
 
     document.getElementById('sh-add-confirm').addEventListener('click', async () => {
@@ -11567,6 +11644,108 @@ function validateBlendSum(blends, label) {
         cancelBtn.disabled = false;
         confirmBtn.textContent = '재염 의뢰서 만들기';
         alert('재염 처리 실패: ' + (err.message || err));
+      }
+    });
+  }
+
+  // v2.53 hotfix19: 부족분 부분 땡처리 모달 — 재염과 같은 패턴(수량 입력 → 종결 처리)
+  function openPartialDiscardModal(woId, colorIdx) {
+    const wo = state.allWorkOrders.find(w => w.id === woId);
+    if (!wo) { toast('의뢰서를 찾을 수 없음', 'error'); return; }
+    const c = (wo.colors || [])[colorIdx];
+    if (!c) { toast('컬러 인덱스 오류', 'error'); return; }
+
+    const cName = c.name || `컬러 #${colorIdx + 1}`;
+    const woNo = wo.wo_number || '-';
+    const item = wo.body?.item || '-';
+    const ordered_body = num(c.body) || 0;
+    const ordered_rib = num(c.rib) || 0;
+    const lack_body = getUnresolvedShortageBody(c);
+    const lack_rib = getUnresolvedShortageRib(c);
+
+    if (lack_body + lack_rib === 0) {
+      toast('땡처리할 남은 부족분이 없습니다', 'info');
+      return;
+    }
+
+    const modal = document.getElementById('dash-modal-bg');
+    if (!modal) { toast('모달 요소 없음', 'error'); return; }
+
+    document.getElementById('dash-modal-title').textContent = '⚠ 부족분 땡처리(종결)';
+    ['dash-modal-image', 'dash-modal-copy', 'dash-modal-print', 'dash-modal-kakao'].forEach(id => {
+      const b = document.getElementById(id);
+      if (b) b.style.display = 'none';
+    });
+
+    document.getElementById('dash-modal-body').innerHTML = `
+      <div class="redye-modal-container">
+        <div class="redye-modal-header" style="background:#fef2f2;border-color:#fca5a5;color:#7f1d1d;">
+          더 받을 수 없는 부족분을 <strong>땡처리(종결)</strong> 합니다.<br>
+          종결한 만큼 부족분에서 빠지고, 남은 부족분이 0이 되면 컬러가 완료됩니다.
+        </div>
+
+        <div class="redye-src-box">
+          의뢰서: <strong>${escapeHtml(woNo)}</strong> · ${escapeHtml(item)}<br>
+          컬러: <span class="redye-src-color">${escapeHtml(cName)}</span>
+          <span class="redye-src-ordered">(의뢰 몸판 ${ordered_body} / 리프 ${ordered_rib}절)</span>
+          <br><span class="redye-src-lack">남은 부족분: 몸판 ${lack_body} / 리프 ${lack_rib}절 → 아래에 자동 입력됨</span>
+        </div>
+
+        <table class="redye-qty-table">
+          <thead>
+            <tr><th>땡처리할 수량</th><th>몸판 (절)</th><th>리프 (절)</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="redye-label-cell">종결 처리</td>
+              <td><input type="number" id="pd-body" class="redye-input" min="0" max="${lack_body}" step="0.5" value="${lack_body > 0 ? lack_body : ''}" placeholder="0"></td>
+              <td><input type="number" id="pd-rib" class="redye-input" min="0" max="${lack_rib}" step="0.5" value="${lack_rib > 0 ? lack_rib : ''}" placeholder="0"></td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="redye-form-row">
+          <label class="redye-form-label">사유 / 메모<span class="redye-hint">(선택)</span></label>
+          <textarea id="pd-memo" class="shortage-textarea" placeholder="예: 수율 부족 — 영원히 안 옴 / 거래처 폐기 등"></textarea>
+        </div>
+
+        <div class="redye-modal-actions">
+          <button type="button" id="pd-cancel" class="shortage-btn-base shortage-btn-cancel">취소</button>
+          <button type="button" id="pd-confirm" class="shortage-btn-base shortage-btn-discard">⚠ 땡처리 종결</button>
+        </div>
+      </div>
+    `;
+    modal.classList.add('show');
+
+    document.getElementById('pd-cancel').addEventListener('click', () => modal.classList.remove('show'));
+
+    document.getElementById('pd-confirm').addEventListener('click', async () => {
+      const dBody = parseFloat(document.getElementById('pd-body').value) || 0;
+      const dRib = parseFloat(document.getElementById('pd-rib').value) || 0;
+      const memo = document.getElementById('pd-memo').value.trim();
+
+      if (dBody <= 0 && dRib <= 0) { alert('땡처리할 수량을 입력하세요 (몸판/리프 중 최소 1개)'); return; }
+      if (dBody > lack_body) { alert(`몸판 땡처리량은 남은 부족분(${lack_body}절)을 초과할 수 없습니다.`); return; }
+      if (dRib > lack_rib) { alert(`리프 땡처리량은 남은 부족분(${lack_rib}절)을 초과할 수 없습니다.`); return; }
+
+      const remain_after = (lack_body - dBody) + (lack_rib - dRib);
+      const cMsg = `"${cName}" 부족분 땡처리(종결):\n` +
+        `종결 수량: 몸판 ${dBody}절 / 리프 ${dRib}절\n\n` +
+        (remain_after === 0 ? '✓ 남은 부족분 모두 정산 → 컬러 종결' : `남은 부족분: 몸판 ${lack_body - dBody}절 / 리프 ${lack_rib - dRib}절`);
+      if (!confirm(cMsg)) return;
+
+      const confirmBtn = document.getElementById('pd-confirm');
+      const cancelBtn = document.getElementById('pd-cancel');
+      confirmBtn.disabled = true; cancelBtn.disabled = true; confirmBtn.textContent = '처리 중...';
+
+      try {
+        const result = await partialDiscardShortage(woId, colorIdx, { discard_body: dBody, discard_rib: dRib, memo });
+        modal.classList.remove('show');
+        toast(result.autoCompleted ? `"${cName}" 부족분 종결 — 컬러 완료` : `"${cName}" 땡처리 ${dBody + dRib}절 종결 (남은 부족 ${result.remaining_body}/${result.remaining_rib})`, 'success');
+      } catch (err) {
+        console.error('[partial-discard]', err);
+        confirmBtn.disabled = false; cancelBtn.disabled = false; confirmBtn.textContent = '⚠ 땡처리 종결';
+        alert('땡처리 실패: ' + (err.message || err));
       }
     });
   }
@@ -12966,6 +13145,9 @@ function validateBlendSum(blends, label) {
               const redyeB = num(c.redye_body) || 0;
               const redyeR = num(c.redye_rib) || 0;
               const hasRedye = (redyeB > 0 || redyeR > 0);
+              const discardB = num(c.discard_body) || 0;
+              const discardR = num(c.discard_rib) || 0;
+              const hasDiscard = (discardB > 0 || discardR > 0);
               const stLabel = shortageStatusLabel(c.shortage_status || '');
               const tooltip = (c.shortage_reason || '') + (stLabel ? ' [' + stLabel + ']' : '');
               // v2.53 hotfix12: 재염 이관/땡처리로 부족분이 처리된 컬러는 ⚠부족 빨간줄 제거 (입고 이력은 유지)
@@ -12974,6 +13156,7 @@ function validateBlendSum(blends, label) {
                 <div class="sz-row sz-ordered">${bodyV}/${ribV}</div>
                 <div class="sz-row sz-received">→ 입고 ${recBody}/${recRib}</div>
                 ${hasRedye ? `<div class="sz-row sz-redye" style="color:#d97706;font-size:11px;">🔄 재염 ${redyeB}/${redyeR}</div>` : ''}
+                ${hasDiscard ? `<div class="sz-row sz-discard" style="color:#b91c1c;font-size:11px;">⚠ 땡처리 ${discardB}/${discardR}</div>` : ''}
                 ${(resolved || (shBody <= 0 && shRib <= 0)) ? '' : `<div class="sz-row sz-lack">⚠ 부족 ${shBody}/${shRib}</div>`}
               </div>`;
             } else {
@@ -13466,6 +13649,9 @@ function validateBlendSum(blends, label) {
         const redyeB = num(c.redye_body) || 0;
         const redyeR = num(c.redye_rib) || 0;
         const hasRedye = (redyeB > 0 || redyeR > 0);
+        const discardB = num(c.discard_body) || 0;
+        const discardR = num(c.discard_rib) || 0;
+        const hasDiscard = (discardB > 0 || discardR > 0);
         const stLabel = shortageStatusLabel(c.shortage_status || '');
         const tooltip = (c.shortage_reason || '') + (stLabel ? ' [' + stLabel + ']' : '');
         // v2.53 hotfix12: 재염 이관/땡처리로 부족분이 처리된 컬러는 ⚠부족 빨간줄 제거 (입고 이력은 유지)
@@ -13474,6 +13660,7 @@ function validateBlendSum(blends, label) {
           <div class="sz-row sz-ordered">${bodyV}/${ribV}</div>
           <div class="sz-row sz-received">→ 입고 ${recBody}/${recRib}</div>
           ${hasRedye ? `<div class="sz-row sz-redye" style="color:#d97706;font-size:11px;">🔄 재염 ${redyeB}/${redyeR}</div>` : ''}
+          ${hasDiscard ? `<div class="sz-row sz-discard" style="color:#b91c1c;font-size:11px;">⚠ 땡처리 ${discardB}/${discardR}</div>` : ''}
           ${(resolved || (shBody <= 0 && shRib <= 0)) ? '' : `<div class="sz-row sz-lack">⚠ 부족 ${shBody}/${shRib}</div>`}
         </div>`;
       } else {
@@ -14616,6 +14803,9 @@ function validateBlendSum(blends, label) {
             const redyeB = num(c.redye_body) || 0;
             const redyeR = num(c.redye_rib) || 0;
             const hasRedye = (redyeB > 0 || redyeR > 0);
+            const discardB = num(c.discard_body) || 0;
+            const discardR = num(c.discard_rib) || 0;
+            const hasDiscard = (discardB > 0 || discardR > 0);
             const stLabel = shortageStatusLabel(c.shortage_status || '');
             const tooltip = (c.shortage_reason || '') + (stLabel ? ' [' + stLabel + ']' : '');
             const resolved = isShortageResolvedByTransfer(c);
@@ -14623,6 +14813,7 @@ function validateBlendSum(blends, label) {
               <div class="sz-row sz-ordered">${bodyV}/${ribV}</div>
               <div class="sz-row sz-received">→ 입고 ${recBody}/${recRib}</div>
               ${hasRedye ? `<div class="sz-row sz-redye" style="color:#d97706;font-size:11px;">🔄 재염 ${redyeB}/${redyeR}</div>` : ''}
+              ${hasDiscard ? `<div class="sz-row sz-discard" style="color:#b91c1c;font-size:11px;">⚠ 땡처리 ${discardB}/${discardR}</div>` : ''}
               ${(resolved || (shBody <= 0 && shRib <= 0)) ? '' : `<div class="sz-row sz-lack">⚠ 부족 ${shBody}/${shRib}</div>`}
             </div>`;
           } else {
