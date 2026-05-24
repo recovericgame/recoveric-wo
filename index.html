@@ -9464,7 +9464,13 @@ function validateBlendSum(blends, label) {
     // v2.53 hotfix8: 재염 이관된 컬러는 최우선으로 'redye' (다른 상태보다 우선)
     // v2.53 hotfix17: 단, 재염을 부족분 일부만 보낸 경우(미처리 부족 남음)는 아직 닫힌 게 아니므로
     //   'redye'로 보지 않고 아래 일반 판정(pending 등)을 타게 함 → [QC 대기]+[+입고] 노출.
-    if (c.redye_transferred_to && !hasUnresolvedShortage(c)) return 'redye';
+    // v2.53 hotfix19: 부족분이 0이어도 실제 입고 차수 QC가 안 끝났으면 'redye'로 닫지 않고
+    //   아래 일반 판정을 타게 함 → [N차 QC 대기] 버튼 노출, QC 완료해야 닫힘.
+    {
+      const _hasReceipts = Array.isArray(c.receipts) && c.receipts.length > 0;
+      const _allQcDone = !_hasReceipts || areAllReceiptsResolved(c);
+      if (c.redye_transferred_to && !hasUnresolvedShortage(c) && _allQcDone) return 'redye';
+    }
 
     // v2.53 hotfix19: 부분 땡처리(discard_body만 누적, 차수는 진행 중) — 미처리 부족이 남았으면
     //   컬러는 '진행 중'으로 본다(검정 row-discard 방지). 땡처리는 별개 건으로 클레임에서 관리.
@@ -10105,11 +10111,16 @@ function validateBlendSum(blends, label) {
     // 땡처리는 컬러 전체를 종결시키는 행위 → 닫힘
     if (c.qc_status === 'discard') return true;
     if (Array.isArray(c.receipts) && c.receipts.some(r => r.qc_status === 'discard')) return true;
-    // 재염 이관됐고, 입고+재염으로 의뢰량을 다 채웠으면 닫힘 (남은 부족분 없을 때만)
-    if (c.redye_transferred_to && !hasUnresolvedShortage(c)) return true;
-    // v2.53 hotfix19: 재염/부분땡처리로 부족분 전부 정산(미처리 부족 0)되면 닫힘
+    // v2.53 hotfix19: 부족분이 0이어도, 실제 입고된 차수의 QC가 안 끝났으면 닫지 않는다.
+    //   → 마지막에 [N차 QC 대기] 버튼이 뜨고, QC 완료해야 비로소 완료 처리됨(박 대표 요청).
+    //   입고 차수가 하나도 없으면(전량 재염/땡처리) QC 대상이 없으므로 부족분 0만으로 닫힘 허용.
+    const hasReceipts = Array.isArray(c.receipts) && c.receipts.length > 0;
+    const allQcDone = !hasReceipts || areAllReceiptsResolved(c);
+    // 재염 이관됐고, 입고+재염으로 의뢰량을 다 채웠으면 닫힘 (남은 부족분 없고 QC도 끝났을 때만)
+    if (c.redye_transferred_to && !hasUnresolvedShortage(c) && allQcDone) return true;
+    // 재염/부분땡처리로 부족분 전부 정산(미처리 부족 0) + QC도 완료되면 닫힘
     const hasProcessing = c.redye_transferred_to || (num(c.discard_body) || 0) > 0 || (num(c.discard_rib) || 0) > 0;
-    if (hasProcessing && !hasUnresolvedShortage(c)) return true;
+    if (hasProcessing && !hasUnresolvedShortage(c) && allQcDone) return true;
     return false;
   }
 
@@ -12109,11 +12120,20 @@ function validateBlendSum(blends, label) {
     const stillShortBody = getUnresolvedShortageBody(oc);
     const stillShortRib = getUnresolvedShortageRib(oc);
     const fullyResolved = (stillShortBody <= 0 && stillShortRib <= 0);
-    if (fullyResolved) {
-      // 부족분 전부 처리됨 → 컬러 종결 (재염 이관으로 닫힘)
+    // v2.53 hotfix19: 부족분 0이어도 실제 입고 차수 QC가 안 끝났으면 완료 보류.
+    //   입고 차수가 있으면 마지막에 [N차 QC 대기]가 떠야 하고, QC 완료 시 자동 완료됨.
+    const _hasReceipts = Array.isArray(oc.receipts) && oc.receipts.length > 0;
+    const _allQcDone = !_hasReceipts || areAllReceiptsResolved(oc);
+    if (fullyResolved && _allQcDone) {
+      // 부족분 전부 처리됨 + 입고 차수 QC도 완료 → 컬러 종결
       oc.completed = true;
       oc.completed_at = now;
       oc.qc_status = 'redye';
+    } else if (fullyResolved && !_allQcDone) {
+      // 부족분은 다 정산됐지만 입고 차수 QC가 남음 → 진행 중 유지(QC 대기 노출)
+      oc.completed = false;
+      delete oc.completed_at;
+      if (oc.qc_status === 'redye') oc.qc_status = 'pending';
     } else {
       // 부족분 일부만 재염 — 컬러는 진행 중 유지, 남은 부족분 계속 추적
       oc.completed = false;
