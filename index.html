@@ -6752,7 +6752,9 @@ const PROTECTED_COLOR_FIELDS = [
   // v2.53 hotfix19: 처리 이력(재염/땡처리/종결 타임라인)
   'redye_history', 'discard_history', 'shortage_settle_history',
   // v2.53 hotfix19: 부분 땡처리 누적량
-  'discard_body', 'discard_rib'
+  'discard_body', 'discard_rib',
+  // v2.53 hotfix19: 땡처리 되돌림/휴지통 이력
+  'discard_revert_history', 'discard_trash'
 ];
 
 // 컬러가 "보호 대상"인지 (완료됐거나 QC/땡처리 어떤 상태든 들어간 컬러)
@@ -9464,25 +9466,31 @@ function validateBlendSum(blends, label) {
     //   'redye'로 보지 않고 아래 일반 판정(pending 등)을 타게 함 → [QC 대기]+[+입고] 노출.
     if (c.redye_transferred_to && !hasUnresolvedShortage(c)) return 'redye';
 
+    // v2.53 hotfix19: 부분 땡처리(discard_body만 누적, 차수는 진행 중) — 미처리 부족이 남았으면
+    //   컬러는 '진행 중'으로 본다(검정 row-discard 방지). 땡처리는 별개 건으로 클레임에서 관리.
+    const hasPartialDiscard = (num(c.discard_body) || 0) > 0 || (num(c.discard_rib) || 0) > 0;
+
     // v2.53 hotfix3: receipts 배열을 진실로 삼아 상태 판정
     // (기존 c.qc_status 단일 필드와 receipts가 어긋나면 화면이 막히는 버그 해결)
     migrateColorReceipts(c);
     if (Array.isArray(c.receipts) && c.receipts.length > 0) {
       // 우선순위: discard > defect > accept > pending(미완료) > done(전부 완료)
       const statuses = c.receipts.map(r => r.qc_status || 'none');
-      if (statuses.includes('discard')) return 'discard';
+      // 차수 자체가 전체 땡처리(qc_status='discard')인 경우만 'discard' (부분 땡처리는 제외)
+      if (statuses.includes('discard') && !hasPartialDiscard) return 'discard';
       if (statuses.includes('defect')) return 'defect';
       // 미완료(none/pending) receipt가 하나라도 있으면 → 진행해야 할 게 남음
       const hasUnresolved = statuses.some(s => s === 'none' || s === 'pending');
       if (hasUnresolved) {
-        // 어떤 receipt이라도 pending이거나, QC 입력이 필요한 상태
-        // 전부 none이면 'none'(아직 QC 시작 전), 하나라도 진행됐으면 'pending'
         const anyStarted = statuses.some(s => s !== 'none');
         return anyStarted ? 'pending' : 'none';
       }
       // 미완료 없음 — 전부 done/accept/discard
+      // 부분 땡처리로 미처리 부족이 남았으면 아직 진행 중 (완료 아님)
+      if (hasPartialDiscard && hasUnresolvedShortage(c)) return 'pending';
+      if (statuses.includes('discard') && !hasPartialDiscard) return 'discard';
       if (statuses.every(s => s === 'accept')) return 'accept';
-      if (statuses.includes('accept')) return 'accept';  // done+accept 혼합 시 accept 우선 표시
+      if (statuses.includes('accept')) return 'accept';
       return 'done';  // 전부 done
     }
     
@@ -10820,7 +10828,7 @@ function validateBlendSum(blends, label) {
         </div>
         <div class="redye-form-row">
           <label class="redye-form-label">청구 금액 <span class="redye-hint">(원)</span></label>
-          <input type="number" id="pce-amount" class="redye-input-text" min="0" step="1" value="${cl.amount || ''}" placeholder="예: 1200000">
+          <input type="text" inputmode="numeric" id="pce-amount" class="redye-input-text" value="${cl.amount ? Number(cl.amount).toLocaleString('ko-KR') : ''}" placeholder="예: 1,600,000">
         </div>
         <div class="redye-modal-actions">
           <button type="button" id="pce-cancel" class="shortage-btn-base shortage-btn-cancel">취소</button>
@@ -10829,11 +10837,20 @@ function validateBlendSum(blends, label) {
       </div>`;
     modal.classList.add('show');
 
+    // v2.53 hotfix19: 청구금액 천단위 콤마 실시간 포맷
+    const amtEl = document.getElementById('pce-amount');
+    if (amtEl) {
+      amtEl.addEventListener('input', () => {
+        const raw = amtEl.value.replace(/[^0-9]/g, '');
+        amtEl.value = raw ? Number(raw).toLocaleString('ko-KR') : '';
+      });
+    }
+
     document.getElementById('pce-cancel').addEventListener('click', () => modal.classList.remove('show'));
     document.getElementById('pce-save').addEventListener('click', async () => {
       const recipient = document.getElementById('pce-recipient').value.trim();
       const reason = document.getElementById('pce-reason').value.trim();
-      const amount = parseFloat(document.getElementById('pce-amount').value) || 0;
+      const amount = parseFloat(document.getElementById('pce-amount').value.replace(/[^0-9.]/g, '')) || 0;
       try {
         const colors = JSON.parse(JSON.stringify(wo.colors || []));
         const dd = colors[colorIdx].discard_history[discardIdx];
@@ -10875,33 +10892,118 @@ function validateBlendSum(blends, label) {
     modal.classList.add('show');
   }
 
-  // v2.53 hotfix19: 부분 땡처리 항목 삭제 — 그 수량만큼 부족분 복원 (별개 건이므로 컬러 진행으로 되돌림)
-  async function deletePartialDiscard(woId, colorIdx, discardIdx) {
+  // v2.53 hotfix19: 부분 땡처리 항목 삭제 — 3가지 옵션
+  //   ① 청구만 취소: 기록 유지, claim만 비움 (땡처리 수량은 그대로)
+  //   ② 땡처리 되돌리기: 그 수량을 부족분으로 복원 + 되돌림 이력 남김
+  //   ③ 완전삭제: 휴지통으로. 수량 복원 없이 그냥 버림(최초 땡처리 전 상태로 더해지지 않음)
+  function deletePartialDiscard(woId, colorIdx, discardIdx) {
     const wo = state.allWorkOrders.find(w => w.id === woId);
     if (!wo) { toast('의뢰서를 찾을 수 없음', 'error'); return; }
     const c = (wo.colors || [])[colorIdx];
     if (!c || !Array.isArray(c.discard_history) || !c.discard_history[discardIdx]) { toast('땡처리 항목을 찾을 수 없음', 'error'); return; }
     const d = c.discard_history[discardIdx];
-    if (!confirm(`이 땡처리(${d.body || 0}/${d.rib || 0}절)를 취소하시겠습니까?\n\n해당 수량은 다시 부족분으로 돌아가고,\n컬러는 진행 중으로 복귀합니다.`)) return;
-    try {
-      const colors = JSON.parse(JSON.stringify(wo.colors || []));
-      const cc = colors[colorIdx];
-      const dd = cc.discard_history[discardIdx];
-      cc.discard_body = Math.max(0, (num(cc.discard_body) || 0) - (num(dd.body) || 0));
-      cc.discard_rib = Math.max(0, (num(cc.discard_rib) || 0) - (num(dd.rib) || 0));
-      cc.discard_history.splice(discardIdx, 1);
-      // 부족분이 다시 생겼으면 진행 중 + 추가입고 대기로
-      if (hasUnresolvedShortage(cc)) {
-        cc.completed = false;
-        delete cc.completed_at;
-        if (cc.shortage_status === 'closed') cc.shortage_status = 'expected';
-      }
-      const updates = { colors, updated_at: serverTimestamp(), updated_by: state.user.email };
-      if (wo.completed && !colors.every(x => isColorClosed(x))) { updates.completed = false; updates.completed_at = null; }
-      await updateDoc(doc(db, 'workorders', woId), updates);
-      toast('땡처리 취소 — 부족분으로 복원됨', 'success');
-      updateClaimsBadge();
-    } catch (e) { toast('취소 실패: ' + e.message, 'error'); }
+    const cName = c.name || `컬러 #${colorIdx + 1}`;
+
+    const modal = document.getElementById('dash-modal-bg');
+    if (!modal) { toast('모달 요소 없음', 'error'); return; }
+    document.getElementById('dash-modal-title').textContent = '✕ 땡처리 삭제';
+    ['dash-modal-image', 'dash-modal-copy', 'dash-modal-print', 'dash-modal-kakao'].forEach(id => { const b = document.getElementById(id); if (b) b.style.display = 'none'; });
+
+    document.getElementById('dash-modal-body').innerHTML = `
+      <div class="redye-modal-container">
+        <div class="redye-modal-header" style="background:#fef9c3;border-color:#fde047;color:#713f12;">
+          <strong>${escapeHtml(wo.wo_number || '')}</strong> · ${escapeHtml(cName)} — 땡처리 ${d.body || 0}/${d.rib || 0}절<br>
+          어떤 방식으로 삭제하시겠습니까?
+        </div>
+        <div style="display:flex;flex-direction:column;gap:10px;margin:6px 0 14px;">
+          <button type="button" id="pdd-cancel-claim" class="pdd-opt" style="text-align:left;padding:12px;border:1.5px solid #d1d5db;border-radius:8px;background:#fff;cursor:pointer;">
+            <div style="font-weight:700;">✕ 청구만 취소</div>
+            <div style="font-size:12px;color:#6b7280;margin-top:3px;">땡처리 기록(${d.body || 0}/${d.rib || 0}절)은 그대로 두고, 청구 거래처·금액만 지웁니다. 클레임 목록에서 사라집니다.</div>
+          </button>
+          <button type="button" id="pdd-revert" class="pdd-opt" style="text-align:left;padding:12px;border:1.5px solid #d1d5db;border-radius:8px;background:#fff;cursor:pointer;">
+            <div style="font-weight:700;">↺ 땡처리 되돌리기</div>
+            <div style="font-size:12px;color:#6b7280;margin-top:3px;">이 ${d.body || 0}/${d.rib || 0}절을 다시 부족분으로 되돌립니다. 컬러가 진행 중으로 복귀하고, 되돌림 이력이 남습니다.</div>
+          </button>
+          <button type="button" id="pdd-purge" class="pdd-opt" style="text-align:left;padding:12px;border:1.5px solid #fca5a5;border-radius:8px;background:#fef2f2;cursor:pointer;">
+            <div style="font-weight:700;color:#b91c1c;">🗑 완전삭제 (휴지통)</div>
+            <div style="font-size:12px;color:#7f1d1d;margin-top:3px;">이 땡처리 건을 휴지통으로 보냅니다. 수량은 복원되지 않고 그대로 버려집니다 (의뢰량에서 영구 차감).</div>
+          </button>
+        </div>
+        <div class="redye-modal-actions">
+          <button type="button" id="pdd-cancel" class="shortage-btn-base shortage-btn-cancel">취소</button>
+        </div>
+      </div>`;
+    modal.classList.add('show');
+
+    document.getElementById('pdd-cancel').addEventListener('click', () => modal.classList.remove('show'));
+
+    // ① 청구만 취소
+    document.getElementById('pdd-cancel-claim').addEventListener('click', async () => {
+      try {
+        const colors = JSON.parse(JSON.stringify(wo.colors || []));
+        colors[colorIdx].discard_history[discardIdx].claim = null;
+        await updateDoc(doc(db, 'workorders', woId), { colors, updated_at: serverTimestamp(), updated_by: state.user.email });
+        modal.classList.remove('show');
+        toast('청구만 취소됨 (땡처리 기록 유지)', 'success');
+        updateClaimsBadge();
+      } catch (e) { toast('실패: ' + e.message, 'error'); }
+    });
+
+    // ② 땡처리 되돌리기 (부족분 복원 + 이력)
+    document.getElementById('pdd-revert').addEventListener('click', async () => {
+      if (!confirm(`이 땡처리(${d.body || 0}/${d.rib || 0}절)를 되돌리시겠습니까?\n\n해당 수량이 다시 부족분으로 돌아가고\n컬러가 진행 중으로 복귀합니다.`)) return;
+      try {
+        const colors = JSON.parse(JSON.stringify(wo.colors || []));
+        const cc = colors[colorIdx];
+        const dd = cc.discard_history[discardIdx];
+        cc.discard_body = Math.max(0, (num(cc.discard_body) || 0) - (num(dd.body) || 0));
+        cc.discard_rib = Math.max(0, (num(cc.discard_rib) || 0) - (num(dd.rib) || 0));
+        // 되돌림 이력 기록
+        if (!Array.isArray(cc.discard_revert_history)) cc.discard_revert_history = [];
+        cc.discard_revert_history.push({ at: new Date().toISOString(), by: state.user.email, body: dd.body || 0, rib: dd.rib || 0, reason: '땡처리 되돌림' });
+        cc.discard_history.splice(discardIdx, 1);
+        if (hasUnresolvedShortage(cc)) {
+          cc.completed = false; delete cc.completed_at;
+          if (cc.shortage_status === 'closed') cc.shortage_status = 'expected';
+        }
+        const updates = { colors, updated_at: serverTimestamp(), updated_by: state.user.email };
+        if (wo.completed && !colors.every(x => isColorClosed(x))) { updates.completed = false; updates.completed_at = null; }
+        await updateDoc(doc(db, 'workorders', woId), updates);
+        modal.classList.remove('show');
+        toast('땡처리 되돌림 — 부족분으로 복원됨', 'success');
+        updateClaimsBadge();
+      } catch (e) { toast('실패: ' + e.message, 'error'); }
+    });
+
+    // ③ 완전삭제 (휴지통, 수량 복원 안 함 — 의뢰량에서 영구 차감)
+    document.getElementById('pdd-purge').addEventListener('click', async () => {
+      if (!confirm(`이 땡처리(${d.body || 0}/${d.rib || 0}절)를 완전삭제하시겠습니까?\n\n· 휴지통으로 들어갑니다\n· 수량은 복원되지 않고 그대로 버려집니다\n· 의뢰량에서 영구 차감됩니다`)) return;
+      try {
+        const colors = JSON.parse(JSON.stringify(wo.colors || []));
+        const cc = colors[colorIdx];
+        const dd = cc.discard_history[discardIdx];
+        // 휴지통 보관 (복구 대비)
+        if (!Array.isArray(cc.discard_trash)) cc.discard_trash = [];
+        cc.discard_trash.push({ ...dd, purged_at: new Date().toISOString(), purged_by: state.user.email });
+        // 의뢰량 영구 차감 (버려진 수량) — 의뢰 자체를 줄여 부족분 계산에서 빠지게
+        cc.body = Math.max(0, (num(cc.body) || 0) - (num(dd.body) || 0));
+        cc.rib = Math.max(0, (num(cc.rib) || 0) - (num(dd.rib) || 0));
+        // discard 누적도 동일 차감 (이미 처리된 것으로 잡혀있던 부분 제거)
+        cc.discard_body = Math.max(0, (num(cc.discard_body) || 0) - (num(dd.body) || 0));
+        cc.discard_rib = Math.max(0, (num(cc.discard_rib) || 0) - (num(dd.rib) || 0));
+        cc.discard_history.splice(discardIdx, 1);
+        // 완료 판정 재평가
+        if (areAllReceiptsResolved(cc) && !hasUnresolvedShortage(cc) && !cc.completed) {
+          cc.completed = true; cc.completed_at = cc.completed_at || new Date().toISOString();
+        }
+        const updates = { colors, updated_at: serverTimestamp(), updated_by: state.user.email };
+        if (colors.every(x => isColorClosed(x))) { updates.completed = true; updates.completed_at = serverTimestamp(); }
+        await updateDoc(doc(db, 'workorders', woId), updates);
+        modal.classList.remove('show');
+        toast('땡처리 완전삭제 — 휴지통으로 이동, 의뢰량 영구 차감', 'success');
+        updateClaimsBadge();
+      } catch (e) { toast('실패: ' + e.message, 'error'); }
+    });
   }
 
   // v2.51 hotfix8: 클레임 삭제 — 옵션 A: 청구만 취소
@@ -13094,11 +13196,14 @@ function validateBlendSum(blends, label) {
     }
     
     // 1행: 핵심 KPI 4개 (대표님 지정 순서)
+    // v2.53 hotfix19: 원사 미입고 → 클레임(땡처리) 건수/총액
+    const _claimsList = (typeof listAllDiscardClaims === 'function') ? listAllDiscardClaims() : [];
+    const _claimsAmount = _claimsList.reduce((s, x) => s + (num(x.claim?.amount) || 0), 0);
     html += `<div class="dash-kpi-row">
-      <div class="dash-kpi-card warn clickable" data-jump="yarn">
-        <div class="kpi-label">원사 미입고</div>
-        <div class="kpi-value">${yarnPending}</div>
-        <div class="kpi-sub">건 (전체 원사 발주 ${yarns.length}건 중)</div>
+      <div class="dash-kpi-card warn clickable" data-jump="claims">
+        <div class="kpi-label">클레임(땡처리)</div>
+        <div class="kpi-value">${_claimsList.length}</div>
+        <div class="kpi-sub">건 · 청구 ₩${formatMoney(_claimsAmount)}</div>
       </div>
       <div class="dash-kpi-card info clickable" data-jump="knit">
         <div class="kpi-label">편직 진행</div>
@@ -18492,7 +18597,7 @@ window.addEventListener('beforeunload', e => {
 (function syncVersion() {
   const VERSION = 'v2.53 hotfix19';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
-  // hotfix19: 저장만 차수별저장 / 부족분있어도 차수QC완료 / 야드중량 잠금+자동계산 / 재염·땡처리 부족분반영+이력+부분처리 / 전체대시보드 차수배지 / 부분땡처리 클레임 연동
+  // hotfix19: 차수별저장/부족분QC완료/야드중량잠금/재염·땡처리 부분처리+이력+클레임연동/부분땡처리 별개건(검정방지)/땡처리삭제3옵션(청구취소·되돌리기·완전삭제)/청구액콤마/KPI클레임카드
   // title (브라우저 탭)
   document.title = 'RECOVERIC HIWOS ' + VERSION;
   // 사이드바 버전 태그
