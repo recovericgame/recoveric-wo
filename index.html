@@ -10966,6 +10966,13 @@ function validateBlendSum(blends, label) {
           // 거래처가 비었거나, 처리 사유가 비었으면 미해결
           if (!recip || !(claim.reason || '').trim()) n++;
         }
+        // v2.53 hotfix19: 부분 땡처리(부족분 종결) — 청구(거래처+사유) 미작성건 미해결로 카운트
+        if (Array.isArray(c.discard_history)) {
+          c.discard_history.forEach(d => {
+            const cl = d.claim || {};
+            if (!(cl.recipient || '').trim() || !(cl.reason || '').trim()) n++;
+          });
+        }
       });
     });
     return n;
@@ -10981,12 +10988,23 @@ function validateBlendSum(blends, label) {
             wo, colorIdx: idx, color: c, claim: c.claim || {}
           });
         }
+        // v2.53 hotfix19: 부분 땡처리(부족분 종결) 건도 각각 클레임 항목으로 노출
+        if (Array.isArray(c.discard_history)) {
+          c.discard_history.forEach((d, di) => {
+            out.push({
+              wo, colorIdx: idx, color: c, claim: d.claim || {},
+              partial: true, discardIdx: di,
+              partialQty: { body: d.body || 0, rib: d.rib || 0 },
+              discard_at: d.at || ''
+            });
+          });
+        }
       });
     });
     // 최신순 (discard_at 기준 내림차순)
     out.sort((a, b) => {
-      const ta = a.color.discard_at || '';
-      const tb = b.color.discard_at || '';
+      const ta = a.discard_at || a.color.discard_at || '';
+      const tb = b.discard_at || b.color.discard_at || '';
       return tb.localeCompare(ta);
     });
     return out;
@@ -11292,23 +11310,27 @@ function validateBlendSum(blends, label) {
           qty: `몸판 ${h.received_body || 0} · 리프 ${h.received_rib || 0}`
         }));
       }
-      if (Array.isArray(c.redye_history)) {
-        c.redye_history.forEach(r => events.push({
-          at: r.at || '',
-          kind: 'redye',
-          label: '🔄 재염',
-          memo: (r.to ? r.to + ' 이관' : '') + (r.memo ? ' / ' + r.memo : ''),
-          qty: `몸판 ${r.body || 0} · 리프 ${r.rib || 0}`
-        }));
-      } else if (c.redye_transferred_to) {
-        events.push({
-          at: c.redye_transferred_at || '',
-          kind: 'redye',
-          label: '🔄 재염',
-          memo: c.redye_transferred_to + ' 이관',
-          qty: `몸판 ${c.redye_body || 0} · 리프 ${c.redye_rib || 0}`
-        });
+      // v2.53 hotfix19: 재염 이력 표시 (배열 우선, 옛 단일필드만 있으면 폴백)
+      const redyeEvents = [];
+      if (Array.isArray(c.redye_history) && c.redye_history.length > 0) {
+        c.redye_history.forEach(r => redyeEvents.push({ at: r.at || '', to: r.to, body: r.body || 0, rib: r.rib || 0, memo: r.memo || '' }));
+        // 배열 합계가 단일필드 누적보다 적으면(=옛 1차가 배열에 안 들어감) 차액 1건 보강
+        const sumB = redyeEvents.reduce((s, e) => s + (num(e.body) || 0), 0);
+        const sumR = redyeEvents.reduce((s, e) => s + (num(e.rib) || 0), 0);
+        const totB = num(c.redye_body) || 0, totR = num(c.redye_rib) || 0;
+        if (totB - sumB > 0 || totR - sumR > 0) {
+          redyeEvents.unshift({ at: c.redye_transferred_at || '', to: '(이전 재염)', body: Math.max(0, totB - sumB), rib: Math.max(0, totR - sumR), memo: '' });
+        }
+      } else if (c.redye_transferred_to && ((num(c.redye_body) || 0) > 0 || (num(c.redye_rib) || 0) > 0)) {
+        redyeEvents.push({ at: c.redye_transferred_at || '', to: c.redye_transferred_to, body: num(c.redye_body) || 0, rib: num(c.redye_rib) || 0, memo: '' });
       }
+      redyeEvents.forEach(r => events.push({
+        at: r.at,
+        kind: 'redye',
+        label: '🔄 재염',
+        memo: (r.to ? r.to + ' 이관' : '') + (r.memo ? ' / ' + r.memo : ''),
+        qty: `몸판 ${r.body || 0} · 리프 ${r.rib || 0}`
+      }));
       if (Array.isArray(c.discard_history)) {
         c.discard_history.forEach(d => events.push({
           at: d.at || '',
@@ -11662,6 +11684,9 @@ function validateBlendSum(blends, label) {
     const ordered_rib = num(c.rib) || 0;
     const lack_body = getUnresolvedShortageBody(c);
     const lack_rib = getUnresolvedShortageRib(c);
+    // v2.53 hotfix19: 청구 책임처 자동값 (의뢰서 거래처 정보에서)
+    const pdCtx = (typeof pickClaimContext === 'function') ? pickClaimContext(wo, colorIdx) : {};
+    const pdRecipient = pdCtx.recipient || '';
 
     if (lack_body + lack_rib === 0) {
       toast('땡처리할 남은 부족분이 없습니다', 'info');
@@ -11705,7 +11730,13 @@ function validateBlendSum(blends, label) {
         </table>
 
         <div class="redye-form-row">
-          <label class="redye-form-label">사유 / 메모<span class="redye-hint">(선택)</span></label>
+          <label class="redye-form-label">청구 책임처<span class="redye-hint">(거래처)</span></label>
+          <input type="text" id="pd-recipient" class="redye-input-text" value="${escapeHtml(pdRecipient)}" placeholder="청구할 거래처명">
+          <div class="redye-hint">비워두면 좌측 [클레임(땡처리)]에 미처리로 쌓입니다. 거래처+사유 입력 시 처리 완료.</div>
+        </div>
+
+        <div class="redye-form-row">
+          <label class="redye-form-label">사유 / 메모<span class="redye-hint">(청구 사유)</span></label>
           <textarea id="pd-memo" class="shortage-textarea" placeholder="예: 수율 부족 — 영원히 안 옴 / 거래처 폐기 등"></textarea>
         </div>
 
@@ -11723,10 +11754,14 @@ function validateBlendSum(blends, label) {
       const dBody = parseFloat(document.getElementById('pd-body').value) || 0;
       const dRib = parseFloat(document.getElementById('pd-rib').value) || 0;
       const memo = document.getElementById('pd-memo').value.trim();
+      const recipient = document.getElementById('pd-recipient').value.trim();
 
       if (dBody <= 0 && dRib <= 0) { alert('땡처리할 수량을 입력하세요 (몸판/리프 중 최소 1개)'); return; }
       if (dBody > lack_body) { alert(`몸판 땡처리량은 남은 부족분(${lack_body}절)을 초과할 수 없습니다.`); return; }
       if (dRib > lack_rib) { alert(`리프 땡처리량은 남은 부족분(${lack_rib}절)을 초과할 수 없습니다.`); return; }
+
+      // 청구 정보 구성 (거래처+사유 모두 있으면 처리완료, 비면 클레임 미처리로 쌓임)
+      const claim = { recipient, reason: memo, qty_body: dBody, qty_rib: dRib, created_at: new Date().toISOString() };
 
       const remain_after = (lack_body - dBody) + (lack_rib - dRib);
       const cMsg = `"${cName}" 부족분 땡처리(종결):\n` +
@@ -11739,7 +11774,7 @@ function validateBlendSum(blends, label) {
       confirmBtn.disabled = true; cancelBtn.disabled = true; confirmBtn.textContent = '처리 중...';
 
       try {
-        const result = await partialDiscardShortage(woId, colorIdx, { discard_body: dBody, discard_rib: dRib, memo });
+        const result = await partialDiscardShortage(woId, colorIdx, { discard_body: dBody, discard_rib: dRib, memo, claim });
         modal.classList.remove('show');
         toast(result.autoCompleted ? `"${cName}" 부족분 종결 — 컬러 완료` : `"${cName}" 땡처리 ${dBody + dRib}절 종결 (남은 부족 ${result.remaining_body}/${result.remaining_rib})`, 'success');
       } catch (err) {
@@ -11822,6 +11857,18 @@ function validateBlendSum(blends, label) {
     const colors = JSON.parse(JSON.stringify(wo.colors || []));
     const oc = colors[colorIdx];
     migrateColorReceipts(oc);
+    // v2.53 hotfix19: 이전(배열 없던 시절) 재염 기록을 이력 배열로 1회 흡수 → 1차 이력 누락 방지
+    if (!Array.isArray(oc.redye_history)) oc.redye_history = [];
+    if (oc.redye_history.length === 0 && oc.redye_transferred_to && ((num(oc.redye_body) || 0) > 0 || (num(oc.redye_rib) || 0) > 0)) {
+      oc.redye_history.push({
+        at: oc.redye_transferred_at || now,
+        by: oc.redye_transferred_by || state.user.email,
+        to: oc.redye_transferred_to,
+        body: num(oc.redye_body) || 0,
+        rib: num(oc.redye_rib) || 0,
+        memo: ''
+      });
+    }
     oc.redye_transferred_to = new_wo_number;
     oc.redye_transferred_at = now;
     oc.redye_transferred_by = state.user.email;
@@ -11829,7 +11876,6 @@ function validateBlendSum(blends, label) {
     oc.redye_body = (num(oc.redye_body) || 0) + redye_body;
     oc.redye_rib = (num(oc.redye_rib) || 0) + redye_rib;
     // v2.53 hotfix19: 재염 이력 기록(날짜·수량·대상) — 처리 이력 타임라인용
-    if (!Array.isArray(oc.redye_history)) oc.redye_history = [];
     oc.redye_history.push({
       at: now,
       by: state.user.email,
@@ -13237,6 +13283,14 @@ function validateBlendSum(blends, label) {
           const shortageBtn = (c && isShortageActive(c))
             ? `<button class="dash-action-btn dash-shortage-add-btn" data-id="${wo.id}" data-color-idx="${colorIdx}" title="미입고분이 추가로 들어왔을 때">+입고</button>`
             : '';
+          // v2.53 hotfix19: 전체 대시보드에도 차수 배지(N차) 표시 — 진행화면과 통일
+          let receiptLabel = '';
+          if (c && Array.isArray(c.receipts) && c.receipts.length > 0) {
+            const activeR = getActiveReceipt(c);
+            if (activeR && c.receipts.length >= 2) {
+              receiptLabel = ` <span style="font-size:9px;color:#fff;background:#2563eb;padding:1px 5px;border-radius:8px;font-weight:700;">${activeR.receipt_no}차</span>`;
+            }
+          }
           if (qcSt === 'redye') {
             // v2.53 hotfix8: 재염 이관된 컬러 — 새 의뢰서 번호 꼬리표 (닫힘 상태)
             const _toNo = (c && c.redye_transferred_to) ? c.redye_transferred_to : '';
@@ -13244,13 +13298,13 @@ function validateBlendSum(blends, label) {
           } else if (qcSt === 'discard') {
             completeCell = `<td class="col-action col-act-complete"><span class="dash-discard-stamp">⚠ 땡처리</span></td>`;
           } else if (qcSt === 'accept') {
-            completeCell = `<td class="col-action col-act-complete"><button class="dash-action-btn dash-defect-btn" style="background:#fbbf24;color:#000;border-color:#d97706;" data-id="${wo.id}" data-color-idx="${colorIdx}" data-qc-action="open" title="그대로 사용 처리됨 — 클릭하여 상세 확인">⚠ 수용</button>${shortageBtn}</td>`;
+            completeCell = `<td class="col-action col-act-complete"><button class="dash-action-btn dash-defect-btn" style="background:#fbbf24;color:#000;border-color:#d97706;" data-id="${wo.id}" data-color-idx="${colorIdx}" data-qc-action="open" title="그대로 사용 처리됨 — 클릭하여 상세 확인">⚠ 수용${receiptLabel}</button>${shortageBtn}</td>`;
           } else if (qcSt === 'defect') {
-            completeCell = `<td class="col-action col-act-complete"><button class="dash-action-btn dash-defect-btn" data-id="${wo.id}" data-color-idx="${colorIdx}" data-qc-action="open" title="불량 처리됨 — 클릭하여 처리 진행">⚠ 불량</button>${shortageBtn}</td>`;
+            completeCell = `<td class="col-action col-act-complete"><button class="dash-action-btn dash-defect-btn" data-id="${wo.id}" data-color-idx="${colorIdx}" data-qc-action="open" title="불량 처리됨 — 클릭하여 처리 진행">⚠ 불량${receiptLabel}</button>${shortageBtn}</td>`;
           } else if (qcSt === 'pending') {
-            completeCell = `<td class="col-action col-act-complete"><button class="dash-action-btn qc-pending-btn" data-id="${wo.id}" data-color-idx="${colorIdx}" data-qc-action="open">QC 대기</button>${shortageBtn}</td>`;
+            completeCell = `<td class="col-action col-act-complete"><button class="dash-action-btn qc-pending-btn" data-id="${wo.id}" data-color-idx="${colorIdx}" data-qc-action="open">QC 대기${receiptLabel}</button>${shortageBtn}</td>`;
           } else if (qcSt === 'done') {
-            completeCell = `<td class="col-action col-act-complete"><button class="dash-action-btn qc-done-btn" data-id="${wo.id}" data-color-idx="${colorIdx}" data-qc-action="open">✓ QC</button>${shortageBtn}</td>`;
+            completeCell = `<td class="col-action col-act-complete"><button class="dash-action-btn qc-done-btn" data-id="${wo.id}" data-color-idx="${colorIdx}" data-qc-action="open">✓ QC${receiptLabel}</button>${shortageBtn}</td>`;
           } else {
             // 진행 중 (none) — [완료] 옆에 [부족] 버튼 노출
             completeCell = `<td class="col-action col-act-complete"><button class="dash-action-btn dash-color-qc-init-btn" data-id="${wo.id}" data-color-idx="${colorIdx}">완료</button><button class="dash-action-btn dash-shortage-btn" data-id="${wo.id}" data-color-idx="${colorIdx}" title="입고 수량이 의뢰량과 다른 경우 (예: 10절 의뢰 → 9절만 입고)">부족</button></td>`;
@@ -18306,7 +18360,8 @@ window.addEventListener('beforeunload', e => {
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
   const VERSION = 'v2.53 hotfix19';
-  // hotfix19: 저장만 차수별저장 / 부족분있어도 차수QC완료 / 야드중량 잠금+자동계산 / 재염 부족분반영표시 / 처리이력 타임라인 / 재염·땡처리 부분처리
+  // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
+  // hotfix19: 저장만 차수별저장 / 부족분있어도 차수QC완료 / 야드중량 잠금+자동계산 / 재염·땡처리 부족분반영+이력+부분처리 / 전체대시보드 차수배지 / 부분땡처리 클레임 연동
   // title (브라우저 탭)
   document.title = 'RECOVERIC HIWOS ' + VERSION;
   // 사이드바 버전 태그
