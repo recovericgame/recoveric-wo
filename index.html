@@ -6753,8 +6753,8 @@ const PROTECTED_COLOR_FIELDS = [
   'redye_history', 'discard_history', 'shortage_settle_history',
   // v2.53 hotfix19: 부분 땡처리 누적량
   'discard_body', 'discard_rib',
-  // v2.53 hotfix19: 땡처리 되돌림/휴지통 이력
-  'discard_revert_history', 'discard_trash'
+  // v2.53 hotfix19: 땡처리 되돌림/휴지통 이력 + 원본 의뢰량(땡처리 차감 전)
+  'discard_revert_history', 'discard_trash', 'original_body', 'original_rib'
 ];
 
 // 컬러가 "보호 대상"인지 (완료됐거나 QC/땡처리 어떤 상태든 들어간 컬러)
@@ -10075,19 +10075,17 @@ function validateBlendSum(blends, label) {
   // v2.53 hotfix17: 재염으로 보낸 양(redye_body/rib)을 "처리된 수량"으로 인정해
   //   진짜 남은(미처리) 부족분을 계산. 재염은 부족분 전부가 아니라 일부만 보낼 수 있으므로
   //   "재염 갔다=닫힘"이 아니라 "입고+재염으로 의뢰량을 다 채웠나"로 판정해야 함.
-  //   v2.53 hotfix19: 땡처리분(discard_body/rib)도 "처리된 수량"으로 차감.
-  //   미처리 부족 = 의뢰량 - 입고량 - 재염보낸양 - 땡처리량  (0 미만은 0)
+  //   v2.53 hotfix19: 땡처리는 의뢰량(body/rib)에서 직접 차감하므로 여기선 재염만 뺀다(이중차감 방지).
+  //   미처리 부족 = 의뢰량 - 입고량 - 재염보낸양  (0 미만은 0)
   function getUnresolvedShortageBody(c) {
     if (!c) return 0;
     const redye = num(c.redye_body) || 0;
-    const discard = num(c.discard_body) || 0;
-    return Math.max(0, (num(c.body) || 0) - getReceivedBody(c) - redye - discard);
+    return Math.max(0, (num(c.body) || 0) - getReceivedBody(c) - redye);
   }
   function getUnresolvedShortageRib(c) {
     if (!c) return 0;
     const redye = num(c.redye_rib) || 0;
-    const discard = num(c.discard_rib) || 0;
-    return Math.max(0, (num(c.rib) || 0) - getReceivedRib(c) - redye - discard);
+    return Math.max(0, (num(c.rib) || 0) - getReceivedRib(c) - redye);
   }
   // 재염/입고로도 아직 다 못 채운 부족분이 남아있는지
   function hasUnresolvedShortage(c) {
@@ -10754,7 +10752,14 @@ function validateBlendSum(blends, label) {
     if (dBody > maxBody) throw new Error(`몸판 땡처리량이 남은 부족분(${maxBody}절)을 초과합니다`);
     if (dRib > maxRib) throw new Error(`리프 땡처리량이 남은 부족분(${maxRib}절)을 초과합니다`);
 
-    // 땡처리량 누적
+    // v2.53 hotfix19: 땡처리는 별개 건 — 의뢰량(body/rib)에서 직접 차감해서
+    //   메인 대시보드 수량 계산에 전혀 관여 안 하게 함. 원본 의뢰량은 보존(되돌림용).
+    if (c.original_body === undefined) c.original_body = num(c.body) || 0;
+    if (c.original_rib === undefined) c.original_rib = num(c.rib) || 0;
+    c.body = Math.max(0, (num(c.body) || 0) - dBody);
+    c.rib = Math.max(0, (num(c.rib) || 0) - dRib);
+
+    // 땡처리량 누적 (이력/표시용 — 부족분 계산엔 더 이상 안 씀, 의뢰량에서 이미 뺐으므로)
     c.discard_body = (num(c.discard_body) || 0) + dBody;
     c.discard_rib = (num(c.discard_rib) || 0) + dRib;
 
@@ -10769,11 +10774,10 @@ function validateBlendSum(blends, label) {
       claim: opts.claim || null
     });
 
-    // 부족분 정산 상태 갱신
+    // 부족분 정산 상태 갱신 (의뢰량이 줄었으므로 부족분도 자동 재계산됨)
     const stillShort = hasUnresolvedShortage(c);
     let autoCompleted = false;
     if (!stillShort) {
-      // 입고+재염+땡처리로 의뢰량 모두 정산 → 컬러 종결 (모든 차수 QC 완료 시)
       c.shortage_status = 'closed';
       c.shortage_resolved_at = now;
       c.shortage_resolved_by = state.user.email;
@@ -10784,7 +10788,6 @@ function validateBlendSum(blends, label) {
         autoCompleted = true;
       }
     } else {
-      // 부족분 일부만 땡처리 — 진행 중 유지
       if (!c.shortage_status || c.shortage_status === 'closed') c.shortage_status = 'expected';
     }
 
@@ -10949,13 +10952,16 @@ function validateBlendSum(blends, label) {
       } catch (e) { toast('실패: ' + e.message, 'error'); }
     });
 
-    // ② 땡처리 되돌리기 (부족분 복원 + 이력)
+    // ② 땡처리 되돌리기 (의뢰량 복원 → 부족분으로 돌아옴 + 이력)
     document.getElementById('pdd-revert').addEventListener('click', async () => {
       if (!confirm(`이 땡처리(${d.body || 0}/${d.rib || 0}절)를 되돌리시겠습니까?\n\n해당 수량이 다시 부족분으로 돌아가고\n컬러가 진행 중으로 복귀합니다.`)) return;
       try {
         const colors = JSON.parse(JSON.stringify(wo.colors || []));
         const cc = colors[colorIdx];
         const dd = cc.discard_history[discardIdx];
+        // 의뢰량 복원 (땡처리 시 뺀 만큼 다시 더함)
+        cc.body = (num(cc.body) || 0) + (num(dd.body) || 0);
+        cc.rib = (num(cc.rib) || 0) + (num(dd.rib) || 0);
         cc.discard_body = Math.max(0, (num(cc.discard_body) || 0) - (num(dd.body) || 0));
         cc.discard_rib = Math.max(0, (num(cc.discard_rib) || 0) - (num(dd.rib) || 0));
         // 되돌림 이력 기록
@@ -10975,22 +10981,16 @@ function validateBlendSum(blends, label) {
       } catch (e) { toast('실패: ' + e.message, 'error'); }
     });
 
-    // ③ 완전삭제 (휴지통, 수량 복원 안 함 — 의뢰량에서 영구 차감)
+    // ③ 완전삭제 (이력만 휴지통으로 — 의뢰량은 이미 빠진 상태 유지, 영구 버림)
     document.getElementById('pdd-purge').addEventListener('click', async () => {
-      if (!confirm(`이 땡처리(${d.body || 0}/${d.rib || 0}절)를 완전삭제하시겠습니까?\n\n· 휴지통으로 들어갑니다\n· 수량은 복원되지 않고 그대로 버려집니다\n· 의뢰량에서 영구 차감됩니다`)) return;
+      if (!confirm(`이 땡처리(${d.body || 0}/${d.rib || 0}절)를 완전삭제하시겠습니까?\n\n· 휴지통으로 들어갑니다\n· 수량은 복원되지 않고 그대로 버려집니다 (이미 의뢰량에서 빠짐)`)) return;
       try {
         const colors = JSON.parse(JSON.stringify(wo.colors || []));
         const cc = colors[colorIdx];
         const dd = cc.discard_history[discardIdx];
-        // 휴지통 보관 (복구 대비)
+        // 휴지통 보관 (복구 대비) — 의뢰량은 건드리지 않음(이미 빠진 상태)
         if (!Array.isArray(cc.discard_trash)) cc.discard_trash = [];
         cc.discard_trash.push({ ...dd, purged_at: new Date().toISOString(), purged_by: state.user.email });
-        // 의뢰량 영구 차감 (버려진 수량) — 의뢰 자체를 줄여 부족분 계산에서 빠지게
-        cc.body = Math.max(0, (num(cc.body) || 0) - (num(dd.body) || 0));
-        cc.rib = Math.max(0, (num(cc.rib) || 0) - (num(dd.rib) || 0));
-        // discard 누적도 동일 차감 (이미 처리된 것으로 잡혀있던 부분 제거)
-        cc.discard_body = Math.max(0, (num(cc.discard_body) || 0) - (num(dd.body) || 0));
-        cc.discard_rib = Math.max(0, (num(cc.discard_rib) || 0) - (num(dd.rib) || 0));
         cc.discard_history.splice(discardIdx, 1);
         // 완료 판정 재평가
         if (areAllReceiptsResolved(cc) && !hasUnresolvedShortage(cc) && !cc.completed) {
@@ -11000,7 +11000,7 @@ function validateBlendSum(blends, label) {
         if (colors.every(x => isColorClosed(x))) { updates.completed = true; updates.completed_at = serverTimestamp(); }
         await updateDoc(doc(db, 'workorders', woId), updates);
         modal.classList.remove('show');
-        toast('땡처리 완전삭제 — 휴지통으로 이동, 의뢰량 영구 차감', 'success');
+        toast('땡처리 완전삭제 — 휴지통으로 이동', 'success');
         updateClaimsBadge();
       } catch (e) { toast('실패: ' + e.message, 'error'); }
     });
@@ -14353,18 +14353,31 @@ function validateBlendSum(blends, label) {
       }
     });
 
-    // 옵션 C: 완전삭제 (의뢰서 휴지통 이동)
+    // 옵션 C: 완전삭제 (이 땡처리 건만 휴지통으로 — 의뢰서/나머지 컬러는 그대로)
     document.getElementById('claim-del-opt-c').addEventListener('click', async () => {
-      if (!confirm(`이 의뢰서를 완전삭제(휴지통 이동)하시겠습니까?\n\n· ${wo_no} / ${colorName}\n\n· 의뢰서 전체가 휴지통으로 이동합니다\n· 휴지통에서 복구할 수 있습니다`)) return;
+      if (!confirm(`이 땡처리 건을 완전삭제(휴지통)하시겠습니까?\n\n· ${wo_no} / ${colorName}\n\n· 이 땡처리 건만 휴지통으로 이동합니다\n· 의뢰서와 다른 컬러는 그대로 유지됩니다\n· 휴지통에서 복구할 수 있습니다`)) return;
       try {
-        await updateDoc(doc(db, 'workorders', woId), {
-          deleted: true,
-          deleted_at: serverTimestamp(),
-          updated_at: serverTimestamp(),
-          updated_by: state.user.email
+        const colors = JSON.parse(JSON.stringify(wo.colors || []));
+        const cc = colors[colorIdx];
+        // 휴지통 보관 (복구 대비) — 컬러 단위 땡처리 스냅샷
+        if (!Array.isArray(cc.discard_trash)) cc.discard_trash = [];
+        cc.discard_trash.push({
+          kind: 'full_color_discard',
+          qc_status: cc.qc_status, claim: cc.claim || null,
+          discard_at: cc.discard_at, discard_by: cc.discard_by,
+          receipts_snapshot: JSON.parse(JSON.stringify(cc.receipts || [])),
+          purged_at: new Date().toISOString(), purged_by: state.user.email
         });
+        // 컬러 단위 땡처리 흔적 제거 (의뢰서·나머지 컬러는 그대로)
+        cc.qc_status = 'none';
+        delete cc.discard_at; delete cc.discard_by; delete cc.claim;
+        if (Array.isArray(cc.receipts)) {
+          cc.receipts.forEach(r => { if (r.qc_status === 'discard') { r.qc_status = 'none'; delete r.discard_at; delete r.discard_by; delete r.claim; } });
+        }
+        cc.completed = false; delete cc.completed_at;
+        await updateDoc(doc(db, 'workorders', woId), { colors, updated_at: serverTimestamp(), updated_by: state.user.email });
         closeModal();
-        toast('완전삭제 완료 — 휴지통으로 이동', 'success');
+        toast('땡처리 건 완전삭제 — 휴지통으로 이동', 'success');
         updateClaimsBadge();
       } catch (e) {
         console.error('[claim-delete] 완전삭제 실패:', e);
