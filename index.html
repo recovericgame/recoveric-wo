@@ -16706,7 +16706,7 @@ function validateBlendSum(blends, label) {
         </div>
         <div class="qc-modal-footer">
           <div class="qc-footer-left">
-            ${shortageActive ? '⚠ 부족분 미해결 — QC 데이터만 저장 가능 (완료 처리 보류)'
+            ${shortageActive ? '이 차수(입고분)는 검수 완료할 수 있습니다. 부족분이 모두 채워지면 컬러가 자동 완료됩니다.'
               : qcStatus === 'done' ? '✓ 완료된 컬러 — 데이터 수정 후 저장하면 즉시 반영됩니다.'
               : isDefectMode ? '⚠ 불량 상태 — 재작업 요청 / 그대로 사용 / 땡처리 중 선택'
               : isAcceptMode ? '⚠ 그대로 사용된 컬러 — 검수 데이터 보존됨'
@@ -16744,6 +16744,7 @@ function validateBlendSum(blends, label) {
             ` : ''}
             ${(!isDefectMode && !isAcceptMode && !isDiscardMode && shortageActive) ? `
               <button type="button" class="qc-modal-btn defect" id="qc-mark-defect" title="불량 처리 (불량 사유 1개 이상 체크 필요)">⚠ 불량 처리</button>
+              <button type="button" class="qc-modal-btn primary" id="qc-finish" title="이 차수(입고분)만 검수 완료합니다. 부족분이 모두 채워지면 컬러가 자동 완료됩니다.">${activeReceiptNo ? activeReceiptNo + '차 검수 완료' : '이 차수 검수 완료'}</button>
             ` : ''}
           </div>
         </div>
@@ -16942,11 +16943,10 @@ function validateBlendSum(blends, label) {
     const finishBtn = document.getElementById('qc-finish');
     if (finishBtn) {
       finishBtn.addEventListener('click', async () => {
-        // v2.52 hotfix2: 부족분 active 안전장치
-        if (shortageActive) {
-          alert(`부족분 ${lackBody + lackRib}절이 미해결 상태입니다.\n\nQC 데이터는 [저장만] 버튼으로 저장할 수 있지만, 컬러 완료 처리는 부족분이 정산된 후에만 가능합니다.\n\n· 추가 입고로 부족분이 모두 들어오거나\n· 부족분을 종결/땡처리로 정산하면\n자동으로 완료 처리됩니다.`);
-          return;
-        }
+        // v2.53 hotfix19: 부족분이 남아있어도 "이 차수(입고분)"는 검수 완료 허용.
+        //   setColorQcDone이 차수만 done 처리하고, 부족분이 남으면 컬러는 미완료로 유지함(안전).
+        //   부족분이 모두 채워져 모든 차수가 done이 되면 자동으로 컬러·의뢰서 완료.
+        //   (기존엔 부족분 있으면 [QC 완료]를 아예 막아 1차 검수를 못 끝내고 우회 과정이 필요했음)
         clearInvalid();
         const data = collect();
         const cName = c.name || `컬러 #${colorIdx + 1}`;
@@ -16962,26 +16962,34 @@ function validateBlendSum(blends, label) {
         
         const colorsArr = wo.colors || [];
         const otherDone = colorsArr.filter((_, i) => i !== colorIdx).every(cc => cc.completed === true);
-        const willCompleteWO = otherDone;
+        const willCompleteWO = otherDone && !shortageActive;
         
         const errs = validateQcData(data);
         const hasEmpty = errs.length > 0;
         if (hasEmpty) {
           errs.forEach(e => fields[e.field]?.classList.add('qc-invalid'));
           const labels = errs.map(e => e.label).join(', ');
-          const emptyMsg = `검수 데이터가 일부 비어 있습니다.\n\n미입력: ${labels}\n\n[${wo.wo_number || ''}] "${cName}" 을(를) 그대로 완료하시겠습니까?\n\n나중에 의뢰서 수정에서 추가 입력할 수 있습니다.`;
+          const emptyMsg = `검수 데이터가 일부 비어 있습니다.\n\n미입력: ${labels}\n\n[${wo.wo_number || ''}] "${cName}" ${activeReceiptNo ? activeReceiptNo + '차를' : ''} 그대로 검수 완료하시겠습니까?\n\n나중에 의뢰서 수정에서 추가 입력할 수 있습니다.`;
           if (!confirm(emptyMsg)) return;
         }
         
-        const finalMsg = willCompleteWO
-          ? `[${wo.wo_number || ''}] "${cName}" QC를 완료할까요?\n\n마지막 컬러까지 QC가 끝났습니다.\n의뢰서 전체가 완료 상태로 바뀌고,\n[완료된 의뢰서] 화면으로 옮겨집니다.`
-          : `[${wo.wo_number || ''}] "${cName}" QC를 완료할까요?\n\n이 컬러만 진행 목록에서 사라지고,\n나머지 컬러는 계속 진행됩니다.`;
+        let finalMsg;
+        if (shortageActive) {
+          // 부족분 남은 컬러 — 이 차수만 검수 완료, 컬러 전체 완료는 부족분 정산 후 자동
+          finalMsg = `[${wo.wo_number || ''}] "${cName}" ${activeReceiptNo ? activeReceiptNo + '차' : '이 차수'} 검수를 완료할까요?\n\n· 부족분 ${lackBody + lackRib}절이 아직 남아 있어\n  컬러 전체는 진행 중으로 유지됩니다.\n· 나머지가 모두 입고되어 검수가 끝나면\n  컬러가 자동으로 완료됩니다.`;
+        } else {
+          finalMsg = willCompleteWO
+            ? `[${wo.wo_number || ''}] "${cName}" QC를 완료할까요?\n\n마지막 컬러까지 QC가 끝났습니다.\n의뢰서 전체가 완료 상태로 바뀌고,\n[완료된 의뢰서] 화면으로 옮겨집니다.`
+            : `[${wo.wo_number || ''}] "${cName}" QC를 완료할까요?\n\n이 컬러만 진행 목록에서 사라지고,\n나머지 컬러는 계속 진행됩니다.`;
+        }
         if (!confirm(finalMsg)) return;
         
         try {
           const allDone = await setColorQcDone(woId, colorIdx, data, window.__qcModalReceiptNo);
           if (allDone) {
             toast(`✓ "${cName}" QC 완료 — 모든 컬러 완료로 의뢰서 자동 완료됨`, 'success');
+          } else if (shortageActive) {
+            toast(`✓ "${cName}" ${activeReceiptNo ? activeReceiptNo + '차 ' : ''}검수 완료 — 부족분 입고 후 자동 완료됩니다`, 'success');
           } else {
             toast(`✓ "${cName}" QC 완료 처리됨`, 'success');
           }
@@ -18044,6 +18052,8 @@ window.addEventListener('beforeunload', e => {
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
   const VERSION = 'v2.53 hotfix19';
+  // hotfix19: (1) [저장만] 차수별 저장 — QC 기록 유실/덮어쓰기 버그 수정
+  //           (2) 부족분 남아도 차수 [QC 완료] 허용 — 우회 완료 과정 제거(자동 완료)
   // title (브라우저 탭)
   document.title = 'RECOVERIC HIWOS ' + VERSION;
   // 사이드바 버전 태그
