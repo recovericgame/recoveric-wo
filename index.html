@@ -10788,6 +10788,122 @@ function validateBlendSum(blends, label) {
     return { autoCompleted, all_done: allDone, remaining_body: getUnresolvedShortageBody(c), remaining_rib: getUnresolvedShortageRib(c) };
   }
 
+  // v2.53 hotfix19: 부분 땡처리 항목의 청구정보 수정 (거래처/사유/청구액)
+  function openPartialClaimEditModal(woId, colorIdx, discardIdx) {
+    const wo = state.allWorkOrders.find(w => w.id === woId);
+    if (!wo) { toast('의뢰서를 찾을 수 없음', 'error'); return; }
+    const c = (wo.colors || [])[colorIdx];
+    if (!c || !Array.isArray(c.discard_history) || !c.discard_history[discardIdx]) { toast('땡처리 항목을 찾을 수 없음', 'error'); return; }
+    const d = c.discard_history[discardIdx];
+    const cl = d.claim || {};
+    const cName = c.name || `컬러 #${colorIdx + 1}`;
+    const ctx = (typeof pickClaimContext === 'function') ? pickClaimContext(wo, colorIdx) : {};
+
+    const modal = document.getElementById('dash-modal-bg');
+    if (!modal) { toast('모달 요소 없음', 'error'); return; }
+    document.getElementById('dash-modal-title').textContent = '⚠ 땡처리 청구정보 수정';
+    ['dash-modal-image', 'dash-modal-copy', 'dash-modal-print', 'dash-modal-kakao'].forEach(id => { const b = document.getElementById(id); if (b) b.style.display = 'none'; });
+
+    document.getElementById('dash-modal-body').innerHTML = `
+      <div class="redye-modal-container">
+        <div class="redye-modal-header" style="background:#fef2f2;border-color:#fca5a5;color:#7f1d1d;">
+          <strong>${escapeHtml(wo.wo_number || '')}</strong> · ${escapeHtml(cName)} — 땡처리 ${d.body || 0}/${d.rib || 0}절<br>
+          청구 책임처와 사유, 청구액을 입력하면 미처리 목록에서 내려갑니다.
+        </div>
+        <div class="redye-form-row">
+          <label class="redye-form-label">청구 책임처 <span class="redye-req">*</span></label>
+          <input type="text" id="pce-recipient" class="redye-input-text" value="${escapeHtml(cl.recipient || ctx.recipient || '')}" placeholder="청구할 거래처명">
+        </div>
+        <div class="redye-form-row">
+          <label class="redye-form-label">결정 사유 <span class="redye-req">*</span></label>
+          <textarea id="pce-reason" class="shortage-textarea" placeholder="예: 수율 부족 / 거래처 폐기 등">${escapeHtml(cl.reason || d.memo || '')}</textarea>
+        </div>
+        <div class="redye-form-row">
+          <label class="redye-form-label">청구 금액 <span class="redye-hint">(원)</span></label>
+          <input type="number" id="pce-amount" class="redye-input-text" min="0" step="1" value="${cl.amount || ''}" placeholder="예: 1200000">
+        </div>
+        <div class="redye-modal-actions">
+          <button type="button" id="pce-cancel" class="shortage-btn-base shortage-btn-cancel">취소</button>
+          <button type="button" id="pce-save" class="shortage-btn-base shortage-btn-discard">저장</button>
+        </div>
+      </div>`;
+    modal.classList.add('show');
+
+    document.getElementById('pce-cancel').addEventListener('click', () => modal.classList.remove('show'));
+    document.getElementById('pce-save').addEventListener('click', async () => {
+      const recipient = document.getElementById('pce-recipient').value.trim();
+      const reason = document.getElementById('pce-reason').value.trim();
+      const amount = parseFloat(document.getElementById('pce-amount').value) || 0;
+      try {
+        const colors = JSON.parse(JSON.stringify(wo.colors || []));
+        const dd = colors[colorIdx].discard_history[discardIdx];
+        dd.claim = { ...(dd.claim || {}), recipient, reason, amount, updated_at: new Date().toISOString() };
+        if (reason && !dd.memo) dd.memo = reason;
+        await updateDoc(doc(db, 'workorders', woId), { colors, updated_at: serverTimestamp(), updated_by: state.user.email });
+        modal.classList.remove('show');
+        toast('땡처리 청구정보 저장됨', 'success');
+        updateClaimsBadge();
+      } catch (e) { toast('저장 실패: ' + e.message, 'error'); }
+    });
+  }
+
+  // v2.53 hotfix19: 부분 땡처리 항목 정산 내역서
+  function openPartialClaimReportModal(woId, colorIdx, discardIdx) {
+    const wo = state.allWorkOrders.find(w => w.id === woId);
+    if (!wo) { toast('의뢰서를 찾을 수 없음', 'error'); return; }
+    const c = (wo.colors || [])[colorIdx];
+    if (!c || !Array.isArray(c.discard_history) || !c.discard_history[discardIdx]) { toast('땡처리 항목을 찾을 수 없음', 'error'); return; }
+    const d = c.discard_history[discardIdx];
+    const cl = d.claim || {};
+    const cName = c.name || `컬러 #${colorIdx + 1}`;
+    const modal = document.getElementById('dash-modal-bg');
+    if (!modal) { toast('모달 요소 없음', 'error'); return; }
+    document.getElementById('dash-modal-title').textContent = '정산(클레임) 내역서';
+    ['dash-modal-image', 'dash-modal-copy', 'dash-modal-print', 'dash-modal-kakao'].forEach(id => { const b = document.getElementById(id); if (b) b.style.display = ''; });
+    document.getElementById('dash-modal-body').innerHTML = `
+      <div style="padding:16px;font-size:14px;line-height:1.8;">
+        <div style="border-bottom:2px solid #111;padding-bottom:8px;margin-bottom:12px;font-weight:700;font-size:16px;">⚠ 부족분 땡처리(종결) 정산</div>
+        <div>의뢰서: <strong>${escapeHtml(wo.wo_number || '-')}</strong></div>
+        <div>품목: ${escapeHtml(wo.body?.item || '-')}</div>
+        <div>대상 컬러: <strong>${escapeHtml(cName)}</strong> · 땡처리 ${d.body || 0}/${d.rib || 0}절</div>
+        <div style="margin-top:10px;">처리일: ${(d.at || '').slice(0,10)}</div>
+        <div>청구 책임처: <strong>${cl.recipient ? escapeHtml(cl.recipient) : '(미입력)'}</strong></div>
+        <div>결정 사유: ${escapeHtml(cl.reason || d.memo || '(미입력)')}</div>
+        <div style="background:#fef9c3;padding:8px;margin-top:10px;border-radius:6px;">청구 금액: <strong style="font-size:18px;">₩${formatMoney(cl.amount || 0)}</strong></div>
+        <div style="text-align:right;margin-top:16px;font-weight:700;">현일텍스 주식회사 드림</div>
+      </div>`;
+    modal.classList.add('show');
+  }
+
+  // v2.53 hotfix19: 부분 땡처리 항목 삭제 — 그 수량만큼 부족분 복원 (별개 건이므로 컬러 진행으로 되돌림)
+  async function deletePartialDiscard(woId, colorIdx, discardIdx) {
+    const wo = state.allWorkOrders.find(w => w.id === woId);
+    if (!wo) { toast('의뢰서를 찾을 수 없음', 'error'); return; }
+    const c = (wo.colors || [])[colorIdx];
+    if (!c || !Array.isArray(c.discard_history) || !c.discard_history[discardIdx]) { toast('땡처리 항목을 찾을 수 없음', 'error'); return; }
+    const d = c.discard_history[discardIdx];
+    if (!confirm(`이 땡처리(${d.body || 0}/${d.rib || 0}절)를 취소하시겠습니까?\n\n해당 수량은 다시 부족분으로 돌아가고,\n컬러는 진행 중으로 복귀합니다.`)) return;
+    try {
+      const colors = JSON.parse(JSON.stringify(wo.colors || []));
+      const cc = colors[colorIdx];
+      const dd = cc.discard_history[discardIdx];
+      cc.discard_body = Math.max(0, (num(cc.discard_body) || 0) - (num(dd.body) || 0));
+      cc.discard_rib = Math.max(0, (num(cc.discard_rib) || 0) - (num(dd.rib) || 0));
+      cc.discard_history.splice(discardIdx, 1);
+      // 부족분이 다시 생겼으면 진행 중 + 추가입고 대기로
+      if (hasUnresolvedShortage(cc)) {
+        cc.completed = false;
+        delete cc.completed_at;
+        if (cc.shortage_status === 'closed') cc.shortage_status = 'expected';
+      }
+      const updates = { colors, updated_at: serverTimestamp(), updated_by: state.user.email };
+      if (wo.completed && !colors.every(x => isColorClosed(x))) { updates.completed = false; updates.completed_at = null; }
+      await updateDoc(doc(db, 'workorders', woId), updates);
+      toast('땡처리 취소 — 부족분으로 복원됨', 'success');
+      updateClaimsBadge();
+    } catch (e) { toast('취소 실패: ' + e.message, 'error'); }
+  }
+
   // v2.51 hotfix8: 클레임 삭제 — 옵션 A: 청구만 취소
   // 컬러는 땡처리 완료 상태 유지, claim 데이터(거래처/사유/청구액)만 비움
   // 클레임 목록에서는 사라지지만, 의뢰서/대시보드의 ⚠ 땡처리 스탬프는 유지
@@ -11723,8 +11839,8 @@ function validateBlendSum(blends, label) {
           <tbody>
             <tr>
               <td class="redye-label-cell">종결 처리</td>
-              <td><input type="number" id="pd-body" class="redye-input" min="0" max="${lack_body}" step="0.5" value="${lack_body > 0 ? lack_body : ''}" placeholder="0"></td>
-              <td><input type="number" id="pd-rib" class="redye-input" min="0" max="${lack_rib}" step="0.5" value="${lack_rib > 0 ? lack_rib : ''}" placeholder="0"></td>
+              <td><input type="number" id="pd-body" class="redye-input" min="0" max="${lack_body}" step="0.5" value="" placeholder="0 (최대 ${lack_body})"></td>
+              <td><input type="number" id="pd-rib" class="redye-input" min="0" max="${lack_rib}" step="0.5" value="" placeholder="0 (최대 ${lack_rib})"></td>
             </tr>
           </tbody>
         </table>
@@ -14277,22 +14393,25 @@ function validateBlendSum(blends, label) {
         const wo = x.wo;
         const c = x.color;
         const claim = x.claim;
-        const date = (c.discard_at || '').slice(0, 10);
+        const isPartial = !!x.partial;
+        const date = (x.discard_at || c.discard_at || '').slice(0, 10);
         const reasonShort = (claim.reason || '').replace(/\s+/g, ' ').slice(0, 40);
         const recipBlank = !(claim.recipient || '').trim() || !(claim.reason || '').trim();
         const rowCls = recipBlank ? 'claims-row-warn' : '';
+        const qtyTag = isPartial ? ` <span style="font-size:10px;color:#b91c1c;">(땡처리 ${x.partialQty.body}/${x.partialQty.rib}절)</span>` : '';
+        const partialAttr = isPartial ? ` data-partial="1" data-discard-idx="${x.discardIdx}"` : '';
         listHtml += `<tr class="${rowCls}">
           <td class="col-no">${idx + 1}</td>
           <td class="col-date">${escapeHtml(date)}</td>
           <td><strong>${escapeHtml(wo.wo_number || '-')}</strong>${wo.lot_no ? `<br><span class="claims-lot">${escapeHtml(wo.lot_no)}</span>` : ''}</td>
-          <td>${escapeHtml(c.name || '-')}</td>
+          <td>${escapeHtml(c.name || '-')}${qtyTag}</td>
           <td>${claim.recipient ? escapeHtml(claim.recipient) : '<span class="claims-na">미입력</span>'}</td>
           <td class="claims-reason-cell" title="${escapeHtml(claim.reason || '')}">${escapeHtml(reasonShort)}${claim.reason && claim.reason.length > 40 ? '…' : ''}</td>
           <td class="claims-col-amount">₩${formatMoney(claim.amount || 0)}</td>
           <td class="col-act">
-            <button class="dash-act-btn claims-act-report" data-id="${wo.id}" data-color-idx="${x.colorIdx}" title="정산 내역서 출력">📄 내역서</button>
-            <button class="dash-act-btn claims-act-edit" data-id="${wo.id}" data-color-idx="${x.colorIdx}" title="클레임 정보 수정">✎ 수정</button>
-            ${(isAdminUser() || c.discard_by === state.user.email) ? `<button class="dash-act-btn claims-act-delete" data-id="${wo.id}" data-color-idx="${x.colorIdx}" title="클레임 삭제">✕ 삭제</button>` : ''}
+            <button class="dash-act-btn claims-act-report" data-id="${wo.id}" data-color-idx="${x.colorIdx}"${partialAttr} title="정산 내역서 출력">📄 내역서</button>
+            <button class="dash-act-btn claims-act-edit" data-id="${wo.id}" data-color-idx="${x.colorIdx}"${partialAttr} title="클레임 정보 수정">✎ 수정</button>
+            ${(isAdminUser() || c.discard_by === state.user.email || isPartial) ? `<button class="dash-act-btn claims-act-delete" data-id="${wo.id}" data-color-idx="${x.colorIdx}"${partialAttr} title="클레임 삭제">✕ 삭제</button>` : ''}
           </td>
         </tr>`;
       });
@@ -15603,19 +15722,31 @@ function validateBlendSum(blends, label) {
       // 내역서 출력
       document.querySelectorAll('.claims-act-report').forEach(btn => {
         btn.addEventListener('click', () => {
-          openClaimReportModal(btn.dataset.id, parseInt(btn.dataset.colorIdx, 10));
+          if (btn.dataset.partial) {
+            openPartialClaimReportModal(btn.dataset.id, parseInt(btn.dataset.colorIdx, 10), parseInt(btn.dataset.discardIdx, 10));
+          } else {
+            openClaimReportModal(btn.dataset.id, parseInt(btn.dataset.colorIdx, 10));
+          }
         });
       });
       // 클레임 수정
       document.querySelectorAll('.claims-act-edit').forEach(btn => {
         btn.addEventListener('click', () => {
-          openDiscardModal(btn.dataset.id, parseInt(btn.dataset.colorIdx, 10));
+          if (btn.dataset.partial) {
+            openPartialClaimEditModal(btn.dataset.id, parseInt(btn.dataset.colorIdx, 10), parseInt(btn.dataset.discardIdx, 10));
+          } else {
+            openDiscardModal(btn.dataset.id, parseInt(btn.dataset.colorIdx, 10));
+          }
         });
       });
       // v2.51 hotfix8: 클레임 삭제
       document.querySelectorAll('.claims-act-delete').forEach(btn => {
         btn.addEventListener('click', () => {
-          openClaimDeleteModal(btn.dataset.id, parseInt(btn.dataset.colorIdx, 10));
+          if (btn.dataset.partial) {
+            deletePartialDiscard(btn.dataset.id, parseInt(btn.dataset.colorIdx, 10), parseInt(btn.dataset.discardIdx, 10));
+          } else {
+            openClaimDeleteModal(btn.dataset.id, parseInt(btn.dataset.colorIdx, 10));
+          }
         });
       });
     }
