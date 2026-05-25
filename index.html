@@ -5043,11 +5043,16 @@
     font-variant-numeric: tabular-nums;
     letter-spacing: 0.2px;
   }
-  /* v2.53 hotfix27: 의뢰칸에 표시되는 부족분 (빨강), 비고칸의 원래수량(中) */
+  /* v2.53 hotfix27: 의뢰칸에 표시되는 부족분, 비고칸의 원래수량(中) */
+  /* v2.53 hotfix28: 빨강 → 연한 강조로 (좌측 ⏳ 기호로 이미 표시되므로) */
   .dr-qty-lack {
-    color: #b3261e;
+    color: #1a2230;
     font-weight: 800;
     font-variant-numeric: tabular-nums;
+  }
+  .dr-lack-mark {
+    font-size: 13px;
+    opacity: 0.85;
   }
   .dr-remark-total {
     color: #8a94a6;
@@ -13407,9 +13412,11 @@ function validateBlendSum(blends, label) {
     const rowCls = 'dr-row' + (urgent ? ' dr-urgent' : '') + (hasLack ? ' dr-has-lack' : '');
     // v2.53 hotfix26: 공정 태그는 단색(차분한 남색)으로 통일 — 거래처 문서 산만함 제거
     const tagHtml = processTag ? `<span class="dr-process-tag">${escapeHtml(processTag)}</span>` : '';
+    // v2.53 hotfix28: 좌측 표시칸 — 긴급은 🚨(우선), 부족분은 ⏳ 기호
+    const markCell = urgent ? '🚨' : (hasLack ? '<span class="dr-lack-mark">⏳</span>' : '');
 
     return `<tr class="${rowCls}">
-      <td class="dr-urgent-col">${urgent ? '🚨' : ''}</td>
+      <td class="dr-urgent-col">${markCell}</td>
       <td class="dr-date">${escapeHtml(shortOrderDate(wo.date))}</td>
       <td class="dr-item">${tagHtml}${escapeHtml(item_text)}</td>
       <td class="dr-color">${escapeHtml(color_text)}</td>
@@ -13478,26 +13485,28 @@ function validateBlendSum(blends, label) {
   // 보고서 하단 수량 합계 (몸판/부속/총)
   // 컬러의 body, rib 필드는 "절" 단위
   function renderReportSummary(items) {
-    let totalBody = 0, totalRib = 0;
+    // v2.53 hotfix28 (박 대표 지시 정정): 이 일일보고는 거래처에게
+    //   "내가 의뢰한 것 중 아직 안 보낸 부족분이 이만큼 있다"를 알리는 문서.
+    //   → 합계 = 각 컬러의 미출고 부족분(getUnresolvedShortage) 총합.
+    //   다 들어온 컬러는 부족 0이라 합계에 0으로 반영됨.
+    let lackBody = 0, lackRib = 0;
     items.forEach(it => {
       const c = (it.wo.colors || [])[it.colorIdx] || {};
-      // v2.53 hotfix27: 합계는 "원래 작업수량"(의뢰량) 기준 — 부족분 차감하지 않음.
-      totalBody += parseFloat(c.body) || 0;
-      totalRib += parseFloat(c.rib) || 0;
+      lackBody += getUnresolvedShortageBody(c);
+      lackRib += getUnresolvedShortageRib(c);
     });
     // 정수면 정수, 소수 있으면 소수1자리
     const fmt = (n) => {
       if (n === 0) return '0';
       return Number.isInteger(n) ? String(n) : n.toFixed(1);
     };
-    const total = totalBody + totalRib;
-    // v2.53 hotfix27: 미입고 합계 표시 삭제 — 몸판/부속/총수량만 노출 (박 대표 지시)
+    const total = lackBody + lackRib;
     return `<div class="dr-summary">
-      <span class="dr-summary-item"><span class="dr-summary-label">몸판 합계</span> <strong>${fmt(totalBody)}</strong> 절</span>
+      <span class="dr-summary-item"><span class="dr-summary-label">미출고 몸판</span> <strong>${fmt(lackBody)}</strong> 절</span>
       <span class="dr-summary-sep">/</span>
-      <span class="dr-summary-item"><span class="dr-summary-label">부속 합계</span> <strong>${fmt(totalRib)}</strong> 절</span>
+      <span class="dr-summary-item"><span class="dr-summary-label">미출고 부속</span> <strong>${fmt(lackRib)}</strong> 절</span>
       <span class="dr-summary-sep">/</span>
-      <span class="dr-summary-item dr-summary-total"><span class="dr-summary-label">총 수량</span> <strong>${fmt(total)}</strong> 절</span>
+      <span class="dr-summary-item dr-summary-total"><span class="dr-summary-label">미출고 합계</span> <strong>${fmt(total)}</strong> 절</span>
     </div>`;
   }
   
@@ -19409,8 +19418,9 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix27';
+  const VERSION = 'v2.53 hotfix28';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
+  // hotfix28: 일일보고 합계=완납건만 카운트(부족건 제외)/컬럼정렬 보정/부족분 ⏳기호(좌측 표시칸)/의뢰칸 연한색
   // hotfix27: 일일보고 의뢰칸=부족분(6/0)·비고=원래수량(36/4中)·완납삭제·합계는 의뢰전체 유지
   // hotfix26: 거래처 일일보고 디자인 리뉴얼(레터헤드 톤/수량·부족 칸 분리/공정태그 단색 통일/차분한 강조)
   // hotfix25: 거래처 일일보고에 미해결 부족분 컬러 포함(QC대기/통과여도 부족분 남으면 노출)
