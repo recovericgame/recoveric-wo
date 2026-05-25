@@ -11422,9 +11422,24 @@ function validateBlendSum(blends, label) {
       }));
     }
 
-    events.sort((a, b) => (a.at || '').localeCompare(b.at || ''));
-
-    // ── 카드 렌더 ──
+    // v2.53 hotfix22: 정렬 보강.
+    //   - 같은 날짜라 시각이 비거나 동일할 때 순서가 흔들리던 문제 해결.
+    //   - 1차: 시각(at) 오름차순. 2차: 입고는 receipt_no, 입고끼리가 아니면 종류 우선순위(입고<재염<땡처리<종결).
+    const kindOrder = { in: 0, redye: 1, discard: 2, settle: 3 };
+    events.forEach((e, i) => { e._seq = i; });
+    events.sort((a, b) => {
+      const ta = (a.at || ''), tb = (b.at || '');
+      // 둘 다 입고면 receipt_no 우선 (시각 무관하게 차수 순서 보장)
+      if (a.kind === 'in' && b.kind === 'in') {
+        return (a.receipt_no || 0) - (b.receipt_no || 0);
+      }
+      // 시각이 있으면 시각 비교
+      if (ta && tb && ta !== tb) return ta.localeCompare(tb);
+      // 시각이 같거나 없으면 종류 우선순위
+      const ka = kindOrder[a.kind] ?? 9, kb = kindOrder[b.kind] ?? 9;
+      if (ka !== kb) return ka - kb;
+      return a._seq - b._seq;
+    });
     function qcGrid(qc) {
       if (!qc) return '';
       const items = [];
@@ -11815,8 +11830,19 @@ function validateBlendSum(blends, label) {
     let historyHtml = '';
     {
       // 입고/재염/땡처리 이벤트를 한 타임라인으로 통합 (날짜순)
+      // v2.53 hotfix22: 입고 소스를 shortage_history → receipts로 교체.
+      //   (shortage_history는 동기화 누락으로 땡처리/메모가 어긋나던 문제 해결)
       const events = [];
-      if (Array.isArray(c.shortage_history)) {
+      if (Array.isArray(c.receipts)) {
+        c.receipts.forEach(r => events.push({
+          at: r.received_at || '',
+          kind: 'in',
+          receipt_no: r.receipt_no || 0,
+          label: `📦 ${r.receipt_no || ''}차 입고`,
+          memo: (r.memo && r.memo !== '최초 입고') ? r.memo : '',
+          qty: `몸판 ${num(r.received_body) || 0} · 리프 ${num(r.received_rib) || 0}`
+        }));
+      } else if (Array.isArray(c.shortage_history)) {
         c.shortage_history.forEach(h => events.push({
           at: h.received_at || '',
           kind: 'in',
@@ -11855,6 +11881,16 @@ function validateBlendSum(blends, label) {
           qty: `몸판 ${d.body || 0} · 리프 ${d.rib || 0}`
         }));
       }
+      // v2.53 hotfix22: 컬러 전체 땡처리(단일필드, discard_history 없는 옛 데이터) 폴백
+      if (c.qc_status === 'discard' && !(Array.isArray(c.discard_history) && c.discard_history.length > 0)) {
+        events.push({
+          at: c.discard_at || '',
+          kind: 'discard',
+          label: '⚠ 땡처리',
+          memo: '',
+          qty: `몸판 ${num(c.discard_body) || num(c.body) || 0} · 리프 ${num(c.discard_rib) || num(c.rib) || 0}`
+        });
+      }
       if (Array.isArray(c.shortage_settle_history)) {
         c.shortage_settle_history.forEach(s => events.push({
           at: s.at || '',
@@ -11864,7 +11900,17 @@ function validateBlendSum(blends, label) {
           qty: `몸판 ${s.body || 0} · 리프 ${s.rib || 0}`
         }));
       }
-      events.sort((a, b) => (a.at || '').localeCompare(b.at || ''));
+      // v2.53 hotfix22: 정렬 보강 (전체이력과 동일 — 입고는 receipt_no순, 동시각은 종류순)
+      const _kindOrder = { in: 0, redye: 1, discard: 2, settle: 3 };
+      events.forEach((e, i) => { e._seq = i; });
+      events.sort((a, b) => {
+        const ta = (a.at || ''), tb = (b.at || '');
+        if (a.kind === 'in' && b.kind === 'in') return (a.receipt_no || 0) - (b.receipt_no || 0);
+        if (ta && tb && ta !== tb) return ta.localeCompare(tb);
+        const ka = _kindOrder[a.kind] ?? 9, kb = _kindOrder[b.kind] ?? 9;
+        if (ka !== kb) return ka - kb;
+        return a._seq - b._seq;
+      });
       if (events.length > 0) {
         const colorOf = { in: '#1e40af', redye: '#d97706', discard: '#b91c1c', settle: '#047857' };
         historyHtml = `
@@ -14302,7 +14348,8 @@ function validateBlendSum(blends, label) {
         <td rowspan="${totalRows}">${escapeHtml(wo.body?.item || '-')}</td>` : '';
       
       // ★ 컬러 단위 셀 (매 행)
-      const colorCell = `<td>${escapeHtml(colorName)}</td>`;
+      const _histIcon = (colorIdx >= 0) ? ` <span class="hist-icon-btn" data-hist-id="${wo.id}" data-hist-color="${colorIdx}" title="전체 작업 이력 보기" style="cursor:pointer;color:#6366f1;font-size:12px;">📜</span>` : '';
+      const colorCell = `<td>${escapeHtml(colorName)}${_histIcon}</td>`;
       // v2.53 hotfix7: sizeText는 부족분 시 이미 HTML(size-shortage div)로 만들어지므로
       //   escapeHtml로 감싸면 코드가 글자 그대로 노출됨 → escape 제거.
       //   (순수 텍스트 경우는 body/rib 숫자뿐이라 escape 불필요·안전)
@@ -17460,7 +17507,10 @@ function validateBlendSum(blends, label) {
     else if (isDefectMode) titlePrefix = '⚠ 불량 처리';
     else if (isDoneMode) titlePrefix = '✓ QC 완료 데이터';
     else titlePrefix = 'QC 검수 입력';
-    document.getElementById('dash-modal-title').textContent = `${titlePrefix} — ${wo.wo_number || ''} / ${c.name || `컬러 #${colorIdx + 1}`}`;
+    // v2.53 hotfix23: 제목에 현재 차수 표시 (헷갈림 방지)
+    const _multiReceipt = Array.isArray(c.receipts) && c.receipts.length >= 2;
+    const _receiptTag = (_multiReceipt && activeReceiptNo) ? ` 【${activeReceiptNo}차】` : '';
+    document.getElementById('dash-modal-title').textContent = `${titlePrefix}${_receiptTag} — ${wo.wo_number || ''} / ${c.name || `컬러 #${colorIdx + 1}`}`;
     
     // 미리보기 전용 액션 버튼 숨김
     const actionsBox = document.getElementById('dash-modal-actions');
@@ -17513,6 +17563,27 @@ function validateBlendSum(blends, label) {
           ${memos.map(m => escapeHtml(m)).join('<br>')}
         </div>`;
       }
+    }
+
+    // v2.53 hotfix22: QC 상단에 재염/땡처리 현황 표시 (읽기 전용, 색 구분)
+    let redyeDiscardBox = '';
+    {
+      const boxes = [];
+      const redyeB = num(c.redye_body) || 0, redyeR = num(c.redye_rib) || 0;
+      if (c.redye_transferred_to && (redyeB > 0 || redyeR > 0)) {
+        boxes.push(`<div style="margin-top:8px;padding:9px 12px;background:#fff7ed;border:1px solid #fdba74;border-radius:6px;color:#9a3412;font-size:13px;line-height:1.5;">
+          <strong>🔄 재염 이관</strong> — 몸판 ${redyeB} · 리프 ${redyeR}절 → <strong>${escapeHtml(c.redye_transferred_to)}</strong>
+        </div>`);
+      }
+      const discB = num(c.discard_body) || 0, discR = num(c.discard_rib) || 0;
+      if (discB > 0 || discR > 0 || c.qc_status === 'discard') {
+        const db = (discB > 0 || discR > 0) ? discB : (num(c.body) || 0);
+        const dr = (discB > 0 || discR > 0) ? discR : (num(c.rib) || 0);
+        boxes.push(`<div style="margin-top:8px;padding:9px 12px;background:#fef2f2;border:1px solid #fca5a5;border-radius:6px;color:#b91c1c;font-size:13px;line-height:1.5;">
+          <strong>⚠ 땡처리</strong> — 몸판 ${db} · 리프 ${dr}절 (클레임 처리됨)
+        </div>`);
+      }
+      redyeDiscardBox = boxes.join('');
     }
 
     // 재작업 카운트 배지 (재작업 1회 이상)
@@ -17592,7 +17663,7 @@ function validateBlendSum(blends, label) {
         </button>`;
       }).join('');
       receiptTabsHtml = `
-        <div style="padding:10px 14px;background:#eff6ff;border-bottom:2px solid #2563eb;display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+        <div style="position:sticky;top:0;z-index:20;padding:10px 14px;background:#eff6ff;border-bottom:2px solid #2563eb;display:flex;gap:6px;flex-wrap:wrap;align-items:center;box-shadow:0 2px 6px rgba(37,99,235,0.15);">
           <span style="font-size:11px;color:#1e40af;font-weight:700;margin-right:4px;">입고 차수별 QC:</span>
           ${tabs}
         </div>`;
@@ -17612,6 +17683,7 @@ function validateBlendSum(blends, label) {
           ${discardInfo}
           ${shortageInfo}
           ${adminMemoBox}
+          ${redyeDiscardBox}
         </div>
         <div class="qc-modal-form">
           <div class="qc-field qc-field-full">
@@ -19016,7 +19088,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix21';
+  const VERSION = 'v2.53 hotfix23';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix19: 차수별저장/부족분QC완료/야드중량잠금/재염·땡처리 부분처리+이력+클레임연동/부분땡처리 별개건(검정방지)/땡처리삭제3옵션(청구취소·되돌리기·완전삭제)/청구액콤마/KPI클레임카드
   // title (브라우저 탭)
