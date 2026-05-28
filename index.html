@@ -4623,6 +4623,19 @@
     letter-spacing: 6px;
     margin-bottom: 12px;
   }
+  /* hotfix33: 부분 땡처리용 부제 */
+  .claim-report-subtitle {
+    font-size: 12px;
+    font-weight: 600;
+    color: #92400e;
+    background: #fef9c3;
+    border: 1px solid #fde047;
+    border-radius: 4px;
+    padding: 4px 10px;
+    display: inline-block;
+    margin-bottom: 10px;
+    letter-spacing: 0;
+  }
   .claim-report-divider {
     height: 2px;
     background: #111827;
@@ -11190,26 +11203,86 @@ function validateBlendSum(blends, label) {
     if (!wo) { toast('의뢰서를 찾을 수 없음', 'error'); return; }
     const c = (wo.colors || [])[colorIdx];
     if (!c || !Array.isArray(c.discard_history) || !c.discard_history[discardIdx]) { toast('땡처리 항목을 찾을 수 없음', 'error'); return; }
-    const d = c.discard_history[discardIdx];
-    const cl = d.claim || {};
-    const cName = c.name || `컬러 #${colorIdx + 1}`;
     const modal = document.getElementById('dash-modal-bg');
     if (!modal) { toast('모달 요소 없음', 'error'); return; }
     document.getElementById('dash-modal-title').textContent = '정산(클레임) 내역서';
-    ['dash-modal-image', 'dash-modal-copy', 'dash-modal-print', 'dash-modal-kakao'].forEach(id => { const b = document.getElementById(id); if (b) b.style.display = ''; });
+    // 외곽 액션 버튼 숨김 (자체 액션 버튼 사용 - openClaimReportModal과 동일 UX)
+    ['dash-modal-image', 'dash-modal-copy', 'dash-modal-print', 'dash-modal-kakao'].forEach(id => {
+      const b = document.getElementById(id);
+      if (b) b.style.display = 'none';
+    });
     document.getElementById('dash-modal-body').innerHTML = `
-      <div style="padding:16px;font-size:14px;line-height:1.8;">
-        <div style="border-bottom:2px solid #111;padding-bottom:8px;margin-bottom:12px;font-weight:700;font-size:16px;">⚠ 부족분 땡처리(종결) 정산</div>
-        <div>의뢰서: <strong>${escapeHtml(wo.wo_number || '-')}</strong></div>
-        <div>품목: ${escapeHtml(wo.body?.item || '-')}</div>
-        <div>대상 컬러: <strong>${escapeHtml(cName)}</strong> · 땡처리 ${d.body || 0}/${d.rib || 0}절</div>
-        <div style="margin-top:10px;">처리일: ${(d.at || '').slice(0,10)}</div>
-        <div>청구 책임처: <strong>${cl.recipient ? escapeHtml(cl.recipient) : '(미입력)'}</strong></div>
-        <div>결정 사유: ${escapeHtml(cl.reason || d.memo || '(미입력)')}</div>
-        <div style="background:#fef9c3;padding:8px;margin-top:10px;border-radius:6px;">청구 금액: <strong style="font-size:18px;">₩${formatMoney(cl.amount || 0)}</strong></div>
-        <div style="text-align:right;margin-top:16px;font-weight:700;">현일텍스 주식회사 드림</div>
-      </div>`;
+      <div class="claim-report-modal">
+        ${renderClaimReportHTML(wo, colorIdx, discardIdx)}
+        <div class="claim-report-actions no-print">
+          <button type="button" id="claim-report-copy" class="claim-rpt-btn claim-rpt-btn-copy">📋 이미지 복사</button>
+          <button type="button" id="claim-report-print" class="claim-rpt-btn claim-rpt-btn-print">🖨 인쇄</button>
+          <button type="button" id="claim-report-edit" class="claim-rpt-btn claim-rpt-btn-edit">✎ 클레임 정보 수정</button>
+          <button type="button" id="claim-report-close" class="claim-rpt-btn claim-rpt-btn-close">닫기</button>
+        </div>
+      </div>
+    `;
     modal.classList.add('show');
+
+    // 이미지 복사 (html2canvas) — openClaimReportModal과 동일 로직
+    document.getElementById('claim-report-copy').addEventListener('click', async () => {
+      const target = document.getElementById('claim-report-content');
+      if (!target) { toast('대상을 찾을 수 없음', 'error'); return; }
+      const btn = document.getElementById('claim-report-copy');
+      btn.disabled = true; btn.textContent = '캡처 중...';
+      try {
+        const canvas = await html2canvas(target, { scale: 2, backgroundColor: '#ffffff', useCORS: true });
+        canvas.toBlob(async blob => {
+          if (!blob) { toast('캡처 실패', 'error'); btn.disabled = false; btn.textContent = '📋 이미지 복사'; return; }
+          try {
+            await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+            toast('이미지가 클립보드에 복사되었습니다. 카카오톡 등에 바로 붙여넣기 가능합니다.', 'success');
+          } catch (e) {
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `claim_${wo.wo_number || 'report'}_${(c.name || 'color').replace(/\s+/g, '_')}_부분${discardIdx + 1}.png`;
+            a.click();
+            URL.revokeObjectURL(url);
+            toast('클립보드 복사 차단됨 — 이미지로 다운로드되었습니다.', 'warning');
+          }
+          btn.disabled = false; btn.textContent = '📋 이미지 복사';
+        }, 'image/png');
+      } catch (e) {
+        btn.disabled = false; btn.textContent = '📋 이미지 복사';
+        toast('이미지 생성 실패: ' + e.message, 'error');
+      }
+    });
+
+    // 인쇄
+    document.getElementById('claim-report-print').addEventListener('click', () => {
+      const target = document.getElementById('claim-report-content');
+      if (!target) return;
+      const w = window.open('', '_blank', 'width=800,height=900');
+      if (!w) { toast('팝업 차단됨 — 브라우저 설정에서 허용해 주세요.', 'warning'); return; }
+      const styles = Array.from(document.querySelectorAll('style, link[rel="stylesheet"]'))
+        .map(el => el.outerHTML).join('\n');
+      const scriptOpen = '<' + 'script>';
+      const scriptClose = '<' + '/' + 'script>';
+      const printScript = scriptOpen + 'window.onload=function(){setTimeout(function(){window.print();},150);};' + scriptClose;
+      const printDoc = '<!doctype html><html><head><meta charset="utf-8">' +
+        '<title>정산 내역서 ' + (wo.wo_number || '') + '</title>' +
+        styles +
+        '<style>body{background:#fff;padding:20px;}.no-print{display:none !important;}@media print{body{padding:0;}}</style>' +
+        '</head><body>' + target.outerHTML + printScript + '</body></html>';
+      w.document.write(printDoc);
+      w.document.close();
+    });
+
+    // 클레임 정보 수정 — 부분 땡처리 전용 수정 모달 호출
+    document.getElementById('claim-report-edit').addEventListener('click', () => {
+      modal.classList.remove('show');
+      setTimeout(() => openPartialClaimEditModal(woId, colorIdx, discardIdx), 100);
+    });
+
+    document.getElementById('claim-report-close').addEventListener('click', () => {
+      modal.classList.remove('show');
+    });
   }
 
   // v2.53 hotfix19: 부분 땡처리 항목 삭제 — 3가지 옵션
@@ -13067,15 +13140,29 @@ function validateBlendSum(blends, label) {
   
   // 정산(클레임) 내역서 — 거래처 발송용 공식 양식
   // 누적 클레임 통계는 거래처 양식엔 미노출
-  function renderClaimReportHTML(wo, colorIdx) {
+  // hotfix33: discardIdx 인자가 있으면 부분 땡처리 모드 (그 건의 수량·사유·금액·청구처 사용)
+  //           없으면 전체 땡처리 모드 (컬러 전체 claim 사용)
+  function renderClaimReportHTML(wo, colorIdx, discardIdx) {
     const ctx = pickClaimContext(wo, colorIdx);
     const c = (wo.colors || [])[colorIdx] || {};
-    const claim = c.claim || {};
-    
+
+    // 부분 / 전체 분기
+    const isPartial = (typeof discardIdx === 'number' && discardIdx >= 0 &&
+                       Array.isArray(c.discard_history) && c.discard_history[discardIdx]);
+    const d = isPartial ? c.discard_history[discardIdx] : null;
+    const claim = isPartial ? (d.claim || {}) : (c.claim || {});
+
+    // 부분 땡처리는 그 건의 수량 / 전체는 컬러의 의뢰량 표시
+    const claimBody = isPartial ? (d.body || 0) : ctx.body_jul;
+    const claimRib  = isPartial ? (d.rib  || 0) : ctx.rib_jul;
+
     const today = new Date();
     const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-    
-    // 측정값 표시 (있는 것만)
+
+    // 처리일 (부분 땡처리는 d.at, 전체는 오늘)
+    const processDate = isPartial && d.at ? d.at.slice(0, 10) : dateStr;
+
+    // 측정값 표시 (있는 것만) - 컬러 QC 기준 (부분/전체 동일)
     const measureLines = [];
     if (ctx.qc_width !== '') {
       const w = ctx.qc_double ? `${ctx.qc_width}인치 (더블 → 실제 ${ctx.qc_actual_width}인치)` : `${ctx.qc_width}인치`;
@@ -13085,17 +13172,28 @@ function validateBlendSum(blends, label) {
     if (ctx.qc_sqm_weight !== '') measureLines.push(`스퀘어중량: ${ctx.qc_sqm_weight}g/㎡`);
     if (ctx.qc_shrink_w !== '') measureLines.push(`폭축률: ${ctx.qc_shrink_w}%`);
     if (ctx.qc_shrink_l !== '') measureLines.push(`장축률: ${ctx.qc_shrink_l}%`);
-    
+
     // 몸판/부속 표시
     const sizeText = [
-      ctx.body_jul ? `몸판 ${ctx.body_jul}절` : '',
-      ctx.rib_jul ? `부속 ${ctx.rib_jul}절` : ''
+      claimBody ? `몸판 ${claimBody}절` : '',
+      claimRib  ? `부속 ${claimRib}절`  : ''
     ].filter(Boolean).join(' · ');
+
+    // 부분 땡처리 사유: claim.reason 우선, 없으면 d.memo
+    const reasonText = isPartial
+      ? (claim.reason || d.memo || '-')
+      : (claim.reason || '-');
+
+    // 부분 땡처리 표식 (양식 제목 옆 작은 부제)
+    const subtitle = isPartial
+      ? `<div class="claim-report-subtitle">부분 정산 (전체 의뢰량 중 일부 ${claimBody || 0}/${claimRib || 0}절 청구)</div>`
+      : '';
     
     return `
       <div class="claim-report" id="claim-report-content">
         <div class="claim-report-header">
           <div class="claim-report-title">정산(클레임) 내역서</div>
+          ${subtitle}
           <div class="claim-report-divider"></div>
           <div class="claim-report-meta">
             <div><span>발행일자</span><strong>${dateStr}</strong></div>
@@ -13111,6 +13209,7 @@ function validateBlendSum(blends, label) {
             ${ctx.lot_no ? `<tr><th>LOT</th><td>${escapeHtml(ctx.lot_no)}</td></tr>` : ''}
             ${ctx.item ? `<tr><th>품목</th><td>${escapeHtml(ctx.item)}${ctx.blend ? ' · ' + escapeHtml(ctx.blend) : ''}</td></tr>` : ''}
             <tr><th>대상 컬러</th><td><strong>${escapeHtml(ctx.color_name || '-')}</strong>${sizeText ? ' (' + escapeHtml(sizeText) + ')' : ''}</td></tr>
+            ${isPartial ? `<tr><th>처리일</th><td>${escapeHtml(processDate)}</td></tr>` : ''}
           </table>
         </div>
         
@@ -13136,8 +13235,8 @@ function validateBlendSum(blends, label) {
         <div class="claim-report-section">
           <div class="claim-report-section-title">처리 결정</div>
           <table class="claim-report-table">
-            <tr><th>결정</th><td><strong>땡처리</strong></td></tr>
-            <tr><th>결정 사유</th><td style="white-space:pre-wrap;">${escapeHtml(claim.reason || '-')}</td></tr>
+            <tr><th>결정</th><td><strong>땡처리${isPartial ? ' (부분 정산)' : ''}</strong></td></tr>
+            <tr><th>결정 사유</th><td style="white-space:pre-wrap;">${escapeHtml(reasonText)}</td></tr>
             <tr class="claim-report-amount-row"><th>청구 금액</th><td><strong class="claim-report-amount">₩${formatMoney(claim.amount || 0)}</strong></td></tr>
             ${claim.unit_price ? `<tr><th>땡처리 단가</th><td>₩${formatMoney(claim.unit_price)}</td></tr>` : ''}
           </table>
@@ -19521,8 +19620,9 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix32';
+  const VERSION = 'v2.53 hotfix33';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
+  // hotfix33: 클레임(땡처리) 내역서 양식 통일 — 부분/전체 모두 정식 표 양식 + 이미지복사/인쇄/수정 동일 버튼
   // hotfix32: 편직진행 화면 - 거래처별/전체 "예상 재고 절·kg" 합계 박스 추가 (필터 줄 우측)
   // hotfix31: 편직진행 표 "예상 재고 절" 폰트 컬러 검정→빨강(가독성)
   // hotfix30: 일일보고 문서헤더에 긴급(🚨) 배지도 표시(부족만 뜨던 문제) - 가공소 긴급 인지용
