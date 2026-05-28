@@ -1427,6 +1427,85 @@
       padding: 6px 10px;
     }
   }
+
+  /* hotfix34: 편직 성격(kind) 필터 콤보 */
+  .dash-kind-filter {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: 8px;
+    padding: 4px 8px;
+    background: #fff;
+    border: 1px solid #ccc;
+    border-radius: 3px;
+    font-size: 11px;
+  }
+  .dash-kind-label {
+    color: #555;
+    font-weight: 600;
+  }
+  .dash-kind-select {
+    padding: 3px 6px;
+    border: 1px solid #aaa;
+    border-radius: 2px;
+    font-size: 11px;
+    font-family: inherit;
+    background: #fff;
+    cursor: pointer;
+    max-width: 200px;
+  }
+  .dash-kind-select:focus {
+    outline: 1px solid #555;
+    outline-offset: -1px;
+  }
+
+  /* hotfix34: 편직 표 row의 성격 배지 (●정규 / ●재고 / ●샘플 / ●완료) */
+  .kind-badge {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 700;
+    padding: 1px 5px;
+    border-radius: 3px;
+    margin-right: 5px;
+    cursor: pointer;
+    user-select: none;
+    line-height: 1.4;
+    vertical-align: middle;
+  }
+  .kind-badge:hover {
+    filter: brightness(0.92);
+    outline: 1px solid #333;
+  }
+  /* 완료 성격 행은 한층 흐리게 (이미 .completed 흐림 적용된 상태에서 추가) */
+  .dash-table tr.row-kind-done td {
+    opacity: 0.62;
+  }
+  .dash-table tr.row-kind-done .kind-badge {
+    opacity: 0.85;
+  }
+  /* hotfix34: 배지 클릭 시 뜨는 작은 메뉴 */
+  .kind-badge-menu {
+    background: #fff;
+    border: 1px solid #4b5563;
+    border-radius: 4px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    padding: 4px 0;
+    min-width: 90px;
+    font-size: 12px;
+  }
+  .kind-badge-menu-item {
+    padding: 6px 12px;
+    cursor: pointer;
+    user-select: none;
+    color: #111827;
+  }
+  .kind-badge-menu-item:hover {
+    background: #f3f4f6;
+  }
+  .kind-badge-menu-item.active {
+    background: #eff6ff;
+    font-weight: 700;
+  }
   
   @media (max-width: 768px) {
     .dash-filter-bar {
@@ -5370,9 +5449,17 @@
     <div id="form-knit" style="display:none;">
       <div class="section">
         <div class="section-title">기본 정보</div>
-        <div class="row row-2">
+        <div class="row row-3">
           <div class="field"><label>의뢰일</label><input type="date" id="k_date"></div>
           <div class="field"><label>수신처 (편직 공장)</label><input type="text" lang="ko" id="k_recipient" placeholder="세원"></div>
+          <div class="field"><label>성격 <span style="color:#9ca3af;font-weight:400;">(자동 추천)</span></label>
+            <select id="k_kind">
+              <option value="regular">정규 — 일반 발주 (거래처 일일보고에 포함)</option>
+              <option value="stock">재고 — 기존 재고 사용 (일일보고 제외)</option>
+              <option value="sample">샘플 — 소량 샘플 (보고서 별도 섹션)</option>
+              <option value="done">완료 — 출고 끝남 (더 진행 없음)</option>
+            </select>
+          </div>
         </div>
       </div>
       <div class="section">
@@ -5967,6 +6054,10 @@ const state = {
     knit:     'all',
     finish:   'all',
     bt:       'all'
+  },
+  // hotfix34: 편직 성격(kind) 필터 — 'all' | 'regular' | 'stock' | 'sample' | 'done'
+  kindFilter: {
+    knit: 'all'
   }
 };
 
@@ -6671,6 +6762,7 @@ function getFormData() {
       type: '편직',
       date: document.getElementById('k_date').value,
       recipient: document.getElementById('k_recipient').value,
+      kind: document.getElementById('k_kind').value || 'regular',
       items,
       cautions: getKnitCautionData(),
       notes: document.getElementById('k_notes').value,
@@ -6771,7 +6863,7 @@ function getFormData() {
 //   - 기존에만 존재 + 완료/QC/땡처리 상태 → 안전을 위해 자동 보존
 //   - 기존에만 존재 + 진행 중 → 폼에서 의도적으로 지운 것으로 보고 제외
 // ============================================================
-const PROTECTED_WO_FIELDS = ['internal_memo', 'urgent_memo'];
+const PROTECTED_WO_FIELDS = ['internal_memo', 'urgent_memo', 'kind'];
 // ==================== v2.53: 입고 차수별 QC 데이터 분리 ====================
 // 박 대표 발견 이슈: 같은 컬러여도 입고 차수가 다르면 다른 탕에서 염색된 다른 원단
 //   - 1차 5절 → A탕 → 폭 76, 야드중량 195
@@ -7058,6 +7150,53 @@ const PROTECTED_COLOR_FIELDS = [
   'receipts_cleared_at'
 ];
 
+// ===== hotfix34: 편직 성격(kind) 시스템 =====
+// 4가지 태그: 'regular'(정규) | 'stock'(재고) | 'sample'(샘플) | 'done'(완료)
+//
+// 자동 분류 우선순위 (위에서 아래로):
+//   1. wo.completed === true                        → 'done'
+//   2. 공유코드/품목명에 "샘플" 포함, 또는 의뢰량 5절 이하 + 메모에 "샘플"  → 'sample'
+//   3. 메모에 "기존원사사용" / "재고" / "재고파악"     → 'stock'
+//   4. 그 외                                         → 'regular'
+function inferKnitKind(wo) {
+  if (!wo) return 'regular';
+  if (wo.completed === true) return 'done';
+  const items = wo.items || [];
+  const firstItem = items[0] || {};
+  const codeText = [firstItem.shared_code, firstItem.wo_no, wo.wo_number].filter(Boolean).join(' ');
+  const itemText = items.map(i => i.item || '').join(' ');
+  const memoText = [wo.internal_memo, wo.notes].filter(Boolean).join(' ');
+  // 샘플 판정
+  const looksSampleByCode  = /샘플/.test(codeText) || /샘플/.test(itemText);
+  const totalJul = items.reduce((s,i) => s + (parseFloat(i.jul) || 0), 0);
+  const looksSampleByQty   = totalJul > 0 && totalJul <= 5 && /샘플/.test(memoText);
+  if (looksSampleByCode || looksSampleByQty) return 'sample';
+  // 재고 판정 (메모만 봄)
+  if (/기존원사사용|재고파악|기존재고/.test(memoText)) return 'stock';
+  return 'regular';
+}
+
+// 옛 데이터 자동 분류 — 편직 진행 화면 첫 진입 시 1회 실행
+//   - kind가 이미 박혀 있으면 손대지 않음
+//   - 없는 경우만 추론해서 채움
+//   - Firestore 저장은 안 함 (lazy migrate). 다음 [수정→저장] 또는 [완료체크] 때 자연스레 영구화
+function migrateKnitKind() {
+  (state.allWorkOrders || []).forEach(wo => {
+    if (wo.type !== '편직') return;
+    if (wo.kind) return;
+    wo.kind = inferKnitKind(wo);
+  });
+}
+
+// kind 표시용 메타 (라벨/색/배경)
+const KNIT_KIND_META = {
+  regular: { label: '정규', dot: '#1d4ed8', bg: '#dbeafe', text: '#1e3a8a' },
+  stock:   { label: '재고', dot: '#6b7280', bg: '#f3f4f6', text: '#374151' },
+  sample:  { label: '샘플', dot: '#b45309', bg: '#fef3c7', text: '#78350f' },
+  done:    { label: '완료', dot: '#9ca3af', bg: '#f9fafb', text: '#6b7280' }
+};
+function kindMeta(k) { return KNIT_KIND_META[k] || KNIT_KIND_META.regular; }
+
 // 컬러가 "보호 대상"인지 (완료됐거나 QC/땡처리 어떤 상태든 들어간 컬러)
 function isProtectedColor(c) {
   if (!c) return false;
@@ -7191,6 +7330,7 @@ function setFormData(d, opts={}) {
   } else if (d.type === '편직') {
     document.getElementById('k_date').valueAsDate = isClone ? today : (d.date ? new Date(d.date) : today);
     document.getElementById('k_recipient').value = d.recipient || '';
+    document.getElementById('k_kind').value = d.kind || inferKnitKind(d) || 'regular';
     document.getElementById('k_notes').value = d.notes || '';
     document.getElementById('knit-items').innerHTML = '';
     if (d.items && d.items.length > 0) {
@@ -7331,6 +7471,7 @@ function resetForm() {
   } else if (state.currentType === '편직') {
     document.getElementById('k_date').valueAsDate = today;
     ['k_recipient','k_notes'].forEach(id => document.getElementById(id).value = '');
+    document.getElementById('k_kind').value = 'regular';
     document.getElementById('knit-items').innerHTML = '';
     addKnitRow();
     state.savedKnitCautions = null;
@@ -9379,12 +9520,58 @@ function validateBlendSum(blends, label) {
     } catch(e) {}
   }
   loadVendorFilter();
+  // hotfix34: 편직 성격 필터 localStorage 복원
+  // (loadKnitKindFilter 정의는 handleVendorFilterChange 다음에 있으므로 forward reference 안전 위해 try)
+  try { if (typeof loadKnitKindFilter === 'function') loadKnitKindFilter(); } catch(_){}
   // 변경 핸들러 (이벤트 위임용)
   function handleVendorFilterChange(viewKey, value) {
     if (!state.vendorFilter[viewKey]) state.vendorFilter[viewKey] = 'all';
     state.vendorFilter[viewKey] = value || 'all';
     saveVendorFilter();
     renderDashboard();
+  }
+
+  // hotfix34: 편직 성격(kind) 필터 변경 + localStorage 저장/복원
+  function handleKnitKindFilterChange(value) {
+    if (!state.kindFilter) state.kindFilter = { knit: 'all' };
+    state.kindFilter.knit = value || 'all';
+    try { localStorage.setItem('hiwos_kind_filter_v1', JSON.stringify(state.kindFilter)); } catch(e) {}
+    renderDashboard();
+  }
+  function loadKnitKindFilter() {
+    try {
+      const saved = JSON.parse(localStorage.getItem('hiwos_kind_filter_v1') || '{}');
+      if (saved && typeof saved.knit === 'string') {
+        if (!state.kindFilter) state.kindFilter = { knit: 'all' };
+        state.kindFilter.knit = saved.knit;
+      }
+    } catch(e) {}
+  }
+  // 의뢰서 한 건의 kind를 즉시 변경 (배지 클릭 → 메뉴 → 선택)
+  async function setKnitKind(woId, newKind) {
+    const wo = state.allWorkOrders.find(w => w.id === woId);
+    if (!wo) { toast('의뢰서를 찾을 수 없음', 'error'); return; }
+    if (wo.type !== '편직') { toast('편직 의뢰서만 성격을 변경할 수 있습니다', 'warning'); return; }
+    if (!['regular','stock','sample','done'].includes(newKind)) return;
+    try {
+      const updates = { kind: newKind, updated_at: serverTimestamp(), updated_by: state.user.email };
+      // 완료 태그 ↔ completed 체크박스 연동 (한쪽만 켜져있는 상태 방지)
+      if (newKind === 'done' && !wo.completed) {
+        updates.completed = true;
+        updates.completed_at = serverTimestamp();
+      } else if (newKind !== 'done' && wo.completed) {
+        updates.completed = false;
+        updates.completed_at = null;
+      }
+      await updateDoc(doc(db, 'workorders', woId), updates);
+      // 로컬 캐시도 즉시 갱신 (다음 렌더링 전 깜빡임 방지)
+      wo.kind = newKind;
+      if (updates.completed !== undefined) wo.completed = updates.completed;
+      toast(`성격: ${kindMeta(newKind).label}`, 'success');
+      renderDashboard();
+    } catch (e) {
+      toast('성격 변경 실패: ' + e.message, 'error');
+    }
   }
   
   // 프리셋 라벨 (사용자 표시용)
@@ -14475,7 +14662,10 @@ function validateBlendSum(blends, label) {
   
   // ===== 편직 진행 화면 =====
   function renderKnitDash() {
-    const list = getDashWorkOrders('편직');
+    // hotfix34: 편직 의뢰서 kind 자동 분류 (lazy migrate, 첫 진입 시 1회)
+    migrateKnitKind();
+
+    let list = getDashWorkOrders('편직');
     const totalCount = state.allWorkOrders.filter(wo => 
       wo.type === '편직' && !wo.deleted && (state.showCompleted || !wo.completed)
     ).length;
@@ -14486,6 +14676,12 @@ function validateBlendSum(blends, label) {
         wo.type === '편직' && !wo.deleted && (state.showCompleted || !wo.completed)
       )
     );
+
+    // hotfix34: kind 필터 적용 (날짜·거래처 필터 이후)
+    const currentKind = state.kindFilter?.knit || 'all';
+    if (currentKind !== 'all') {
+      list = list.filter(wo => (wo.kind || inferKnitKind(wo)) === currentKind);
+    }
     
     let html = renderAddRowBar('knit');
     
@@ -14518,10 +14714,37 @@ function validateBlendSum(blends, label) {
       <span class="dash-knit-sum-val" style="color:${kgColor};">${sumRemainKg.toFixed(1)}kg</span>
     </span>`;
 
+    // hotfix34: 성격(kind) 필터 콤보 + 각 성격별 건수
+    //   날짜·거래처 필터까지는 적용된 풀(=list 산정 직전의 풀)에서 카운트
+    const kindPool = (function() {
+      // getDashWorkOrders는 정렬/완료필터까지 다 적용된 결과를 줌 → 다시 한 번 호출 후 거래처 필터 적용한 게 list (kind 필터 빠진 상태)
+      const basePool = getDashWorkOrders('편직');
+      // 거래처 필터까지 반영
+      const v = state.vendorFilter?.knit;
+      if (!v || v === 'all') return basePool;
+      return basePool.filter(wo => getWoVendorNames(wo).includes(v));
+    })();
+    const kindCounts = { all: kindPool.length, regular: 0, stock: 0, sample: 0, done: 0 };
+    kindPool.forEach(wo => {
+      const k = wo.kind || inferKnitKind(wo);
+      if (kindCounts[k] !== undefined) kindCounts[k]++;
+    });
+    const kindBar = `<span class="dash-kind-filter" title="편직 의뢰서 성격별 필터">
+      <span class="dash-kind-label">성격:</span>
+      <select class="dash-kind-select" data-kind-view="knit">
+        <option value="all"${currentKind==='all'?' selected':''}>전체 (${kindCounts.all})</option>
+        <option value="regular"${currentKind==='regular'?' selected':''}>● 정규 (${kindCounts.regular})</option>
+        <option value="stock"${currentKind==='stock'?' selected':''}>● 재고 (${kindCounts.stock})</option>
+        <option value="sample"${currentKind==='sample'?' selected':''}>● 샘플 (${kindCounts.sample})</option>
+        <option value="done"${currentKind==='done'?' selected':''}>● 완료 (${kindCounts.done})</option>
+      </select>
+    </span>`;
+
     html += `<div style="font-size:11px;color:#555;margin:0 0 6px 4px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
       <span class="dash-legend">발주 5일 이상 경과 (납기 임박)</span>
       ${renderFilterSummary('knit', totalCount, list.length)}
       ${renderVendorFilterBar('knit', knitVendorOptions)}
+      ${kindBar}
       ${sumBox}
     </div>`;
     
@@ -14559,6 +14782,11 @@ function validateBlendSum(blends, label) {
       const elapsed = daysSince(wo.date);
       const overdueClass = !wo.completed && elapsed >= 5 ? 'overdue' : '';
       const completedClass = wo.completed ? 'completed' : '';
+      // hotfix34: 성격(kind) 결정 — 저장된 값이 있으면 그것을, 없으면 즉시 추론
+      const kind = wo.kind || inferKnitKind(wo);
+      const kMeta = kindMeta(kind);
+      // 완료 행은 한 단계 더 흐리게
+      const kindClass = kind === 'done' ? 'row-kind-done' : '';
       const items = wo.items || [];
       const first = items[0] || {};
       const moreItems = items.length > 1 ? ` 외 ${items.length - 1}` : '';
@@ -14598,9 +14826,12 @@ function validateBlendSum(blends, label) {
         ? items.map(i => `<div class="size-line">${i.jul || 0}절</div>`).join('')
         : '-';
       
-      html += `<tr class="${overdueClass} ${completedClass}" data-row-id="${wo.id}">
+      html += `<tr class="${overdueClass} ${completedClass} ${kindClass}" data-row-id="${wo.id}">
         <td class="col-select"><input type="checkbox" class="dash-row-cb" data-id="${wo.id}" data-list-type="편직"></td>
-        <td class="col-no" title="${escapeHtml(wo.wo_number || '')}">${escapeHtml(codeDisplay)}</td>
+        <td class="col-no" title="${escapeHtml(wo.wo_number || '')}">
+          <span class="kind-badge" data-kind-toggle="${wo.id}" data-kind-cur="${kind}" style="background:${kMeta.bg};color:${kMeta.text};" title="클릭하여 성격 변경">●${kMeta.label}</span>
+          ${escapeHtml(codeDisplay)}
+        </td>
         <td class="col-stamps">${renderStampMini(wo.stamps) || '-'}</td>
         <td class="col-date">${formatYMD(wo.date)}</td>
         <td>${escapeHtml(wo.recipient || '-')}</td>
@@ -16567,6 +16798,8 @@ function validateBlendSum(blends, label) {
         completed: false,
         deleted: false
       };
+      // hotfix34: 인라인 빠른 입력은 kind 입력 칸 없음 → 자동 추론
+      woData.kind = inferKnitKind(woData);
       title = `편직 ${recipient} / ${item}`;
     } else if (type === 'finish') {
       const bodyitem = get('.nr-bodyitem');
@@ -16837,6 +17070,54 @@ function validateBlendSum(blends, label) {
       sel.addEventListener('change', () => {
         const view = sel.dataset.vendorView;
         if (view) handleVendorFilterChange(view, sel.value);
+      });
+    });
+
+    // hotfix34: 편직 성격(kind) 콤보 변경 핸들러
+    document.querySelectorAll('#dash-body .dash-kind-select[data-kind-view="knit"]').forEach(sel => {
+      sel.addEventListener('change', () => {
+        handleKnitKindFilterChange(sel.value);
+      });
+    });
+    // hotfix34: 표 행의 ● 배지 클릭 → 인라인 드롭다운으로 성격 즉시 변경
+    document.querySelectorAll('#dash-body .kind-badge[data-kind-toggle]').forEach(badge => {
+      badge.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        const woId = badge.dataset.kindToggle;
+        const cur = badge.dataset.kindCur || 'regular';
+        // 기존 떠 있는 메뉴 닫기
+        document.querySelectorAll('.kind-badge-menu').forEach(m => m.remove());
+        const menu = document.createElement('div');
+        menu.className = 'kind-badge-menu';
+        ['regular','stock','sample','done'].forEach(k => {
+          const m = kindMeta(k);
+          const item = document.createElement('div');
+          item.className = 'kind-badge-menu-item' + (k === cur ? ' active' : '');
+          item.innerHTML = `<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${m.dot};margin-right:6px;vertical-align:middle;"></span>${m.label}`;
+          item.addEventListener('click', (e) => {
+            e.stopPropagation();
+            menu.remove();
+            if (k !== cur) setKnitKind(woId, k);
+          });
+          menu.appendChild(item);
+        });
+        // 위치 잡기 — 배지 바로 아래
+        const rect = badge.getBoundingClientRect();
+        menu.style.position = 'fixed';
+        menu.style.top = (rect.bottom + 2) + 'px';
+        menu.style.left = rect.left + 'px';
+        menu.style.zIndex = '9999';
+        document.body.appendChild(menu);
+        // 바깥 클릭 시 닫기
+        setTimeout(() => {
+          const closeFn = (e) => {
+            if (!menu.contains(e.target)) {
+              menu.remove();
+              document.removeEventListener('click', closeFn);
+            }
+          };
+          document.addEventListener('click', closeFn);
+        }, 0);
       });
     });
     
@@ -17235,6 +17516,15 @@ function validateBlendSum(blends, label) {
               else delete next.completed_at;
               return next;
             });
+          }
+          // hotfix34: 편직 의뢰서면 kind도 함께 동기화 (완료체크↔done태그)
+          if (wo && wo.type === '편직') {
+            if (newState) {
+              updates.kind = 'done';
+            } else if (wo.kind === 'done') {
+              // 완료 해제 시 done이었으면 다시 추론값으로 되돌림
+              updates.kind = inferKnitKind({ ...wo, completed: false }) || 'regular';
+            }
           }
           await updateDoc(doc(db, 'workorders', id), updates);
           toast(newState ? '✓ 완료 처리되었습니다' : '진행 중으로 변경됨', 'success');
@@ -19620,8 +19910,9 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix33';
+  const VERSION = 'v2.53 hotfix34';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
+  // hotfix34: 편직 의뢰서 [성격] 시스템 도입 — 정규/재고/샘플/완료 4태그, 자동분류, 표 ● 배지, [성격▼] 필터, 완료체크 양방향연동
   // hotfix33: 클레임(땡처리) 내역서 양식 통일 — 부분/전체 모두 정식 표 양식 + 이미지복사/인쇄/수정 동일 버튼
   // hotfix32: 편직진행 화면 - 거래처별/전체 "예상 재고 절·kg" 합계 박스 추가 (필터 줄 우측)
   // hotfix31: 편직진행 표 "예상 재고 절" 폰트 컬러 검정→빨강(가독성)
