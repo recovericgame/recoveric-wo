@@ -5454,7 +5454,7 @@
           <div class="field"><label>수신처 (편직 공장)</label><input type="text" lang="ko" id="k_recipient" placeholder="세원"></div>
           <div class="field"><label>성격 <span style="color:#9ca3af;font-weight:400;">(자동 추천)</span></label>
             <select id="k_kind">
-              <option value="regular">정규 — 일반 발주 (거래처 일일보고에 포함)</option>
+              <option value="regular">기획 — 일반 발주 (거래처 일일보고에 포함)</option>
               <option value="stock">재고 — 기존 재고 사용 (일일보고 제외)</option>
               <option value="sample">샘플 — 소량 샘플 (보고서 별도 섹션)</option>
               <option value="done">완료 — 출고 끝남 (더 진행 없음)</option>
@@ -6195,8 +6195,10 @@ function addKnitRow(data={}) {
     const color = row.querySelector('.k-color').value.trim();
     if (!item || !color) return;
     if (wo.value.trim() && !wo.dataset.autogen) return;  // 사용자가 수동으로 입력한 코드는 건드리지 않음
-    // 자동 생성 시도
-    const code = buildSharedCode(item, color);
+    // 자동 생성 시도 — hotfix35: 폼의 성격(k_kind)을 읽어 4단 코드 생성
+    const kindEl = document.getElementById('k_kind');
+    const kind = (kindEl && kindEl.value) || 'regular';
+    const code = buildSharedCode(item, color, kind);
     if (code) {
       wo.value = code;
       wo.dataset.autogen = '1';
@@ -6445,16 +6447,23 @@ function getOrPromptColorCode(colorName) {
   return upper;
 }
 
-// 같은 품목+컬러 조합의 마지막 일련번호 검색 (전체 의뢰서 스캔)
+// 같은 품목+컬러 조합의 마지막 투입회차 검색 (전체 의뢰서 스캔)
+// hotfix35: 3단(US-LW-001) / 4단(PL-US-LW-001) 코드 모두 호환.
+//   코드를 '-'로 쪼개 끝에서부터 [회차, 원사색, 품목] 순으로 매칭.
+//   성격(맨 앞)은 회차 계산에 무관 — 품목+원사색만 보고 누적한다.
 function getNextSerialFor(itemCode, colorCode) {
   if (!itemCode || !colorCode) return 1;
-  const prefix = `${itemCode}-${colorCode}-`;
   let maxN = 0;
   state.allWorkOrders.forEach(wo => {
     (wo.items || []).forEach(it => {
-      if (it.shared_code && it.shared_code.startsWith(prefix)) {
-        const tail = it.shared_code.slice(prefix.length);
-        const n = parseInt(tail, 10);
+      if (!it.shared_code) return;
+      const parts = it.shared_code.split('-');
+      if (parts.length < 3) return;
+      const serial = parts[parts.length - 1];
+      const cc = parts[parts.length - 2];
+      const ic = parts[parts.length - 3];
+      if (ic === itemCode && cc === colorCode) {
+        const n = parseInt(serial, 10);
         if (!isNaN(n) && n > maxN) maxN = n;
       }
     });
@@ -6462,14 +6471,21 @@ function getNextSerialFor(itemCode, colorCode) {
   return maxN + 1;
 }
 
-// 공유 코드 자동 생성
-function buildSharedCode(item, color) {
+// hotfix35: 성격 약자 (코드 맨 앞). 완료(done)는 코드에 안 들어감.
+const KIND_CODE_PREFIX = { regular: 'PL', sample: 'SP', stock: 'ST' };
+
+// 공유 코드 자동 생성 — hotfix35: 4단 구조 [성격]-[품목]-[원사색]-[투입회차]
+//   예) PL-US-LW-001 (기획·울트라싱글·로화이트·1번 통)
+//   성격이 PL/SP/ST면 4단, 그 외(done/미지정)는 기존 3단으로 생성.
+function buildSharedCode(item, color, kind) {
   const ic = getOrPromptItemCode(item);
   if (!ic) return '';
   const cc = getOrPromptColorCode(color);
   if (!cc) return '';
   const n = getNextSerialFor(ic, cc);
-  return `${ic}-${cc}-${String(n).padStart(3, '0')}`;
+  const base = `${ic}-${cc}-${String(n).padStart(3, '0')}`;
+  const prefix = KIND_CODE_PREFIX[kind];
+  return prefix ? `${prefix}-${base}` : base;
 }
 
 // 코드 매핑 관리 모달
@@ -7190,7 +7206,7 @@ function migrateKnitKind() {
 
 // kind 표시용 메타 (라벨/색/배경)
 const KNIT_KIND_META = {
-  regular: { label: '정규', dot: '#1d4ed8', bg: '#dbeafe', text: '#1e3a8a' },
+  regular: { label: '기획', dot: '#1d4ed8', bg: '#dbeafe', text: '#1e3a8a' },
   stock:   { label: '재고', dot: '#6b7280', bg: '#f3f4f6', text: '#374151' },
   sample:  { label: '샘플', dot: '#b45309', bg: '#fef3c7', text: '#78350f' },
   done:    { label: '완료', dot: '#9ca3af', bg: '#f9fafb', text: '#6b7280' }
@@ -14733,7 +14749,7 @@ function validateBlendSum(blends, label) {
       <span class="dash-kind-label">성격:</span>
       <select class="dash-kind-select" data-kind-view="knit">
         <option value="all"${currentKind==='all'?' selected':''}>전체 (${kindCounts.all})</option>
-        <option value="regular"${currentKind==='regular'?' selected':''}>● 정규 (${kindCounts.regular})</option>
+        <option value="regular"${currentKind==='regular'?' selected':''}>● 기획 (${kindCounts.regular})</option>
         <option value="stock"${currentKind==='stock'?' selected':''}>● 재고 (${kindCounts.stock})</option>
         <option value="sample"${currentKind==='sample'?' selected':''}>● 샘플 (${kindCounts.sample})</option>
         <option value="done"${currentKind==='done'?' selected':''}>● 완료 (${kindCounts.done})</option>
@@ -16784,7 +16800,9 @@ function validateBlendSum(blends, label) {
       // 공유코드 자동 생성 시도 (둘 다 있으면)
       let sharedCode = '';
       if (item && color) {
-        try { sharedCode = buildSharedCode(item, color); } catch(e) {}
+        // hotfix35: 빠른 입력은 성격 칸이 없으니 자동 추론한 성격으로 4단 코드 생성
+        const qkKind = inferKnitKind({ type: '편직', items: [{ item, jul }], internal_memo: get('.nr-memo') || null, completed: false });
+        try { sharedCode = buildSharedCode(item, color, qkKind); } catch(e) {}
       }
       woData = {
         type: '편직',
@@ -19910,7 +19928,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix34';
+  const VERSION = 'v2.53 hotfix35';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix34: 편직 의뢰서 [성격] 시스템 도입 — 정규/재고/샘플/완료 4태그, 자동분류, 표 ● 배지, [성격▼] 필터, 완료체크 양방향연동
   // hotfix33: 클레임(땡처리) 내역서 양식 통일 — 부분/전체 모두 정식 표 양식 + 이미지복사/인쇄/수정 동일 버튼
