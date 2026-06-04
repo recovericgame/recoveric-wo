@@ -1450,9 +1450,19 @@
     50%      { box-shadow: 0 0 0 4px rgba(4,120,87,0); }
   }
 
-  /* hotfix37: 편직 재고 이미지 캡쳐 시 액션/선택 컬럼 숨김 (재고 파악용 깔끔 화면) */
-  .dash-table.knit-capture-mode .col-select,
-  .dash-table.knit-capture-mode .col-action { display: none !important; }
+  /* hotfix38: 편직 재고 이미지 캡쳐 시 표시 컬럼 제한
+     표시: 공유코드(2)/스탬프(3)/의뢰일(4)/편직공장(5)/품목(6)/컬러(7)/예상재고절(12)/예상재고kg(13)/메모(14)
+     숨김: 선택(1)/의뢰절(8)/예상kg(9)/원사입고(10)/생지출고(11)/작지(15)/작업(16)/복사(17)/완료(18)/삭제(19) */
+  .dash-table.knit-capture-mode th:nth-child(1),  .dash-table.knit-capture-mode td:nth-child(1),
+  .dash-table.knit-capture-mode th:nth-child(8),  .dash-table.knit-capture-mode td:nth-child(8),
+  .dash-table.knit-capture-mode th:nth-child(9),  .dash-table.knit-capture-mode td:nth-child(9),
+  .dash-table.knit-capture-mode th:nth-child(10), .dash-table.knit-capture-mode td:nth-child(10),
+  .dash-table.knit-capture-mode th:nth-child(11), .dash-table.knit-capture-mode td:nth-child(11),
+  .dash-table.knit-capture-mode th:nth-child(15), .dash-table.knit-capture-mode td:nth-child(15),
+  .dash-table.knit-capture-mode th:nth-child(16), .dash-table.knit-capture-mode td:nth-child(16),
+  .dash-table.knit-capture-mode th:nth-child(17), .dash-table.knit-capture-mode td:nth-child(17),
+  .dash-table.knit-capture-mode th:nth-child(18), .dash-table.knit-capture-mode td:nth-child(18),
+  .dash-table.knit-capture-mode th:nth-child(19), .dash-table.knit-capture-mode td:nth-child(19) { display: none !important; }
 
   /* hotfix34: 편직 성격(kind) 필터 콤보 */
   .dash-kind-filter {
@@ -9670,6 +9680,24 @@ function validateBlendSum(blends, label) {
     return changed ? copy : null;
   }
   
+  // hotfix38: 기존 편직 의뢰서에서 편직공장/품목 고유 목록 추출 (콤보박스 옵션)
+  function getKnitVendorList() {
+    const set = new Set();
+    (state.allWorkOrders || []).forEach(w => {
+      if (w.type === '편직' && !w.deleted && w.recipient) set.add(String(w.recipient).trim());
+    });
+    return [...set].filter(Boolean).sort();
+  }
+  function getKnitItemList() {
+    const set = new Set();
+    (state.allWorkOrders || []).forEach(w => {
+      if (w.type === '편직' && !w.deleted) {
+        (w.items || []).forEach(it => { if (it.item) set.add(String(it.item).trim()); });
+      }
+    });
+    return [...set].filter(Boolean).sort();
+  }
+  
   // 프리셋 라벨 (사용자 표시용)
   function presetLabel(preset) {
     const labels = {
@@ -9764,6 +9792,11 @@ function validateBlendSum(blends, label) {
         if (wo.type === '염색가공') return wo.body?.item || '~';
         if (wo.type === 'BT') return wo.item || '~';
         if (wo.type === '공문') return wo.title || '~';
+        return '~';
+      }
+      case 'shared_code': {
+        // hotfix38: 편직 공유코드 정렬 — 첫 품목의 공유코드 문자열 기준
+        if (wo.type === '편직') return (wo.items?.[0]?.shared_code || wo.items?.[0]?.wo_no || '~').toString();
         return '~';
       }
       case 'vendor': {
@@ -14773,13 +14806,18 @@ function validateBlendSum(blends, label) {
       )
     );
 
-    // hotfix34: kind 필터 적용 (날짜·거래처 필터 이후)
+    // hotfix34: kind 필터 적용 (날짜·거래처 필터 이후) — 1차 성격 필터
     const currentKind = state.kindFilter?.knit || 'all';
     if (currentKind !== 'all') {
       list = list.filter(wo => (wo.kind || inferKnitKind(wo)) === currentKind);
     }
     
-    // hotfix37: 품목 검색 필터 (품목명/공유코드/컬러 부분일치) — "365" 입력 시 365 원단만 묶여 보임
+    // hotfix38: 품목 콤보 옵션 = 1차 성격 필터까지 적용된 풀의 품목 (검색 적용 전)
+    const knitItemOptions = [...new Set(
+      list.flatMap(wo => (wo.items || []).map(it => (it.item || '').trim()).filter(Boolean))
+    )].sort();
+    
+    // hotfix37/38: 2차 품목 검색 (품목명/공유코드/컬러 부분일치). 빈 값이면 전체.
     const itemSearch = (state.knitItemSearch || '').trim().toLowerCase();
     if (itemSearch) {
       list = list.filter(wo => (wo.items || []).some(it =>
@@ -14854,11 +14892,12 @@ function validateBlendSum(blends, label) {
       ${sumBox}
     </div>`;
     
-    // hotfix37: 품목 검색 + 재고 이미지 캡쳐/인쇄 도구줄
+    // hotfix37/38: 1차 성격(위 콤보) → 2차 품목 검색(콤보 선택 + 직접입력, 실시간) + 재고 이미지/인쇄
     html += `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 8px 4px;">
       <span style="font-size:11px;color:#1f2937;font-weight:700;">🔍 품목 검색</span>
-      <input type="text" id="knit-item-search" value="${escapeHtml(state.knitItemSearch || '')}" placeholder="예: 365" style="font-size:11px;padding:4px 9px;border:1px solid #ccc;border-radius:3px;width:150px;">
-      ${itemSearch ? `<button id="knit-item-search-clear" style="font-size:10px;padding:4px 8px;border:1px solid #ccc;background:#fff;border-radius:3px;cursor:pointer;">✕ 해제</button>` : ''}
+      <input type="text" id="knit-item-search" list="knit-item-options" value="${escapeHtml(state.knitItemSearch || '')}" placeholder="전체 (선택 또는 입력)" autocomplete="off" style="font-size:11px;padding:4px 9px;border:1px solid #ccc;border-radius:3px;width:170px;">
+      <datalist id="knit-item-options">${knitItemOptions.map(it => `<option value="${escapeHtml(it)}"></option>`).join('')}</datalist>
+      ${itemSearch ? `<button id="knit-item-search-clear" style="font-size:10px;padding:4px 8px;border:1px solid #ccc;background:#fff;border-radius:3px;cursor:pointer;">✕ 전체</button>` : ''}
       <span style="margin-left:auto;"></span>
       <button id="knit-capture-btn" class="dash-action-btn" style="background:#1e3a8a;color:#fff;font-weight:700;padding:5px 12px;">📷 재고 이미지</button>
       <button id="knit-print-btn" class="dash-action-btn" style="background:#374151;color:#fff;font-weight:700;padding:5px 12px;">🖨 인쇄</button>
@@ -14874,7 +14913,7 @@ function validateBlendSum(blends, label) {
     
     html += `<div class="dash-bulk-bar-slot" data-type="편직"></div><div class="dash-table-wrap"><table class="dash-table" data-list-type="편직"><thead><tr>
       <th class="col-select" title="선택"></th>
-      <th class="col-no">공유코드</th>
+      ${sortableTh('knit', 'shared_code', '공유코드', 'col-no')}
       <th class="col-stamps">스탬프</th>
       ${sortableTh('knit', 'date', '의뢰일', 'col-date')}
       ${sortableTh('knit', 'vendor', '편직 공장')}
@@ -14896,10 +14935,11 @@ function validateBlendSum(blends, label) {
     
     list.forEach(wo => {
       const elapsed = daysSince(wo.date);
-      const overdueClass = !wo.completed && elapsed >= 5 ? 'overdue' : '';
-      const completedClass = wo.completed ? 'completed' : '';
       // hotfix34: 성격(kind) 결정 — 저장된 값이 있으면 그것을, 없으면 즉시 추론
       const kind = wo.kind || inferKnitKind(wo);
+      // hotfix38: 재고(stock)는 납기 개념이 없으므로 빨간 경과선(overdue) 제외
+      const overdueClass = !wo.completed && kind !== 'stock' && elapsed >= 5 ? 'overdue' : '';
+      const completedClass = wo.completed ? 'completed' : '';
       const kMeta = kindMeta(kind);
       // 완료 행은 한 단계 더 흐리게
       const kindClass = kind === 'done' ? 'row-kind-done' : '';
@@ -16694,7 +16734,7 @@ function validateBlendSum(blends, label) {
         </select></td>
         <td class="col-stamps">-</td>
         <td class="col-date"><input type="date" class="nr-date" value="${today}"></td>
-        <td><input type="text" lang="ko" class="nr-recipient" placeholder="편직공장"></td>
+        <td><input type="text" lang="ko" class="nr-recipient" placeholder="편직공장" list="nr-knit-vendor-list-${idx}"><datalist id="nr-knit-vendor-list-${idx}">${getKnitVendorList().map(v => `<option value="${escapeHtml(v)}"></option>`).join('')}</datalist></td>
         <td><input type="text" lang="ko" class="nr-item" placeholder="품목"></td>
         <td><input type="text" lang="ko" class="nr-color" placeholder="컬러"></td>
         <td class="col-num"><input type="number" class="nr-jul" placeholder="절" step="0.5"></td>
@@ -17634,12 +17674,26 @@ function validateBlendSum(blends, label) {
       });
     });
     
-    // hotfix37: 편직 품목 검색 (엔터/blur 시 적용)
+    // hotfix37/38: 편직 품목 검색 — 실시간 반영(입력/삭제 즉시), 재렌더 후 포커스·커서 복원
     const knitSearchEl = document.getElementById('knit-item-search');
     if (knitSearchEl) {
-      const applySearch = () => { state.knitItemSearch = knitSearchEl.value || ''; renderDashboard(); };
-      knitSearchEl.addEventListener('change', applySearch);
-      knitSearchEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') applySearch(); });
+      const applySearchLive = () => {
+        const pos = knitSearchEl.selectionStart;
+        state.knitItemSearch = knitSearchEl.value || '';
+        clearTimeout(state._knitSearchTimer);
+        state._knitSearchTimer = setTimeout(() => {
+          renderDashboard();
+          const el = document.getElementById('knit-item-search');
+          if (el) { el.focus(); try { el.setSelectionRange(pos, pos); } catch (e) {} }
+        }, 200);
+      };
+      knitSearchEl.addEventListener('input', applySearchLive);
+      // 콤보 목록에서 선택(change)은 즉시 반영
+      knitSearchEl.addEventListener('change', () => {
+        state.knitItemSearch = knitSearchEl.value || '';
+        clearTimeout(state._knitSearchTimer);
+        renderDashboard();
+      });
     }
     const knitSearchClearEl = document.getElementById('knit-item-search-clear');
     if (knitSearchClearEl) knitSearchClearEl.addEventListener('click', () => { state.knitItemSearch = ''; renderDashboard(); });
@@ -17696,7 +17750,8 @@ function validateBlendSum(blends, label) {
           + 'table{border-collapse:collapse;width:100%;font-size:10px;}'
           + 'th,td{border:1px solid #ccc;padding:3px 5px;text-align:center;}'
           + 'th{background:#1e3a8a;color:#fff;}'
-          + '.col-select,.col-action{display:none !important;} button,input{display:none !important;}'
+          + 'th:nth-child(1),td:nth-child(1),th:nth-child(8),td:nth-child(8),th:nth-child(9),td:nth-child(9),th:nth-child(10),td:nth-child(10),th:nth-child(11),td:nth-child(11),th:nth-child(15),td:nth-child(15),th:nth-child(16),td:nth-child(16),th:nth-child(17),td:nth-child(17),th:nth-child(18),td:nth-child(18),th:nth-child(19),td:nth-child(19){display:none !important;}'
+          + 'button,input{display:none !important;}'
           + '.kind-badge{padding:1px 5px;border-radius:8px;font-size:9px;}'
           + '</style></head><body>'
           + '<h2>RECOVERIC 편직 재고 현황</h2>'
@@ -20130,7 +20185,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix37';
+  const VERSION = 'v2.53 hotfix38';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix34: 편직 의뢰서 [성격] 시스템 도입 — 정규/재고/샘플/완료 4태그, 자동분류, 표 ● 배지, [성격▼] 필터, 완료체크 양방향연동
   // hotfix33: 클레임(땡처리) 내역서 양식 통일 — 부분/전체 모두 정식 표 양식 + 이미지복사/인쇄/수정 동일 버튼
