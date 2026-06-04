@@ -4905,7 +4905,26 @@
   }
   .claim-rpt-btn-close:hover { background: #f3f4f6; }
   .claim-rpt-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-  
+
+  /* hotfix44: 수정작업지시서 (정산 내역서 디자인 재활용 + 수정 주황 톤) */
+  .fix-order-divider { background: #f97316 !important; }
+  .fix-order-badge {
+    font-size: 12px; font-weight: 700; color: #9a3412;
+    background: #ffedd5; border: 1px solid #fdba74;
+    border-radius: 4px; padding: 4px 10px;
+    display: inline-block; margin-bottom: 10px; letter-spacing: 0;
+  }
+  .fix-order-list th {
+    width: auto; background: #fff7ed; color: #9a3412;
+    border-bottom: 2px solid #f97316; text-align: left; white-space: nowrap;
+  }
+  .fix-order-list .fo-col-color { width: 38%; }
+  .fix-order-list .fo-col-qty { width: 24%; white-space: nowrap; }
+  .fix-order-qty { font-weight: 800; color: #9a3412; font-variant-numeric: tabular-nums; }
+  .fix-order-note-na { color: #9ca3af; font-style: italic; }
+  .claim-rpt-btn-fix { background: #f97316; border-color: #ea580c; color: #fff; }
+  .claim-rpt-btn-fix:hover { background: #ea580c; }
+
   /* 모바일 반응형 (클레임 시스템) */
   @media (max-width: 768px) {
     .claims-stats {
@@ -11893,7 +11912,7 @@ function validateBlendSum(blends, label) {
   // hotfix40: 수정 보내기 — 불량 컬러에서 일부(또는 전부)를 작업장에 다시 보내 손봄.
   //   같은 컬러 안 사이클. 발주일 불변, 수정 이력만 쌓임. 수정작업 스탬프 자동 부착.
   //   해당 차수는 통과(done) 처리 → 나머지 합격분은 완료로 넘어가고, 수정분(fix)만 별도 트랙으로 남음.
-  async function setColorFixSend(woId, colorIdx, fixBody, fixRib, receiptNo) {
+  async function setColorFixSend(woId, colorIdx, fixBody, fixRib, receiptNo, note) {
     const wo = state.allWorkOrders.find(w => w.id === woId);
     if (!wo) throw new Error('의뢰서를 찾을 수 없음');
     const colors = JSON.parse(JSON.stringify(wo.colors || []));
@@ -11903,13 +11922,14 @@ function validateBlendSum(blends, label) {
     const fb = Math.max(0, num(fixBody) || 0);
     const fr = Math.max(0, num(fixRib) || 0);
     if (fb === 0 && fr === 0) throw new Error('수정 수량을 입력하세요');
+    const fnote = (note == null ? '' : String(note)).trim();
     
     // 수정 트랙 설정 (누적)
     c.fix_active = true;
     c.fix_body = (num(c.fix_body) || 0) + fb;
     c.fix_rib  = (num(c.fix_rib)  || 0) + fr;
     if (!Array.isArray(c.fix_history)) c.fix_history = [];
-    c.fix_history.push({ body: fb, rib: fr, sent_at: now, sent_by: state.user.email, resolved_at: null });
+    c.fix_history.push({ body: fb, rib: fr, note: fnote, sent_at: now, sent_by: state.user.email, resolved_at: null });
     // 불량 상태 해제 → 해당 차수는 통과 처리(나머지 합격분 완료), 수정분은 fix 트랙
     migrateColorReceipts(c);
     let targetIdx = (receiptNo !== undefined && receiptNo !== null)
@@ -13621,6 +13641,160 @@ function validateBlendSum(blends, label) {
     });
   }
   
+  // hotfix44: 수정작업지시서 본문 — 의뢰서 [보기]에서 출력. 현재 수정 중(fix_active) 컬러를 한 장에 모음.
+  //   재염과 별개. 같은 색 그대로 손보는 작업 지시. 정산 내역서 디자인 재활용 + 주황 톤.
+  function renderFixOrderHTML(wo) {
+    const today = new Date();
+    const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+    const recipient = (typeof pickClaimRecipient === 'function') ? pickClaimRecipient(wo) : '';
+    const item = (wo.body && wo.body.item) || wo.item || '';
+    const blend = (wo.body && wo.body.blend) || wo.blend || '';
+    const lot = wo.lot_no || '';
+
+    // 수정 중 컬러 → 미해결 fix_history 엔트리별로 행 생성 (여러 번 보냈으면 여러 줄)
+    const rows = [];
+    (wo.colors || []).forEach(c => {
+      if (!c || c.fix_active !== true) return;
+      const cName = c.name || '(이름없음)';
+      const open = Array.isArray(c.fix_history) ? c.fix_history.filter(h => h && !h.resolved_at) : [];
+      if (open.length) {
+        open.forEach(h => {
+          const b = num(h.body) || 0, r = num(h.rib) || 0;
+          const qty = [b ? `몸판 ${b}절` : '', r ? `부속 ${r}절` : ''].filter(Boolean).join(' · ') || '-';
+          rows.push({ cName, qty, note: (h.note || '').trim() });
+        });
+      } else {
+        const b = num(c.fix_body) || 0, r = num(c.fix_rib) || 0;
+        const qty = [b ? `몸판 ${b}절` : '', r ? `부속 ${r}절` : ''].filter(Boolean).join(' · ') || '-';
+        rows.push({ cName, qty, note: '' });
+      }
+    });
+
+    const rowsHtml = rows.length ? rows.map(x => `
+      <tr>
+        <td><strong>${escapeHtml(x.cName)}</strong></td>
+        <td class="fix-order-qty">${escapeHtml(x.qty)}</td>
+        <td>${x.note ? escapeHtml(x.note) : '<span class="fix-order-note-na">(요청 미입력)</span>'}</td>
+      </tr>`).join('') : `<tr><td colspan="3" class="fix-order-note-na">현재 수정 중인 컬러가 없습니다.</td></tr>`;
+
+    return `
+      <div class="claim-report" id="fix-order-content">
+        <div class="claim-report-header">
+          <div class="claim-report-title">수정작업지시서</div>
+          <div class="fix-order-badge">🔧 재염 아님 · 같은 색 그대로 수정</div>
+          <div class="claim-report-divider fix-order-divider"></div>
+          <div class="claim-report-meta">
+            <div><span>발송일</span><strong>${dateStr}</strong></div>
+            <div><span>발행처</span><strong>현일텍스 주식회사</strong></div>
+            <div><span>수신처</span><strong>${escapeHtml(recipient || '(미정)')}</strong></div>
+          </div>
+        </div>
+
+        <div class="claim-report-section">
+          <div class="claim-report-section-title">대상 의뢰서</div>
+          <table class="claim-report-table">
+            <tr><th>의뢰서 번호</th><td>${escapeHtml(wo.wo_number || '-')}</td></tr>
+            ${lot ? `<tr><th>LOT</th><td>${escapeHtml(lot)}</td></tr>` : ''}
+            ${item ? `<tr><th>품목</th><td>${escapeHtml(item)}${blend ? ' · ' + escapeHtml(blend) : ''}</td></tr>` : ''}
+          </table>
+        </div>
+
+        <div class="claim-report-section">
+          <div class="claim-report-section-title">수정 요청 내역</div>
+          <table class="claim-report-table fix-order-list">
+            <thead>
+              <tr>
+                <th class="fo-col-color">컬러</th>
+                <th class="fo-col-qty">수정 수량</th>
+                <th>요청</th>
+              </tr>
+            </thead>
+            <tbody>${rowsHtml}</tbody>
+          </table>
+        </div>
+
+        <div class="claim-report-footer">
+          <div class="claim-report-footer-text">상기 컬러를 같은 색 그대로 수정 후 회송 부탁드립니다. (재염 아님)</div>
+          <div class="claim-report-signature">현일텍스 주식회사 드림</div>
+        </div>
+      </div>
+    `;
+  }
+
+  // hotfix44: 수정작업지시서 모달 (의뢰서 [보기] → [🔧 수정작업지시서] 버튼)
+  function openFixOrderModal(woId) {
+    const wo = state.allWorkOrders.find(w => w.id === woId);
+    if (!wo) { toast('의뢰서를 찾을 수 없음', 'error'); return; }
+    const hasFix = (wo.colors || []).some(c => c && c.fix_active === true);
+    if (!hasFix) { toast('현재 수정 중인 컬러가 없습니다.', 'warning'); return; }
+    const modal = document.getElementById('dash-modal-bg');
+    if (!modal) { toast('모달 요소 없음', 'error'); return; }
+    document.getElementById('dash-modal-title').textContent = '🔧 수정작업지시서';
+    ['dash-modal-image', 'dash-modal-copy', 'dash-modal-print', 'dash-modal-kakao'].forEach(id => {
+      const b = document.getElementById(id); if (b) b.style.display = 'none';
+    });
+    document.getElementById('dash-modal-body').innerHTML = `
+      <div class="claim-report-modal">
+        ${renderFixOrderHTML(wo)}
+        <div class="claim-report-actions no-print">
+          <button type="button" id="fix-order-copy" class="claim-rpt-btn claim-rpt-btn-fix">📋 이미지 복사</button>
+          <button type="button" id="fix-order-print" class="claim-rpt-btn claim-rpt-btn-print">🖨 인쇄</button>
+          <button type="button" id="fix-order-close" class="claim-rpt-btn claim-rpt-btn-close">닫기</button>
+        </div>
+      </div>
+    `;
+    modal.classList.add('show');
+
+    document.getElementById('fix-order-copy').addEventListener('click', async () => {
+      const target = document.getElementById('fix-order-content');
+      if (!target) { toast('대상을 찾을 수 없음', 'error'); return; }
+      const btn = document.getElementById('fix-order-copy');
+      btn.disabled = true; btn.textContent = '캡처 중...';
+      try {
+        const canvas = await html2canvas(target, { scale: 2, backgroundColor: '#ffffff', useCORS: true });
+        canvas.toBlob(async blob => {
+          if (!blob) { toast('캡처 실패', 'error'); btn.disabled = false; btn.textContent = '📋 이미지 복사'; return; }
+          try {
+            await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+            toast('이미지가 클립보드에 복사되었습니다. 카카오톡 등에 바로 붙여넣기 가능합니다.', 'success');
+          } catch (e) {
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `수정작업지시서_${wo.wo_number || 'order'}.png`;
+            a.click();
+            URL.revokeObjectURL(url);
+            toast('클립보드 복사 차단됨 — 이미지로 다운로드되었습니다.', 'warning');
+          }
+          btn.disabled = false; btn.textContent = '📋 이미지 복사';
+        }, 'image/png');
+      } catch (e) {
+        btn.disabled = false; btn.textContent = '📋 이미지 복사';
+        toast('이미지 생성 실패: ' + e.message, 'error');
+      }
+    });
+
+    document.getElementById('fix-order-print').addEventListener('click', () => {
+      const target = document.getElementById('fix-order-content');
+      if (!target) return;
+      const w = window.open('', '_blank', 'width=800,height=900');
+      if (!w) { toast('팝업 차단됨 — 브라우저 설정에서 허용해 주세요.', 'warning'); return; }
+      const styles = Array.from(document.querySelectorAll('style, link[rel="stylesheet"]')).map(el => el.outerHTML).join('\n');
+      const scriptOpen = '<' + 'script>';
+      const scriptClose = '<' + '/' + 'script>';
+      const printScript = scriptOpen + 'window.onload=function(){setTimeout(function(){window.print();},150);};' + scriptClose;
+      const printDoc = '<!doctype html><html><head><meta charset="utf-8">' +
+        '<title>수정작업지시서 ' + (wo.wo_number || '') + '</title>' +
+        styles +
+        '<style>body{background:#fff;padding:20px;}.no-print{display:none !important;}@media print{body{padding:0;}}</style>' +
+        '</head><body>' + target.outerHTML + printScript + '</body></html>';
+      w.document.write(printDoc);
+      w.document.close();
+    });
+
+    document.getElementById('fix-order-close').addEventListener('click', () => { modal.classList.remove('show'); });
+  }
+
   // 정산(클레임) 내역서 — 거래처 발송용 공식 양식
   // 누적 클레임 통계는 거래처 양식엔 미노출
   // hotfix33: discardIdx 인자가 있으면 부분 땡처리 모드 (그 건의 수량·사유·금액·청구처 사용)
@@ -18461,11 +18635,28 @@ function validateBlendSum(blends, label) {
     
     // BT 의뢰서는 wo-doc-bt 클래스 추가 (스타일 차이)
     const btClass = wo.type === 'BT' ? ' wo-doc-bt' : (wo.type === '공문' ? ' wo-doc-of' : '');
-    body.innerHTML = `<div class="wo-doc${btClass}" id="dash-modal-wo-doc" style="margin:auto;">${html}</div>`;
+    // hotfix44: 염색가공이고 수정 중인 컬러가 있으면 [수정작업지시서] 버튼 노출
+    const hasFix = (wo.type !== '원사' && wo.type !== '편직' && wo.type !== 'BT' && wo.type !== '공문')
+      && (wo.colors || []).some(c => c && c.fix_active === true);
+    const fixCnt = hasFix ? (wo.colors || []).filter(c => c && c.fix_active === true).length : 0;
+    const fixBar = hasFix ? `
+      <div style="text-align:center;margin:0 auto 12px;">
+        <button type="button" id="dash-modal-fixorder"
+          style="background:#f97316;border:1px solid #ea580c;color:#fff;font-weight:700;font-size:13px;padding:9px 18px;border-radius:6px;cursor:pointer;">
+          🔧 수정작업지시서 (수정중 ${fixCnt}컬러)
+        </button>
+      </div>` : '';
+    body.innerHTML = fixBar + `<div class="wo-doc${btClass}" id="dash-modal-wo-doc" style="margin:auto;">${html}</div>`;
     
     // 카톡 텍스트 버튼은 편직일 때만 노출 (메인 미리보기 정책과 동일)
     const kakaoBtn = document.getElementById('dash-modal-kakao');
     if (kakaoBtn) kakaoBtn.style.display = wo.type === '편직' ? '' : 'none';
+    
+    // hotfix44: 수정작업지시서 버튼 핸들러
+    if (hasFix) {
+      const foBtn = document.getElementById('dash-modal-fixorder');
+      if (foBtn) foBtn.addEventListener('click', () => openFixOrderModal(wo.id));
+    }
     
     // 액션 핸들러 바인딩 (모달 열 때마다 새 wo 대상으로 갱신)
     bindDashModalActions(wo);
@@ -19494,11 +19685,19 @@ function validateBlendSum(blends, label) {
         const fb = parseFloat(parts[0]) || 0;
         const fr = parseFloat(parts[1]) || 0;
         if (fb === 0 && fr === 0) { toast('수정 수량을 입력하세요 (예: 5/0)', 'error'); return; }
+        // 요청 메모 (작업장에 전달할 한 줄 — 비워도 됨)
+        const noteInput = prompt(
+          `[${wo.wo_number || ''}] "${cName}" 작업장에 전달할 요청 (선택)\n\n` +
+          `· 예: 색 유지 · 핀홀 손봄 / 색 유지\n` +
+          `· 비워두면 지시서에 빈칸으로 들어갑니다`,
+          ''
+        );
+        if (noteInput === null) return;  // 취소
         try {
           // 모달의 현재 입력값(불량 메모 포함) 먼저 저장
           const currentInput = collect();
           await saveQcData(woId, colorIdx, currentInput, window.__qcModalReceiptNo);
-          await setColorFixSend(woId, colorIdx, fb, fr, window.__qcModalReceiptNo);
+          await setColorFixSend(woId, colorIdx, fb, fr, window.__qcModalReceiptNo, noteInput);
           toast(`🔧 "${cName}" 수정 ${fb}/${fr} 보냄 — 일일보고 수정 칸에 표시됩니다`, 'success');
           modal.classList.remove('show');
           renderDashboard();
@@ -20500,7 +20699,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix43';
+  const VERSION = 'v2.53 hotfix44';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix34: 편직 의뢰서 [성격] 시스템 도입 — 정규/재고/샘플/완료 4태그, 자동분류, 표 ● 배지, [성격▼] 필터, 완료체크 양방향연동
   // hotfix33: 클레임(땡처리) 내역서 양식 통일 — 부분/전체 모두 정식 표 양식 + 이미지복사/인쇄/수정 동일 버튼
