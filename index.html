@@ -801,6 +801,16 @@
   .overview-type-filter-btn.active[data-type-filter="편직"]    { background: var(--badge-knit);   border-color: var(--badge-knit); }
   .overview-type-filter-btn.active[data-type-filter="염색가공"] { background: var(--badge-finish); border-color: var(--badge-finish); }
   .overview-type-filter-btn.active[data-type-filter="BT"]      { background: var(--badge-bt);     border-color: var(--badge-bt); }
+  /* hotfix43: 상태 빠른 필터 (수정/부족/긴급) */
+  .overview-status-filter-btn {
+    padding: 6px 12px; font-size: 12px; font-weight: 700;
+    border: 1.5px solid #d1d5db; border-radius: 4px; cursor: pointer;
+    background: #fff; color: #555; transition: all 0.15s;
+  }
+  .overview-status-filter-btn:hover { background: #f7f7f7; border-color: #999; }
+  .overview-status-filter-btn.sf-fix.active    { background: #f97316; color: #fff; border-color: #ea580c; }
+  .overview-status-filter-btn.sf-lack.active   { background: #d97706; color: #fff; border-color: #b45309; }
+  .overview-status-filter-btn.sf-urgent.active { background: #dc2626; color: #fff; border-color: #b91c1c; }
   
   /* ===== 미리보기 스탬프 ===== */
   .wo-stamps { 
@@ -6131,6 +6141,8 @@ const state = {
   },
   // v2.34: 전체 대시보드 유형 필터 (overview)
   overviewTypeFilter: 'all',  // 'all' | '원사' | '편직' | '염색가공' | 'BT'
+  // hotfix43: 전체 대시보드 상태 빠른 필터 — 유형과 겹쳐서 거르기
+  ovStatusFilter: 'all',  // 'all' | 'fix'(수정) | 'lack'(부족) | 'urgent'(긴급)
   // v2.44: 거래처 필터 (5개 화면 각자 — 콤보박스로 거래처별 의뢰서만 표시)
   vendorFilter: {
     overview: 'all',
@@ -14600,6 +14612,23 @@ function validateBlendSum(blends, label) {
       const active = tf === val;
       return `<button class="overview-type-filter-btn ${active ? 'active' : ''}" data-type-filter="${val}">${label} <span style="opacity:0.7;font-weight:500;">${cnt}</span></button>`;
     };
+    // hotfix43: 상태 빠른 필터 (수정/부족/긴급) — 유형 필터와 겹쳐서 거름
+    const woHasFix = (wo) => wo.type === '염색가공' && (wo.colors || []).some(c => c && c.fix_active === true);
+    const woHasLack = (wo) => wo.type === '염색가공' && (wo.colors || []).some(c => c && (getUnresolvedShortageBody(c) > 0 || getUnresolvedShortageRib(c) > 0) && c.qc_status !== 'discard');
+    const woIsUrgent = (wo) => !!wo.urgent || (wo.colors || []).some(c => c && c.urgent);
+    const sf = state.ovStatusFilter || 'all';
+    // 상태 카운트는 현재 유형 필터 적용 후 풀 기준 (유형 바꾸면 그 유형 내 카운트)
+    const statusPool = (tf === 'all') ? allIng : allIng.filter(wo => wo.type === tf);
+    const statusCounts = {
+      fix: statusPool.filter(woHasFix).length,
+      lack: statusPool.filter(woHasLack).length,
+      urgent: statusPool.filter(woIsUrgent).length
+    };
+    const statusBtn = (val, label, cls) => {
+      const cnt = statusCounts[val] || 0;
+      const active = sf === val;
+      return `<button class="overview-status-filter-btn ${cls} ${active ? 'active' : ''}" data-status-filter="${val}">${label} <span style="opacity:0.75;font-weight:600;">${cnt}</span></button>`;
+    };
     // v2.44: overview 거래처 콤보 옵션 (유형 필터 적용 후 기준)
     const overviewVendorOptions = extractVendorOptions(
       tf === 'all' ? allIng : allIng.filter(wo => wo.type === tf)
@@ -14619,6 +14648,10 @@ function validateBlendSum(blends, label) {
         ${typeBtn('편직', '편직')}
         ${typeBtn('염색가공', '염색가공')}
         ${typeBtn('BT', 'BT')}
+        <span style="width:1px;height:20px;background:#d1d5db;margin:0 4px;"></span>
+        ${statusBtn('fix', '🔧 수정', 'sf-fix')}
+        ${statusBtn('lack', '⏳ 부족', 'sf-lack')}
+        ${statusBtn('urgent', '🚨 긴급', 'sf-urgent')}
         ${renderVendorFilterBar('overview', overviewVendorOptions)}
       </div>
     </div>`;
@@ -14626,14 +14659,24 @@ function validateBlendSum(blends, label) {
     // v2.18: 통합 정렬 시스템 사용 (overview 키) + v2.34: 유형 필터 적용
     let filteredIng = allIng;
     if (tf !== 'all') filteredIng = filteredIng.filter(wo => wo.type === tf);
+    // hotfix43: 상태 빠른 필터 적용 (유형과 겹침)
+    if (sf === 'fix') filteredIng = filteredIng.filter(woHasFix);
+    else if (sf === 'lack') filteredIng = filteredIng.filter(woHasLack);
+    else if (sf === 'urgent') filteredIng = filteredIng.filter(woIsUrgent);
     // v2.44: 거래처 필터 적용 (overview는 getDashList 비사용이므로 직접 적용)
     filteredIng = applyVendorFilter(filteredIng, 'overview');
     const allIngSorted = sortWorkOrders(filteredIng, 'overview');
     
     if (allIngSorted.length === 0) {
-      const emptyMsg = tf === 'all' 
-        ? '진행 중인 의뢰서가 없습니다.' 
-        : `진행 중인 ${tf} 의뢰서가 없습니다. <strong>"전체"</strong> 버튼을 눌러 다른 유형도 확인할 수 있습니다.`;
+      const statusLabel = { fix: '🔧 수정 중인', lack: '⏳ 부족분 있는', urgent: '🚨 긴급' };
+      let emptyMsg;
+      if (sf !== 'all') {
+        emptyMsg = `${statusLabel[sf] || ''} ${tf === 'all' ? '' : tf + ' '}의뢰서가 없습니다. 상태 버튼을 다시 눌러 해제할 수 있습니다.`;
+      } else {
+        emptyMsg = tf === 'all'
+          ? '진행 중인 의뢰서가 없습니다.'
+          : `진행 중인 ${tf} 의뢰서가 없습니다. <strong>"전체"</strong> 버튼을 눌러 다른 유형도 확인할 수 있습니다.`;
+      }
       html += `<div class="dash-empty">${emptyMsg}</div>`;
     } else {
       // v2.37: 염색가공은 컬러별 N행 분리, 그 외 유형은 1행
@@ -17406,6 +17449,16 @@ function validateBlendSum(blends, label) {
           saveVendorFilter();
         }
         state.overviewTypeFilter = t;
+        renderDashboard();
+      });
+    });
+    
+    // hotfix43: Overview 상태 빠른 필터 (수정/부족/긴급) — 같은 버튼 다시 누르면 해제
+    document.querySelectorAll('#dash-body .overview-status-filter-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const s = btn.dataset.statusFilter;
+        if (!s) return;
+        state.ovStatusFilter = (state.ovStatusFilter === s) ? 'all' : s;
         renderDashboard();
       });
     });
@@ -20447,7 +20500,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix42';
+  const VERSION = 'v2.53 hotfix43';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix34: 편직 의뢰서 [성격] 시스템 도입 — 정규/재고/샘플/완료 4태그, 자동분류, 표 ● 배지, [성격▼] 필터, 완료체크 양방향연동
   // hotfix33: 클레임(땡처리) 내역서 양식 통일 — 부분/전체 모두 정식 표 양식 + 이미지복사/인쇄/수정 동일 버튼
