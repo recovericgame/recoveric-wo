@@ -16081,7 +16081,6 @@ function validateBlendSum(blends, label) {
     const ribRecv  = (fn.rib?.receiving || '').trim();
     const bodyQty  = (fn.colors || []).reduce((s, c) => s + (Number(c && c.body) || 0), 0);
     const ribQty   = (fn.colors || []).reduce((s, c) => s + (Number(c && c.rib) || 0), 0);
-    // "없음~"(리프만/몸판만 작업)인 품목은 해당 파트 없음 처리
     const bodyAbsent = !bodyItem || /^없음/.test(bodyItem);
     const ribAbsent  = !ribItem  || /^없음/.test(ribItem);
     const hasBody = !!((!bodyAbsent && bodyItem) || bodyRecv || bodyQty);
@@ -16097,6 +16096,10 @@ function validateBlendSum(blends, label) {
     const actionsBox = document.getElementById('dash-modal-actions');
     if (actionsBox) actionsBox.style.display = 'none';
 
+    // 이 모달에서 만든 번호 (연속 채번 중복 방지)
+    const sessionNums = [];
+    let madeCount = 0;
+
     const fld = (label, id, val, ph) => `
       <div style="margin-bottom:9px;">
         <label style="display:block;font-size:11.5px;font-weight:700;color:#374151;margin-bottom:3px;">${label}</label>
@@ -16104,25 +16107,41 @@ function validateBlendSum(blends, label) {
           style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #d1d5db;border-radius:5px;font-size:13px;font-family:inherit;">
       </div>`;
 
-    // 몸판/리프 카드 (체크 시 활성)
-    const partCard = (part, on, item, recv, qty) => `
-      <div class="gs-part-card" data-part="${part}" style="border:1px solid #e5e7eb;border-radius:8px;padding:11px 13px;margin-bottom:11px;background:#fafafa;${on ? '' : 'opacity:.42;'}">
-        <label style="display:flex;align-items:center;gap:8px;font-weight:800;font-size:14px;color:#111827;margin-bottom:9px;cursor:pointer;">
-          <input type="checkbox" id="gs-on-${part}" ${on ? 'checked' : ''} style="width:16px;height:16px;cursor:pointer;">
-          ${gsPartLabel(part)} 출고의뢰서
-        </label>
-        <div id="gs-fields-${part}">
+    // 독립 카드 — 각 카드가 한 업체용 완결된 의뢰서. 카드별 [만들기] 버튼.
+    const partCard = (part, item, recv, qty) => {
+      const accent = part === 'body' ? '#2563eb' : '#7c3aed';
+      return `
+      <div class="gs-part-card" data-part="${part}" style="border:1px solid #e5e7eb;border-left:4px solid ${accent};border-radius:8px;padding:12px 14px;margin-bottom:13px;background:#fafafa;">
+        <div style="font-weight:800;font-size:14px;color:#111827;margin-bottom:10px;">${gsPartLabel(part)} 출고의뢰서</div>
+        <div class="gs-part-fields" id="gs-fields-${part}">
           ${fld('품목', `gs-item-${part}`, item, '')}
           ${fld('수신처 (편직공장)', `gs-recv-${part}`, recv, '')}
           ${fld('출고처 (염색·가공처)', `gs-dest-${part}`, dest, '미지정 시 직접 입력')}
           ${fld('수량 (절)', `gs-qty-${part}`, qty ? String(qty) : '', '0')}
+          ${fld('컬러', `gs-color-${part}`, colorsTxt, '')}
+          ${fld('송장 No (선택)', `gs-inv-${part}`, '', '예: 001')}
+          <div style="margin-bottom:9px;">
+            <label style="display:block;font-size:11.5px;font-weight:700;color:#374151;margin-bottom:3px;">메모 (직접 작성)</label>
+            <textarea id="gs-note-${part}" rows="2" placeholder="예: 송장에 No 기입해서 보내주세요"
+              style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #d1d5db;border-radius:5px;font-size:13px;font-family:inherit;resize:vertical;"></textarea>
+          </div>
+        </div>
+        <div id="gs-action-${part}">
+          <button type="button" id="gs-make-${part}"
+            style="width:100%;padding:10px;border:1px solid #047857;border-radius:6px;background:#059669;color:#fff;font-weight:700;cursor:pointer;font-size:13px;">
+            ${gsPartLabel(part)} 의뢰서 만들기
+          </button>
         </div>
       </div>`;
+    };
 
     const destWarn = dest ? '' :
       `<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:8px 11px;margin-bottom:11px;font-size:11.5px;color:#92400e;">
-        염색처·가공처가 작지에 지정되어 있지 않습니다. 각 칸의 <strong>출고처</strong>를 직접 입력해 주세요.
+        염색처·가공처가 작지에 지정되어 있지 않습니다. 카드의 <strong>출고처</strong>를 직접 입력해 주세요.
       </div>`;
+
+    const noPart = (!hasBody && !hasRib)
+      ? `<div style="padding:24px;text-align:center;color:#9ca3af;font-size:13px;">이 작지에 몸판·리프 정보가 없습니다.</div>` : '';
 
     document.getElementById('dash-modal-body').innerHTML = `
       <div style="max-width:560px;margin:0 auto;padding:4px 2px 4px;">
@@ -16131,130 +16150,118 @@ function validateBlendSum(blends, label) {
           ${dest ? ` · 출고처(자동) ${escapeHtml(dest)}` : ''}
         </div>
         ${destWarn}
-        <div style="font-size:11.5px;color:#6b7280;margin:0 0 8px 2px;">출고할 원단을 선택하세요. 몸판·리프를 모두 선택하면 <strong>각각 1장씩</strong> 만들어집니다.</div>
-        ${partCard('body', hasBody, bodyAbsent ? '' : bodyItem, bodyRecv, bodyQty)}
-        ${partCard('rib', hasRib, ribAbsent ? '' : ribItem, ribRecv, ribQty)}
-        ${fld('컬러 (공통)', 'gs-color', colorsTxt, '')}
-        ${fld('송장 No (선택)', 'gs-invoice', '', '예: 001')}
-        <div style="margin-bottom:6px;">
-          <label style="display:block;font-size:11.5px;font-weight:700;color:#374151;margin-bottom:3px;">메모 (직접 작성)</label>
-          <textarea id="gs-note" rows="2" placeholder="예: 송장에 No 기입해서 보내주세요 / 연색용 등"
-            style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #d1d5db;border-radius:5px;font-size:13px;font-family:inherit;resize:vertical;"></textarea>
-        </div>
-        <div style="position:sticky;bottom:0;background:#fff;display:flex;gap:8px;justify-content:flex-end;padding:12px 0 6px;margin-top:6px;border-top:1px solid #eee;">
-          <button type="button" id="gs-cancel" style="padding:9px 16px;border:1px solid #d1d5db;border-radius:5px;background:#fff;cursor:pointer;font-size:13px;">취소</button>
-          <button type="button" id="gs-create" style="padding:9px 18px;border:1px solid #047857;border-radius:5px;background:#059669;color:#fff;font-weight:700;cursor:pointer;font-size:13px;">생지출고의뢰서 만들기</button>
+        <div style="font-size:11.5px;color:#6b7280;margin:0 0 10px 2px;">몸판과 리프는 <strong>업체가 다를 수 있어</strong> 따로 만듭니다. 보낼 업체의 카드에서 <strong>[만들기]</strong>를 눌러 주세요.</div>
+        ${hasBody ? partCard('body', bodyAbsent ? '' : bodyItem, bodyRecv, bodyQty) : ''}
+        ${hasRib  ? partCard('rib',  ribAbsent ? '' : ribItem,  ribRecv,  ribQty) : ''}
+        ${noPart}
+        <div style="position:sticky;bottom:0;background:#fff;display:flex;gap:8px;justify-content:flex-end;padding:12px 0 6px;margin-top:4px;border-top:1px solid #eee;">
+          <button type="button" id="gs-close" style="padding:9px 18px;border:1px solid #d1d5db;border-radius:5px;background:#fff;cursor:pointer;font-size:13px;">닫기</button>
         </div>
       </div>`;
 
-    // 체크 토글 → 카드 흐림/입력 비활성
-    ['body', 'rib'].forEach(part => {
-      const cb = document.getElementById(`gs-on-${part}`);
-      if (!cb) return;
-      const card = document.querySelector(`.gs-part-card[data-part="${part}"]`);
-      const fields = document.getElementById(`gs-fields-${part}`);
-      const sync = () => {
-        const on = cb.checked;
-        if (card) card.style.opacity = on ? '1' : '.42';
-        if (fields) fields.querySelectorAll('input').forEach(inp => inp.disabled = !on);
-      };
-      cb.addEventListener('change', sync);
-      sync();
+    // 닫기 → 만든 게 있으면 생지출고 목록으로 이동
+    document.getElementById('gs-close').addEventListener('click', () => {
+      modal.classList.remove('show');
+      if (madeCount > 0) {
+        state.uiMode = 'dashboard';
+        state.dashView = 'gs';
+        renderDashboard();
+      }
     });
 
-    document.getElementById('gs-cancel').addEventListener('click', () => modal.classList.remove('show'));
-    document.getElementById('gs-create').addEventListener('click', () => {
-      const gColor = document.getElementById('gs-color').value.trim();
-      const gInv = document.getElementById('gs-invoice').value.trim();
-      const gNote = document.getElementById('gs-note').value;
-      const items = [];
-      ['body', 'rib'].forEach(part => {
-        const cb = document.getElementById(`gs-on-${part}`);
-        if (!cb || !cb.checked) return;
+    // 카드별 [만들기] 핸들러
+    ['body', 'rib'].forEach(part => {
+      const mk = document.getElementById(`gs-make-${part}`);
+      if (!mk) return;
+      mk.addEventListener('click', async () => {
         let q = parseInt(document.getElementById(`gs-qty-${part}`).value, 10);
         if (isNaN(q)) q = 0;
-        items.push({
+        const it = {
           gs_part: part,
           gs_item: document.getElementById(`gs-item-${part}`).value.trim(),
           recipient: document.getElementById(`gs-recv-${part}`).value.trim(),
           gs_dest: document.getElementById(`gs-dest-${part}`).value.trim(),
           gs_qty: q,
-          gs_color: gColor,
-          gs_invoice_no: gInv,
-          gs_note: gNote
-        });
+          gs_color: document.getElementById(`gs-color-${part}`).value.trim(),
+          gs_invoice_no: document.getElementById(`gs-inv-${part}`).value.trim(),
+          gs_note: document.getElementById(`gs-note-${part}`).value
+        };
+        if (!it.gs_item) { toast(`${gsPartLabel(part)} 품목을 입력하세요`, 'error'); return; }
+        if (!it.recipient) { toast(`${gsPartLabel(part)} 수신처(편직공장)를 입력하세요`, 'error'); return; }
+        mk.disabled = true; mk.textContent = '저장 중...';
+        const wo = await createOneGreigeOrder(fn, it, sessionNums);
+        if (!wo) { mk.disabled = false; mk.textContent = `${gsPartLabel(part)} 의뢰서 만들기`; return; }
+        madeCount++;
+        // 입력 잠금
+        const fields = document.getElementById(`gs-fields-${part}`);
+        if (fields) fields.querySelectorAll('input,textarea').forEach(el => el.disabled = true);
+        // 버튼 영역 → 생성 완료 + 보기
+        const box = document.getElementById(`gs-action-${part}`);
+        if (box) {
+          box.innerHTML = `
+            <div style="display:flex;align-items:center;gap:10px;justify-content:space-between;background:#ecfdf5;border:1px solid #a7f3d0;border-radius:6px;padding:9px 12px;">
+              <span style="font-size:12.5px;font-weight:700;color:#047857;">✓ ${escapeHtml(wo.wo_number)} 생성됨</span>
+              <button type="button" id="gs-view-${part}" style="padding:7px 14px;border:1px solid #047857;border-radius:5px;background:#fff;color:#047857;font-weight:700;cursor:pointer;font-size:12.5px;">출고의뢰서 보기</button>
+            </div>`;
+          const vb = document.getElementById(`gs-view-${part}`);
+          if (vb) vb.addEventListener('click', () => { modal.classList.remove('show'); showPreviewModal(wo); });
+        }
       });
-      if (items.length === 0) { toast('몸판 또는 리프를 선택하세요', 'error'); return; }
-      for (const it of items) {
-        if (!it.gs_item) { toast(`${gsPartLabel(it.gs_part)} 품목을 입력하세요`, 'error'); return; }
-        if (!it.recipient) { toast(`${gsPartLabel(it.gs_part)} 수신처(편직공장)를 입력하세요`, 'error'); return; }
-      }
-      saveGreigeOrders(fn, items);
     });
 
     modal.classList.add('show');
   }
 
-  // ===== hotfix48/50: 생지출고의뢰서 저장 (선택한 몸판/리프마다 1장씩) =====
-  async function saveGreigeOrders(fn, items) {
-    const btn = document.getElementById('gs-create');
-    if (btn) { btn.disabled = true; btn.textContent = '저장 중...'; }
+  // ===== hotfix48/51: 생지출고의뢰서 1장 저장 =====
+  async function createOneGreigeOrder(fn, it, sessionNums) {
     try {
       const today = new Date();
       const ymd = today.getFullYear() + String(today.getMonth() + 1).padStart(2, '0') + String(today.getDate()).padStart(2, '0');
       const dateStr = today.toISOString().slice(0, 10);
-      // 연속 채번 보정 (onSnapshot 갱신 전이라 직접 카운트)
-      const base = state.allWorkOrders.filter(wo => wo.wo_number && wo.wo_number.startsWith(`GS-${ymd}`)).length;
-      const createdWos = [];
-      for (let i = 0; i < items.length; i++) {
-        const it = items[i];
-        const wo_number = `GS-${ymd}-${String(base + i + 1).padStart(3, '0')}`;
-        const docData = {
-          type: '생지출고',
-          wo_number,
-          date: dateStr,
-          title: '생지 출고 의뢰서',
-          subject: `[${gsPartLabel(it.gs_part)}] ${it.gs_item || ''}${it.gs_color ? ' / ' + it.gs_color : ''}`.trim(),
-          recipient: it.recipient || '',
-          gs_part: it.gs_part,
-          gs_item: it.gs_item || '',
-          gs_color: it.gs_color || '',
-          gs_qty: it.gs_qty || 0,
-          gs_dest: it.gs_dest || '',
-          gs_invoice_no: it.gs_invoice_no || '',
-          gs_note: it.gs_note || '',
-          body: buildGreigeOrderBody(it),
-          memo: '',
-          stamps: [],
-          source_fn_id: fn.id || '',
-          source_fn_number: fn.wo_number || '',
-          internal_memo: '',
-          completed: false,
-          deleted: false,
-          created_at: serverTimestamp(),
-          updated_at: serverTimestamp(),
-          created_by: state.user?.email || 'unknown',
-          updated_by: state.user?.email || 'unknown'
-        };
-        const ref = await addDoc(collection(db, 'workorders'), docData);
-        createdWos.push({ id: ref.id, ...docData, created_at: null });
-      }
-      toast(`생지출고의뢰서 ${createdWos.length}장 생성 완료`, 'success');
-      const modal = document.getElementById('dash-modal-bg');
-      if (modal) modal.classList.remove('show');
-      if (createdWos.length === 1) {
-        // 1장이면 바로 보기(출력/이미지 복사 가능)
-        showPreviewModal(createdWos[0]);
-      } else {
-        // 2장이면 목록으로 이동(둘 다 확인)
-        state.uiMode = 'dashboard';
-        state.dashView = 'gs';
-        renderDashboard();
-      }
+      // 채번: 기존 + 이번 세션 생성분 중복 회피
+      let n = state.allWorkOrders.filter(wo => wo.wo_number && wo.wo_number.startsWith(`GS-${ymd}`)).length;
+      let wo_number;
+      do {
+        n++;
+        wo_number = `GS-${ymd}-${String(n).padStart(3, '0')}`;
+      } while ((sessionNums && sessionNums.includes(wo_number)) ||
+               state.allWorkOrders.some(wo => wo.wo_number === wo_number));
+      if (sessionNums) sessionNums.push(wo_number);
+
+      const docData = {
+        type: '생지출고',
+        wo_number,
+        date: dateStr,
+        title: '생지 출고 의뢰서',
+        subject: `[${gsPartLabel(it.gs_part)}] ${it.gs_item || ''}${it.gs_color ? ' / ' + it.gs_color : ''}`.trim(),
+        recipient: it.recipient || '',
+        gs_part: it.gs_part,
+        gs_item: it.gs_item || '',
+        gs_color: it.gs_color || '',
+        gs_qty: it.gs_qty || 0,
+        gs_dest: it.gs_dest || '',
+        gs_invoice_no: it.gs_invoice_no || '',
+        gs_note: it.gs_note || '',
+        body: buildGreigeOrderBody(it),
+        memo: '',
+        stamps: [],
+        source_fn_id: fn.id || '',
+        source_fn_number: fn.wo_number || '',
+        internal_memo: '',
+        completed: false,
+        deleted: false,
+        created_at: serverTimestamp(),
+        updated_at: serverTimestamp(),
+        created_by: state.user?.email || 'unknown',
+        updated_by: state.user?.email || 'unknown'
+      };
+      const ref = await addDoc(collection(db, 'workorders'), docData);
+      toast(`${gsPartLabel(it.gs_part)} 의뢰서 ${wo_number} 생성`, 'success');
+      return { id: ref.id, ...docData, created_at: null };
     } catch (e) {
-      console.error('[saveGreigeOrders]', e);
+      console.error('[createOneGreigeOrder]', e);
       toast('저장 실패: ' + (e.message || e), 'error');
-      if (btn) { btn.disabled = false; btn.textContent = '생지출고의뢰서 만들기'; }
+      return null;
     }
   }
 
@@ -21071,7 +21078,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix50';
+  const VERSION = 'v2.53 hotfix51';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix34: 편직 의뢰서 [성격] 시스템 도입 — 정규/재고/샘플/완료 4태그, 자동분류, 표 ● 배지, [성격▼] 필터, 완료체크 양방향연동
   // hotfix33: 클레임(땡처리) 내역서 양식 통일 — 부분/전체 모두 정식 표 양식 + 이미지복사/인쇄/수정 동일 버튼
