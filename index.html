@@ -9177,7 +9177,7 @@ window.addEventListener('firebase-ready', () => {
       else if (wo.type === '편직') { title = wo.items?.[0]?.item || '-'; sub = wo.recipient || ''; }
       else if (wo.type === 'BT') { title = wo.item || '-'; sub = wo.recipient || ''; }
       else if (wo.type === '공문') { title = wo.title || '-'; sub = wo.recipient || ''; }
-      else if (wo.type === '생지출고') { title = wo.gs_item || wo.gs_greige || '생지출고'; sub = wo.recipient || ''; }
+      else if (wo.type === '생지출고') { title = `[${wo.gs_part === 'rib' ? '리프' : '몸판'}] ${wo.gs_item || '생지출고'}`; sub = wo.recipient || ''; }
       else {
         // hotfix46: 몸판 품목이 비었거나 "없음~"(리프만 작업)이면 리프 품목명으로 표시
         const bodyItem = (wo.body?.item || '').trim();
@@ -16006,7 +16006,7 @@ function validateBlendSum(blends, label) {
       <th>송장No</th>
       <th>출처 작지</th>
       <th>📝 메모</th>
-      <th class="col-action">작지</th>
+      <th class="col-action">문서</th>
       <th class="col-action">완료</th>
       <th class="col-action">삭제</th>
     </tr></thead><tbody>`;
@@ -16028,7 +16028,7 @@ function validateBlendSum(blends, label) {
         <td>${escapeHtml(wo.gs_invoice_no || '-')}</td>
         <td style="font-size:11px;color:#666;">${escapeHtml(wo.source_fn_number || '-')}</td>
         ${renderEditableCell(wo, 'internal_memo', wo.internal_memo, 'text')}
-        <td class="col-action"><button class="dash-action-btn dash-view-btn" data-id="${wo.id}">보기</button></td>
+        <td class="col-action"><button class="dash-action-btn dash-view-btn" data-id="${wo.id}">보기</button> <button class="dash-action-btn dash-gs-edit-btn" data-id="${wo.id}">수정</button></td>
         <td class="col-action"><input type="checkbox" class="dash-complete-cb" data-id="${wo.id}" ${wo.completed ? 'checked' : ''}> ${wo.completed ? '완료' : ''}</td>
         <td class="col-action"><button class="dash-action-btn danger dash-delete-btn" data-id="${wo.id}">삭제</button></td>
       </tr>`;
@@ -16263,6 +16263,101 @@ function validateBlendSum(blends, label) {
       toast('저장 실패: ' + (e.message || e), 'error');
       return null;
     }
+  }
+
+  // ===== hotfix52: 생지출고의뢰서 수정 모달 (단건) =====
+  function openGreigeOrderEditModal(woId) {
+    const wo = state.allWorkOrders.find(w => w.id === woId);
+    if (!wo || wo.type !== '생지출고') { toast('생지출고의뢰서를 찾을 수 없습니다', 'error'); return; }
+
+    const modal = document.getElementById('dash-modal-bg');
+    if (!modal) { toast('모달 요소 없음', 'error'); return; }
+    document.getElementById('dash-modal-title').textContent = '📄 생지출고의뢰서 수정';
+    ['dash-modal-image', 'dash-modal-copy', 'dash-modal-print', 'dash-modal-kakao'].forEach(id => {
+      const b = document.getElementById(id);
+      if (b) b.style.display = 'none';
+    });
+    const actionsBox = document.getElementById('dash-modal-actions');
+    if (actionsBox) actionsBox.style.display = 'none';
+
+    const fld = (label, id, val, ph) => `
+      <div style="margin-bottom:9px;">
+        <label style="display:block;font-size:11.5px;font-weight:700;color:#374151;margin-bottom:3px;">${label}</label>
+        <input type="text" id="${id}" value="${escapeHtml(val || '')}" placeholder="${escapeHtml(ph || '')}" lang="ko"
+          style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #d1d5db;border-radius:5px;font-size:13px;font-family:inherit;">
+      </div>`;
+    const accent = wo.gs_part === 'body' ? '#2563eb' : '#7c3aed';
+
+    document.getElementById('dash-modal-body').innerHTML = `
+      <div style="max-width:560px;margin:0 auto;padding:4px 2px 4px;">
+        <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:10px 12px;margin-bottom:12px;font-size:12px;color:#1e40af;">
+          수정 중: <strong>${escapeHtml(wo.wo_number || '-')}</strong>
+          ${wo.source_fn_number ? ` · 출처 ${escapeHtml(wo.source_fn_number)}` : ''}
+        </div>
+        <div style="font-size:11.5px;color:#6b7280;margin:0 0 10px 2px;">품목 칸은 작지처럼 <strong>품목 / 컬러(사종)</strong>를 함께 적어두면 이력 검색에서 한눈에 확인됩니다.</div>
+        <div style="border:1px solid #e5e7eb;border-left:4px solid ${accent};border-radius:8px;padding:12px 14px;background:#fafafa;">
+          <div style="font-weight:800;font-size:14px;color:#111827;margin-bottom:10px;">${gsPartLabel(wo.gs_part)} 출고의뢰서</div>
+          ${fld('품목', 'gse-item', wo.gs_item, '예: testRS-365T / 먹색 7(4)')}
+          ${fld('수신처 (편직공장)', 'gse-recv', wo.recipient, '')}
+          ${fld('출고처 (염색·가공처)', 'gse-dest', wo.gs_dest, '')}
+          ${fld('수량 (절)', 'gse-qty', (wo.gs_qty || wo.gs_qty === 0) ? String(wo.gs_qty) : '', '0')}
+          ${fld('컬러', 'gse-color', wo.gs_color, '')}
+          ${fld('송장 No (선택)', 'gse-inv', wo.gs_invoice_no, '예: 001')}
+          <div style="margin-bottom:4px;">
+            <label style="display:block;font-size:11.5px;font-weight:700;color:#374151;margin-bottom:3px;">메모 (직접 작성)</label>
+            <textarea id="gse-note" rows="2"
+              style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #d1d5db;border-radius:5px;font-size:13px;font-family:inherit;resize:vertical;">${escapeHtml(wo.gs_note || '')}</textarea>
+          </div>
+        </div>
+        <div style="position:sticky;bottom:0;background:#fff;display:flex;gap:8px;justify-content:flex-end;padding:12px 0 6px;margin-top:6px;border-top:1px solid #eee;">
+          <button type="button" id="gse-cancel" style="padding:9px 16px;border:1px solid #d1d5db;border-radius:5px;background:#fff;cursor:pointer;font-size:13px;">취소</button>
+          <button type="button" id="gse-save" style="padding:9px 18px;border:1px solid #047857;border-radius:5px;background:#059669;color:#fff;font-weight:700;cursor:pointer;font-size:13px;">저장</button>
+        </div>
+      </div>`;
+
+    document.getElementById('gse-cancel').addEventListener('click', () => modal.classList.remove('show'));
+    document.getElementById('gse-save').addEventListener('click', async () => {
+      let q = parseInt(document.getElementById('gse-qty').value, 10);
+      if (isNaN(q)) q = 0;
+      const it = {
+        gs_part: wo.gs_part,
+        gs_item: document.getElementById('gse-item').value.trim(),
+        recipient: document.getElementById('gse-recv').value.trim(),
+        gs_dest: document.getElementById('gse-dest').value.trim(),
+        gs_qty: q,
+        gs_color: document.getElementById('gse-color').value.trim(),
+        gs_invoice_no: document.getElementById('gse-inv').value.trim(),
+        gs_note: document.getElementById('gse-note').value
+      };
+      if (!it.gs_item) { toast('품목을 입력하세요', 'error'); return; }
+      if (!it.recipient) { toast('수신처(편직공장)를 입력하세요', 'error'); return; }
+      const btn = document.getElementById('gse-save');
+      btn.disabled = true; btn.textContent = '저장 중...';
+      try {
+        await updateDoc(doc(db, 'workorders', woId), {
+          gs_item: it.gs_item,
+          recipient: it.recipient,
+          gs_dest: it.gs_dest,
+          gs_qty: it.gs_qty,
+          gs_color: it.gs_color,
+          gs_invoice_no: it.gs_invoice_no,
+          gs_note: it.gs_note,
+          subject: `[${gsPartLabel(it.gs_part)}] ${it.gs_item || ''}${it.gs_color ? ' / ' + it.gs_color : ''}`.trim(),
+          body: buildGreigeOrderBody(it),
+          updated_at: serverTimestamp(),
+          updated_by: state.user?.email || 'unknown'
+        });
+        toast('생지출고의뢰서 수정 완료', 'success');
+        modal.classList.remove('show');
+        renderDashboard();
+      } catch (e) {
+        console.error('[gs edit save]', e);
+        toast('저장 실패: ' + (e.message || e), 'error');
+        btn.disabled = false; btn.textContent = '저장';
+      }
+    });
+
+    modal.classList.add('show');
   }
 
   // v2.51 hotfix9: 클레임 삭제 모달 — 2옵션 선택형
@@ -18748,6 +18843,13 @@ function validateBlendSum(blends, label) {
       });
     });
 
+    // hotfix52: 생지출고의뢰서 수정 버튼
+    document.querySelectorAll('#dash-body .dash-gs-edit-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        openGreigeOrderEditModal(btn.dataset.id);
+      });
+    });
+
     // v2.53 hotfix21: 전체 작업 이력 버튼/아이콘 (완료화면 [📜 이력] + 진행화면 컬러명 옆 📜)
     document.querySelectorAll('#dash-body .hist-open-btn, #dash-body .hist-icon-btn').forEach(btn => {
       btn.addEventListener('click', (ev) => {
@@ -21078,7 +21180,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix51';
+  const VERSION = 'v2.53 hotfix52';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix34: 편직 의뢰서 [성격] 시스템 도입 — 정규/재고/샘플/완료 4태그, 자동분류, 표 ● 배지, [성격▼] 필터, 완료체크 양방향연동
   // hotfix33: 클레임(땡처리) 내역서 양식 통일 — 부분/전체 모두 정식 표 양식 + 이미지복사/인쇄/수정 동일 버튼
