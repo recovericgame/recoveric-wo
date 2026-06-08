@@ -12327,6 +12327,12 @@ function validateBlendSum(blends, label) {
       r.qc_status = 'done';
       r.qc_done_at = now;
       r.defect_at = null; r.defect_by = null;
+      // hotfix61: 수정으로 보내면 축률 이상 보류도 함께 해제 (대표 보고 종료)
+      if (r.shrink_hold) {
+        r.shrink_hold = false;
+        r.shrink_resolved_as = 'fix';
+        r.shrink_resolved_at = now;
+      }
     }
     // 컬러 단위 불량 흔적 정리 (완료는 아님 — fix_active로 미완 유지)
     if (c.qc_status === 'defect') c.qc_status = 'done';
@@ -17073,6 +17079,7 @@ function validateBlendSum(blends, label) {
           <div class="ceo-report-actions">
             <button class="dash-action-btn ceo-rep-view-btn" data-id="${rep.woId}">원단 보기</button>
             <button class="dash-action-btn ceo-rep-approve-btn" style="background:#16a34a;color:#fff;border-color:#15803d;font-weight:700;" data-id="${rep.woId}" data-color-idx="${rep.colorIdx}">✓ 정상 승인 (완료 처리)</button>
+            <button class="dash-action-btn ceo-rep-fix-btn" style="background:#f97316;color:#fff;border-color:#ea580c;font-weight:700;" data-id="${rep.woId}" data-color-idx="${rep.colorIdx}">🔧 수정으로 처리</button>
             <button class="dash-action-btn ceo-rep-defect-btn" style="background:#dc2626;color:#fff;border-color:#b91c1c;font-weight:700;" data-id="${rep.woId}" data-color-idx="${rep.colorIdx}">⚠ 불량으로 처리</button>
           </div>
         </div>`;
@@ -19377,6 +19384,49 @@ function validateBlendSum(blends, label) {
         // 불량 검수 화면을 열어 사유를 선택하고 [불량 처리]로 마무리 (보류는 그때 자동 해제됨)
         toast('불량 검수 화면을 엽니다 — 사유 선택 후 [불량 처리]를 눌러주세요', 'info');
         openQcModal(id, ci, r ? r.receipt_no : undefined);
+      });
+    });
+    // hotfix61: 대표 보고함 — [🔧 수정으로 처리] (같은 컬러를 작업장에 다시 보내 손봄 — 색 그대로)
+    document.querySelectorAll('#dash-body .ceo-rep-fix-btn').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (!isAdminUser()) { toast('대표만 처리할 수 있습니다', 'warning'); return; }
+        const id = btn.dataset.id;
+        const ci = parseInt(btn.dataset.colorIdx, 10);
+        const wo = state.allWorkOrders.find(w => w.id === id);
+        if (!wo) return;
+        const c = (wo.colors || [])[ci] || {};
+        const cName = c.name || `컬러 #${ci + 1}`;
+        const r = (c.receipts || []).find(rr => rr.shrink_hold);
+        // 받은 양 전체를 기본값으로 (일부만 보낼 땐 직접 수정)
+        const defB = (typeof getReceivedBody === 'function' ? getReceivedBody(c) : 0) || (num(c.body) || 0);
+        const defR = (typeof getReceivedRib === 'function' ? getReceivedRib(c) : 0) || (num(c.rib) || 0);
+        const input = prompt(
+          `[${wo.wo_number || ''}] "${cName}" 수정 보낼 수량 (몸판/부속)\n\n` +
+          `· 같은 컬러를 작업장에 다시 보내 축률을 손봅니다 (색 그대로)\n` +
+          `· 일부만 보내려면 숫자를 고치세요. 예: 5/0\n` +
+          `· 받은 양 전체를 보내려면 그대로 두세요`,
+          `${defB}/${defR}`
+        );
+        if (input === null) return;
+        const parts = String(input).split('/');
+        const fb = parseFloat(parts[0]) || 0;
+        const fr = parseFloat(parts[1]) || 0;
+        if (fb === 0 && fr === 0) { toast('수정 수량을 입력하세요 (예: 5/0)', 'error'); return; }
+        const noteInput = prompt(
+          `[${wo.wo_number || ''}] "${cName}" 작업장에 전달할 요청 (선택)\n\n` +
+          `· 예: 축률 잡아주세요 / 색 유지\n` +
+          `· 비워두면 지시서에 빈칸으로 들어갑니다`,
+          '축률 수정 (색 유지)'
+        );
+        if (noteInput === null) return;
+        try {
+          await setColorFixSend(id, ci, fb, fr, r ? r.receipt_no : undefined, noteInput);
+          toast(`🔧 "${cName}" 수정 ${fb}/${fr} 보냄 — 작업장 회수 후 검수 통과하면 완료됩니다`, 'success');
+          renderDashboard();
+        } catch (err) {
+          toast('수정 보내기 실패: ' + err.message, 'error');
+        }
       });
     });
     // hotfix60: 전체 대시보드 축률 배너 클릭 → 대표 보고함 이동
@@ -21903,7 +21953,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix60';
+  const VERSION = 'v2.53 hotfix61';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix34: 편직 의뢰서 [성격] 시스템 도입 — 정규/재고/샘플/완료 4태그, 자동분류, 표 ● 배지, [성격▼] 필터, 완료체크 양방향연동
   // hotfix33: 클레임(땡처리) 내역서 양식 통일 — 부분/전체 모두 정식 표 양식 + 이미지복사/인쇄/수정 동일 버튼
