@@ -7471,7 +7471,9 @@ const PROTECTED_COLOR_FIELDS = [
   // v2.53 hotfix24: 전체 입고 취소 표식 (수정저장 자동복원 차단용)
   'receipts_cleared_at',
   // v2.53 hotfix40: 수정(fix) 사이클 — 같은 컬러를 작업장에 다시 보내 손보는 절차 (재염과 별개)
-  'fix_active', 'fix_body', 'fix_rib', 'fix_history'
+  'fix_active', 'fix_body', 'fix_rib', 'fix_history',
+  // v2.53 hotfix68: 수정 재검수 불합격 → 대표 보고 보류
+  'fix_ceo_hold', 'fix_spec_dev'
 ];
 
 // ===== hotfix34: 편직 성격(kind) 시스템 =====
@@ -11192,7 +11194,41 @@ function validateBlendSum(blends, label) {
       });
     });
 
-    // [보고 유형 ②~] 향후 추가: 예) 납기 초과, 사유 미확정 부족분 등 — 여기에 push
+    // [보고 유형 ②] 수정 재검수 불합격 — 대표 보고로 올린 수정 건 (hotfix68)
+    (state.allWorkOrders || []).forEach(wo => {
+      if (wo.deleted || wo.type !== '염색가공') return;
+      (wo.colors || []).forEach((c, ci) => {
+        if (!c || c.fix_active !== true || c.fix_ceo_hold !== true) return;
+        const dev = c.fix_spec_dev || null;
+        const fails = [];
+        if (dev) {
+          if (dev.width && dev.width.fail) fails.push('폭');
+          if (dev.weight && dev.weight.fail) fails.push('중량');
+          if (dev.shrink && dev.shrink.fail) fails.push('축률');
+        }
+        const lastHist = (Array.isArray(c.fix_history) && c.fix_history.length) ? c.fix_history[c.fix_history.length - 1] : null;
+        const rc = (lastHist && lastHist.recheck) || null;
+        reports.push({
+          type: 'fix_recheck',
+          typeLabel: fails.length ? `수정 재검수 불합격 (${fails.join('·')})` : '수정 재검수 불합격',
+          icon: '🔧',
+          theme: '#f97316',
+          woId: wo.id,
+          woNumber: wo.wo_number || '',
+          colorIdx: ci,
+          colorName: c.name || `컬러 #${ci + 1}`,
+          item: wo.body?.item || '',
+          dev: dev,
+          fixBody: num(c.fix_body) || 0,
+          fixRib: num(c.fix_rib) || 0,
+          notes: (rc && rc.notes) || '',
+          createdAt: (rc && rc.at) || '',
+          createdBy: (rc && rc.by) || ''
+        });
+      });
+    });
+
+    // [보고 유형 ③~] 향후 추가: 예) 납기 초과, 사유 미확정 부족분 등 — 여기에 push
 
     // 최신 보고 먼저
     reports.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
@@ -12568,7 +12604,8 @@ function validateBlendSum(blends, label) {
   }
   
   // hotfix40: 수정 완료 — 작업장에서 수정분이 돌아와 검수 통과. fix 트랙 종료.
-  async function setColorFixResolve(woId, colorIdx) {
+  // hotfix68: recheck(재검수값) 선택 인자 — 직전 회차 이력에 합격 기록으로 남김.
+  async function setColorFixResolve(woId, colorIdx, recheck) {
     const wo = state.allWorkOrders.find(w => w.id === woId);
     if (!wo) throw new Error('의뢰서를 찾을 수 없음');
     const colors = JSON.parse(JSON.stringify(wo.colors || []));
@@ -12578,9 +12615,15 @@ function validateBlendSum(blends, label) {
     c.fix_active = false;
     c.fix_body = 0;
     c.fix_rib = 0;
+    delete c.fix_ceo_hold;
+    delete c.fix_spec_dev;
     if (Array.isArray(c.fix_history) && c.fix_history.length) {
       const last = c.fix_history[c.fix_history.length - 1];
-      if (last && !last.resolved_at) { last.resolved_at = now; last.resolved_by = state.user.email; }
+      if (last && !last.resolved_at) {
+        last.resolved_at = now;
+        last.resolved_by = state.user.email;
+        if (recheck) last.recheck = Object.assign({}, recheck, { passed: true, at: now, by: state.user.email });
+      }
     }
     // 수정 해결로 컬러가 완벽히 닫혔으면 의뢰서 자동 완료 판정 반영
     const updates = { colors, updated_at: serverTimestamp(), updated_by: state.user.email };
@@ -12591,6 +12634,286 @@ function validateBlendSum(blends, label) {
     await updateDoc(doc(db, 'workorders', woId), updates);
     if (newStamps) wo.stamps = newStamps;
   }
+
+  // ===== hotfix68: 수정 회수 = 재검수 =====
+  // [🔧 수정중] 클릭 → 돌아온 수정분을 재검수. 합격해야만 완료(setColorFixResolve).
+  // 불합격이면 [다시 수정 보내기] / [대표 보고] / [불량] 3갈래.
+
+  // 다시 수정 보내기 — 같은 수량을 재작업. ★수량 ADD 안 함★(회차만 누적 로깅).
+  async function setColorFixRetry(woId, colorIdx, recheck, specDev, note) {
+    const wo = state.allWorkOrders.find(w => w.id === woId);
+    if (!wo) throw new Error('의뢰서를 찾을 수 없음');
+    const colors = JSON.parse(JSON.stringify(wo.colors || []));
+    const c = colors[colorIdx];
+    if (!c) throw new Error('컬러 인덱스 오류');
+    const now = new Date().toISOString();
+    if (!Array.isArray(c.fix_history)) c.fix_history = [];
+    const last = c.fix_history.length ? c.fix_history[c.fix_history.length - 1] : null;
+    const prevBody = last ? (num(last.body) || 0) : (num(c.fix_body) || 0);
+    const prevRib  = last ? (num(last.rib)  || 0) : (num(c.fix_rib)  || 0);
+    const prevRound = (last && last.round) ? last.round : c.fix_history.length;
+    // 직전(미해결) 회차 = 재검수 불합격으로 마감
+    if (last && !last.resolved_at) {
+      last.resolved_at = now;
+      last.resolved_by = state.user.email;
+      last.recheck = Object.assign({}, recheck || {}, { passed: false, spec_dev: specDev || null, at: now, by: state.user.email });
+    }
+    const fnote = (note == null ? '' : String(note)).trim();
+    // 새 회차 — 같은 수량(가산 없음), 재작업 표식
+    c.fix_history.push({
+      round: prevRound + 1, retry: true,
+      body: prevBody, rib: prevRib, note: fnote,
+      sent_at: now, sent_by: state.user.email, resolved_at: null
+    });
+    // 총 수정중 수량(fix_body/fix_rib)은 그대로 유지 — ADD 금지
+    c.fix_active = true;
+    delete c.fix_ceo_hold;
+    delete c.fix_spec_dev;
+    const updates = { colors, updated_at: serverTimestamp(), updated_by: state.user.email };
+    const newStamps = syncFixStamp(wo, colors);
+    if (newStamps) updates.stamps = newStamps;
+    await updateDoc(doc(db, 'workorders', woId), updates);
+    if (newStamps) wo.stamps = newStamps;
+  }
+
+  // 대표 보고로 올림 — fix_active 유지, 대표 보고함에 표시.
+  async function setColorFixCeoHold(woId, colorIdx, recheck, specDev) {
+    const wo = state.allWorkOrders.find(w => w.id === woId);
+    if (!wo) throw new Error('의뢰서를 찾을 수 없음');
+    const colors = JSON.parse(JSON.stringify(wo.colors || []));
+    const c = colors[colorIdx];
+    if (!c) throw new Error('컬러 인덱스 오류');
+    const now = new Date().toISOString();
+    if (Array.isArray(c.fix_history) && c.fix_history.length) {
+      const last = c.fix_history[c.fix_history.length - 1];
+      if (last && !last.resolved_at) {
+        last.recheck = Object.assign({}, recheck || {}, { passed: false, spec_dev: specDev || null, at: now, by: state.user.email });
+      }
+    }
+    c.fix_active = true;
+    c.fix_ceo_hold = true;
+    c.fix_spec_dev = specDev || null;
+    await updateDoc(doc(db, 'workorders', woId), {
+      colors, updated_at: serverTimestamp(), updated_by: state.user.email
+    });
+  }
+
+  // 불량으로 처리 — 수정 트랙 종료 후 해당 차수를 불량 상태로 (기존 불량 흐름으로 인계).
+  async function setColorFixDefect(woId, colorIdx, recheck) {
+    const wo = state.allWorkOrders.find(w => w.id === woId);
+    if (!wo) throw new Error('의뢰서를 찾을 수 없음');
+    const colors = JSON.parse(JSON.stringify(wo.colors || []));
+    const c = colors[colorIdx];
+    if (!c) throw new Error('컬러 인덱스 오류');
+    const now = new Date().toISOString();
+    migrateColorReceipts(c);
+    if (Array.isArray(c.fix_history) && c.fix_history.length) {
+      const last = c.fix_history[c.fix_history.length - 1];
+      if (last && !last.resolved_at) {
+        last.resolved_at = now;
+        last.resolved_by = state.user.email;
+        last.recheck = Object.assign({}, recheck || {}, { passed: false, defect: true, at: now, by: state.user.email });
+      }
+    }
+    c.fix_active = false;
+    c.fix_body = 0;
+    c.fix_rib = 0;
+    delete c.fix_ceo_hold;
+    delete c.fix_spec_dev;
+    // 활성(미완료) 차수를 불량으로 — 없으면 마지막 차수
+    let targetIdx = getActiveReceiptIndex(c);
+    if (targetIdx < 0 && Array.isArray(c.receipts) && c.receipts.length) targetIdx = c.receipts.length - 1;
+    if (targetIdx >= 0) {
+      const r = c.receipts[targetIdx];
+      r.qc_status = 'defect';
+      r.defect_at = now;
+      r.defect_by = state.user.email;
+      if (r.shrink_hold) { r.shrink_hold = false; r.shrink_resolved_as = 'defect'; r.shrink_resolved_at = now; }
+    }
+    c.qc_status = 'defect';
+    c.defect_at = now;
+    c.defect_by = state.user.email;
+    c.completed = false;
+    delete c.completed_at;
+    const updates = { colors, updated_at: serverTimestamp(), updated_by: state.user.email };
+    const newStamps = syncFixStamp(wo, colors);
+    if (newStamps) updates.stamps = newStamps;
+    await updateDoc(doc(db, 'workorders', woId), updates);
+    if (newStamps) wo.stamps = newStamps;
+  }
+
+  // hotfix68: 수정 회수 재검수 모달 — [🔧 수정중] 클릭 시 열림
+  function openFixRecheckModal(woId, colorIdx) {
+    const wo = state.allWorkOrders.find(w => w.id === woId);
+    if (!wo) return;
+    const c = (wo.colors || [])[colorIdx];
+    if (!c) return;
+    const cName = c.name || `컬러 #${colorIdx + 1}`;
+    const fb = num(c.fix_body) || 0;
+    const fr = num(c.fix_rib) || 0;
+    const body = wo.body || {};
+    const ws = parseWidthSpec(body.spec_width);
+    const tube = !!body.spec_width_tube;
+    const specBits = [];
+    if (ws) {
+      let t = `폭 ${escapeHtml(String(body.spec_width))}″`;
+      if (tube) t += ` 튜브(실폭 ${ws.min * 2}/${ws.max * 2})`;
+      specBits.push(t);
+    }
+    if (body.spec_gy != null && body.spec_gy !== '') specBits.push(`${escapeHtml(String(body.spec_gy))}g/y`);
+    specBits.push('축률 2.5% 이하');
+    const specLine = (ws || (body.spec_gy != null && body.spec_gy !== ''))
+      ? `<div style="margin:8px 0;padding:8px 12px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;color:#1e3a8a;font-weight:700;font-size:12px;">기준 ${specBits.join(' · ')}</div>`
+      : `<div style="margin:8px 0;padding:8px 12px;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;color:#92400e;font-size:12px;">이 품목은 기준 폭/중량이 없어 축률만 자동 판정됩니다.</div>`;
+
+    const modal = document.getElementById('dash-modal-bg');
+    document.getElementById('dash-modal-title').textContent = '🔧 수정 회수 재검수';
+    document.getElementById('dash-modal-body').innerHTML = `
+      <div style="padding:16px 18px;">
+        <div style="font-size:13px;color:#334155;margin-bottom:4px;">[${escapeHtml(wo.wo_number || '')}] <strong>${escapeHtml(cName)}</strong></div>
+        <div style="font-size:12px;color:#f97316;font-weight:700;margin-bottom:6px;">🔧 수정중 ${fb}/${fr}절 — 작업장에서 돌아온 원단을 다시 검수합니다</div>
+        ${specLine}
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px;">
+          <div style="grid-column:1/3;">
+            <label style="font-size:12px;font-weight:700;color:#334155;">폭 (인치)</label>
+            <div style="display:flex;align-items:center;gap:8px;margin-top:4px;">
+              <input type="number" step="0.1" min="0" id="fr-width" placeholder="예: 38" style="flex:0 0 120px;padding:8px;border:1px solid #cbd5e1;border-radius:6px;">
+              <label style="font-size:12px;display:inline-flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" id="fr-double"> 더블</label>
+              <span id="fr-actual-width" style="font-size:12px;color:#1e40af;font-weight:700;"></span>
+            </div>
+          </div>
+          <div>
+            <label style="font-size:12px;font-weight:700;color:#334155;">스퀘어중량 (g/㎡)</label>
+            <input type="number" step="1" min="0" id="fr-sqm" placeholder="예: 195" style="width:100%;padding:8px;border:1px solid #cbd5e1;border-radius:6px;margin-top:4px;box-sizing:border-box;">
+          </div>
+          <div>
+            <label style="font-size:12px;font-weight:700;color:#334155;">야드중량 (g/y · 자동)</label>
+            <input type="number" id="fr-gy" placeholder="자동 계산" readonly tabindex="-1" style="width:100%;padding:8px;border:1px solid #e2e8f0;background:#f8fafc;border-radius:6px;margin-top:4px;box-sizing:border-box;">
+          </div>
+          <div>
+            <label style="font-size:12px;font-weight:700;color:#334155;">폭축률 (%)</label>
+            <input type="number" step="0.1" id="fr-shrink-w" placeholder="예: 2.0" style="width:100%;padding:8px;border:1px solid #cbd5e1;border-radius:6px;margin-top:4px;box-sizing:border-box;">
+          </div>
+          <div>
+            <label style="font-size:12px;font-weight:700;color:#334155;">장축률 (%)</label>
+            <input type="number" step="0.1" id="fr-shrink-l" placeholder="예: 2.0" style="width:100%;padding:8px;border:1px solid #cbd5e1;border-radius:6px;margin-top:4px;box-sizing:border-box;">
+          </div>
+          <div style="grid-column:1/3;">
+            <label style="font-size:12px;font-weight:700;color:#334155;">특이사항 (선택)</label>
+            <textarea id="fr-notes" placeholder="재검수 특이사항" style="width:100%;padding:8px;border:1px solid #cbd5e1;border-radius:6px;margin-top:4px;box-sizing:border-box;min-height:48px;"></textarea>
+          </div>
+        </div>
+        <div id="fr-result" style="margin-top:12px;"></div>
+        <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px;flex-wrap:wrap;" id="fr-footer">
+          <button type="button" id="fr-cancel" style="padding:9px 16px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;cursor:pointer;">취소</button>
+          <button type="button" id="fr-judge" style="padding:9px 18px;border:1px solid #1e40af;border-radius:6px;background:#1e40af;color:#fff;font-weight:700;cursor:pointer;">✓ 재검수 판정</button>
+        </div>
+      </div>`;
+    modal.classList.add('show');
+
+    const wEl = document.getElementById('fr-width');
+    const dEl = document.getElementById('fr-double');
+    const sqmEl = document.getElementById('fr-sqm');
+    const gyEl = document.getElementById('fr-gy');
+    const swEl = document.getElementById('fr-shrink-w');
+    const slEl = document.getElementById('fr-shrink-l');
+    const notesEl = document.getElementById('fr-notes');
+    const awEl = document.getElementById('fr-actual-width');
+    const resultEl = document.getElementById('fr-result');
+    const footerEl = document.getElementById('fr-footer');
+
+    function recalc() {
+      const aw = calcActualWidth(wEl.value, dEl.checked);
+      awEl.textContent = aw != null ? `→ 실폭 ${aw}″${dEl.checked ? ' (더블)' : ''}` : '';
+      const gy = calcYardWeight(sqmEl.value, aw);
+      gyEl.value = gy != null ? gy : '';
+    }
+    wEl.addEventListener('input', recalc);
+    dEl.addEventListener('change', recalc);
+    sqmEl.addEventListener('input', recalc);
+
+    function readData() {
+      return {
+        width_inch: wEl.value,
+        width_double: dEl.checked,
+        weight_g_per_sqm: sqmEl.value,
+        weight_g_per_y: gyEl.value,
+        shrink_width_pct: swEl.value,
+        shrink_length_pct: slEl.value,
+        notes: notesEl.value
+      };
+    }
+    function closeModal() { modal.classList.remove('show'); }
+    document.getElementById('fr-cancel').addEventListener('click', closeModal);
+
+    document.getElementById('fr-judge').addEventListener('click', () => {
+      const data = readData();
+      const dev = checkSpecDeviation(data, wo);
+      const evaluated = !!(dev.width || dev.weight || dev.shrink);
+      const line = (k, ok, txt) => `<div style="font-size:12px;margin:3px 0;color:${ok ? '#16a34a' : '#dc2626'};font-weight:700;">${ok ? '✓' : '⚠'} ${k} ${txt}</div>`;
+      let rows = '';
+      if (dev.width) rows += line('폭', !dev.width.fail, `실측 ${dev.width.actual}″ (허용 ${dev.width.lo}~${dev.width.hi}″)`);
+      if (dev.weight) rows += line('중량', !dev.weight.fail, `실측 ${dev.weight.actual}g/y (허용 ${dev.weight.lo}~${dev.weight.hi})`);
+      if (dev.shrink) rows += line('축률', !dev.shrink.fail, `폭 ${dev.shrink.w == null ? '-' : dev.shrink.w}% / 장 ${dev.shrink.l == null ? '-' : dev.shrink.l}% (기준 2.5% 이하)`);
+
+      if (!evaluated) {
+        resultEl.innerHTML = `<div style="padding:10px 12px;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;font-size:12px;color:#92400e;">검수값을 입력해 주세요 — 폭·중량·축률 중 하나 이상.</div>`;
+        return;
+      }
+      if (!dev.any) {
+        resultEl.innerHTML = `<div style="padding:10px 12px;background:#f0fdf4;border:1px solid #bbf7d0;border-left:4px solid #16a34a;border-radius:6px;"><div style="font-weight:700;color:#15803d;margin-bottom:4px;">✓ 기준 안 — 합격</div>${rows}</div>`;
+        footerEl.innerHTML = `
+          <button type="button" id="fr-cancel2" style="padding:9px 16px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;cursor:pointer;">취소</button>
+          <button type="button" id="fr-pass" style="padding:9px 18px;border:1px solid #15803d;border-radius:6px;background:#16a34a;color:#fff;font-weight:700;cursor:pointer;">✓ 수정 완료 처리</button>`;
+        document.getElementById('fr-cancel2').addEventListener('click', closeModal);
+        document.getElementById('fr-pass').addEventListener('click', async () => {
+          try {
+            await setColorFixResolve(woId, colorIdx, data);
+            closeModal();
+            toast(`🔧 "${cName}" 수정 완료 — 재검수 합격`, 'success');
+            renderDashboard();
+          } catch (err) { toast('수정 완료 실패: ' + err.message, 'error'); }
+        });
+      } else {
+        resultEl.innerHTML = `<div style="padding:10px 12px;background:#fef2f2;border:1px solid #fecaca;border-left:4px solid #dc2626;border-radius:6px;"><div style="font-weight:700;color:#b91c1c;margin-bottom:4px;">⚠ 기준 벗어남 — 불합격</div>${rows}<div style="font-size:11px;color:#991b1b;margin-top:6px;">아래에서 처리 방법을 선택하세요.</div></div>`;
+        footerEl.innerHTML = `
+          <button type="button" id="fr-cancel2" style="padding:9px 14px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;cursor:pointer;">취소</button>
+          <button type="button" id="fr-retry" style="padding:9px 14px;border:1px solid #ea580c;border-radius:6px;background:#f97316;color:#fff;font-weight:700;cursor:pointer;">🔧 다시 수정 보내기</button>
+          <button type="button" id="fr-ceo" style="padding:9px 14px;border:1px solid #b91c1c;border-radius:6px;background:#dc2626;color:#fff;font-weight:700;cursor:pointer;">🚩 대표 보고</button>
+          <button type="button" id="fr-defect" style="padding:9px 14px;border:1px solid #7f1d1d;border-radius:6px;background:#991b1b;color:#fff;font-weight:700;cursor:pointer;">⚠ 불량</button>`;
+        document.getElementById('fr-cancel2').addEventListener('click', closeModal);
+        document.getElementById('fr-retry').addEventListener('click', async () => {
+          const note = prompt(`[${wo.wo_number || ''}] "${cName}" 작업장에 다시 보낼 요청 (선택)\n\n· 같은 수량을 다시 손봅니다 (수량 추가 없음)`, '축률 다시 잡아주세요');
+          if (note === null) return;
+          try {
+            await setColorFixRetry(woId, colorIdx, data, dev, note);
+            closeModal();
+            toast(`🔧 "${cName}" 다시 수정 보냄 — 회차 누적`, 'success');
+            renderDashboard();
+          } catch (err) { toast('다시 수정 실패: ' + err.message, 'error'); }
+        });
+        document.getElementById('fr-ceo').addEventListener('click', async () => {
+          try {
+            await setColorFixCeoHold(woId, colorIdx, data, dev);
+            closeModal();
+            toast(`🚩 "${cName}" 대표 보고함으로 올렸습니다`, 'info');
+            if (isAdminUser()) state.dashView = 'ceoReports';
+            renderDashboard();
+          } catch (err) { toast('대표 보고 실패: ' + err.message, 'error'); }
+        });
+        document.getElementById('fr-defect').addEventListener('click', async () => {
+          if (!confirm(`[${wo.wo_number || ''}] "${cName}"\n수정한 원단을 불량으로 처리합니다.\n수정 트랙이 종료되고 불량 상태로 돌아갑니다.\n\n계속할까요?`)) return;
+          try {
+            await setColorFixDefect(woId, colorIdx, data);
+            closeModal();
+            toast(`⚠ "${cName}" 불량 처리`, 'warning');
+            renderDashboard();
+          } catch (err) { toast('불량 처리 실패: ' + err.message, 'error'); }
+        });
+      }
+    });
+  }
+  // ===== hotfix68 수정 회수 재검수 끝 =====
   
   // ==================== v2.51 step2: 땡처리/클레임 시스템 ====================
   
@@ -15755,7 +16078,7 @@ function validateBlendSum(blends, label) {
           }
           // hotfix40: 수정 중인 컬러는 [🔧 수정중] 버튼 우선 (눌러서 수정 완료 처리)
           if (c && c.fix_active === true) {
-            completeCell = `<td class="col-action col-act-complete"><button class="dash-action-btn dash-fix-resolve-btn" style="background:#f97316;color:#fff;border-color:#ea580c;" data-id="${wo.id}" data-color-idx="${colorIdx}" title="수정 ${num(c.fix_body)||0}/${num(c.fix_rib)||0} — 작업장에서 돌아와 검수 통과하면 클릭">🔧 수정중 ${num(c.fix_body)||0}/${num(c.fix_rib)||0}</button></td>`;
+            completeCell = `<td class="col-action col-act-complete"><button class="dash-action-btn dash-fix-resolve-btn" style="background:#f97316;color:#fff;border-color:#ea580c;" data-id="${wo.id}" data-color-idx="${colorIdx}" title="수정 ${num(c.fix_body)||0}/${num(c.fix_rib)||0} — 돌아오면 클릭 → 재검수창">🔧 수정중 ${num(c.fix_body)||0}/${num(c.fix_rib)||0}</button></td>`;
           } else if (qcSt === 'redye') {
             // v2.53 hotfix8: 재염 이관된 컬러 — 새 의뢰서 번호 꼬리표 (닫힘 상태)
             const _toNo = (c && c.redye_transferred_to) ? c.redye_transferred_to : '';
@@ -16464,7 +16787,7 @@ function validateBlendSum(blends, label) {
           : '';
         if (c && c.fix_active === true) {
           // hotfix40: 수정 중인 컬러는 [🔧 수정중] 버튼 우선
-          completeCell = `<td class="col-action"><button class="dash-action-btn dash-fix-resolve-btn" style="background:#f97316;color:#fff;border-color:#ea580c;" data-id="${wo.id}" data-color-idx="${colorIdx}" title="수정 ${num(c.fix_body)||0}/${num(c.fix_rib)||0} — 작업장에서 돌아와 검수 통과하면 클릭">🔧 수정중 ${num(c.fix_body)||0}/${num(c.fix_rib)||0}</button></td>`;
+          completeCell = `<td class="col-action"><button class="dash-action-btn dash-fix-resolve-btn" style="background:#f97316;color:#fff;border-color:#ea580c;" data-id="${wo.id}" data-color-idx="${colorIdx}" title="수정 ${num(c.fix_body)||0}/${num(c.fix_rib)||0} — 돌아오면 클릭 → 재검수창">🔧 수정중 ${num(c.fix_body)||0}/${num(c.fix_rib)||0}</button></td>`;
         } else if (qcSt === 'redye') {
           // v2.53 hotfix8: 재염 이관된 컬러 — 새 의뢰서 번호 꼬리표 (닫힘 상태)
           const _toNo = (c && c.redye_transferred_to) ? c.redye_transferred_to : '';
@@ -17316,6 +17639,42 @@ function validateBlendSum(blends, label) {
             <button class="dash-action-btn ceo-rep-approve-btn" style="background:#16a34a;color:#fff;border-color:#15803d;font-weight:700;" data-id="${rep.woId}" data-color-idx="${rep.colorIdx}">✓ 정상 승인 (완료 처리)</button>
             <button class="dash-action-btn ceo-rep-fix-btn" style="background:#f97316;color:#fff;border-color:#ea580c;font-weight:700;" data-id="${rep.woId}" data-color-idx="${rep.colorIdx}">🔧 수정으로 처리</button>
             <button class="dash-action-btn ceo-rep-defect-btn" style="background:#dc2626;color:#fff;border-color:#b91c1c;font-weight:700;" data-id="${rep.woId}" data-color-idx="${rep.colorIdx}">⚠ 불량으로 처리</button>
+          </div>
+        </div>`;
+      }
+      else if (rep.type === 'fix_recheck') {
+        const dev = rep.dev;
+        const when = rep.createdAt ? new Date(rep.createdAt).toLocaleString('ko-KR') : '';
+        const rows = [];
+        if (dev && dev.width) {
+          const cc = dev.width.fail ? '#dc2626' : '#6b7280';
+          rows.push(`<div class="ceo-report-line"><span class="ceo-report-k">폭</span> 실측 <strong style="color:${cc};">${dev.width.actual}″</strong> / 허용 ${dev.width.lo}~${dev.width.hi}″ ${dev.width.fail ? '<strong style="color:#dc2626;">⚠ 이상</strong>' : '<span style="color:#16a34a;">정상</span>'}</div>`);
+        }
+        if (dev && dev.weight) {
+          const cc = dev.weight.fail ? '#dc2626' : '#6b7280';
+          rows.push(`<div class="ceo-report-line"><span class="ceo-report-k">중량</span> 실측 <strong style="color:${cc};">${dev.weight.actual}g/y</strong> / 허용 ${dev.weight.lo}~${dev.weight.hi} ${dev.weight.fail ? '<strong style="color:#dc2626;">⚠ 이상</strong>' : '<span style="color:#16a34a;">정상</span>'}</div>`);
+        }
+        if (dev && dev.shrink) {
+          const cc = dev.shrink.fail ? '#dc2626' : '#6b7280';
+          rows.push(`<div class="ceo-report-line"><span class="ceo-report-k">축률</span> 폭 <strong style="color:${cc};">${dev.shrink.w == null ? '-' : dev.shrink.w}%</strong> / 장 <strong style="color:${cc};">${dev.shrink.l == null ? '-' : dev.shrink.l}%</strong> (기준 2.5% 이하) ${dev.shrink.fail ? '<strong style="color:#dc2626;">⚠ 이상</strong>' : '<span style="color:#16a34a;">정상</span>'}</div>`);
+        }
+        html += `<div class="ceo-report-card" data-rep-type="fix_recheck" data-id="${rep.woId}" data-color-idx="${rep.colorIdx}">
+          <div class="ceo-report-head">
+            <span class="ceo-report-tag" style="background:${rep.theme};">${rep.icon} ${escapeHtml(rep.typeLabel)}</span>
+            <span class="ceo-report-title">[${escapeHtml(rep.woNumber)}] ${escapeHtml(rep.colorName)}</span>
+          </div>
+          <div class="ceo-report-body">
+            <div class="ceo-report-line"><span class="ceo-report-k">품목</span> ${escapeHtml(rep.item || '-')}</div>
+            <div class="ceo-report-line"><span class="ceo-report-k">수정중</span> <strong style="color:#f97316;">${rep.fixBody}/${rep.fixRib}절</strong> — 작업장 수정 후 재검수에서 기준 벗어남</div>
+            ${rows.join('')}
+            ${rep.notes ? `<div class="ceo-report-line"><span class="ceo-report-k">특이사항</span> ${escapeHtml(rep.notes)}</div>` : ''}
+            <div class="ceo-report-line" style="color:#9ca3af;font-size:11px;"><span class="ceo-report-k">재검수</span> ${escapeHtml(rep.createdBy || '-')}${when ? ' · ' + escapeHtml(when) : ''}</div>
+          </div>
+          <div class="ceo-report-actions">
+            <button class="dash-action-btn ceo-rep-view-btn" data-id="${rep.woId}">원단 보기</button>
+            <button class="dash-action-btn ceo-fix-approve-btn" style="background:#16a34a;color:#fff;border-color:#15803d;font-weight:700;" data-id="${rep.woId}" data-color-idx="${rep.colorIdx}">✓ 수정 합격 인정 (완료)</button>
+            <button class="dash-action-btn ceo-fix-retry-btn" style="background:#f97316;color:#fff;border-color:#ea580c;font-weight:700;" data-id="${rep.woId}" data-color-idx="${rep.colorIdx}">🔧 다시 수정</button>
+            <button class="dash-action-btn ceo-fix-defect-btn" style="background:#dc2626;color:#fff;border-color:#b91c1c;font-weight:700;" data-id="${rep.woId}" data-color-idx="${rep.colorIdx}">⚠ 불량</button>
           </div>
         </div>`;
       }
@@ -19589,25 +19948,13 @@ function validateBlendSum(blends, label) {
       });
     }
     
-    // hotfix40: [🔧 수정중] → 수정분이 돌아와 검수 통과 → 수정 완료
+    // hotfix68: [🔧 수정중] → 수정 회수 재검수창 (합격해야만 완료)
     document.querySelectorAll('#dash-body .dash-fix-resolve-btn').forEach(btn => {
-      btn.addEventListener('click', async (e) => {
+      btn.addEventListener('click', (e) => {
         e.stopPropagation();
         const id = btn.dataset.id;
         const ci = parseInt(btn.dataset.colorIdx, 10);
-        const wo = state.allWorkOrders.find(w => w.id === id);
-        if (!wo) return;
-        const c = (wo.colors || [])[ci] || {};
-        const cName = c.name || `컬러 #${ci + 1}`;
-        const msg = `[${wo.wo_number || ''}] "${cName}"\n수정 ${num(c.fix_body)||0}/${num(c.fix_rib)||0} 분이 작업장에서 돌아와\n검수 통과했습니까?\n\n· 수정 완료로 처리됩니다\n· 다른 진행/부족이 없으면 컬러·의뢰서가 완료됩니다`;
-        if (!confirm(msg)) return;
-        try {
-          await setColorFixResolve(id, ci);
-          toast(`🔧 "${cName}" 수정 완료`, 'success');
-          renderDashboard();
-        } catch (err) {
-          toast('수정 완료 실패: ' + err.message, 'error');
-        }
+        openFixRecheckModal(id, ci);
       });
     });
 
@@ -19723,6 +20070,62 @@ function validateBlendSum(blends, label) {
         } catch (err) {
           toast('수정 보내기 실패: ' + err.message, 'error');
         }
+      });
+    });
+    // hotfix68: 대표 보고함 — 수정 재검수 불합격 카드 [✓ 수정 합격 인정] / [🔧 다시 수정] / [⚠ 불량]
+    document.querySelectorAll('#dash-body .ceo-fix-approve-btn').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (!isAdminUser()) { toast('대표만 처리할 수 있습니다', 'warning'); return; }
+        const id = btn.dataset.id;
+        const ci = parseInt(btn.dataset.colorIdx, 10);
+        const wo = state.allWorkOrders.find(w => w.id === id);
+        if (!wo) return;
+        const c = (wo.colors || [])[ci] || {};
+        const cName = c.name || `컬러 #${ci + 1}`;
+        if (!confirm(`✓ 수정 합격 인정\n\n[${wo.wo_number || ''}] "${cName}"\n이 수정 원단을 정상으로 인정하고 수정 완료 처리합니다.\n(다른 진행/부족이 없으면 의뢰서가 완료됩니다)\n\n계속할까요?`)) return;
+        try {
+          await setColorFixResolve(id, ci);
+          toast(`✓ "${cName}" 수정 합격·완료`, 'success');
+          renderDashboard();
+        } catch (err) { toast('처리 실패: ' + err.message, 'error'); }
+      });
+    });
+    document.querySelectorAll('#dash-body .ceo-fix-retry-btn').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (!isAdminUser()) { toast('대표만 처리할 수 있습니다', 'warning'); return; }
+        const id = btn.dataset.id;
+        const ci = parseInt(btn.dataset.colorIdx, 10);
+        const wo = state.allWorkOrders.find(w => w.id === id);
+        if (!wo) return;
+        const c = (wo.colors || [])[ci] || {};
+        const cName = c.name || `컬러 #${ci + 1}`;
+        const note = prompt(`[${wo.wo_number || ''}] "${cName}" 작업장에 다시 보낼 요청 (선택)\n\n· 같은 수량을 다시 손봅니다 (수량 추가 없음)`, '축률 다시 잡아주세요');
+        if (note === null) return;
+        try {
+          await setColorFixRetry(id, ci, {}, c.fix_spec_dev || null, note);
+          toast(`🔧 "${cName}" 다시 수정 보냄 — 회차 누적`, 'success');
+          renderDashboard();
+        } catch (err) { toast('다시 수정 실패: ' + err.message, 'error'); }
+      });
+    });
+    document.querySelectorAll('#dash-body .ceo-fix-defect-btn').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (!isAdminUser()) { toast('대표만 처리할 수 있습니다', 'warning'); return; }
+        const id = btn.dataset.id;
+        const ci = parseInt(btn.dataset.colorIdx, 10);
+        const wo = state.allWorkOrders.find(w => w.id === id);
+        if (!wo) return;
+        const c = (wo.colors || [])[ci] || {};
+        const cName = c.name || `컬러 #${ci + 1}`;
+        if (!confirm(`⚠ 불량 처리\n\n[${wo.wo_number || ''}] "${cName}"\n수정 트랙을 종료하고 불량 상태로 되돌립니다.\n\n계속할까요?`)) return;
+        try {
+          await setColorFixDefect(id, ci, {});
+          toast(`⚠ "${cName}" 불량 처리`, 'warning');
+          renderDashboard();
+        } catch (err) { toast('불량 처리 실패: ' + err.message, 'error'); }
       });
     });
     // hotfix60: 전체 대시보드 축률 배너 클릭 → 대표 보고함 이동
@@ -22312,7 +22715,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix67';
+  const VERSION = 'v2.53 hotfix68';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix34: 편직 의뢰서 [성격] 시스템 도입 — 정규/재고/샘플/완료 4태그, 자동분류, 표 ● 배지, [성격▼] 필터, 완료체크 양방향연동
   // hotfix33: 클레임(땡처리) 내역서 양식 통일 — 부분/전체 모두 정식 표 양식 + 이미지복사/인쇄/수정 동일 버튼
