@@ -4419,6 +4419,7 @@
   body.is-not-admin .dash-delete-btn,
   body.is-not-admin .dash-menu-btn[data-view="trash"],
   body.is-not-admin .dash-menu-btn[data-view="stampSettings"],
+  body.is-not-admin .dash-menu-btn[data-view="ceoReports"],
   body.is-not-admin [data-restore],
   body.is-not-admin [data-purge] {
     display: none !important;
@@ -4467,6 +4468,34 @@
     background: #fff;
     color: #dc2626;
   }
+  /* hotfix60: 대표 보고 배지 — 클레임 배지와 동일 스타일 */
+  .ceo-report-badge {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 1px 7px;
+    background: #dc2626;
+    color: #fff;
+    border-radius: 10px;
+    font-size: 10px;
+    font-weight: 800;
+    line-height: 1.4;
+    vertical-align: middle;
+    min-width: 18px;
+    text-align: center;
+    box-shadow: 0 1px 2px rgba(220,38,38,0.4);
+    animation: claims-badge-pulse 2.4s ease-in-out infinite;
+  }
+  .dash-menu-btn.active .ceo-report-badge { background: #fff; color: #dc2626; }
+  /* hotfix60: 대표 보고함 카드 */
+  .ceo-report-card { border:1px solid #fecaca; border-left:4px solid #dc2626; border-radius:8px; background:#fff; padding:13px 15px; box-shadow:0 1px 3px rgba(0,0,0,0.06); }
+  .ceo-report-head { display:flex; align-items:center; gap:9px; margin-bottom:9px; flex-wrap:wrap; }
+  .ceo-report-tag { color:#fff; font-weight:800; font-size:12px; padding:2px 10px; border-radius:12px; white-space:nowrap; }
+  .ceo-report-title { font-weight:800; font-size:14px; color:#1f2937; }
+  .ceo-report-body { font-size:13px; color:#374151; line-height:1.7; }
+  .ceo-report-line { }
+  .ceo-report-k { display:inline-block; min-width:54px; color:#6b7280; font-weight:700; font-size:11.5px; }
+  .ceo-report-actions { display:flex; gap:8px; margin-top:11px; flex-wrap:wrap; }
+  .ceo-report-actions .dash-action-btn { padding:6px 13px; }
   /* 땡처리 입력 모달 */
   .claim-modal-container {
     padding: 8px 4px 4px;
@@ -5528,6 +5557,7 @@
         <button class="dash-menu-btn submenu" data-view="knit">ㄴ 편직 진행</button>
         <button class="dash-menu-btn submenu" data-view="finish">ㄴ 염색가공 진행</button>
         <button class="dash-menu-btn submenu" data-view="bt">ㄴ B/T 진행</button>
+        <button class="dash-menu-btn admin-only" data-view="ceoReports" style="background:#fef2f2;border:1px solid #fecaca;color:#b91c1c;font-weight:800;">🚩 대표 보고<span class="ceo-report-badge" id="ceo-report-badge" style="display:none;">0</span></button>
         <button class="dash-menu-btn" data-view="of">📄 공문 목록</button>
         <button class="dash-menu-btn" data-view="gs">🚚 생지출고 목록</button>
         <button class="dash-menu-btn" data-view="claims">⚠ 클레임(땡처리)<span class="claims-menu-badge" id="claims-menu-badge" style="display:none;">0</span></button>
@@ -9128,6 +9158,8 @@ window.addEventListener('firebase-ready', () => {
       renderHistory();
       // v2.51 step2: 사이드바 클레임 배지 갱신
       updateClaimsBadge();
+      // hotfix60: 사이드바 대표 보고 배지 갱신
+      updateCeoReportBadge();
       // 대시보드 모드일 때 자동 갱신
       // v2.48: 메모 편집 중이면 재렌더 보류 (강제 blur 방지) — 편집 종료 후 대기 갱신 적용
       if (state.uiMode === 'dashboard') {
@@ -9602,6 +9634,10 @@ function validateBlendSum(blends, label) {
   function switchDashView(view) {
     // v2.22: 직원은 휴지통 뷰 진입 불가 (혹시 라도 들어가면 overview로 리다이렉트)
     if (view === 'trash' && !isAdminUser()) {
+      view = 'overview';
+    }
+    // hotfix60: 대표 보고함은 관리자 전용
+    if (view === 'ceoReports' && !isAdminUser()) {
       view = 'overview';
     }
     // v2.51 step3: 일일 보고는 페이지 전환 없이 모달만 진입
@@ -10908,6 +10944,51 @@ function validateBlendSum(blends, label) {
     return out;
   }
 
+  // ===== hotfix60: 대표 보고 통합 수집기 (재사용 프레임워크) =====
+  // 앞으로 대표 확인이 필요한 모든 항목을 이 한 곳에 모은다.
+  // 새 보고 유형을 추가하려면 아래에 push 블록만 하나 더 붙이면 됨.
+  //   각 보고 객체: { type, typeLabel, icon, color(테마), woId, woNumber, ... , createdAt, createdBy }
+  function collectCeoReports() {
+    const reports = [];
+
+    // [보고 유형 ①] 축률 이상 — 폭/장 축률 2.5% 초과로 완료 보류된 건
+    collectShrinkHolds().forEach(h => {
+      reports.push({
+        type: 'shrink',
+        typeLabel: '축률 이상',
+        icon: '🚩',
+        theme: '#dc2626',
+        woId: h.wo.id,
+        woNumber: h.wo.wo_number || '',
+        colorIdx: h.colorIdx,
+        colorName: h.color.name || `컬러 #${h.colorIdx + 1}`,
+        receiptNo: h.receipt.receipt_no,
+        item: h.wo.body?.item || '',
+        width: h.receipt.shrink_hold_w,
+        length: h.receipt.shrink_hold_l,
+        notes: (h.receipt.qc && h.receipt.qc.notes) || '',
+        createdAt: h.receipt.shrink_hold_at || '',
+        createdBy: h.receipt.shrink_hold_by || ''
+      });
+    });
+
+    // [보고 유형 ②~] 향후 추가: 예) 납기 초과, 사유 미확정 부족분 등 — 여기에 push
+
+    // 최신 보고 먼저
+    reports.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+    return reports;
+  }
+  function countCeoReports() { return collectCeoReports().length; }
+  function updateCeoReportBadge() {
+    const badge = document.getElementById('ceo-report-badge');
+    if (!badge) return;
+    if (!isAdminUser()) { badge.style.display = 'none'; return; }
+    const n = countCeoReports();
+    if (n > 0) { badge.textContent = n > 99 ? '99+' : String(n); badge.style.display = 'inline-block'; }
+    else badge.style.display = 'none';
+  }
+  // ===== hotfix60 대표 보고 수집기 끝 =====
+
   // 축률 이상 → 보류(대표 확인 대기). QC 데이터는 저장하되 done으로 안 넘김.
   async function setColorShrinkHold(woId, colorIdx, qcData, receiptNo) {
     const wo = state.allWorkOrders.find(w => w.id === woId);
@@ -11563,6 +11644,12 @@ function validateBlendSum(blends, label) {
     r.qc_status = 'defect';
     r.defect_at = now;
     r.defect_by = state.user.email;
+    // hotfix60: 불량으로 처리하면 축률 이상 보류도 함께 해제 (대표 보고 종료)
+    if (r.shrink_hold) {
+      r.shrink_hold = false;
+      r.shrink_resolved_as = 'defect';
+      r.shrink_resolved_at = now;
+    }
     
     // 의뢰서 단위 컬러 필드 동기화
     c.qc = r.qc;
@@ -14939,14 +15026,14 @@ function validateBlendSum(blends, label) {
           <span><strong>사유 미확정 부족분 ${pendingShortage}건</strong> — 염색가공 진행 화면에서 [+입고] 버튼 우클릭으로 상태/사유 분류해 주세요.</span>
         </div>`;
       }
-      // hotfix59: 축률 이상 — 대표 확인 대기 배너
+      // hotfix59/60: 축률 이상 — 대표 보고함으로 안내하는 배너 (클릭 시 이동)
       const shrinkHolds = collectShrinkHolds();
       if (shrinkHolds.length > 0) {
         const names = shrinkHolds.slice(0, 4).map(h => `${escapeHtml(h.wo.wo_number || '')} ${escapeHtml(h.color.name || '')}`).join(', ');
         const more = shrinkHolds.length > 4 ? ` 외 ${shrinkHolds.length - 4}건` : '';
-        html += `<div class="shrink-alert-banner">
+        html += `<div class="shrink-alert-banner" id="ov-shrink-banner" style="cursor:pointer;">
           <span style="font-size:18px;">🚩</span>
-          <span><strong>축률 이상 ${shrinkHolds.length}건 — 대표 확인 필요</strong> — 폭/장 축률 2.5% 초과 원단입니다 (${names}${more}). 진행 화면의 빨간 [🚩 축률 이상] 버튼을 눌러 확인·승인해 주세요.</span>
+          <span><strong>축률 이상 ${shrinkHolds.length}건 — 대표 확인 필요</strong> — 폭/장 축률 2.5% 초과 원단입니다 (${names}${more}). 클릭하면 <strong>대표 보고함</strong>으로 이동합니다.</span>
         </div>`;
       }
     }
@@ -16935,6 +17022,67 @@ function validateBlendSum(blends, label) {
   }
   
   // ===== 클레임(땡처리) 뷰 — v2.51 step2 =====
+  // ===== hotfix60: 대표 보고함 화면 =====
+  // 대표 확인이 필요한 모든 보고를 카드로 모아 보여주고, 여기서만 처리(승인/불량)한다.
+  // 축률 이상은 대표가 [정상 승인]을 눌러야 비로소 완료된다. 그 전까지는 절대 완료 안 됨.
+  function renderCeoReports() {
+    if (!isAdminUser()) {
+      return `<div class="dash-empty">대표 전용 화면입니다.</div>`;
+    }
+    const reports = collectCeoReports();
+    let html = `<div style="font-size:12px;color:#555;margin:4px 0 12px;line-height:1.6;">
+      대표 확인이 필요한 항목을 모아둔 곳입니다. <strong>여기에서 처리하기 전까지 해당 의뢰서는 완료되지 않습니다.</strong>
+    </div>`;
+
+    if (reports.length === 0) {
+      html += `<div class="dash-empty">현재 확인이 필요한 보고가 없습니다. 👍</div>`;
+      return html;
+    }
+
+    // 유형별 건수 요약
+    const byType = {};
+    reports.forEach(r => { byType[r.typeLabel] = (byType[r.typeLabel] || 0) + 1; });
+    const summary = Object.keys(byType).map(k => `${k} ${byType[k]}건`).join(' · ');
+    html += `<div style="margin:0 0 14px;padding:9px 13px;background:#fef2f2;border:1px solid #fecaca;border-left:4px solid #dc2626;border-radius:6px;font-size:13px;color:#991b1b;font-weight:700;">
+      🚩 확인 필요 ${reports.length}건 — ${escapeHtml(summary)}
+    </div>`;
+
+    html += `<div style="display:flex;flex-direction:column;gap:10px;">`;
+    reports.forEach(rep => {
+      if (rep.type === 'shrink') {
+        const w = (rep.width == null) ? '-' : rep.width;
+        const l = (rep.length == null) ? '-' : rep.length;
+        const wOver = (rep.width != null && rep.width > 2.5);
+        const lOver = (rep.length != null && rep.length > 2.5);
+        const when = rep.createdAt ? new Date(rep.createdAt).toLocaleString('ko-KR') : '';
+        html += `<div class="ceo-report-card" data-rep-type="shrink" data-id="${rep.woId}" data-color-idx="${rep.colorIdx}">
+          <div class="ceo-report-head">
+            <span class="ceo-report-tag" style="background:${rep.theme};">${rep.icon} ${escapeHtml(rep.typeLabel)}</span>
+            <span class="ceo-report-title">[${escapeHtml(rep.woNumber)}] ${escapeHtml(rep.colorName)}${rep.receiptNo ? ` · ${rep.receiptNo}차` : ''}</span>
+          </div>
+          <div class="ceo-report-body">
+            <div class="ceo-report-line"><span class="ceo-report-k">품목</span> ${escapeHtml(rep.item || '-')}</div>
+            <div class="ceo-report-line"><span class="ceo-report-k">축률</span>
+              폭 <strong style="color:${wOver ? '#dc2626' : '#374151'};">${w}%</strong> /
+              장 <strong style="color:${lOver ? '#dc2626' : '#374151'};">${l}%</strong>
+              <span style="color:#9ca3af;font-size:11px;">(기준 2.5% 초과)</span>
+            </div>
+            ${rep.notes ? `<div class="ceo-report-line"><span class="ceo-report-k">특이사항</span> ${escapeHtml(rep.notes)}</div>` : ''}
+            <div class="ceo-report-line" style="color:#9ca3af;font-size:11px;"><span class="ceo-report-k">검수</span> ${escapeHtml(rep.createdBy || '-')}${when ? ' · ' + escapeHtml(when) : ''}</div>
+          </div>
+          <div class="ceo-report-actions">
+            <button class="dash-action-btn ceo-rep-view-btn" data-id="${rep.woId}">원단 보기</button>
+            <button class="dash-action-btn ceo-rep-approve-btn" style="background:#16a34a;color:#fff;border-color:#15803d;font-weight:700;" data-id="${rep.woId}" data-color-idx="${rep.colorIdx}">✓ 정상 승인 (완료 처리)</button>
+            <button class="dash-action-btn ceo-rep-defect-btn" style="background:#dc2626;color:#fff;border-color:#b91c1c;font-weight:700;" data-id="${rep.woId}" data-color-idx="${rep.colorIdx}">⚠ 불량으로 처리</button>
+          </div>
+        </div>`;
+      }
+    });
+    html += `</div>`;
+    return html;
+  }
+  // ===== hotfix60 대표 보고함 끝 =====
+
   function renderClaimsDash() {
     const claims = listAllDiscardClaims();
     
@@ -17981,6 +18129,10 @@ function validateBlendSum(blends, label) {
     } else if (state.dashView === 'claims') {
       title = '⚠ 클레임(땡처리)';
       body = renderClaimsDash();
+      addBtn.style.display = 'none';
+    } else if (state.dashView === 'ceoReports') {
+      title = '🚩 대표 보고';
+      body = renderCeoReports();
       addBtn.style.display = 'none';
     } else if (state.dashView === 'completed') {
       title = '✓ 완료된 의뢰서';
@@ -19156,10 +19308,42 @@ function validateBlendSum(blends, label) {
       });
     });
 
-    // hotfix59: [🚩 축률 이상] → 대표 확인·승인 (관리자만 승인 가능, 직원은 안내만)
+    // hotfix60: [🚩 축률 이상] → 인라인에서 바로 완료시키지 않고, 대표 보고함으로 이동해서 관리.
+    //   (관리자: 대표 보고함 화면으로 / 직원: 안내만)
     document.querySelectorAll('#dash-body .dash-shrink-review-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const id = btn.dataset.id;
+        const ci = parseInt(btn.dataset.colorIdx, 10);
+        const wo = state.allWorkOrders.find(w => w.id === id);
+        const c = wo ? (wo.colors || [])[ci] || {} : {};
+        const cName = c.name || `컬러 #${ci + 1}`;
+        const r = (c.receipts || []).find(rr => rr.shrink_hold) || {};
+        const wTxt = (r.shrink_hold_w == null) ? '-' : r.shrink_hold_w;
+        const lTxt = (r.shrink_hold_l == null) ? '-' : r.shrink_hold_l;
+        if (!isAdminUser()) {
+          toast(`🚩 "${cName}" 축률 이상 (폭 ${wTxt}% / 장 ${lTxt}%) — 대표 확인 대기 중입니다`, 'warning');
+          return;
+        }
+        // 관리자 → 대표 보고함으로 이동
+        state.dashView = 'ceoReports';
+        renderDashboard();
+        toast('🚩 대표 보고함에서 확인·처리해 주세요', 'info');
+      });
+    });
+
+    // hotfix60: 대표 보고함 — [원단 보기] / [✓ 정상 승인 (완료)] / [⚠ 불량으로 처리]
+    document.querySelectorAll('#dash-body .ceo-rep-view-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const wo = state.allWorkOrders.find(w => w.id === btn.dataset.id);
+        if (wo) showPreviewModal(wo);
+      });
+    });
+    document.querySelectorAll('#dash-body .ceo-rep-approve-btn').forEach(btn => {
       btn.addEventListener('click', async (e) => {
         e.stopPropagation();
+        if (!isAdminUser()) { toast('대표만 승인할 수 있습니다', 'warning'); return; }
         const id = btn.dataset.id;
         const ci = parseInt(btn.dataset.colorIdx, 10);
         const wo = state.allWorkOrders.find(w => w.id === id);
@@ -19169,23 +19353,40 @@ function validateBlendSum(blends, label) {
         const r = (c.receipts || []).find(rr => rr.shrink_hold) || {};
         const wTxt = (r.shrink_hold_w == null) ? '-' : r.shrink_hold_w;
         const lTxt = (r.shrink_hold_l == null) ? '-' : r.shrink_hold_l;
-        if (!isAdminUser()) {
-          toast(`🚩 "${cName}" 축률 이상 (폭 ${wTxt}% / 장 ${lTxt}%) — 대표 확인 대기 중입니다`, 'warning');
-          return;
-        }
-        const note = (r.qc && r.qc.notes) ? `\n특이사항: ${r.qc.notes}` : '';
-        const by = r.shrink_hold_by ? `\n검수자: ${r.shrink_hold_by}` : '';
-        const msg = `🚩 축률 이상 확인\n\n[${wo.wo_number || ''}] "${cName}"\n폭축률 ${wTxt}% / 장축률 ${lTxt}% (기준 2.5% 초과)${note}${by}\n\n[확인]을 누르면 이 원단을 정상 승인하고\nQC 완료 처리합니다.\n(취소하면 보류 상태로 그대로 둡니다)`;
+        const msg = `✓ 정상 승인\n\n[${wo.wo_number || ''}] "${cName}"\n폭축률 ${wTxt}% / 장축률 ${lTxt}%\n\n이 원단을 정상으로 인정하고\nQC를 완료 처리합니다.\n(다른 진행/부족이 없으면 의뢰서가 완료됩니다)\n\n계속할까요?`;
         if (!confirm(msg)) return;
         try {
           const allDone = await setColorShrinkApprove(id, ci);
-          toast(`✓ "${cName}" 축률 확인·승인 완료${allDone ? ' — 의뢰서 자동 완료' : ''}`, 'success');
+          toast(`✓ "${cName}" 정상 승인·완료${allDone ? ' — 의뢰서 완료' : ''}`, 'success');
           renderDashboard();
         } catch (err) {
           toast('승인 실패: ' + err.message, 'error');
         }
       });
     });
+    document.querySelectorAll('#dash-body .ceo-rep-defect-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (!isAdminUser()) { toast('대표만 처리할 수 있습니다', 'warning'); return; }
+        const id = btn.dataset.id;
+        const ci = parseInt(btn.dataset.colorIdx, 10);
+        const wo = state.allWorkOrders.find(w => w.id === id);
+        if (!wo) return;
+        const c = (wo.colors || [])[ci] || {};
+        const r = (c.receipts || []).find(rr => rr.shrink_hold);
+        // 불량 검수 화면을 열어 사유를 선택하고 [불량 처리]로 마무리 (보류는 그때 자동 해제됨)
+        toast('불량 검수 화면을 엽니다 — 사유 선택 후 [불량 처리]를 눌러주세요', 'info');
+        openQcModal(id, ci, r ? r.receipt_no : undefined);
+      });
+    });
+    // hotfix60: 전체 대시보드 축률 배너 클릭 → 대표 보고함 이동
+    const ovShrinkBanner = document.getElementById('ov-shrink-banner');
+    if (ovShrinkBanner) {
+      ovShrinkBanner.addEventListener('click', () => {
+        state.dashView = 'ceoReports';
+        renderDashboard();
+      });
+    }
     
     // hotfix39: 전체 대시보드 "✓ 완료 N개" 접이식 토글
     document.querySelectorAll('#dash-body .ov-done-toggle').forEach(btn => {
@@ -20585,26 +20786,20 @@ function validateBlendSum(blends, label) {
           if (!confirm(emptyMsg)) return;
         }
         
-        // hotfix59: 축률 이상(폭/장 2.5% 초과) — 바로 완료로 넘기지 않고 대표 확인 대기로 보고
+        // hotfix59/60: 축률 이상(폭/장 2.5% 초과) — 절대 바로 완료 안 됨. 대표 보고함으로 보고하고 보류.
         if (isShrinkOver(data)) {
-          // 이미 대표가 승인한 차수를 재편집하는 경우는 다시 보류하지 않음
-          const _rcpNo = window.__qcModalReceiptNo;
-          const _tgt = (_rcpNo != null) ? (c.receipts || []).find(rr => rr.receipt_no === _rcpNo) : null;
-          const alreadyApproved = _tgt && _tgt.shrink_approved === true && _tgt.shrink_hold !== true;
-          if (!alreadyApproved) {
-            const wTxt = (data.shrink_width_pct === '' || data.shrink_width_pct == null) ? '-' : data.shrink_width_pct;
-            const lTxt = (data.shrink_length_pct === '' || data.shrink_length_pct == null) ? '-' : data.shrink_length_pct;
-            const holdMsg = `🚩 축률 이상입니다.\n\n[${wo.wo_number || ''}] "${cName}"\n폭축률 ${wTxt}% / 장축률 ${lTxt}% (기준 2.5% 초과)\n\n이 원단은 바로 완료되지 않고\n대표 확인 대기 상태로 보고됩니다.\n\n계속할까요?`;
-            if (!confirm(holdMsg)) return;
-            try {
-              await setColorShrinkHold(woId, colorIdx, data, window.__qcModalReceiptNo);
-              toast(`🚩 "${cName}" 축률 이상 — 대표 확인 대기로 보고되었습니다`, 'warning');
-              modal.classList.remove('show');
-            } catch (e) {
-              toast('보류 처리 실패: ' + e.message, 'error');
-            }
-            return;
+          const wTxt = (data.shrink_width_pct === '' || data.shrink_width_pct == null) ? '-' : data.shrink_width_pct;
+          const lTxt = (data.shrink_length_pct === '' || data.shrink_length_pct == null) ? '-' : data.shrink_length_pct;
+          const holdMsg = `🚩 축률 이상입니다.\n\n[${wo.wo_number || ''}] "${cName}"\n폭축률 ${wTxt}% / 장축률 ${lTxt}% (기준 2.5% 초과)\n\n이 원단은 완료되지 않고\n대표 보고함으로 보고됩니다.\n대표가 보고함에서 확인·승인해야 완료됩니다.\n\n계속할까요?`;
+          if (!confirm(holdMsg)) return;
+          try {
+            await setColorShrinkHold(woId, colorIdx, data, window.__qcModalReceiptNo);
+            toast(`🚩 "${cName}" 축률 이상 — 대표 보고함으로 보고되었습니다`, 'warning');
+            modal.classList.remove('show');
+          } catch (e) {
+            toast('보류 처리 실패: ' + e.message, 'error');
           }
+          return;
         }
         
         let finalMsg;
@@ -21708,7 +21903,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix59';
+  const VERSION = 'v2.53 hotfix60';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix34: 편직 의뢰서 [성격] 시스템 도입 — 정규/재고/샘플/완료 4태그, 자동분류, 표 ● 배지, [성격▼] 필터, 완료체크 양방향연동
   // hotfix33: 클레임(땡처리) 내역서 양식 통일 — 부분/전체 모두 정식 표 양식 + 이미지복사/인쇄/수정 동일 버튼
