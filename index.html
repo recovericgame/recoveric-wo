@@ -811,6 +811,14 @@
   .overview-status-filter-btn.sf-fix.active    { background: #f97316; color: #fff; border-color: #ea580c; }
   .overview-status-filter-btn.sf-lack.active   { background: #d97706; color: #fff; border-color: #b45309; }
   .overview-status-filter-btn.sf-urgent.active { background: #dc2626; color: #fff; border-color: #b91c1c; }
+  /* hotfix57: 전체 대시보드 편직 세부(기획/재고/샘플) 버튼 */
+  .ov-knit-kind-btn {
+    padding: 4px 12px; font-size: 12px; font-weight: 700;
+    border: 1.5px solid #d1d5db; border-radius: 4px; cursor: pointer;
+    background: #fff; color: #555; transition: all 0.15s;
+  }
+  .ov-knit-kind-btn:hover { background: #f0f0f0; border-color: #999; }
+  .ov-knit-kind-btn.active { background: var(--badge-knit); color: #fff; border-color: var(--badge-knit); }
   
   /* ===== 미리보기 스탬프 ===== */
   .wo-stamps { 
@@ -6190,6 +6198,9 @@ const state = {
   greigeItems: [],
   // v2.34: 전체 대시보드 유형 필터 (overview)
   overviewTypeFilter: 'all',  // 'all' | '원사' | '편직' | '염색가공' | 'BT'
+  // hotfix57: 전체 대시보드에서 편직 선택 시 세부 성격 + 재고 업체 필터
+  ovKnitKind: 'all',    // 'all' | 'regular'(기획) | 'stock'(재고) | 'sample'(샘플)
+  ovKnitVendor: 'all',  // 재고 성격일 때 편직공장 선택 (전체/업체명)
   // hotfix43: 전체 대시보드 상태 빠른 필터 — 유형과 겹쳐서 거르기
   ovStatusFilter: 'all',  // 'all' | 'fix'(수정) | 'lack'(부족) | 'urgent'(긴급)
   // v2.44: 거래처 필터 (5개 화면 각자 — 콤보박스로 거래처별 의뢰서만 표시)
@@ -14941,10 +14952,58 @@ function validateBlendSum(blends, label) {
         ${renderVendorFilterBar('overview', overviewVendorOptions)}
       </div>
     </div>`;
+
+    // hotfix57: 편직 선택 시 세부 성격(기획/재고/샘플) + 재고는 업체별/전체
+    if (tf === '편직') {
+      const knitPool = allIng.filter(w => w.type === '편직');
+      const kindOf = w => (w.kind || inferKnitKind(w));
+      const kc = { all: knitPool.length, regular: 0, stock: 0, sample: 0 };
+      knitPool.forEach(w => { const k = kindOf(w); if (k === 'regular') kc.regular++; else if (k === 'stock') kc.stock++; else if (k === 'sample') kc.sample++; });
+      const kk = state.ovKnitKind || 'all';
+      const kbtn = (val, label) => `<button type="button" class="ov-knit-kind-btn ${kk === val ? 'active' : ''}" data-knit-kind="${val}">${label} <span style="opacity:.7;font-weight:500;">${val === 'all' ? kc.all : kc[val]}</span></button>`;
+      let stockBox = '';
+      if (kk === 'stock') {
+        const stockPool = knitPool.filter(w => kindOf(w) === 'stock');
+        const vendors = [...new Set(stockPool.flatMap(w => getWoVendorNames(w)).filter(Boolean))].sort();
+        const cv = state.ovKnitVendor || 'all';
+        const target = (cv === 'all') ? stockPool : stockPool.filter(w => getWoVendorNames(w).includes(cv));
+        let sj = 0, sk = 0;
+        target.forEach(w => {
+          const items = w.items || [];
+          const tj = items.reduce((s, i) => s + (parseFloat(i.jul) || 0), 0);
+          const tk = items.reduce((s, i) => s + (parseFloat(i.jul) || 0) * (parseFloat(i.kg_per_jul) || 21), 0);
+          const sh = w.greige_shipments || [];
+          const shj = sh.reduce((s, x) => s + (parseFloat(x.jul) || 0), 0);
+          const shk = sh.reduce((s, x) => s + (parseFloat(x.kg) || 0), 0);
+          sj += (tj - shj); sk += (tk - shk);
+        });
+        const opts = ['all', ...vendors].map(v => `<option value="${escapeHtml(v)}" ${cv === v ? 'selected' : ''}>${v === 'all' ? '전체 업체' : escapeHtml(v)}</option>`).join('');
+        stockBox = `<span style="display:inline-flex;align-items:center;gap:8px;margin-left:8px;">
+          <select id="ov-knit-vendor" style="padding:4px 8px;border:1px solid #d1d5db;border-radius:5px;font-size:12px;font-family:inherit;">${opts}</select>
+          <span style="font-size:12px;font-weight:800;color:#374151;white-space:nowrap;">📊 ${cv === 'all' ? '전체' : escapeHtml(cv)} 생지 재고 <span style="color:#c0271f;">${sj}절</span> <span style="color:#9ca3af;">/</span> <span style="color:#c0271f;">${sk.toFixed(1)}kg</span></span>
+        </span>`;
+      }
+      html += `<div class="ov-knit-subbar" style="display:flex;align-items:center;gap:5px;margin:0 0 10px 2px;flex-wrap:wrap;padding:7px 10px;background:#f9fafb;border:1px solid #eee;border-radius:6px;">
+        <span style="font-size:11.5px;color:#6b7280;font-weight:700;margin-right:4px;">편직 성격</span>
+        ${kbtn('all', '전체')} ${kbtn('regular', '기획')} ${kbtn('stock', '재고')} ${kbtn('sample', '샘플')}
+        ${stockBox}
+      </div>`;
+    }
     
     // v2.18: 통합 정렬 시스템 사용 (overview 키) + v2.34: 유형 필터 적용
     let filteredIng = allIng;
     if (tf !== 'all') filteredIng = filteredIng.filter(wo => wo.type === tf);
+    // hotfix57: 편직 세부 성격(기획/재고/샘플) + 재고 업체 필터
+    if (tf === '편직') {
+      const kk = state.ovKnitKind || 'all';
+      if (kk !== 'all') {
+        filteredIng = filteredIng.filter(w => (w.kind || inferKnitKind(w)) === kk);
+        if (kk === 'stock') {
+          const cv = state.ovKnitVendor || 'all';
+          if (cv !== 'all') filteredIng = filteredIng.filter(w => getWoVendorNames(w).includes(cv));
+        }
+      }
+    }
     // hotfix43: 상태 빠른 필터 적용 (유형과 겹침)
     if (sf === 'fix') filteredIng = filteredIng.filter(woHasFix);
     else if (sf === 'lack') filteredIng = filteredIng.filter(woHasLack);
@@ -18159,9 +18218,27 @@ function validateBlendSum(blends, label) {
           saveVendorFilter();
         }
         state.overviewTypeFilter = t;
+        state.ovKnitKind = 'all';     // hotfix57: 유형 바꾸면 편직 세부 초기화
+        state.ovKnitVendor = 'all';
         renderDashboard();
       });
     });
+
+    // hotfix57: 편직 세부 성격 버튼 + 재고 업체 드롭다운
+    document.querySelectorAll('#dash-body .ov-knit-kind-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        state.ovKnitKind = btn.dataset.knitKind || 'all';
+        state.ovKnitVendor = 'all';   // 성격 바꾸면 업체 초기화
+        renderDashboard();
+      });
+    });
+    const ovKnitVendorSel = document.getElementById('ov-knit-vendor');
+    if (ovKnitVendorSel) {
+      ovKnitVendorSel.addEventListener('change', () => {
+        state.ovKnitVendor = ovKnitVendorSel.value || 'all';
+        renderDashboard();
+      });
+    }
     
     // hotfix43: Overview 상태 빠른 필터 (수정/부족/긴급) — 같은 버튼 다시 누르면 해제
     document.querySelectorAll('#dash-body .overview-status-filter-btn').forEach(btn => {
@@ -21267,7 +21344,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix56';
+  const VERSION = 'v2.53 hotfix57';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix34: 편직 의뢰서 [성격] 시스템 도입 — 정규/재고/샘플/완료 4태그, 자동분류, 표 ● 배지, [성격▼] 필터, 완료체크 양방향연동
   // hotfix33: 클레임(땡처리) 내역서 양식 통일 — 부분/전체 모두 정식 표 양식 + 이미지복사/인쇄/수정 동일 버튼
