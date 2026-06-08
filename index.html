@@ -8713,66 +8713,7 @@ document.getElementById('form-panel').addEventListener('input', () => { render()
 //   - 동적으로 다시 그려진 stamp-checks 체크박스가 'input' 이벤트를 일관되게 발생시키지 않는 브라우저 대응
 document.getElementById('form-panel').addEventListener('change', () => { render(); markDirty(); });
 
-// hotfix66/69: 몸판 품목 → 원단 기본 스펙에서 폭·중량·튜브·혼용율(·주의사항) 채움.
-//   overwrite=false: 빈 칸만(자동, 수동입력 보존) / overwrite=true: 전부 덮어쓰기(버튼)
-function applyFabricSpecToForm(spec, overwrite) {
-  if (!spec) return false;
-  let changed = false;
-  const wEl = document.getElementById('f_body_spec_width');
-  const gEl = document.getElementById('f_body_spec_gy');
-  const tEl = document.getElementById('f_body_spec_tube');
-  if (wEl && spec.width && (overwrite || !wEl.value.trim())) { wEl.value = spec.width; changed = true; }
-  if (gEl && spec.gy != null && spec.gy !== '' && (overwrite || !gEl.value.trim())) { gEl.value = spec.gy; changed = true; }
-  if (tEl) {
-    if (overwrite) { tEl.checked = !!spec.tube; }
-    else if (spec.tube && wEl && wEl.value === spec.width) { tEl.checked = true; }
-  }
-  // 혼용율
-  const blendRows = parseBlendString(spec.blend);
-  if (blendRows.length) {
-    const cur = getBlendData('body_blends');
-    const curEmpty = cur.length === 0 || cur.every(b => !b.value);
-    if (overwrite || curEmpty) { renderBlendRows('body_blends', blendRows); changed = true; }
-  }
-  // 주의사항 기본값 — 버튼(overwrite)에서만 적용 (자동 경로는 기존 입력 보호)
-  if (overwrite && spec.cautions && typeof spec.cautions === 'object') {
-    const hasAny = ['dyeing', 'processing', 'post'].some(k => Array.isArray(spec.cautions[k]) && spec.cautions[k].length);
-    if (hasAny) {
-      state.savedFinishCautions = JSON.parse(JSON.stringify(spec.cautions));
-      if (typeof renderFinishCautions === 'function') renderFinishCautions();
-      changed = true;
-    }
-  }
-  if (changed) { render(); markDirty(); }
-  return changed;
-}
-function autoFillBodySpec() {
-  const el = document.getElementById('f_body_item');
-  if (!el) return;
-  const spec = findFabricSpec(el.value);
-  if (!spec) return;
-  const changed = applyFabricSpecToForm(spec, false);
-  if (changed) { try { toast(`"${spec.name}" 기준 자동 채움 (필요 시 수정 가능)`, 'info'); } catch (_) {} }
-}
-// change(확정) + input(목록 선택·정확 일치) 둘 다 — datalist 누락 방지
-document.getElementById('form-panel').addEventListener('change', (e) => {
-  if (e.target && e.target.id === 'f_body_item') autoFillBodySpec();
-});
-document.getElementById('form-panel').addEventListener('input', (e) => {
-  if (e.target && e.target.id === 'f_body_item' && findFabricSpec(e.target.value)) autoFillBodySpec();
-});
-// [📐 기준 불러오기] — 폭·중량·튜브·혼용율·주의사항 전부 덮어쓰기
-document.getElementById('f_body_loadspec')?.addEventListener('click', () => {
-  const el = document.getElementById('f_body_item');
-  const spec = el ? findFabricSpec(el.value) : null;
-  if (!spec) { try { toast('등록된 품목이 아닙니다. 목록에서 고르거나 [원단 기본 스펙]에 먼저 등록하세요.', 'warning'); } catch (_) {} return; }
-  const wEl = document.getElementById('f_body_spec_width');
-  const gEl = document.getElementById('f_body_spec_gy');
-  const hasExisting = (wEl && wEl.value.trim()) || (gEl && gEl.value.trim()) || getBlendData('body_blends').some(b => b.value);
-  if (hasExisting && !confirm(`"${spec.name}" 기준으로\n폭·중량·튜브·혼용율·주의사항을 덮어쓸까요?\n(현재 입력값이 바뀝니다)`)) return;
-  applyFabricSpecToForm(spec, true);
-  try { toast(`"${spec.name}" 기준 불러옴`, 'success'); } catch (_) {}
-});
+// hotfix73: 품목 자동채움/기준 불러오기 로직은 findFabricSpec가 있는 firebase-ready 스코프로 이동함
 
 document.getElementById('new-btn').addEventListener('click', () => {
   if (state.isDirty && !confirm('저장되지 않은 변경사항이 있습니다. 계속하시겠습니까?')) return;
@@ -9348,6 +9289,76 @@ window.addEventListener('firebase-ready', () => {
     if (!dl) return;
     dl.innerHTML = getFabricSpecs().map(s => `<option value="${escapeHtml(s.name)}"></option>`).join('');
   }
+
+  // hotfix66/69/73: 몸판 품목 → 원단 기본 스펙에서 폭·중량·튜브·혼용율(·주의사항) 채움.
+  //   (findFabricSpec가 이 스코프에 있으므로 여기서 정의·바인딩해야 동작함 — hotfix73 스코프 이동)
+  //   overwrite=false: 빈 칸만(자동, 수동입력 보존) / overwrite=true: 전부 덮어쓰기(버튼)
+  function applyFabricSpecToForm(spec, overwrite) {
+    if (!spec) return false;
+    let changed = false;
+    const wEl = document.getElementById('f_body_spec_width');
+    const gEl = document.getElementById('f_body_spec_gy');
+    const tEl = document.getElementById('f_body_spec_tube');
+    if (wEl && spec.width && (overwrite || !wEl.value.trim())) { wEl.value = spec.width; changed = true; }
+    if (gEl && spec.gy != null && spec.gy !== '' && (overwrite || !gEl.value.trim())) { gEl.value = spec.gy; changed = true; }
+    if (tEl) {
+      if (overwrite) { tEl.checked = !!spec.tube; }
+      else if (spec.tube && wEl && wEl.value === spec.width) { tEl.checked = true; }
+    }
+    // 혼용율
+    const blendRows = parseBlendString(spec.blend);
+    if (blendRows.length) {
+      const cur = getBlendData('body_blends');
+      const curEmpty = cur.length === 0 || cur.every(b => !b.value);
+      if (overwrite || curEmpty) { renderBlendRows('body_blends', blendRows); changed = true; }
+    }
+    // 주의사항 기본값 — 버튼(overwrite)에서만 적용 (자동 경로는 기존 입력 보호)
+    if (overwrite && spec.cautions && typeof spec.cautions === 'object') {
+      const hasAny = ['dyeing', 'processing', 'post'].some(k => Array.isArray(spec.cautions[k]) && spec.cautions[k].length);
+      if (hasAny) {
+        state.savedFinishCautions = JSON.parse(JSON.stringify(spec.cautions));
+        if (typeof renderFinishCautions === 'function') renderFinishCautions();
+        changed = true;
+      }
+    }
+    if (changed) { render(); markDirty(); }
+    return changed;
+  }
+  function autoFillBodySpec() {
+    const el = document.getElementById('f_body_item');
+    if (!el) return;
+    const spec = findFabricSpec(el.value);
+    if (!spec) return;
+    const changed = applyFabricSpecToForm(spec, false);
+    if (changed) { try { toast(`"${spec.name}" 기준 자동 채움 (필요 시 수정 가능)`, 'info'); } catch (_) {} }
+  }
+  (function bindFabricSpecAutoFill() {
+    const fp = document.getElementById('form-panel');
+    if (fp && !fp.dataset.specAutofillBound) {
+      fp.dataset.specAutofillBound = '1';
+      // change(확정) + input(목록 선택·정확 일치) 둘 다 — datalist 누락 방지
+      fp.addEventListener('change', (e) => {
+        if (e.target && e.target.id === 'f_body_item') autoFillBodySpec();
+      });
+      fp.addEventListener('input', (e) => {
+        if (e.target && e.target.id === 'f_body_item' && findFabricSpec(e.target.value)) autoFillBodySpec();
+      });
+      // [📐 기준 불러오기] — 위임으로 바인딩(폼 재구성에도 안전). 폭·중량·튜브·혼용율·주의사항 전부 덮어쓰기
+      fp.addEventListener('click', (e) => {
+        const btn = e.target && (e.target.id === 'f_body_loadspec' ? e.target : (e.target.closest ? e.target.closest('#f_body_loadspec') : null));
+        if (!btn) return;
+        const el = document.getElementById('f_body_item');
+        const spec = el ? findFabricSpec(el.value) : null;
+        if (!spec) { try { toast('등록된 품목이 아닙니다. 목록에서 고르거나 [원단 기본 스펙]에 먼저 등록하세요.', 'warning'); } catch (_) {} return; }
+        const wEl = document.getElementById('f_body_spec_width');
+        const gEl = document.getElementById('f_body_spec_gy');
+        const hasExisting = (wEl && wEl.value.trim()) || (gEl && gEl.value.trim()) || getBlendData('body_blends').some(b => b.value);
+        if (hasExisting && !confirm(`"${spec.name}" 기준으로\n폭·중량·튜브·혼용율·주의사항을 덮어쓸까요?\n(현재 입력값이 바뀝니다)`)) return;
+        applyFabricSpecToForm(spec, true);
+        try { toast(`"${spec.name}" 기준 불러옴`, 'success'); } catch (_) {}
+      });
+    }
+  })();
 
   // hotfix70: 기존 염색가공 의뢰서에서 품목별 주의사항 수확 (품목당 가장 최근 의뢰서 기준)
   //   반환: [{ itemName, cautions:{dyeing,processing,post}, date, woNumber }]  (workorders 절대 안 건드림 — 읽기만)
@@ -22968,7 +22979,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix72';
+  const VERSION = 'v2.53 hotfix73';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix34: 편직 의뢰서 [성격] 시스템 도입 — 정규/재고/샘플/완료 4태그, 자동분류, 표 ● 배지, [성격▼] 필터, 완료체크 양방향연동
   // hotfix33: 클레임(땡처리) 내역서 양식 통일 — 부분/전체 모두 정식 표 양식 + 이미지복사/인쇄/수정 동일 버튼
