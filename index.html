@@ -5710,7 +5710,12 @@
       
       <div class="section">
         <div class="section-title">몸판 (BODY)</div>
-        <div class="field"><label>몸판 품목</label><input type="text" lang="ko" id="f_body_item" list="fabric-spec-datalist" placeholder="프리미엄싱글 (선택 시 기준 폭·중량 자동 채움)"><datalist id="fabric-spec-datalist"></datalist></div>
+        <div class="field"><label>몸판 품목</label>
+          <div style="display:flex;gap:6px;align-items:center;">
+            <input type="text" lang="ko" id="f_body_item" list="fabric-spec-datalist" placeholder="프리미엄싱글 (선택 시 기준 폭·중량 자동 채움)" style="flex:1;"><datalist id="fabric-spec-datalist"></datalist>
+            <button type="button" id="f_body_loadspec" class="btn-add" style="white-space:nowrap;background:#1e3a8a;color:#fff;" title="이 품목의 기준 폭·중량·튜브·혼용율·주의사항을 한 번에 불러옵니다">📐 기준 불러오기</button>
+          </div>
+        </div>
         <div class="field"><label>몸판 입고처 (편직 공장)</label><input type="text" lang="ko" id="f_receiving" placeholder="세원"></div>
         <div class="field">
           <label>몸판 혼용율 (자유 추가/삭제)</label>
@@ -6214,6 +6219,52 @@ const SEED_FABRIC_SPECS = [
   { name: '물나염싱글',    cat: '몰나염',   width: '72/74', tube: false, gy: 420, blend: 'C35% P65%' },
   { name: '물나염쭈리',    cat: '몰나염',   width: '64/66', tube: false, gy: 520, blend: 'C25% P75%' }
 ];
+
+// hotfix69: 원사 코드 → 한글 매핑 (혼용율 문자열 자동채움용)
+const YARN_CODE_KO = {
+  C:'면', CO:'면', COTTON:'면',
+  P:'포리', PO:'포리', PE:'포리', POLY:'포리',
+  SP:'스판', SPAN:'스판', SPANDEX:'스판',
+  R:'레이온', RA:'레이온', RAYON:'레이온',
+  N:'나일론', NY:'나일론', NYLON:'나일론',
+  W:'울', WO:'울', WOOL:'울',
+  A:'아크릴', AC:'아크릴',
+  L:'린넨', LI:'린넨', LINEN:'린넨',
+  M:'모달', MO:'모달', MODAL:'모달',
+  T:'텐셀', TE:'텐셀', TENCEL:'텐셀',
+  CVC:'CVC', TC:'T/C', TR:'T/R'
+};
+// "C55% P45%" → [{name:'면',value:'55'},{name:'포리',value:'45'}] · 한글 코드는 그대로
+function parseBlendString(str) {
+  if (!str) return [];
+  const out = [];
+  const re = /([A-Za-z가-힣\/]+)\s*([0-9]+(?:\.[0-9]+)?)\s*%?/g;
+  let m;
+  while ((m = re.exec(str))) {
+    const code = m[1].trim();
+    const key = code.toUpperCase();
+    out.push({ name: YARN_CODE_KO[key] || code, value: m[2] });
+  }
+  return out;
+}
+// hotfix69: 주의사항 줄 텍스트 ↔ 행 배열 (원단 기본 스펙 편집용)
+//   한 줄 형식: "★ 터치 : 부드럽게"  (맨 앞 마크 ★/※/● 생략 시 ※, 구분자 : 또는 =)
+function parseCautionLines(text) {
+  if (!text) return [];
+  const marks = ['★', '※', '●'];
+  return String(text).split(/\r?\n/).map(l => l.trim()).filter(Boolean).map(line => {
+    let mark = '※';
+    if (marks.includes(line[0])) { mark = line[0]; line = line.slice(1).trim(); }
+    let label = line, value = '';
+    const sep = line.search(/[:=]/);
+    if (sep >= 0) { label = line.slice(0, sep).trim(); value = line.slice(sep + 1).trim(); }
+    return { mark, label, value };
+  }).filter(r => r.label || r.value);
+}
+function cautionRowsToLines(rows) {
+  if (!Array.isArray(rows)) return '';
+  return rows.map(r => `${r.mark || '※'} ${r.label || ''}${(r.value != null && r.value !== '') ? ' : ' + r.value : ''}`).join('\n');
+}
 
 // hotfix54: 로컬 기준 오늘 날짜 YYYY-MM-DD (toISOString은 UTC라 한국 새벽~오전에 어제로 밀리는 문제 방지)
 function todayYMD() {
@@ -8662,22 +8713,65 @@ document.getElementById('form-panel').addEventListener('input', () => { render()
 //   - 동적으로 다시 그려진 stamp-checks 체크박스가 'input' 이벤트를 일관되게 발생시키지 않는 브라우저 대응
 document.getElementById('form-panel').addEventListener('change', () => { render(); markDirty(); });
 
-// hotfix66: 몸판 품목 선택/입력 시 원단 기본 스펙에서 기준 폭·중량·튜브 자동 채움 (빈 칸만 채워 수동 입력 보존)
-document.getElementById('form-panel').addEventListener('change', (e) => {
-  if (!e.target || e.target.id !== 'f_body_item') return;
-  const spec = findFabricSpec(e.target.value);
-  if (!spec) return;
+// hotfix66/69: 몸판 품목 → 원단 기본 스펙에서 폭·중량·튜브·혼용율(·주의사항) 채움.
+//   overwrite=false: 빈 칸만(자동, 수동입력 보존) / overwrite=true: 전부 덮어쓰기(버튼)
+function applyFabricSpecToForm(spec, overwrite) {
+  if (!spec) return false;
+  let changed = false;
   const wEl = document.getElementById('f_body_spec_width');
   const gEl = document.getElementById('f_body_spec_gy');
   const tEl = document.getElementById('f_body_spec_tube');
-  let filled = false;
-  if (wEl && !wEl.value.trim() && spec.width) { wEl.value = spec.width; filled = true; }
-  if (gEl && !gEl.value.trim() && spec.gy != null) { gEl.value = spec.gy; filled = true; }
-  if (tEl && spec.tube && !tEl.checked && (wEl && wEl.value === spec.width)) { tEl.checked = true; }
-  if (filled) {
-    try { toast(`"${spec.name}" 기준 폭·중량 자동 채움 (필요 시 수정 가능)`, 'info'); } catch (_) {}
-    render(); markDirty();
+  if (wEl && spec.width && (overwrite || !wEl.value.trim())) { wEl.value = spec.width; changed = true; }
+  if (gEl && spec.gy != null && spec.gy !== '' && (overwrite || !gEl.value.trim())) { gEl.value = spec.gy; changed = true; }
+  if (tEl) {
+    if (overwrite) { tEl.checked = !!spec.tube; }
+    else if (spec.tube && wEl && wEl.value === spec.width) { tEl.checked = true; }
   }
+  // 혼용율
+  const blendRows = parseBlendString(spec.blend);
+  if (blendRows.length) {
+    const cur = getBlendData('body_blends');
+    const curEmpty = cur.length === 0 || cur.every(b => !b.value);
+    if (overwrite || curEmpty) { renderBlendRows('body_blends', blendRows); changed = true; }
+  }
+  // 주의사항 기본값 — 버튼(overwrite)에서만 적용 (자동 경로는 기존 입력 보호)
+  if (overwrite && spec.cautions && typeof spec.cautions === 'object') {
+    const hasAny = ['dyeing', 'processing', 'post'].some(k => Array.isArray(spec.cautions[k]) && spec.cautions[k].length);
+    if (hasAny) {
+      state.savedFinishCautions = JSON.parse(JSON.stringify(spec.cautions));
+      if (typeof renderFinishCautions === 'function') renderFinishCautions();
+      changed = true;
+    }
+  }
+  if (changed) { render(); markDirty(); }
+  return changed;
+}
+function autoFillBodySpec() {
+  const el = document.getElementById('f_body_item');
+  if (!el) return;
+  const spec = findFabricSpec(el.value);
+  if (!spec) return;
+  const changed = applyFabricSpecToForm(spec, false);
+  if (changed) { try { toast(`"${spec.name}" 기준 자동 채움 (필요 시 수정 가능)`, 'info'); } catch (_) {} }
+}
+// change(확정) + input(목록 선택·정확 일치) 둘 다 — datalist 누락 방지
+document.getElementById('form-panel').addEventListener('change', (e) => {
+  if (e.target && e.target.id === 'f_body_item') autoFillBodySpec();
+});
+document.getElementById('form-panel').addEventListener('input', (e) => {
+  if (e.target && e.target.id === 'f_body_item' && findFabricSpec(e.target.value)) autoFillBodySpec();
+});
+// [📐 기준 불러오기] — 폭·중량·튜브·혼용율·주의사항 전부 덮어쓰기
+document.getElementById('f_body_loadspec')?.addEventListener('click', () => {
+  const el = document.getElementById('f_body_item');
+  const spec = el ? findFabricSpec(el.value) : null;
+  if (!spec) { try { toast('등록된 품목이 아닙니다. 목록에서 고르거나 [원단 기본 스펙]에 먼저 등록하세요.', 'warning'); } catch (_) {} return; }
+  const wEl = document.getElementById('f_body_spec_width');
+  const gEl = document.getElementById('f_body_spec_gy');
+  const hasExisting = (wEl && wEl.value.trim()) || (gEl && gEl.value.trim()) || getBlendData('body_blends').some(b => b.value);
+  if (hasExisting && !confirm(`"${spec.name}" 기준으로\n폭·중량·튜브·혼용율·주의사항을 덮어쓸까요?\n(현재 입력값이 바뀝니다)`)) return;
+  applyFabricSpecToForm(spec, true);
+  try { toast(`"${spec.name}" 기준 불러옴`, 'success'); } catch (_) {}
 });
 
 document.getElementById('new-btn').addEventListener('click', () => {
@@ -18057,7 +18151,8 @@ function validateBlendSum(blends, label) {
     const specs = getFabricSpecs();
     const inputStyle = 'width:100%;padding:7px 9px;border:1px solid #d1d5db;border-radius:5px;font-size:13px;font-family:inherit;box-sizing:border-box;';
     let h = `<div style="font-size:12px;color:#555;margin:4px 0 12px;line-height:1.6;">
-      품목별 표준 작업 스펙입니다. 작업의뢰서에서 품목을 고르면 <strong>기준 폭·중량</strong>이 자동으로 채워집니다.
+      품목별 표준 작업 스펙입니다. 작업의뢰서에서 품목을 고르면 <strong>기준 폭·중량</strong>이 자동으로 채워지고,
+      <strong>[📐 기준 불러오기]</strong>를 누르면 <strong>혼용율·튜브·주의사항</strong>까지 한 번에 채워집니다.
       (샘플·신규 원단은 작업의뢰서에서 직접 입력하면 됩니다.) 단가는 단가관리 시스템에서 관리하므로 여기엔 없습니다.
     </div>
     <div style="margin:0 0 10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
@@ -18097,6 +18192,14 @@ function validateBlendSum(blends, label) {
             <div style="flex:1;"><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">중량 g/y</label><input type="number" step="1" id="fs-f-gy" style="${inputStyle}" placeholder="380"></div>
           </div>
           <div><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">혼용률</label><input type="text" id="fs-f-blend" style="${inputStyle}" placeholder="예: C55% P45%"></div>
+          <div style="border-top:1px solid #e5e7eb;padding-top:10px;margin-top:2px;">
+            <div style="font-size:12px;font-weight:700;color:#1e3a8a;margin-bottom:6px;">주의사항 기본값 <span style="font-weight:400;color:#9ca3af;font-size:11px;">— 한 줄에 하나, 형식: ★ 항목 : 값 (작업의뢰서에서 [📐 기준 불러오기] 시 채워짐)</span></div>
+            <div style="display:flex;flex-direction:column;gap:7px;">
+              <div><label style="font-size:11px;font-weight:700;color:#6b7280;display:block;margin-bottom:3px;">■ 염색</label><textarea id="fs-f-caution-dye" style="${inputStyle}min-height:70px;resize:vertical;" placeholder="★ 터치 : 부드럽게&#10;★ 선바이오 : X&#10;※ 대전방지제 : O"></textarea></div>
+              <div><label style="font-size:11px;font-weight:700;color:#6b7280;display:block;margin-bottom:3px;">■ 가공</label><textarea id="fs-f-caution-proc" style="${inputStyle}min-height:70px;resize:vertical;" placeholder="★ 유연제 : O&#10;★ KC인증 : O&#10;※ 견뢰도 : O"></textarea></div>
+              <div><label style="font-size:11px;font-weight:700;color:#6b7280;display:block;margin-bottom:3px;">■ 후가공 (선택)</label><textarea id="fs-f-caution-post" style="${inputStyle}min-height:50px;resize:vertical;" placeholder="★ 기모 :&#10;※ 워싱 :"></textarea></div>
+            </div>
+          </div>
           <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:6px;">
             <button class="dash-action-btn" id="fs-modal-cancel" style="padding:7px 16px;">취소</button>
             <button class="dash-action-btn" id="fs-modal-save" style="background:#1e3a8a;color:#fff;font-weight:700;padding:7px 18px;">저장</button>
@@ -20152,6 +20255,10 @@ function validateBlendSum(blends, label) {
         document.getElementById('fs-f-tube').checked = !!s.tube;
         document.getElementById('fs-f-gy').value = (s.gy != null ? s.gy : '');
         document.getElementById('fs-f-blend').value = s.blend || '';
+        const sc = s.cautions || {};
+        document.getElementById('fs-f-caution-dye').value = cautionRowsToLines(sc.dyeing);
+        document.getElementById('fs-f-caution-proc').value = cautionRowsToLines(sc.processing);
+        document.getElementById('fs-f-caution-post').value = cautionRowsToLines(sc.post);
         modal.classList.add('show');
         setTimeout(() => document.getElementById('fs-f-name').focus(), 50);
       };
@@ -20173,6 +20280,13 @@ function validateBlendSum(blends, label) {
           gy: document.getElementById('fs-f-gy').value.trim(),
           blend: document.getElementById('fs-f-blend').value.trim()
         };
+        // hotfix69: 주의사항 기본값 (비어있는 공정은 저장 안 함)
+        const cz = {
+          dyeing: parseCautionLines(document.getElementById('fs-f-caution-dye').value),
+          processing: parseCautionLines(document.getElementById('fs-f-caution-proc').value),
+          post: parseCautionLines(document.getElementById('fs-f-caution-post').value)
+        };
+        if (cz.dyeing.length || cz.processing.length || cz.post.length) entry.cautions = cz;
         const list = getFabricSpecs().map(x => ({ ...x }));
         if (editingSpecIdx >= 0) list[editingSpecIdx] = entry;
         else list.push(entry);
@@ -22715,7 +22829,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix68';
+  const VERSION = 'v2.53 hotfix69';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix34: 편직 의뢰서 [성격] 시스템 도입 — 정규/재고/샘플/완료 4태그, 자동분류, 표 ● 배지, [성격▼] 필터, 완료체크 양방향연동
   // hotfix33: 클레임(땡처리) 내역서 양식 통일 — 부분/전체 모두 정식 표 양식 + 이미지복사/인쇄/수정 동일 버튼
