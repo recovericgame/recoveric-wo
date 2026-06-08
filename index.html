@@ -5708,6 +5708,13 @@
           <button class="btn-add" type="button" id="add_body_blend">+ 항목 추가</button>
         </div>
         <div class="field"><label>몸판 가공 사양</label><input type="text" lang="ko" id="f_body_spec" placeholder="텐컴 후 70/72+400"></div>
+        <div class="field">
+          <label>몸판 기준 폭 / 중량 — 자동 판정용 (벗어나면 대표 보고)</label>
+          <div style="display:flex;gap:8px;">
+            <input type="text" lang="ko" id="f_body_spec_width" placeholder="폭 예: 60/62" style="flex:1;">
+            <input type="number" step="1" id="f_body_spec_gy" placeholder="중량 g/y 예: 380" style="flex:1;">
+          </div>
+        </div>
       </div>
       
       <div class="section">
@@ -5720,6 +5727,13 @@
           <button class="btn-add" type="button" id="add_rib_blend">+ 항목 추가</button>
         </div>
         <div class="field"><label>리프 가공 사양</label><input type="text" lang="ko" id="f_rib_spec" placeholder="리프용 사양 (선택)"></div>
+        <div class="field">
+          <label>리프 기준 폭 / 중량 (선택 · 입력 가능, 자동 판정은 추후)</label>
+          <div style="display:flex;gap:8px;">
+            <input type="text" lang="ko" id="f_rib_spec_width" placeholder="폭 예: 60/62" style="flex:1;">
+            <input type="number" step="1" id="f_rib_spec_gy" placeholder="중량 g/y" style="flex:1;">
+          </div>
+        </div>
       </div>
       
       <div class="section">
@@ -7073,13 +7087,17 @@ function getFormData() {
       item: getVal('f_body_item'),
       receiving: getVal('f_receiving'),
       blends: getBlendData('body_blends'),
-      spec: getVal('f_body_spec')
+      spec: getVal('f_body_spec'),
+      spec_width: getVal('f_body_spec_width'),
+      spec_gy: getVal('f_body_spec_gy')
     },
     rib: {
       item: getVal('f_rib_item'),
       receiving: getVal('f_rib_receiving'),
       blends: getBlendData('rib_blends'),
-      spec: getVal('f_rib_spec')
+      spec: getVal('f_rib_spec'),
+      spec_width: getVal('f_rib_spec_width'),
+      spec_gy: getVal('f_rib_spec_gy')
     },
     caution: getCautionData(),
     colors,
@@ -7648,9 +7666,13 @@ function setFormData(d, opts={}) {
     document.getElementById('f_body_item').value = d.body?.item || '';
     document.getElementById('f_receiving').value = d.body?.receiving || '';
     document.getElementById('f_body_spec').value = d.body?.spec || '';
+    document.getElementById('f_body_spec_width').value = d.body?.spec_width || '';
+    document.getElementById('f_body_spec_gy').value = (d.body?.spec_gy != null ? d.body.spec_gy : '');
     document.getElementById('f_rib_item').value = d.rib?.item || '';
     document.getElementById('f_rib_receiving').value = d.rib?.receiving || '';
     document.getElementById('f_rib_spec').value = d.rib?.spec || '';
+    document.getElementById('f_rib_spec_width').value = d.rib?.spec_width || '';
+    document.getElementById('f_rib_spec_gy').value = (d.rib?.spec_gy != null ? d.rib.spec_gy : '');
     document.getElementById('f_notes').value = d.notes || '';
     
     // 혼용율 (구버전 blend → blends 마이그레이션)
@@ -7746,7 +7768,7 @@ function resetForm() {
   } else {
     document.getElementById('f_date').value = today;
     document.getElementById('f_type').value = '오더';
-    ['f_dest','f_body_item','f_receiving','f_body_spec','f_rib_item','f_rib_receiving','f_rib_spec','f_notes'].forEach(id => document.getElementById(id).value = '');
+    ['f_dest','f_body_item','f_receiving','f_body_spec','f_body_spec_width','f_body_spec_gy','f_rib_item','f_rib_receiving','f_rib_spec','f_rib_spec_width','f_rib_spec_gy','f_notes'].forEach(id => document.getElementById(id).value = '');
     document.getElementById('p_dyeing').checked = true;
     document.getElementById('p_proc').checked = true;
     document.getElementById('p_post').checked = false;
@@ -8002,8 +8024,8 @@ function renderFinishOrder(d) {
       <td class="label">리프 혼용율</td><td>${rBlend}</td>
     </tr>
     <tr>
-      <td class="label">몸판 가공</td><td>${escapeHtml(d.body.spec) || '-'}</td>
-      <td class="label">리프 가공</td><td>${escapeHtml(d.rib?.spec) || '-'}</td>
+      <td class="label">몸판 가공</td><td>${escapeHtml(d.body.spec) || '-'}${(function(){const a=[];if(d.body.spec_width)a.push('폭 '+escapeHtml(d.body.spec_width)+'″');if(d.body.spec_gy!=null&&d.body.spec_gy!=='')a.push(escapeHtml(String(d.body.spec_gy))+'g/y');return a.length?`<div style="color:#1e3a8a;font-weight:700;font-size:11px;margin-top:3px;">기준 ${a.join(' · ')}</div>`:'';})()}</td>
+      <td class="label">리프 가공</td><td>${escapeHtml(d.rib?.spec) || '-'}${(function(){const a=[];if(d.rib&&d.rib.spec_width)a.push('폭 '+escapeHtml(d.rib.spec_width)+'″');if(d.rib&&d.rib.spec_gy!=null&&d.rib.spec_gy!=='')a.push(escapeHtml(String(d.rib.spec_gy))+'g/y');return a.length?`<div style="color:#1e3a8a;font-weight:700;font-size:11px;margin-top:3px;">기준 ${a.join(' · ')}</div>`:'';})()}</td>
     </tr>
   </table>
   <div class="wo-shipping-bar">
@@ -10930,6 +10952,55 @@ function validateBlendSum(blends, label) {
     return (w != null && !isNaN(w) && w > SHRINK_ALERT_THRESHOLD)
         || (l != null && !isNaN(l) && l > SHRINK_ALERT_THRESHOLD);
   }
+
+  // hotfix62: 규격(폭/중량) 기준 파싱 + 통합 판정
+  const WIDTH_MAX_TOLERANCE = 3;      // 최대폭 + 3인치까지 허용
+  const WEIGHT_TOLERANCE_PCT = 0.05;  // 중량 ±5%
+  // "60/62" → {min:60,max:62} · "60" → {min:60,max:60} · 따옴표/공백/단위 무시
+  function parseWidthSpec(s) {
+    if (s == null) return null;
+    const nums = String(s).match(/[\d.]+/g);
+    if (!nums || nums.length === 0) return null;
+    const a = parseFloat(nums[0]);
+    if (!isFinite(a)) return null;
+    const b = nums.length > 1 ? parseFloat(nums[1]) : a;
+    return { min: Math.min(a, b), max: Math.max(a, isFinite(b) ? b : a) };
+  }
+  // QC 검수값 vs 몸판 기준 → 어긋난 항목 객체 반환. any=true면 대표 보고 대상.
+  function checkSpecDeviation(qcData, wo) {
+    const body = (wo && wo.body) || {};
+    const out = { width: null, weight: null, shrink: null, any: false };
+
+    // 폭: 실제폭(=입력폭×더블배수)이 [최소, 최대+3] 밖이면 어긋남
+    const ws = parseWidthSpec(body.spec_width);
+    const actualW = calcActualWidth(qcData.width_inch, !!qcData.width_double);
+    if (ws && actualW != null) {
+      const lo = ws.min, hi = ws.max + WIDTH_MAX_TOLERANCE;
+      const fail = actualW < lo || actualW > hi;
+      out.width = { actual: actualW, lo, hi, specMin: ws.min, specMax: ws.max, fail };
+      if (fail) out.any = true;
+    }
+    // 중량(g/y): 기준 ±5% 밖이면 어긋남
+    const tgy = parseFloat(body.spec_gy);
+    const actualGy = (qcData.weight_g_per_y === '' || qcData.weight_g_per_y == null) ? null : parseFloat(qcData.weight_g_per_y);
+    if (isFinite(tgy) && tgy > 0 && actualGy != null && isFinite(actualGy)) {
+      const lo = Math.round(tgy * (1 - WEIGHT_TOLERANCE_PCT) * 10) / 10;
+      const hi = Math.round(tgy * (1 + WEIGHT_TOLERANCE_PCT) * 10) / 10;
+      const fail = actualGy < lo || actualGy > hi;
+      out.weight = { actual: actualGy, target: tgy, lo, hi, fail };
+      if (fail) out.any = true;
+    }
+    // 축률: 폭/장 중 하나라도 2.5% 초과
+    const sw = (qcData.shrink_width_pct === '' || qcData.shrink_width_pct == null) ? null : parseFloat(qcData.shrink_width_pct);
+    const sl = (qcData.shrink_length_pct === '' || qcData.shrink_length_pct == null) ? null : parseFloat(qcData.shrink_length_pct);
+    const swFail = (sw != null && isFinite(sw) && sw > SHRINK_ALERT_THRESHOLD);
+    const slFail = (sl != null && isFinite(sl) && sl > SHRINK_ALERT_THRESHOLD);
+    if (sw != null || sl != null) {
+      out.shrink = { w: (sw != null && isFinite(sw)) ? sw : null, l: (sl != null && isFinite(sl)) ? sl : null, fail: swFail || slFail };
+      if (swFail || slFail) out.any = true;
+    }
+    return out;
+  }
   // 현재 축률 이상으로 대표 확인 대기 중인 건 수집
   function collectShrinkHolds() {
     const out = [];
@@ -10951,11 +11022,20 @@ function validateBlendSum(blends, label) {
   function collectCeoReports() {
     const reports = [];
 
-    // [보고 유형 ①] 축률 이상 — 폭/장 축률 2.5% 초과로 완료 보류된 건
+    // [보고 유형 ①] 규격 이상 — 폭/중량/축률이 기준을 벗어나 완료 보류된 건
     collectShrinkHolds().forEach(h => {
+      const dev = h.receipt.spec_dev || null;
+      // 동적 라벨: 어긋난 항목만 표기
+      const fails = [];
+      if (dev) {
+        if (dev.width && dev.width.fail) fails.push('폭');
+        if (dev.weight && dev.weight.fail) fails.push('중량');
+        if (dev.shrink && dev.shrink.fail) fails.push('축률');
+      }
+      const label = fails.length ? `규격 이상 (${fails.join('·')})` : '축률 이상';
       reports.push({
         type: 'shrink',
-        typeLabel: '축률 이상',
+        typeLabel: label,
         icon: '🚩',
         theme: '#dc2626',
         woId: h.wo.id,
@@ -10964,6 +11044,7 @@ function validateBlendSum(blends, label) {
         colorName: h.color.name || `컬러 #${h.colorIdx + 1}`,
         receiptNo: h.receipt.receipt_no,
         item: h.wo.body?.item || '',
+        dev: dev,
         width: h.receipt.shrink_hold_w,
         length: h.receipt.shrink_hold_l,
         notes: (h.receipt.qc && h.receipt.qc.notes) || '',
@@ -10990,7 +11071,7 @@ function validateBlendSum(blends, label) {
   // ===== hotfix60 대표 보고 수집기 끝 =====
 
   // 축률 이상 → 보류(대표 확인 대기). QC 데이터는 저장하되 done으로 안 넘김.
-  async function setColorShrinkHold(woId, colorIdx, qcData, receiptNo) {
+  async function setColorShrinkHold(woId, colorIdx, qcData, receiptNo, specDev) {
     const wo = state.allWorkOrders.find(w => w.id === woId);
     if (!wo) throw new Error('의뢰서를 찾을 수 없음');
     const colors = JSON.parse(JSON.stringify(wo.colors || []));
@@ -11041,6 +11122,8 @@ function validateBlendSum(blends, label) {
     r.shrink_hold_l = lPct;
     r.shrink_hold_at = now;
     r.shrink_hold_by = state.user.email;
+    // hotfix62: 폭/중량/축률 편차 상세 저장 (대표 보고함 표시용)
+    if (specDev) r.spec_dev = specDev;
     delete r.qc_done_at;
     delete r.qc_done_by;
 
@@ -15039,7 +15122,7 @@ function validateBlendSum(blends, label) {
         const more = shrinkHolds.length > 4 ? ` 외 ${shrinkHolds.length - 4}건` : '';
         html += `<div class="shrink-alert-banner" id="ov-shrink-banner" style="cursor:pointer;">
           <span style="font-size:18px;">🚩</span>
-          <span><strong>축률 이상 ${shrinkHolds.length}건 — 대표 확인 필요</strong> — 폭/장 축률 2.5% 초과 원단입니다 (${names}${more}). 클릭하면 <strong>대표 보고함</strong>으로 이동합니다.</span>
+          <span><strong>규격 이상 ${shrinkHolds.length}건 — 대표 확인 필요</strong> — 폭/중량/축률이 기준을 벗어난 원단입니다 (${names}${more}). 클릭하면 <strong>대표 보고함</strong>으로 이동합니다.</span>
         </div>`;
       }
     }
@@ -15546,7 +15629,7 @@ function validateBlendSum(blends, label) {
             completeCell = `<td class="col-action col-act-complete"><button class="dash-action-btn dash-defect-btn" data-id="${wo.id}" data-color-idx="${colorIdx}" data-qc-action="open" title="불량 처리됨 — 클릭하여 처리 진행">⚠ 불량${receiptLabel}</button>${shortageBtn}</td>`;
           } else if (qcSt === 'shrink') {
             // hotfix59: 축률 이상 — 대표 확인 대기 (완료 안 됨)
-            completeCell = `<td class="col-action col-act-complete"><button class="dash-action-btn dash-shrink-review-btn" style="background:#dc2626;color:#fff;border-color:#b91c1c;" data-id="${wo.id}" data-color-idx="${colorIdx}" title="폭/장 축률 2.5% 초과 — ${isAdminUser() ? '클릭하여 확인·승인' : '대표 확인 대기 중'}">🚩 축률 이상${receiptLabel}</button>${shortageBtn}</td>`;
+            completeCell = `<td class="col-action col-act-complete"><button class="dash-action-btn dash-shrink-review-btn" style="background:#dc2626;color:#fff;border-color:#b91c1c;" data-id="${wo.id}" data-color-idx="${colorIdx}" title="규격 이상(폭/중량/축률) — ${isAdminUser() ? '클릭하여 확인·처리' : '대표 확인 대기 중'}">🚩 규격 이상${receiptLabel}</button>${shortageBtn}</td>`;
           } else if (qcSt === 'pending') {
             completeCell = `<td class="col-action col-act-complete"><button class="dash-action-btn qc-pending-btn" data-id="${wo.id}" data-color-idx="${colorIdx}" data-qc-action="open">QC 대기${receiptLabel}</button>${shortageBtn}</td>`;
           } else if (qcSt === 'done') {
@@ -16255,7 +16338,7 @@ function validateBlendSum(blends, label) {
           completeCell = `<td class="col-action"><button class="dash-action-btn dash-defect-btn" data-id="${wo.id}" data-color-idx="${colorIdx}" data-qc-action="open" title="불량 처리됨">⚠ 불량${receiptLabel}</button>${shortageBtn}</td>`;
         } else if (qcSt === 'shrink') {
           // hotfix59: 축률 이상 — 대표 확인 대기 (완료 안 됨)
-          completeCell = `<td class="col-action"><button class="dash-action-btn dash-shrink-review-btn" style="background:#dc2626;color:#fff;border-color:#b91c1c;" data-id="${wo.id}" data-color-idx="${colorIdx}" title="폭/장 축률 2.5% 초과 — ${isAdminUser() ? '클릭하여 확인·승인' : '대표 확인 대기 중'}">🚩 축률 이상${receiptLabel}</button>${shortageBtn}</td>`;
+          completeCell = `<td class="col-action"><button class="dash-action-btn dash-shrink-review-btn" style="background:#dc2626;color:#fff;border-color:#b91c1c;" data-id="${wo.id}" data-color-idx="${colorIdx}" title="규격 이상(폭/중량/축률) — ${isAdminUser() ? '클릭하여 확인·처리' : '대표 확인 대기 중'}">🚩 규격 이상${receiptLabel}</button>${shortageBtn}</td>`;
         } else if (qcSt === 'pending') {
           completeCell = `<td class="col-action"><button class="dash-action-btn qc-pending-btn" data-id="${wo.id}" data-color-idx="${colorIdx}" data-qc-action="open">QC 대기${receiptLabel}</button>${shortageBtn}</td>`;
         } else if (qcSt === 'done') {
@@ -17056,11 +17139,28 @@ function validateBlendSum(blends, label) {
     html += `<div style="display:flex;flex-direction:column;gap:10px;">`;
     reports.forEach(rep => {
       if (rep.type === 'shrink') {
-        const w = (rep.width == null) ? '-' : rep.width;
-        const l = (rep.length == null) ? '-' : rep.length;
-        const wOver = (rep.width != null && rep.width > 2.5);
-        const lOver = (rep.length != null && rep.length > 2.5);
+        const dev = rep.dev;
         const when = rep.createdAt ? new Date(rep.createdAt).toLocaleString('ko-KR') : '';
+        // 폭/중량/축률 줄 — 어긋난 항목은 빨강 ⚠, 정상은 회색
+        const rows = [];
+        if (dev && dev.width) {
+          const c = dev.width.fail ? '#dc2626' : '#6b7280';
+          rows.push(`<div class="ceo-report-line"><span class="ceo-report-k">폭</span> 실측 <strong style="color:${c};">${dev.width.actual}″</strong> / 허용 ${dev.width.lo}~${dev.width.hi}″ (기준 ${dev.width.specMin}/${dev.width.specMax}) ${dev.width.fail ? '<strong style="color:#dc2626;">⚠ 이상</strong>' : '<span style="color:#16a34a;">정상</span>'}</div>`);
+        }
+        if (dev && dev.weight) {
+          const c = dev.weight.fail ? '#dc2626' : '#6b7280';
+          rows.push(`<div class="ceo-report-line"><span class="ceo-report-k">중량</span> 실측 <strong style="color:${c};">${dev.weight.actual}g/y</strong> / 허용 ${dev.weight.lo}~${dev.weight.hi} (기준 ${dev.weight.target}) ${dev.weight.fail ? '<strong style="color:#dc2626;">⚠ 이상</strong>' : '<span style="color:#16a34a;">정상</span>'}</div>`);
+        }
+        if (dev && dev.shrink) {
+          const c = dev.shrink.fail ? '#dc2626' : '#6b7280';
+          rows.push(`<div class="ceo-report-line"><span class="ceo-report-k">축률</span> 폭 <strong style="color:${c};">${dev.shrink.w == null ? '-' : dev.shrink.w}%</strong> / 장 <strong style="color:${c};">${dev.shrink.l == null ? '-' : dev.shrink.l}%</strong> (기준 2.5% 이하) ${dev.shrink.fail ? '<strong style="color:#dc2626;">⚠ 이상</strong>' : '<span style="color:#16a34a;">정상</span>'}</div>`);
+        }
+        // 옛 데이터(spec_dev 없음) 안전망 — 축률만 표시
+        if (!dev) {
+          const w = (rep.width == null) ? '-' : rep.width;
+          const l = (rep.length == null) ? '-' : rep.length;
+          rows.push(`<div class="ceo-report-line"><span class="ceo-report-k">축률</span> 폭 <strong style="color:#dc2626;">${w}%</strong> / 장 <strong style="color:#dc2626;">${l}%</strong> (기준 2.5% 초과)</div>`);
+        }
         html += `<div class="ceo-report-card" data-rep-type="shrink" data-id="${rep.woId}" data-color-idx="${rep.colorIdx}">
           <div class="ceo-report-head">
             <span class="ceo-report-tag" style="background:${rep.theme};">${rep.icon} ${escapeHtml(rep.typeLabel)}</span>
@@ -17068,11 +17168,7 @@ function validateBlendSum(blends, label) {
           </div>
           <div class="ceo-report-body">
             <div class="ceo-report-line"><span class="ceo-report-k">품목</span> ${escapeHtml(rep.item || '-')}</div>
-            <div class="ceo-report-line"><span class="ceo-report-k">축률</span>
-              폭 <strong style="color:${wOver ? '#dc2626' : '#374151'};">${w}%</strong> /
-              장 <strong style="color:${lOver ? '#dc2626' : '#374151'};">${l}%</strong>
-              <span style="color:#9ca3af;font-size:11px;">(기준 2.5% 초과)</span>
-            </div>
+            ${rows.join('')}
             ${rep.notes ? `<div class="ceo-report-line"><span class="ceo-report-k">특이사항</span> ${escapeHtml(rep.notes)}</div>` : ''}
             <div class="ceo-report-line" style="color:#9ca3af;font-size:11px;"><span class="ceo-report-k">검수</span> ${escapeHtml(rep.createdBy || '-')}${when ? ' · ' + escapeHtml(when) : ''}</div>
           </div>
@@ -19329,7 +19425,7 @@ function validateBlendSum(blends, label) {
         const wTxt = (r.shrink_hold_w == null) ? '-' : r.shrink_hold_w;
         const lTxt = (r.shrink_hold_l == null) ? '-' : r.shrink_hold_l;
         if (!isAdminUser()) {
-          toast(`🚩 "${cName}" 축률 이상 (폭 ${wTxt}% / 장 ${lTxt}%) — 대표 확인 대기 중입니다`, 'warning');
+          toast(`🚩 "${cName}" 규격 이상 — 대표 확인 대기 중입니다`, 'warning');
           return;
         }
         // 관리자 → 대표 보고함으로 이동
@@ -20836,15 +20932,18 @@ function validateBlendSum(blends, label) {
           if (!confirm(emptyMsg)) return;
         }
         
-        // hotfix59/60: 축률 이상(폭/장 2.5% 초과) — 절대 바로 완료 안 됨. 대표 보고함으로 보고하고 보류.
-        if (isShrinkOver(data)) {
-          const wTxt = (data.shrink_width_pct === '' || data.shrink_width_pct == null) ? '-' : data.shrink_width_pct;
-          const lTxt = (data.shrink_length_pct === '' || data.shrink_length_pct == null) ? '-' : data.shrink_length_pct;
-          const holdMsg = `🚩 축률 이상입니다.\n\n[${wo.wo_number || ''}] "${cName}"\n폭축률 ${wTxt}% / 장축률 ${lTxt}% (기준 2.5% 초과)\n\n이 원단은 완료되지 않고\n대표 보고함으로 보고됩니다.\n대표가 보고함에서 확인·승인해야 완료됩니다.\n\n계속할까요?`;
+        // hotfix59/60/62: 규격 이상(폭/중량/축률) — 절대 바로 완료 안 됨. 대표 보고함으로 보고하고 보류.
+        const specDev = checkSpecDeviation(data, wo);
+        if (specDev.any) {
+          const lines = [];
+          if (specDev.width && specDev.width.fail) lines.push(`· 폭 ${specDev.width.actual}″ (기준 ${specDev.width.specMin}/${specDev.width.specMax}″ → 허용 ${specDev.width.lo}~${specDev.width.hi}″)`);
+          if (specDev.weight && specDev.weight.fail) lines.push(`· 중량 ${specDev.weight.actual}g/y (기준 ${specDev.weight.target} → 허용 ${specDev.weight.lo}~${specDev.weight.hi})`);
+          if (specDev.shrink && specDev.shrink.fail) lines.push(`· 축률 폭 ${specDev.shrink.w == null ? '-' : specDev.shrink.w}% / 장 ${specDev.shrink.l == null ? '-' : specDev.shrink.l}% (기준 2.5% 이하)`);
+          const holdMsg = `🚩 규격 이상입니다.\n\n[${wo.wo_number || ''}] "${cName}"\n${lines.join('\n')}\n\n이 원단은 완료되지 않고\n대표 보고함으로 보고됩니다.\n대표가 보고함에서 확인·처리해야 완료됩니다.\n\n계속할까요?`;
           if (!confirm(holdMsg)) return;
           try {
-            await setColorShrinkHold(woId, colorIdx, data, window.__qcModalReceiptNo);
-            toast(`🚩 "${cName}" 축률 이상 — 대표 보고함으로 보고되었습니다`, 'warning');
+            await setColorShrinkHold(woId, colorIdx, data, window.__qcModalReceiptNo, specDev);
+            toast(`🚩 "${cName}" 규격 이상 — 대표 보고함으로 보고되었습니다`, 'warning');
             modal.classList.remove('show');
           } catch (e) {
             toast('보류 처리 실패: ' + e.message, 'error');
@@ -21953,7 +22052,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix61';
+  const VERSION = 'v2.53 hotfix62';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix34: 편직 의뢰서 [성격] 시스템 도입 — 정규/재고/샘플/완료 4태그, 자동분류, 표 ● 배지, [성격▼] 필터, 완료체크 양방향연동
   // hotfix33: 클레임(땡처리) 내역서 양식 통일 — 부분/전체 모두 정식 표 양식 + 이미지복사/인쇄/수정 동일 버튼
