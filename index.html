@@ -9349,6 +9349,34 @@ window.addEventListener('firebase-ready', () => {
     dl.innerHTML = getFabricSpecs().map(s => `<option value="${escapeHtml(s.name)}"></option>`).join('');
   }
 
+  // hotfix70: 기존 염색가공 의뢰서에서 품목별 주의사항 수확 (품목당 가장 최근 의뢰서 기준)
+  //   반환: [{ itemName, cautions:{dyeing,processing,post}, date, woNumber }]  (workorders 절대 안 건드림 — 읽기만)
+  function collectCautionsFromWorkorders() {
+    const byItem = {};
+    (state.allWorkOrders || []).forEach(wo => {
+      if (!wo || wo.deleted || wo.type !== '염색가공') return;
+      const item = ((wo.body && wo.body.item) || '').trim();
+      if (!item) return;
+      const cz = wo.caution;
+      if (!cz || typeof cz !== 'object') return;
+      const hasAny = ['dyeing', 'processing', 'post'].some(k => Array.isArray(cz[k]) && cz[k].some(r => r && (r.label || r.value)));
+      if (!hasAny) return;
+      const key = item.toLowerCase();
+      const date = wo.date || '';
+      const prev = byItem[key];
+      if (!prev || String(date).localeCompare(String(prev.date)) >= 0) {
+        const clean = {};
+        ['dyeing', 'processing', 'post'].forEach(k => {
+          clean[k] = (Array.isArray(cz[k]) ? cz[k] : [])
+            .filter(r => r && (r.label || r.value))
+            .map(r => ({ mark: r.mark || '※', label: r.label || '', value: r.value || '' }));
+        });
+        byItem[key] = { itemName: item, cautions: clean, date, woNumber: wo.wo_number || '' };
+      }
+    });
+    return Object.values(byItem).sort((a, b) => a.itemName.localeCompare(b.itemName));
+  }
+
   // 작성 화면 공통 스탬프 div 동적 렌더 (체크 상태 보존)
   function renderCommonStamps() {
     const container = document.querySelector('.stamp-section .stamp-checks');
@@ -9424,14 +9452,23 @@ window.addEventListener('firebase-ready', () => {
   // v2.7 이력 필터/검색 변경 시 재렌더
   document.addEventListener('hiwos-rerender-history', () => renderHistory());
   
+  // hotfix71: 목록·정렬 표시용 품목 라벨 — 몸판 품목이 없거나 "없음…" 더미면 리프 품목으로 대체
+  //   (몸판만/리프만 작업 모두 지원. 리프로 대체될 땐 "리프: " 접두로 구분)
+  function woDisplayItem(wo) {
+    if (!wo) return '';
+    const b = ((wo.body && wo.body.item) || wo.item || '').trim();
+    if (b && !/^없음/.test(b)) return b;
+    const r = ((wo.rib && wo.rib.item) || '').trim();
+    if (r) return '리프: ' + r;
+    return b || '';
+  }
+
   // hotfix53: 염색가공 이력 제목 — 품목명 + 컬러/수량 자동 조합
   //   박 대표는 품목칸에 품목명만 적어도 아래 컬러+수량(절)을 끌어와 "품목 / 컬러 몸판(리프)"로 표시.
   //   단 품목칸에 이미 컬러명을 직접 적어둔 기존 데이터는 중복 방지로 그대로 사용.
+  //   hotfix71: 몸판 비었으면 "리프: …"로 표시(woDisplayItem 일원화).
   function finishHistoryTitle(wo) {
-    const bodyItem = (wo.body?.item || '').trim();
-    const ribItem = (wo.rib?.item || '').trim();
-    const bodyEmpty = !bodyItem || /^없음/.test(bodyItem);
-    const baseItem = (bodyEmpty ? (ribItem || bodyItem) : bodyItem) || '';
+    const baseItem = woDisplayItem(wo) || '';
     const colors = wo.colors || [];
     if (!colors.length) return baseItem || '-';
     const summary = colors.map(c => {
@@ -9781,7 +9818,7 @@ function validateBlendSum(blends, label) {
       const d = getFormData();
       if (d.type === '원사' && !d.supplier) { toast('수신처를 입력하세요', 'error'); return; }
       if (d.type === '편직' && !d.recipient) { toast('수신처를 입력하세요', 'error'); return; }
-      if (d.type === '염색가공' && !d.body.item) { toast('몸판 품목을 입력하세요', 'error'); return; }
+      if (d.type === '염색가공' && !d.body.item && !(d.rib && d.rib.item)) { toast('몸판 또는 리프 품목 중 하나는 입력하세요 (둘 다 가능)', 'error'); return; }
       if (d.type === 'BT' && !d.recipient) { toast('수신처(염색공장)를 입력하세요', 'error'); return; }
       if (d.type === 'BT' && !d.item) { toast('품명을 입력하세요', 'error'); return; }
       // v2.47: 공문 검증
@@ -10296,7 +10333,7 @@ function validateBlendSum(blends, label) {
         // 품목/사종 정렬: 유형별로 적절한 품목 필드 사용
         if (wo.type === '원사') return wo.yarns?.[0]?.type || '~';
         if (wo.type === '편직') return wo.items?.[0]?.item || '~';
-        if (wo.type === '염색가공') return wo.body?.item || '~';
+        if (wo.type === '염색가공') return woDisplayItem(wo) || '~';
         if (wo.type === 'BT') return wo.item || '~';
         if (wo.type === '공문') return wo.title || '~';
         return '~';
@@ -15243,8 +15280,8 @@ function validateBlendSum(blends, label) {
     // 긴급 여부 (컬러 단위가 우선, 없으면 의뢰서 단위)
     const urgent = !!c.urgent || !!wo.urgent;
     
-    // 품목 / 사종 (염색가공)
-    const bodyItem = wo.body?.item || wo.item || '';
+    // 품목 / 사종 (염색가공) — hotfix71: 몸판 없으면 리프로 대체(woDisplayItem)
+    const bodyItem = woDisplayItem(wo);
     const blend = wo.body?.blend || wo.blend || '';
     const item_text = blend ? `${bodyItem} / ${blend}` : bodyItem;
     
@@ -16052,7 +16089,7 @@ function validateBlendSum(blends, label) {
           vendorHtml = escapeHtml(wo.recipient || '-');
           
         } else if (wo.type === '염색가공') {
-          item = wo.body?.item || '-';
+          item = woDisplayItem(wo) || '-';
           if (isFinishWithColor) {
             // 컬러별 1행
             const c = wo.colors[colorIdx];
@@ -16816,7 +16853,7 @@ function validateBlendSum(blends, label) {
         <td class="col-date" rowspan="${totalRows}">${formatYMD(wo.date)}</td>
         ${compact ? '' : `<td rowspan="${totalRows}">${escapeHtml(wo.production_type || '-')}</td>`}
         ${compact ? '' : `<td rowspan="${totalRows}">${escapeHtml(wo.final_destination || '-')}</td>`}
-        <td rowspan="${totalRows}">${escapeHtml(wo.body?.item || '-')}</td>` : '';
+        <td rowspan="${totalRows}">${escapeHtml(woDisplayItem(wo) || '-')}</td>` : '';
       
       // ★ 컬러 단위 셀 (매 행)
       const _histIcon = (colorIdx >= 0) ? ` <span class="hist-icon-btn" data-hist-id="${wo.id}" data-hist-color="${colorIdx}" title="전체 작업 이력 보기" style="cursor:pointer;color:#6366f1;font-size:12px;">📜</span>` : '';
@@ -18053,7 +18090,7 @@ function validateBlendSum(blends, label) {
       else if (wo.type === '편직') summary = `${wo.recipient || '-'} / ${wo.items?.[0]?.item || '-'}`;
       else if (wo.type === 'BT') summary = `${wo.recipient || '-'} / ${wo.item || '-'}`;
       else if (wo.type === '공문') summary = `${wo.recipient || '-'} / ${wo.title || '-'}`;
-      else summary = `${wo.body?.item || '-'} / ${wo.final_destination || '-'}`;
+      else summary = `${woDisplayItem(wo) || '-'} / ${wo.final_destination || '-'}`;
       
       const delDate = wo.deleted_at?.toDate ? wo.deleted_at.toDate().toLocaleDateString('ko-KR', {month:'numeric', day:'numeric'}) : '-';
       
@@ -18157,6 +18194,7 @@ function validateBlendSum(blends, label) {
     </div>
     <div style="margin:0 0 10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
       <button class="dash-action-btn" id="fs-add-btn" style="background:#1e3a8a;color:#fff;font-weight:700;padding:6px 14px;">＋ 새 품목 추가</button>
+      <button class="dash-action-btn" id="fs-import-btn" style="background:#047857;color:#fff;font-weight:700;padding:6px 14px;" title="기존 작업의뢰서에 입력된 주의사항을 품목별로 모아 기본값으로 채웁니다">📋 기존 의뢰서에서 주의사항 가져오기</button>
       <span style="font-size:12px;color:#6b7280;font-weight:700;">총 ${specs.length}품목</span>
       <button class="dash-action-btn" id="fs-reset-btn" style="margin-left:auto;font-size:11px;color:#6b7280;" title="기본 34품목으로 되돌립니다">기본 34품목 불러오기</button>
     </div>
@@ -18203,6 +18241,28 @@ function validateBlendSum(blends, label) {
           <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:6px;">
             <button class="dash-action-btn" id="fs-modal-cancel" style="padding:7px 16px;">취소</button>
             <button class="dash-action-btn" id="fs-modal-save" style="background:#1e3a8a;color:#fff;font-weight:700;padding:7px 18px;">저장</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+    // hotfix70: 기존 의뢰서 주의사항 가져오기 미리보기 모달
+    h += `<div class="dash-modal-bg" id="fs-import-modal">
+      <div class="dash-modal" style="max-width:640px;">
+        <div class="dash-modal-head"><span>📋 기존 의뢰서에서 주의사항 가져오기</span><button class="dash-modal-close" id="fs-import-close">✕</button></div>
+        <div style="padding:14px 16px;">
+          <div style="font-size:12px;color:#555;line-height:1.6;margin-bottom:10px;">
+            기존 작업의뢰서에 입력된 주의사항을 품목별로 모았습니다 (품목당 <strong>가장 최근 의뢰서</strong> 기준).
+            반영할 품목을 선택하세요. <strong>이미 기본값이 있는 품목은 기본 해제</strong>되어 있습니다.
+          </div>
+          <div style="margin:0 0 10px;display:flex;gap:10px;align-items:center;font-size:12px;">
+            <button type="button" class="dash-action-btn" id="fs-imp-all" style="padding:4px 10px;">전체 선택</button>
+            <button type="button" class="dash-action-btn" id="fs-imp-none" style="padding:4px 10px;">전체 해제</button>
+            <span id="fs-imp-count" style="color:#6b7280;font-weight:700;margin-left:auto;"></span>
+          </div>
+          <div id="fs-import-list" style="max-height:48vh;overflow-y:auto;border:1px solid #e5e7eb;border-radius:6px;"></div>
+          <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px;">
+            <button class="dash-action-btn" id="fs-import-cancel" style="padding:7px 16px;">취소</button>
+            <button class="dash-action-btn" id="fs-import-apply" style="background:#047857;color:#fff;font-weight:700;padding:7px 18px;">선택 항목 반영</button>
           </div>
         </div>
       </div>
@@ -18517,7 +18577,7 @@ function validateBlendSum(blends, label) {
         
         if (completedColorIdxs.length === 0) {
           // 컬러가 없는 옛 의뢰서 호환 — 기존 단일 행
-          const item = wo.body?.item || '-';
+          const item = woDisplayItem(wo) || '-';
           const cl = renderColorList(wo.colors, wo.id);
           const recList = [];
           if (wo.processes?.dyeing && wo.recipients?.dyeing) recList.push(`<div class="vendor-line"><span class="vendor-tag">염색</span>${escapeHtml(wo.recipients.dyeing)}</div>`);
@@ -18548,7 +18608,7 @@ function validateBlendSum(blends, label) {
         
         // 컬러별 N행
         const totalRows = completedColorIdxs.length;
-        const item = wo.body?.item || '-';
+        const item = woDisplayItem(wo) || '-';
         const recList = [];
         if (wo.processes?.dyeing && wo.recipients?.dyeing) recList.push(`<div class="vendor-line"><span class="vendor-tag">염색</span>${escapeHtml(wo.recipients.dyeing)}</div>`);
         if (wo.processes?.processing && wo.recipients?.processing) recList.push(`<div class="vendor-line"><span class="vendor-tag">가공</span>${escapeHtml(wo.recipients.processing)}</div>`);
@@ -18672,7 +18732,7 @@ function validateBlendSum(blends, label) {
         sizeHtml = items.map(it => `<div class="size-line">${escapeHtml(String(it.jul || '-'))}절</div>`).join('') || '-';
         vendorHtml = escapeHtml(wo.recipient || '-');
       } else if (wo.type === '염색가공') {
-        item = wo.body?.item || '-';
+        item = woDisplayItem(wo) || '-';
         const cl = renderColorList(wo.colors, wo.id);
         colorHtml = cl.colorHtml;
         sizeHtml = cl.sizeHtml;
@@ -20308,6 +20368,85 @@ function validateBlendSum(blends, label) {
         if (!confirm('기본 34품목으로 되돌립니다.\n(현재 등록한 내용은 기본값으로 덮어써집니다)\n계속할까요?')) return;
         const ok = await saveFabricSpecs(SEED_FABRIC_SPECS.map(x => ({ ...x })));
         if (ok) { toast('기본 34품목을 불러왔습니다', 'success'); renderDashboard(); }
+      });
+
+      // hotfix70: 기존 의뢰서에서 주의사항 가져오기
+      const importModal = document.getElementById('fs-import-modal');
+      let importFound = [];
+      function cautionSummary(cz) {
+        const parts = [];
+        [['dyeing', '염색'], ['processing', '가공'], ['post', '후가공']].forEach(([k, lab]) => {
+          const rows = (cz && cz[k]) || [];
+          if (rows.length) parts.push(`<span style="color:#374151;"><strong>${lab}</strong> ${escapeHtml(rows.map(r => r.label || r.value).filter(Boolean).join('·'))}</span>`);
+        });
+        return parts.join(' &nbsp;/&nbsp; ') || '<span style="color:#9ca3af;">-</span>';
+      }
+      function updateImportCount() {
+        const n = importModal.querySelectorAll('.fs-imp-chk:checked').length;
+        const el = document.getElementById('fs-imp-count');
+        if (el) el.textContent = `${n}개 선택됨`;
+      }
+      function openImportModal() {
+        importFound = collectCautionsFromWorkorders();
+        const specs = getFabricSpecs();
+        const specKey = {};
+        specs.forEach(s => { specKey[String(s.name || '').trim().toLowerCase()] = s; });
+        const listEl = document.getElementById('fs-import-list');
+        if (!importFound.length) {
+          listEl.innerHTML = `<div style="padding:24px;text-align:center;color:#9ca3af;">주의사항이 입력된 기존 의뢰서를 찾지 못했습니다.</div>`;
+        } else {
+          listEl.innerHTML = importFound.map((f, i) => {
+            const sp = specKey[f.itemName.toLowerCase()];
+            const inSpec = !!sp;
+            const specHas = inSpec && sp.cautions && ['dyeing', 'processing', 'post'].some(k => Array.isArray(sp.cautions[k]) && sp.cautions[k].length);
+            const defaultOn = inSpec && !specHas;
+            let tag, tagColor;
+            if (!inSpec) { tag = '신규 추가'; tagColor = '#047857'; }
+            else if (specHas) { tag = '이미 있음 · 덮어쓰기'; tagColor = '#b45309'; }
+            else { tag = '비어 있음'; tagColor = '#2563eb'; }
+            return `<label style="display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border-bottom:1px solid #f1f5f9;cursor:pointer;">
+              <input type="checkbox" class="fs-imp-chk" data-idx="${i}" ${defaultOn ? 'checked' : ''} style="margin-top:3px;">
+              <div style="flex:1;min-width:0;">
+                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                  <strong style="font-size:13px;">${escapeHtml(f.itemName)}</strong>
+                  <span style="font-size:11px;font-weight:700;color:${tagColor};">${tag}</span>
+                  <span style="font-size:11px;color:#9ca3af;">${escapeHtml(f.woNumber || '')}${f.date ? ' · ' + escapeHtml(f.date) : ''}</span>
+                </div>
+                <div style="font-size:11px;margin-top:3px;line-height:1.5;">${cautionSummary(f.cautions)}</div>
+              </div>
+            </label>`;
+          }).join('');
+        }
+        importModal.querySelectorAll('.fs-imp-chk').forEach(c => c.addEventListener('change', updateImportCount));
+        updateImportCount();
+        importModal.classList.add('show');
+      }
+      const closeImport = () => importModal && importModal.classList.remove('show');
+      document.getElementById('fs-import-btn')?.addEventListener('click', openImportModal);
+      document.getElementById('fs-import-close')?.addEventListener('click', closeImport);
+      document.getElementById('fs-import-cancel')?.addEventListener('click', closeImport);
+      importModal?.addEventListener('click', (e) => { if (e.target === importModal) closeImport(); });
+      document.getElementById('fs-imp-all')?.addEventListener('click', () => { importModal.querySelectorAll('.fs-imp-chk').forEach(c => c.checked = true); updateImportCount(); });
+      document.getElementById('fs-imp-none')?.addEventListener('click', () => { importModal.querySelectorAll('.fs-imp-chk').forEach(c => c.checked = false); updateImportCount(); });
+      document.getElementById('fs-import-apply')?.addEventListener('click', async () => {
+        const checked = Array.from(importModal.querySelectorAll('.fs-imp-chk:checked')).map(c => importFound[parseInt(c.dataset.idx, 10)]).filter(Boolean);
+        if (!checked.length) { toast('반영할 품목을 선택하세요', 'warning'); return; }
+        const list = getFabricSpecs().map(x => ({ ...x }));
+        const idxByKey = {};
+        list.forEach((s, i) => { idxByKey[String(s.name || '').trim().toLowerCase()] = i; });
+        let updated = 0, added = 0;
+        checked.forEach(f => {
+          const key = f.itemName.toLowerCase();
+          const cz = JSON.parse(JSON.stringify(f.cautions));
+          if (idxByKey[key] != null) { list[idxByKey[key]] = { ...list[idxByKey[key]], cautions: cz }; updated++; }
+          else { list.push({ name: f.itemName, cat: '', width: '', tube: false, gy: '', blend: '', cautions: cz }); added++; }
+        });
+        const ok = await saveFabricSpecs(list);
+        if (ok) {
+          closeImport();
+          toast(`주의사항 반영 완료 — 갱신 ${updated}품목${added ? `, 신규 ${added}품목` : ''}`, 'success');
+          renderDashboard();
+        }
       });
     })();
     
@@ -21987,7 +22126,7 @@ function validateBlendSum(blends, label) {
     if (wo.type === '편직') return `${wo.items?.[0]?.item || '-'} / ${wo.items?.[0]?.color || '-'}`;
     if (wo.type === 'BT') return wo.item || '-';
     if (wo.type === '공문') return wo.title || '-';
-    return `${wo.body?.item || '-'} / ${summarizeColors(wo.colors)}`;
+    return `${woDisplayItem(wo) || '-'} / ${summarizeColors(wo.colors)}`;
   }
   
   // 생지 출고 입력 모달
@@ -22829,7 +22968,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix69';
+  const VERSION = 'v2.53 hotfix71';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix34: 편직 의뢰서 [성격] 시스템 도입 — 정규/재고/샘플/완료 4태그, 자동분류, 표 ● 배지, [성격▼] 필터, 완료체크 양방향연동
   // hotfix33: 클레임(땡처리) 내역서 양식 통일 — 부분/전체 모두 정식 표 양식 + 이미지복사/인쇄/수정 동일 버튼
