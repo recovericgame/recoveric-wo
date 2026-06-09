@@ -5669,6 +5669,7 @@
         <button class="dash-menu-btn" data-view="trash">🗑 휴지통</button>
         <button class="dash-menu-btn admin-only" data-view="stampSettings">⚙ 스탬프 설정</button>
         <button class="dash-menu-btn admin-only" data-view="fabricSpecs">📐 원단 기본 스펙</button>
+        <button class="dash-menu-btn admin-only" data-view="specTol">⚙️ 규격 허용치</button>
       </div>
     </div>
   </aside>
@@ -6298,6 +6299,16 @@ const SEED_GREIGE_ITEMS = [
   { greige: '울트라싱글 생지',   item: 'RS-500S' },
   { greige: '4S클래스 생지',     item: 'RS-850T' }
 ];
+
+// hotfix83: 규격 허용치 기본값 (settings/spec_tolerance 비었을 때). 대표가 [⚙ 규격 허용치]에서 변경 가능.
+const DEFAULT_SPEC_TOL = {
+  width_upper: 3,      // 폭 상한 여유 (기준 최대폭 +N인치)
+  width_lower: 0,      // 폭 하한 여유 (기준 최소폭 -N인치)
+  weight_mode: 'pct',  // 중량 판정 방식: 'pct'(%) 또는 'gy'(절대 g/y)
+  weight_pct: 5,       // 중량 ±N%
+  weight_gy: 30,       // 중량 ±N g/y
+  shrink: 2.5          // 축률 N% 초과 시 보고
+};
 
 // hotfix66: 원단 기본 스펙 34품목 (단가표 기준, 단가·피그먼트 의류 제외). settings/fabric_specs 비었을 때 기본값.
 //   tube=false 기본 (단가표 폭은 실폭 기준). 품목명은 단가표 표기 그대로 — 필요 시 화면에서 수정 가능.
@@ -9352,6 +9363,13 @@ window.addEventListener('firebase-ready', () => {
       if (typeof refreshFabricSpecDatalist === 'function') refreshFabricSpecDatalist();
       if (state.uiMode === 'dashboard' && state.dashView === 'fabricSpecs') renderDashboard();
     }, err => console.warn('[fabricSpec sub]', err.message));
+    // hotfix83: 규격 허용치 구독 (대표 보고 판정 기준)
+    onSnapshot(doc(db, 'settings', 'spec_tolerance'), snap => {
+      state.specTol = snap.exists()
+        ? Object.assign({}, DEFAULT_SPEC_TOL, snap.data())
+        : Object.assign({}, DEFAULT_SPEC_TOL);
+      if (state.uiMode === 'dashboard' && state.dashView === 'specTol') renderDashboard();
+    }, err => console.warn('[specTol sub]', err.message));
   }
   
   // 마스터 변경 시 화면 동적 갱신
@@ -9416,6 +9434,24 @@ window.addEventListener('firebase-ready', () => {
     state.fabricSpecs = cleaned;
     return true;
   }
+  // hotfix83: 규격 허용치 저장 (관리자만) — settings/spec_tolerance
+  async function saveSpecTol(obj) {
+    if (!isAdminUser()) { toast('관리자만 변경할 수 있습니다', 'error'); return false; }
+    const clean = {
+      width_upper: Math.max(0, num(obj.width_upper) || 0),
+      width_lower: Math.max(0, num(obj.width_lower) || 0),
+      weight_mode: (obj.weight_mode === 'gy') ? 'gy' : 'pct',
+      weight_pct: Math.max(0, num(obj.weight_pct) || 0),
+      weight_gy: Math.max(0, num(obj.weight_gy) || 0),
+      shrink: Math.max(0, num(obj.shrink) || 0)
+    };
+    await setDoc(doc(db, 'settings', 'spec_tolerance'), Object.assign({}, clean, {
+      updated_at: serverTimestamp(), updated_by: state.user?.email || 'unknown'
+    }));
+    state.specTol = Object.assign({}, DEFAULT_SPEC_TOL, clean);
+    return true;
+  }
+  function getSpecTol() { return Object.assign({}, DEFAULT_SPEC_TOL, (state && state.specTol) || {}); }
   // 현재 스펙 목록(저장본 우선, 없으면 기본 34품목)
   function getFabricSpecs() {
     return (state.fabricSpecs && state.fabricSpecs.length) ? state.fabricSpecs : SEED_FABRIC_SPECS.slice();
@@ -10116,7 +10152,7 @@ function validateBlendSum(blends, label) {
       view = 'overview';
     }
     // hotfix66: 원단 기본 스펙도 관리자 전용
-    if (view === 'fabricSpecs' && !isAdminUser()) {
+    if ((view === 'fabricSpecs' || view === 'specTol') && !isAdminUser()) {
       view = 'overview';
     }
     // v2.51 step3: 일일 보고는 페이지 전환 없이 모달만 진입
@@ -11419,8 +11455,9 @@ function validateBlendSum(blends, label) {
   function checkSpecDeviation(qcData, wo) {
     const body = (wo && wo.body) || {};
     const out = { width: null, weight: null, shrink: null, any: false };
+    const T = Object.assign({}, DEFAULT_SPEC_TOL, (state && state.specTol) || {}); // hotfix83: 대표 설정 허용치
 
-    // 폭: 실제폭(=입력폭×더블배수)이 [최소, 최대+3] 밖이면 어긋남
+    // 폭: 실제폭(=입력폭×더블배수)이 [최소-하한여유, 최대+상한여유] 밖이면 어긋남
     //     튜브 생산이면 기준 폭은 튜브(접힘) 기준이므로 ×2 해서 실폭으로 환산 후 비교
     const ws = parseWidthSpec(body.spec_width);
     const actualW = calcActualWidth(qcData.width_inch, !!qcData.width_double);
@@ -11428,26 +11465,35 @@ function validateBlendSum(blends, label) {
       const tube = !!body.spec_width_tube;
       const specMin = tube ? ws.min * 2 : ws.min;
       const specMax = tube ? ws.max * 2 : ws.max;
-      const lo = specMin, hi = specMax + WIDTH_MAX_TOLERANCE;
+      const lo = specMin - (num(T.width_lower) || 0), hi = specMax + (num(T.width_upper) || 0);
       const fail = actualW < lo || actualW > hi;
       out.width = { actual: actualW, lo, hi, specMin, specMax, tube, rawMin: ws.min, rawMax: ws.max, fail };
       if (fail) out.any = true;
     }
-    // 중량(g/y): 기준 ±5% 밖이면 어긋남
+    // 중량(g/y): 대표 설정 방식(% 또는 절대 g/y) 기준 밖이면 어긋남
     const tgy = parseFloat(body.spec_gy);
     const actualGy = (qcData.weight_g_per_y === '' || qcData.weight_g_per_y == null) ? null : parseFloat(qcData.weight_g_per_y);
     if (isFinite(tgy) && tgy > 0 && actualGy != null && isFinite(actualGy)) {
-      const lo = Math.round(tgy * (1 - WEIGHT_TOLERANCE_PCT) * 10) / 10;
-      const hi = Math.round(tgy * (1 + WEIGHT_TOLERANCE_PCT) * 10) / 10;
+      let lo, hi;
+      if (T.weight_mode === 'gy') {
+        const m = Math.abs(num(T.weight_gy) || 0);
+        lo = Math.round((tgy - m) * 10) / 10;
+        hi = Math.round((tgy + m) * 10) / 10;
+      } else {
+        const p = (num(T.weight_pct) || 0) / 100;
+        lo = Math.round(tgy * (1 - p) * 10) / 10;
+        hi = Math.round(tgy * (1 + p) * 10) / 10;
+      }
       const fail = actualGy < lo || actualGy > hi;
-      out.weight = { actual: actualGy, target: tgy, lo, hi, fail };
+      out.weight = { actual: actualGy, target: tgy, lo, hi, mode: (T.weight_mode || 'pct'), fail };
       if (fail) out.any = true;
     }
-    // 축률: 폭/장 중 하나라도 2.5% 초과
+    // 축률: 폭/장 중 하나라도 설정 기준 초과
+    const shrinkLimit = num(T.shrink) || SHRINK_ALERT_THRESHOLD;
     const sw = (qcData.shrink_width_pct === '' || qcData.shrink_width_pct == null) ? null : parseFloat(qcData.shrink_width_pct);
     const sl = (qcData.shrink_length_pct === '' || qcData.shrink_length_pct == null) ? null : parseFloat(qcData.shrink_length_pct);
-    const swFail = (sw != null && isFinite(sw) && sw > SHRINK_ALERT_THRESHOLD);
-    const slFail = (sl != null && isFinite(sl) && sl > SHRINK_ALERT_THRESHOLD);
+    const swFail = (sw != null && isFinite(sw) && sw > shrinkLimit);
+    const slFail = (sl != null && isFinite(sl) && sl > shrinkLimit);
     if (sw != null || sl != null) {
       out.shrink = { w: (sw != null && isFinite(sw)) ? sw : null, l: (sl != null && isFinite(sl)) ? sl : null, fail: swFail || slFail };
       if (swFail || slFail) out.any = true;
@@ -13280,6 +13326,7 @@ function validateBlendSum(blends, label) {
       });
     })();
 
+    const wEl = document.getElementById('fr-width');
     const dEl = document.getElementById('fr-double');
     const sqmEl = document.getElementById('fr-sqm');
     const gyEl = document.getElementById('fr-gy');
@@ -18518,6 +18565,57 @@ function validateBlendSum(blends, label) {
   // 편집 중인 임시 데이터 (저장 전까지 화면에만)
   let editingStamps = { common: null, bt: null };
 
+  // hotfix83: 규격 허용치 설정 화면 (관리자 전용) — 현재값 표시 + 변경
+  function renderSpecTol() {
+    const T = getSpecTol();
+    return `
+      <div style="max-width:560px;margin:0 auto;">
+        <div style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:20px;">
+          <p style="color:#6b7280;font-size:13px;margin:0 0 18px;line-height:1.6;">대표 보고(규격 이상) 판정에 쓰이는 허용치입니다.<br>변경하면 <b>이후 검수부터 바로 적용</b>됩니다. (저장된 의뢰서는 건드리지 않습니다)</p>
+
+          <div style="margin-bottom:20px;">
+            <div style="font-weight:800;margin-bottom:8px;">폭 허용치 (인치)</div>
+            <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;">
+              <label>기준 최소폭 − <input type="number" step="0.5" id="st_width_lower" value="${T.width_lower}" style="width:72px;padding:6px;border:1px solid #ccc;border-radius:6px;"> 까지</label>
+              <label>기준 최대폭 + <input type="number" step="0.5" id="st_width_upper" value="${T.width_upper}" style="width:72px;padding:6px;border:1px solid #ccc;border-radius:6px;"> 까지</label>
+            </div>
+            <div style="color:#9ca3af;font-size:12px;margin-top:6px;">현재: 아래 −${T.width_lower}″ / 위 +${T.width_upper}″</div>
+          </div>
+
+          <div style="margin-bottom:20px;">
+            <div style="font-weight:800;margin-bottom:8px;">중량 허용치 (검수 때 골라 입력)</div>
+            <div style="display:flex;flex-direction:column;gap:8px;">
+              <label><input type="radio" name="st_wmode" value="pct" ${T.weight_mode !== 'gy' ? 'checked' : ''}> 퍼센트 ± <input type="number" step="0.5" id="st_weight_pct" value="${T.weight_pct}" style="width:64px;padding:6px;border:1px solid #ccc;border-radius:6px;"> %</label>
+              <label><input type="radio" name="st_wmode" value="gy" ${T.weight_mode === 'gy' ? 'checked' : ''}> 절대중량 ± <input type="number" step="1" id="st_weight_gy" value="${T.weight_gy}" style="width:64px;padding:6px;border:1px solid #ccc;border-radius:6px;"> g/y</label>
+            </div>
+            <div style="color:#9ca3af;font-size:12px;margin-top:6px;">현재 방식: ${T.weight_mode === 'gy' ? ('절대 ±' + T.weight_gy + ' g/y') : ('퍼센트 ±' + T.weight_pct + '%')}</div>
+          </div>
+
+          <div style="margin-bottom:22px;">
+            <div style="font-weight:800;margin-bottom:8px;">축률 허용치</div>
+            <label><input type="number" step="0.1" id="st_shrink" value="${T.shrink}" style="width:72px;padding:6px;border:1px solid #ccc;border-radius:6px;"> % 초과 시 보고</label>
+            <div style="color:#9ca3af;font-size:12px;margin-top:6px;">현재: ${T.shrink}% 초과</div>
+          </div>
+
+          <button type="button" onclick="window.__saveSpecTol()" style="width:100%;padding:14px;border:none;border-radius:8px;background:#1a1a1a;color:#fff;font-size:15px;font-weight:800;cursor:pointer;">허용치 저장</button>
+        </div>
+      </div>`;
+  }
+  window.__saveSpecTol = async function () {
+    const mode = (document.querySelector('input[name="st_wmode"]:checked') || {}).value || 'pct';
+    try {
+      const ok = await saveSpecTol({
+        width_upper: document.getElementById('st_width_upper').value,
+        width_lower: document.getElementById('st_width_lower').value,
+        weight_mode: mode,
+        weight_pct: document.getElementById('st_weight_pct').value,
+        weight_gy: document.getElementById('st_weight_gy').value,
+        shrink: document.getElementById('st_shrink').value
+      });
+      if (ok) { toast('규격 허용치를 저장했습니다', 'success'); if (typeof renderDashboard === 'function') renderDashboard(); }
+    } catch (e) { toast('저장 실패: ' + e.message, 'error'); }
+  };
+
   // hotfix66: 원단 기본 스펙 편집 상태 (-1=신규)
   let editingSpecIdx = null;
   function renderFabricSpecs() {
@@ -19304,6 +19402,9 @@ function validateBlendSum(blends, label) {
       title = '⚙ 스탬프 설정 (관리자 전용)';
       body = renderStampSettings();
       addBtn.style.display = 'none';
+    } else if (state.dashView === 'specTol') {
+      title = '⚙️ 규격 허용치 (관리자 전용)';
+      body = renderSpecTol();
     } else if (state.dashView === 'fabricSpecs') {
       title = '📐 원단 기본 스펙 (관리자 전용)';
       body = renderFabricSpecs();
@@ -23447,7 +23548,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix82';
+  const VERSION = 'v2.53 hotfix84';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix34: 편직 의뢰서 [성격] 시스템 도입 — 정규/재고/샘플/완료 4태그, 자동분류, 표 ● 배지, [성격▼] 필터, 완료체크 양방향연동
   // hotfix33: 클레임(땡처리) 내역서 양식 통일 — 부분/전체 모두 정식 표 양식 + 이미지복사/인쇄/수정 동일 버튼
