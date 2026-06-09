@@ -116,7 +116,7 @@
   
   .history-item { background: #fff; padding: 10px 70px 10px 10px; border-radius: 3px; margin-bottom: 6px; cursor: pointer; font-size: 12px; transition: background 0.2s; position: relative; border-left: 3px solid #ccc; border-top: 1px solid #eee; border-right: 1px solid #eee; border-bottom: 1px solid #eee; }
   .history-item:hover { background: #f5f5f5; }
-  .history-item.active { background: #000; color: #fff; border-left-color: #000; }
+  .history-item.active { background: #1e3a8a; color: #fff; border-left-color: #1e3a8a; }
   .history-item.active .item-num, .history-item.active .item-meta { color: #ccc; }
   .history-item.active .item-title { color: #fff; }
   
@@ -155,6 +155,15 @@
   }
   .history-item .item-edit-btn:hover { background: #2563eb; color: #fff; }
   .history-item.active .item-edit-btn { background: #fff; color: #1e3a8a; }
+  /* hotfix77: 편집 중(active) 항목은 [수정] → [취소]로 토글 (CSS만으로 전환, 재렌더 불필요) */
+  .history-item .item-cancel-btn {
+    display: none; background: #dc2626; border: none; color: #fff;
+    border-radius: 3px; cursor: pointer; font-size: 11px; font-weight: 700; font-family: inherit; padding: 3px 10px;
+  }
+  .history-item .item-cancel-btn:hover { background: #b91c1c; color: #fff; }
+  .history-item.active .item-edit-btn { display: none; }
+  .history-item.active .item-cancel-btn { display: inline-block; background: #fff; color: #dc2626; }
+  .history-item.active .item-cancel-btn:hover { background: #fee2e2; color: #b91c1c; }
   
   .history-empty { color: #999; font-size: 11px; padding: 20px 0; text-align: center; }
   
@@ -9615,6 +9624,7 @@ window.addEventListener('firebase-ready', () => {
         <div class="history-item ${active}" data-id="${wo.id}" data-type="${wo.type || ''}">
           <div class="item-btns">
             <button class="item-edit-btn" data-id="${wo.id}" title="원본을 수정합니다">수정</button>
+            <button class="item-cancel-btn" data-id="${wo.id}" title="편집을 취소합니다">취소</button>
             <button class="item-copy-btn" data-id="${wo.id}" title="새 의뢰서로 복사합니다">복사</button>
           </div>
           <div class="item-num"><span class="item-type">${wo.type || '-'}</span>${escapeHtml(wo.wo_number) || ''}</div>
@@ -9625,8 +9635,8 @@ window.addEventListener('firebase-ready', () => {
     
     list.querySelectorAll('.history-item').forEach(el => {
       el.addEventListener('click', (e) => {
-        // hotfix76: [수정]/[복사] 버튼 클릭은 각자 처리 — 항목 클릭은 '미리보기(읽기전용)'로 원본 보호
-        if (e.target.closest('.item-copy-btn') || e.target.closest('.item-edit-btn')) return;
+        // hotfix76/77: [수정]/[취소]/[복사] 버튼은 각자 처리 — 항목 클릭은 '미리보기(읽기전용)'로 원본 보호
+        if (e.target.closest('.item-copy-btn') || e.target.closest('.item-edit-btn') || e.target.closest('.item-cancel-btn')) return;
         const wo = state.allWorkOrders.find(x => x.id === el.dataset.id);
         if (wo) showPreviewModal(wo);
       });
@@ -9636,12 +9646,22 @@ window.addEventListener('firebase-ready', () => {
     list.querySelectorAll('.item-edit-btn').forEach(btn => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
-        if (state.isDirty && !confirm('저장되지 않은 변경사항이 있습니다. 계속하시겠습니까?')) return;
+        if (state.isDirty && !confirm('입력 중인 내용이 있습니다.\n저장하지 않고 다른 의뢰서를 수정할까요?')) return;
         const wo = state.allWorkOrders.find(x => x.id === btn.dataset.id);
         if (wo) {
           if (wo.type === '생지출고') { openGreigeOrderEditModal(wo.id, 'edit'); return; }
           loadWorkOrder(wo);
         }
+      });
+    });
+
+    // hotfix77: [취소] 버튼 — 편집 중인 항목에 표시. 편집을 취소하고 원본은 그대로 둠
+    list.querySelectorAll('.item-cancel-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (state.isDirty && !confirm('입력하던 내용이 있습니다.\n편집을 취소할까요? (원본은 그대로 유지됩니다)')) return;
+        resetForm();
+        toast('편집 취소 — 원본은 그대로입니다', 'info');
       });
     });
     
@@ -22665,8 +22685,8 @@ window.addEventListener('beforeunload', e => {
     if (!isMobile()) return;
     const target = e.target.closest('.mode-btn, .dash-menu-btn, .new-btn, .history-item, .type-btn');
     if (target) {
-      // history-item의 복사 버튼은 닫지 않음
-      if (e.target.closest('.item-copy-btn')) return;
+      // history-item의 복사/취소 버튼은 닫지 않음 (목록에 머무름)
+      if (e.target.closest('.item-copy-btn') || e.target.closest('.item-cancel-btn')) return;
       setTimeout(closeDrawer, 150);
     }
   });
@@ -23127,7 +23147,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix76';
+  const VERSION = 'v2.53 hotfix77';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix34: 편직 의뢰서 [성격] 시스템 도입 — 정규/재고/샘플/완료 4태그, 자동분류, 표 ● 배지, [성격▼] 필터, 완료체크 양방향연동
   // hotfix33: 클레임(땡처리) 내역서 양식 통일 — 부분/전체 모두 정식 표 양식 + 이미지복사/인쇄/수정 동일 버튼
