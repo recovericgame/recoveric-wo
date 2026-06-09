@@ -7660,7 +7660,9 @@ const PROTECTED_COLOR_FIELDS = [
   // v2.53 hotfix40: 수정(fix) 사이클 — 같은 컬러를 작업장에 다시 보내 손보는 절차 (재염과 별개)
   'fix_active', 'fix_body', 'fix_rib', 'fix_history',
   // v2.53 hotfix68: 수정 재검수 불합격 → 대표 보고 보류
-  'fix_ceo_hold', 'fix_spec_dev'
+  'fix_ceo_hold', 'fix_spec_dev',
+  // v2.53 hotfix81: 수정 취소 시 직전 상태 복원용 스냅샷
+  'fix_prev_color_qc', 'fix_prev_completed'
 ];
 
 // ===== hotfix34: 편직 성격(kind) 시스템 =====
@@ -12884,7 +12886,8 @@ function validateBlendSum(blends, label) {
     c.fix_body = (num(c.fix_body) || 0) + fb;
     c.fix_rib  = (num(c.fix_rib)  || 0) + fr;
     if (!Array.isArray(c.fix_history)) c.fix_history = [];
-    c.fix_history.push({ body: fb, rib: fr, note: fnote, sent_at: now, sent_by: state.user.email, resolved_at: null });
+    const _fixHist = { body: fb, rib: fr, note: fnote, sent_at: now, sent_by: state.user.email, resolved_at: null };
+    c.fix_history.push(_fixHist);
     // 불량 상태 해제 → 해당 차수는 통과 처리(나머지 합격분 완료), 수정분은 fix 트랙
     migrateColorReceipts(c);
     let targetIdx = (receiptNo !== undefined && receiptNo !== null)
@@ -12893,6 +12896,17 @@ function validateBlendSum(blends, label) {
     if (targetIdx < 0) targetIdx = getActiveReceiptIndex(c);
     if (targetIdx >= 0) {
       const r = c.receipts[targetIdx];
+      // hotfix81: 수정 직전 차수 상태 스냅샷 (취소 시 복원용). 첫 진입만 저장.
+      if (r.fix_prev_qc === undefined) {
+        r.fix_prev_qc = {
+          qc_status: r.qc_status || null,
+          qc_done_at: r.qc_done_at || null,
+          defect_at: r.defect_at || null,
+          defect_by: r.defect_by || null,
+          shrink_hold: !!r.shrink_hold
+        };
+      }
+      _fixHist.receipt_no = r.receipt_no;
       r.qc_status = 'done';
       r.qc_done_at = now;
       r.defect_at = null; r.defect_by = null;
@@ -12904,6 +12918,11 @@ function validateBlendSum(blends, label) {
       }
     }
     // 컬러 단위 불량 흔적 정리 (완료는 아님 — fix_active로 미완 유지)
+    // hotfix81: 컬러 직전 상태도 첫 진입 시 스냅샷
+    if (c.fix_prev_color_qc === undefined) {
+      c.fix_prev_color_qc = c.qc_status || null;
+      c.fix_prev_completed = (c.completed === true);
+    }
     if (c.qc_status === 'defect') c.qc_status = 'done';
     delete c.defect_at; delete c.defect_by;
     
@@ -12943,7 +12962,7 @@ function validateBlendSum(blends, label) {
     });
   }
 
-  // hotfix76: 수정 취소(되돌리기) — 잘못 보낸 수정을 무르고, 해당 차수를 불량(재결정)으로 복귀
+  // hotfix76/81: 수정 취소(되돌리기) — 잘못 보낸 수정을 무르고, 해당 차수를 수정 직전 상태로 복원
   async function setColorFixCancel(woId, colorIdx) {
     const wo = state.allWorkOrders.find(w => w.id === woId);
     if (!wo) throw new Error('의뢰서를 찾을 수 없음');
@@ -12962,20 +12981,48 @@ function validateBlendSum(blends, label) {
     c.fix_rib = 0;
     delete c.fix_ceo_hold;
     delete c.fix_spec_dev;
-    // 수정 보낼 때 통과(done)로 바꿨던 차수를 다시 불량으로 → 기존 불량 결정 흐름 복귀
-    let idx = getActiveReceiptIndex(c);
-    if (idx < 0 && Array.isArray(c.receipts) && c.receipts.length) idx = c.receipts.length - 1;
-    if (idx >= 0) {
-      const r = c.receipts[idx];
-      r.qc_status = 'defect';
-      r.defect_at = now;
-      r.defect_by = state.user.email;
+    // hotfix81: 수정 보낼 때 손댄 차수를 "수정 직전 상태"로 복원 (불량 강제 금지)
+    const _touched = new Set();
+    if (Array.isArray(c.fix_history)) {
+      c.fix_history.forEach(h => { if (h && h.cancelled && h.receipt_no != null) _touched.add(h.receipt_no); });
     }
-    c.qc_status = 'defect';
-    c.defect_at = now;
-    c.defect_by = state.user.email;
-    c.completed = false;
-    delete c.completed_at;
+    let _restored = false;
+    if (Array.isArray(c.receipts)) {
+      c.receipts.forEach(r => {
+        if (r && r.fix_prev_qc && (_touched.size === 0 || _touched.has(r.receipt_no))) {
+          const p = r.fix_prev_qc;
+          r.qc_status = p.qc_status || 'done';
+          r.qc_done_at = p.qc_done_at || r.qc_done_at || null;
+          r.defect_at = p.defect_at || null;
+          r.defect_by = p.defect_by || null;
+          r.shrink_hold = !!p.shrink_hold;
+          delete r.fix_prev_qc;
+          _restored = true;
+        }
+      });
+    }
+    if (!_restored) {
+      // 직전 스냅샷이 없는 과거 데이터 → 마지막 확인 상태(정상 합격)로 복귀 (불량 아님)
+      let idx = getActiveReceiptIndex(c);
+      if (idx < 0 && Array.isArray(c.receipts) && c.receipts.length) idx = c.receipts.length - 1;
+      if (idx >= 0) {
+        const r = c.receipts[idx];
+        r.qc_status = 'done';
+        if (!r.qc_done_at) r.qc_done_at = now;
+        r.defect_at = null; r.defect_by = null;
+      }
+    }
+    // 컬러 레벨도 직전 상태로 복원 (스냅샷 있으면 정확히, 없으면 정상으로)
+    if (c.fix_prev_color_qc !== undefined) {
+      c.qc_status = c.fix_prev_color_qc || 'done';
+      c.completed = (c.fix_prev_completed === true);
+      if (!c.completed) delete c.completed_at;
+      delete c.fix_prev_color_qc;
+      delete c.fix_prev_completed;
+    } else {
+      c.qc_status = 'done';
+      delete c.defect_at; delete c.defect_by;
+    }
     const updates = { colors, updated_at: serverTimestamp(), updated_by: state.user.email };
     const newStamps = syncFixStamp(wo, colors);
     if (newStamps) updates.stamps = newStamps;
@@ -13163,7 +13210,7 @@ function validateBlendSum(blends, label) {
             <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;">
               <button type="button" id="fe-save" style="padding:7px 14px;border:1px solid #ea580c;border-radius:6px;background:#f97316;color:#fff;font-weight:700;cursor:pointer;">수정 내용 저장</button>
               <button type="button" id="fe-cancel-fix" style="padding:7px 14px;border:1px solid #b91c1c;border-radius:6px;background:#fff;color:#b91c1c;font-weight:700;cursor:pointer;">수정 취소(되돌리기)</button>
-              <span style="font-size:11px;color:#9a3412;align-self:center;">취소 시 이 차수는 불량으로 돌아가 다시 결정합니다</span>
+              <span style="font-size:11px;color:#9a3412;align-self:center;">취소 시 이 차수는 수정 전 마지막 확인 상태로 되돌립니다</span>
             </div>
           </div>
         </details>
@@ -13223,11 +13270,11 @@ function validateBlendSum(blends, label) {
       });
       const cancelFixBtn = document.getElementById('fe-cancel-fix');
       if (cancelFixBtn) cancelFixBtn.addEventListener('click', async () => {
-        if (!confirm(`[${wo.wo_number || ''}] "${cName}"\n이 수정 건을 취소(되돌리기)합니다.\n해당 차수는 불량으로 돌아가 다시 결정합니다.\n\n계속할까요?`)) return;
+        if (!confirm(`[${wo.wo_number || ''}] "${cName}"\n이 수정 건을 취소(되돌리기)합니다.\n해당 차수는 수정 전 마지막 확인 상태로 되돌립니다.\n\n계속할까요?`)) return;
         try {
           await setColorFixCancel(woId, colorIdx);
           closeM();
-          toast(`🔧 "${cName}" 수정 취소 — 불량으로 복귀`, 'warning');
+          toast(`🔧 "${cName}" 수정 취소 — 수정 전 상태로 복귀`, 'warning');
           renderDashboard();
         } catch (err) { toast('수정 취소 실패: ' + err.message, 'error'); }
       });
@@ -23400,7 +23447,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix80';
+  const VERSION = 'v2.53 hotfix81';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix34: 편직 의뢰서 [성격] 시스템 도입 — 정규/재고/샘플/완료 4태그, 자동분류, 표 ● 배지, [성격▼] 필터, 완료체크 양방향연동
   // hotfix33: 클레임(땡처리) 내역서 양식 통일 — 부분/전체 모두 정식 표 양식 + 이미지복사/인쇄/수정 동일 버튼
