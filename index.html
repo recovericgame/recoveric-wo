@@ -16218,10 +16218,11 @@ function validateBlendSum(blends, label) {
   // hotfix101: 진행 행 3구역 분류 (박 대표 확정 정의)
   //   · 직원 확인 대기(위): QC 대기 / ✓QC(n차) / 📥 재검수 대기(돌아옴 처리돼 직원이 재검수할 차례)
   //   · 담당자(대표) 확인 대기(아래): 🔧 수정중 n/n / 📤 확인 대기(완료보고) / 🚩 규격이상·불량 / 완료·부족(none)
+  //   (hotfix102: 일반 진행 구역 폐지 — 두 구역만. 직원 외 모든 건은 담당자 구역으로.)
   function classifyOverviewSection(wo, colorIdx) {
-    if (!wo || wo.type !== '염색가공' || colorIdx < 0) return 'normal';
+    if (!wo || wo.type !== '염색가공' || colorIdx < 0) return 'manager';
     const c = wo.colors?.[colorIdx];
-    if (!c) return 'normal';
+    if (!c) return 'manager';
     // 직원: 돌아온 수정분 재검수 대기 (수정중이지만 돌아옴 처리됨)
     if (c.fix_active === true && c.fix_returned === true) return 'worker';
     // 담당자: 수정중(아직 작업장) / 완료보고 대기 / 규격이상·불량
@@ -16232,9 +16233,8 @@ function validateBlendSum(blends, label) {
     // 직원: 입고돼 QC 미완료(pending)
     if (qs === 'pending') return 'worker';
     if (isShortageActive(c)) return 'worker';
-    // none(입고 전, 완료·부족 버튼) 등 — 담당자 영역(완료는 대표가 누름)
-    if (qs === 'none') return 'manager';
-    return 'normal';
+    // none(입고 전, 완료·부족) 등 나머지 전부 — 담당자 영역
+    return 'manager';
   }
 
   function renderOverview() {
@@ -16605,7 +16605,7 @@ function validateBlendSum(blends, label) {
       //   그룹 내 행 중 가장 우선(worker>manager>normal? — 직원이 할 일이 있으면 직원 구역)
       //   기준: 한 의뢰서에 직원 작업과 담당자 확인이 섞이면, "직원 작업"을 우선으로 본다
       //   (직원이 먼저 끝내야 담당자 차례가 오므로).
-      const sectionRank = { worker: 0, manager: 1, normal: 2 };
+      const sectionRank = { worker: 0, manager: 1 };
       const woSection = {};
       overviewRows.forEach(r => {
         const sec = classifyOverviewSection(r.wo, r.colorIdx);
@@ -16642,12 +16642,11 @@ function validateBlendSum(blends, label) {
       // hotfix97: 구역 머리행 삽입용 — 직전 구역 추적
       let __lastSection = null;
       const __sectionMeta = {
-        worker:  { label: '🔧 직원 작업 대기',   sub: 'QC·수정·부족분 입고 — 직원이 처리할 일',  bg: '#fff7ed', bd: '#f97316', fg: '#9a3412' },
-        manager: { label: '🚩 담당자 확인 대기', sub: '완료 보고·규격 이상·재검수 — 대표/담당 확인', bg: '#fef2f2', bd: '#dc2626', fg: '#991b1b' },
-        normal:  { label: '▫ 일반 진행',          sub: '특이사항 없이 진행 중',                       bg: '#f8fafc', bd: '#94a3b8', fg: '#475569' }
+        worker:  { label: '🔧 직원 확인 대기',   sub: 'QC · 재검수 대기 — 직원이 처리할 일',          bg: '#fff7ed', bd: '#f97316', fg: '#9a3412' },
+        manager: { label: '🚩 담당자 확인 대기', sub: '수정중 · 완료 · 부족 · 규격 이상 — 대표/담당 확인', bg: '#fef2f2', bd: '#dc2626', fg: '#991b1b' }
       };
       const __sectionsEnabled = (tf === 'all' || tf === '염색가공');
-      const __sectionCounts = { worker: 0, manager: 0, normal: 0 };
+      const __sectionCounts = { worker: 0, manager: 0 };
       if (__sectionsEnabled) {
         const _seen = new Set();
         overviewRows.forEach(r => { if (!_seen.has(r.wo.id)) { _seen.add(r.wo.id); __sectionCounts[woSection[r.wo.id]]++; } });
@@ -24049,7 +24048,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix101';
+  const VERSION = 'v2.53 hotfix102';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix34: 편직 의뢰서 [성격] 시스템 도입 — 정규/재고/샘플/완료 4태그, 자동분류, 표 ● 배지, [성격▼] 필터, 완료체크 양방향연동
   // hotfix33: 클레임(땡처리) 내역서 양식 통일 — 부분/전체 모두 정식 표 양식 + 이미지복사/인쇄/수정 동일 버튼
