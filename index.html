@@ -16215,23 +16215,25 @@ function validateBlendSum(blends, label) {
     return { colorHtml: colorLines, sizeHtml: sizeLines };
   }
   
-  // hotfix100: 진행 행 3구역 분류 (박 대표 기준 — 직원 구역이 맨 위)
-  //   · 직원 작업 대기: 실제 입고돼 QC를 해야 하는 것(pending) / 부족분 입고 대기
-  //   · 담당자(대표) 확인 대기: 수정중(보냄·돌아옴) / 규격(축률)이상·불량 / 완료 보고 대기
-  //   · 일반 진행: 아직 입고 전(none)이거나 그 외
+  // hotfix101: 진행 행 3구역 분류 (박 대표 확정 정의)
+  //   · 직원 확인 대기(위): QC 대기 / ✓QC(n차) / 📥 재검수 대기(돌아옴 처리돼 직원이 재검수할 차례)
+  //   · 담당자(대표) 확인 대기(아래): 🔧 수정중 n/n / 📤 확인 대기(완료보고) / 🚩 규격이상·불량 / 완료·부족(none)
   function classifyOverviewSection(wo, colorIdx) {
     if (!wo || wo.type !== '염색가공' || colorIdx < 0) return 'normal';
     const c = wo.colors?.[colorIdx];
     if (!c) return 'normal';
-    // 담당자(대표) 확인 라인
-    if (hasCeoConfirmPending(c)) return 'manager';            // 완료 보고 대기
+    // 직원: 돌아온 수정분 재검수 대기 (수정중이지만 돌아옴 처리됨)
+    if (c.fix_active === true && c.fix_returned === true) return 'worker';
+    // 담당자: 수정중(아직 작업장) / 완료보고 대기 / 규격이상·불량
+    if (c.fix_active === true) return 'manager';            // 수정중 n/n
+    if (hasCeoConfirmPending(c)) return 'manager';          // 📤 확인 대기(완료 보고)
     const qs = getColorQcStatus(wo, colorIdx);
-    if (qs === 'shrink' || qs === 'defect') return 'manager'; // 규격 이상 / 불량
-    if (c.fix_active === true) return 'manager';              // 수정중(보냄·돌아옴 모두)
-    // 직원 작업 대기: 입고돼 QC 미완료(pending) / 부족분 입고 대기
+    if (qs === 'shrink' || qs === 'defect') return 'manager';
+    // 직원: 입고돼 QC 미완료(pending)
     if (qs === 'pending') return 'worker';
     if (isShortageActive(c)) return 'worker';
-    // 입고 전(none) 등 — 일반 진행
+    // none(입고 전, 완료·부족 버튼) 등 — 담당자 영역(완료는 대표가 누름)
+    if (qs === 'none') return 'manager';
     return 'normal';
   }
 
@@ -16851,6 +16853,9 @@ function validateBlendSum(blends, label) {
             completeCell = `<td class="col-action col-act-complete"><button class="dash-action-btn dash-shrink-review-btn" style="background:#dc2626;color:#fff;border-color:#b91c1c;" data-id="${wo.id}" data-color-idx="${colorIdx}" title="규격 이상(폭/중량/축률) — ${isAdminUser() ? '클릭하여 확인·처리' : '대표 확인 대기 중'}">🚩 규격 이상${receiptLabel}</button>${shortageBtn}</td>`;
           } else if (qcSt === 'pending') {
             completeCell = `<td class="col-action col-act-complete"><button class="dash-action-btn qc-pending-btn" data-id="${wo.id}" data-color-idx="${colorIdx}" data-qc-action="open">QC 대기${receiptLabel}</button>${shortageBtn}</td>`;
+          } else if (qcSt === 'done' && c && hasCeoConfirmPending(c)) {
+            // hotfix101: QC 합격했으나 대표 확인 대기 — ✓QC가 아니라 [📤 확인 대기]로 구분
+            completeCell = `<td class="col-action col-act-complete"><button class="dash-action-btn dash-goto-complete-rep" style="background:#16a34a;color:#fff;border-color:#15803d;font-weight:700;" data-id="${wo.id}" data-color-idx="${colorIdx}" title="완료 보고에서 대표 확인 대기 중 — 클릭하여 완료 보고로 이동">📤 확인 대기${receiptLabel}</button>${shortageBtn}</td>`;
           } else if (qcSt === 'done') {
             completeCell = `<td class="col-action col-act-complete"><button class="dash-action-btn qc-done-btn" data-id="${wo.id}" data-color-idx="${colorIdx}" data-qc-action="open">✓ QC${receiptLabel}</button>${shortageBtn}</td>`;
           } else {
@@ -17566,10 +17571,10 @@ function validateBlendSum(blends, label) {
           completeCell = `<td class="col-action"><button class="dash-action-btn dash-shrink-review-btn" style="background:#dc2626;color:#fff;border-color:#b91c1c;" data-id="${wo.id}" data-color-idx="${colorIdx}" title="규격 이상(폭/중량/축률) — ${isAdminUser() ? '클릭하여 확인·처리' : '대표 확인 대기 중'}">🚩 규격 이상${receiptLabel}</button>${shortageBtn}</td>`;
         } else if (qcSt === 'pending') {
           completeCell = `<td class="col-action"><button class="dash-action-btn qc-pending-btn" data-id="${wo.id}" data-color-idx="${colorIdx}" data-qc-action="open">QC 대기${receiptLabel}</button>${shortageBtn}</td>`;
+        } else if (qcSt === 'done' && c && hasCeoConfirmPending(c)) {
+          // hotfix101: QC 합격·대표 확인 대기 — [📤 확인 대기] (완료 보고로 이동)
+          completeCell = `<td class="col-action"><button class="dash-action-btn dash-goto-complete-rep" style="background:#16a34a;color:#fff;border-color:#15803d;font-weight:700;" data-id="${wo.id}" data-color-idx="${colorIdx}" title="완료 보고에서 대표 확인 대기 중 — 클릭하여 완료 보고로 이동">📤 확인 대기${receiptLabel}</button>${shortageBtn}</td>`;
         } else if (qcSt === 'done') {
-          // v2.53 hotfix2: QC done인데 컬러가 아직 미완료(completed!==true)면
-          // [완료 확정] 버튼 같이 노출 — 부족분 정산이 꼬였거나 차수 판정이 막혔을 때 탈출구
-          const colorDone = c && c.completed === true;
           const allReceiptsOk = c && areAllReceiptsResolved(c);
           const noShortage = c && !isShortageActive(c);
           const canForceComplete = !colorDone && allReceiptsOk && noShortage;
@@ -20901,6 +20906,15 @@ function validateBlendSum(blends, label) {
       });
     }
     
+    // hotfix101: [📤 확인 대기] → 완료 보고 화면으로 이동
+    document.querySelectorAll('#dash-body .dash-goto-complete-rep').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (isAdminUser()) { switchDashView('completeReports'); }
+        else { toast('완료 보고는 대표가 확인합니다 — 검수는 끝났습니다', 'info'); }
+      });
+    });
+
     // hotfix68: [🔧 수정중] → 수정 회수 재검수창 (합격해야만 완료)
     document.querySelectorAll('#dash-body .dash-fix-resolve-btn').forEach(btn => {
       btn.addEventListener('click', (e) => {
@@ -24035,7 +24049,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix100';
+  const VERSION = 'v2.53 hotfix101';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix34: 편직 의뢰서 [성격] 시스템 도입 — 정규/재고/샘플/완료 4태그, 자동분류, 표 ● 배지, [성격▼] 필터, 완료체크 양방향연동
   // hotfix33: 클레임(땡처리) 내역서 양식 통일 — 부분/전체 모두 정식 표 양식 + 이미지복사/인쇄/수정 동일 버튼
