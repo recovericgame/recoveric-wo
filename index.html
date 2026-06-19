@@ -7685,7 +7685,9 @@ const PROTECTED_COLOR_FIELDS = [
   // v2.53 hotfix89: 수정분 작업장에서 돌아옴 표식 (재검수 대기 강조용)
   'fix_returned', 'fix_returned_at', 'fix_returned_by',
   // v2.53 hotfix91: 완료 전 대표 확인 대기 (정상 QC도 대표 OK 후 완료)
-  'completed_blocked_by_ceo'
+  'completed_blocked_by_ceo',
+  // v2.53 hotfix93: 수정 재검수 로트(LOT) 번호 — 추적용
+  'fix_lot_no'
 ];
 
 // ===== hotfix34: 편직 성격(kind) 시스템 =====
@@ -11664,6 +11666,7 @@ function validateBlendSum(blends, label) {
             item: wo.body?.item || '',
             qc, dev,
             fixCount,
+            lotNo: c.fix_lot_no || (qc && qc.lot_no) || '',
             fixHistory: Array.isArray(c.fix_history) ? c.fix_history : [],
             createdAt: r.qc_done_at || '',
             createdBy: r.qc_done_by || ''
@@ -13213,6 +13216,7 @@ function validateBlendSum(blends, label) {
     const c = colors[colorIdx];
     if (!c) throw new Error('컬러 인덱스 오류');
     const now = new Date().toISOString();
+    if (recheck && recheck.lot_no) c.fix_lot_no = recheck.lot_no;
     c.fix_active = false;
     c.fix_body = 0;
     c.fix_rib = 0;
@@ -13265,6 +13269,7 @@ function validateBlendSum(blends, label) {
     const c = colors[colorIdx];
     if (!c) throw new Error('컬러 인덱스 오류');
     const now = new Date().toISOString();
+    if (recheck && recheck.lot_no) c.fix_lot_no = recheck.lot_no;
     if (!Array.isArray(c.fix_history)) c.fix_history = [];
     const last = c.fix_history.length ? c.fix_history[c.fix_history.length - 1] : null;
     const prevBody = last ? (num(last.body) || 0) : (num(c.fix_body) || 0);
@@ -13303,6 +13308,7 @@ function validateBlendSum(blends, label) {
     const c = colors[colorIdx];
     if (!c) throw new Error('컬러 인덱스 오류');
     const now = new Date().toISOString();
+    if (recheck && recheck.lot_no) c.fix_lot_no = recheck.lot_no;
     if (Array.isArray(c.fix_history) && c.fix_history.length) {
       const last = c.fix_history[c.fix_history.length - 1];
       if (last && !last.resolved_at) {
@@ -13326,6 +13332,7 @@ function validateBlendSum(blends, label) {
     if (!c) throw new Error('컬러 인덱스 오류');
     const now = new Date().toISOString();
     migrateColorReceipts(c);
+    if (recheck && recheck.lot_no) c.fix_lot_no = recheck.lot_no;
     if (Array.isArray(c.fix_history) && c.fix_history.length) {
       const last = c.fix_history[c.fix_history.length - 1];
       if (last && !last.resolved_at) {
@@ -13434,6 +13441,10 @@ function validateBlendSum(blends, label) {
             <input type="number" step="0.1" id="fr-shrink-l" placeholder="예: 2.0" style="width:100%;padding:8px;border:1px solid #cbd5e1;border-radius:6px;margin-top:4px;box-sizing:border-box;">
           </div>
           <div style="grid-column:1/3;">
+            <label style="font-size:12px;font-weight:700;color:#334155;">🏷 로트(LOT) 번호</label>
+            <input type="text" id="fr-lot" lang="en" placeholder="염색 LOT 번호 — 나중에 추적용" value="${escapeHtml((c.fix_lot_no || '') )}" style="width:100%;padding:8px;border:1px solid #cbd5e1;border-radius:6px;margin-top:4px;box-sizing:border-box;font-weight:700;letter-spacing:0.5px;">
+          </div>
+          <div style="grid-column:1/3;">
             <label style="font-size:12px;font-weight:700;color:#334155;">특이사항 (선택)</label>
             <textarea id="fr-notes" placeholder="재검수 특이사항" style="width:100%;padding:8px;border:1px solid #cbd5e1;border-radius:6px;margin-top:4px;box-sizing:border-box;min-height:48px;"></textarea>
           </div>
@@ -13502,6 +13513,7 @@ function validateBlendSum(blends, label) {
         weight_g_per_y: gyEl.value,
         shrink_width_pct: swEl.value,
         shrink_length_pct: slEl.value,
+        lot_no: (document.getElementById('fr-lot')?.value || '').trim(),
         notes: notesEl.value
       };
     }
@@ -18327,6 +18339,7 @@ function validateBlendSum(blends, label) {
         </div>
         <div class="ceo-report-body">
           <div class="ceo-report-line"><span class="ceo-report-k">품목</span> ${escapeHtml(rep.item || '-')}</div>
+          ${rep.lotNo ? `<div class="ceo-report-line"><span class="ceo-report-k">🏷 LOT</span> <strong style="color:#1e3a8a;background:#eff6ff;padding:1px 8px;border-radius:4px;">${escapeHtml(rep.lotNo)}</strong></div>` : ''}
           ${devRow(rep.dev)}
           ${(!rep.dev) ? `<div class="ceo-report-line"><span class="ceo-report-k">검수</span> 폭 ${qc.width_inch != null ? qc.width_inch + '″' : '-'} · 중량 ${qc.weight_g_per_y != null ? qc.weight_g_per_y + 'g/y' : '-'} · 축률 ${qc.shrink_width_pct != null ? qc.shrink_width_pct + '%' : '-'}/${qc.shrink_length_pct != null ? qc.shrink_length_pct + '%' : '-'}</div>` : ''}
           ${fixTimeline(rep)}
@@ -23909,7 +23922,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix92';
+  const VERSION = 'v2.53 hotfix93';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix34: 편직 의뢰서 [성격] 시스템 도입 — 정규/재고/샘플/완료 4태그, 자동분류, 표 ● 배지, [성격▼] 필터, 완료체크 양방향연동
   // hotfix33: 클레임(땡처리) 내역서 양식 통일 — 부분/전체 모두 정식 표 양식 + 이미지복사/인쇄/수정 동일 버튼
