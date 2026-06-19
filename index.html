@@ -4529,6 +4529,7 @@
   body.is-not-admin .dash-menu-btn[data-view="stampSettings"],
   body.is-not-admin .dash-menu-btn[data-view="fabricSpecs"],
   body.is-not-admin .dash-menu-btn[data-view="ceoReports"],
+  body.is-not-admin .dash-menu-btn[data-view="completeReports"],
   body.is-not-admin [data-restore],
   body.is-not-admin [data-purge] {
     display: none !important;
@@ -5666,7 +5667,8 @@
         <button class="dash-menu-btn submenu" data-view="knit">ㄴ 편직 진행</button>
         <button class="dash-menu-btn submenu" data-view="finish">ㄴ 염색가공 진행</button>
         <button class="dash-menu-btn submenu" data-view="bt">ㄴ B/T 진행</button>
-        <button class="dash-menu-btn admin-only" data-view="ceoReports" style="background:#fef2f2;border:1px solid #fecaca;color:#b91c1c;font-weight:800;">🚩 대표 보고<span class="ceo-report-badge" id="ceo-report-badge" style="display:none;">0</span></button>
+        <button class="dash-menu-btn admin-only" data-view="completeReports" style="background:#f0fdf4;border:1px solid #bbf7d0;color:#15803d;font-weight:800;">✅ 완료 보고<span class="ceo-report-badge" id="complete-report-badge" style="display:none;background:#16a34a;">0</span></button>
+        <button class="dash-menu-btn admin-only" data-view="ceoReports" style="background:#fef2f2;border:1px solid #fecaca;color:#b91c1c;font-weight:800;">⚠ 불량 보고<span class="ceo-report-badge" id="ceo-report-badge" style="display:none;">0</span></button>
         <button class="dash-menu-btn" data-view="of">📄 공문 목록</button>
         <button class="dash-menu-btn" data-view="gs">🚚 생지출고 목록</button>
         <button class="dash-menu-btn" data-view="claims">⚠ 클레임(땡처리)<span class="claims-menu-badge" id="claims-menu-badge" style="display:none;">0</span></button>
@@ -7681,7 +7683,9 @@ const PROTECTED_COLOR_FIELDS = [
   // v2.53 hotfix81: 수정 취소 시 직전 상태 복원용 스냅샷
   'fix_prev_color_qc', 'fix_prev_completed',
   // v2.53 hotfix89: 수정분 작업장에서 돌아옴 표식 (재검수 대기 강조용)
-  'fix_returned', 'fix_returned_at', 'fix_returned_by'
+  'fix_returned', 'fix_returned_at', 'fix_returned_by',
+  // v2.53 hotfix91: 완료 전 대표 확인 대기 (정상 QC도 대표 OK 후 완료)
+  'completed_blocked_by_ceo'
 ];
 
 // ===== hotfix34: 편직 성격(kind) 시스템 =====
@@ -10158,7 +10162,7 @@ function validateBlendSum(blends, label) {
       view = 'overview';
     }
     // hotfix60: 대표 보고함은 관리자 전용
-    if (view === 'ceoReports' && !isAdminUser()) {
+    if ((view === 'ceoReports' || view === 'completeReports') && !isAdminUser()) {
       view = 'overview';
     }
     // hotfix66: 원단 기본 스펙도 관리자 전용
@@ -11391,6 +11395,10 @@ function validateBlendSum(blends, label) {
     r.qc_status = 'done';
     r.qc_done_at = now;
     r.qc_done_by = state.user.email;
+    // hotfix91: 정상 QC 합격도 대표 확인을 거쳐 완료된다. 이 차수를 "대표 확인 대기"로 표시.
+    r.ceo_confirm_pending = true;
+    r.ceo_confirm_at = null;
+    r.ceo_confirm_by = null;
     
     // 의뢰서 단위(c.qc, c.qc_status)는 활성 receipt 기준으로 동기화 (검색/필터용)
     // 일관성을 위해 가장 마지막 receipt 또는 활성 receipt 데이터 반영
@@ -11399,40 +11407,61 @@ function validateBlendSum(blends, label) {
     c.qc_done_at = r.qc_done_at;
     c.qc_done_by = r.qc_done_by;
     
-    // 컬러 완료 판정: 모든 receipts 처리 완료 + 부족분 정산
-    const allReceiptsResolved = areAllReceiptsResolved(c);
-    const shortageBlocked = isShortageActive(c);
-    
-    if (allReceiptsResolved && !shortageBlocked) {
-      c.completed = true;
-      c.completed_at = c.completed_at || now;
-      if (c.urgent) {
-        c.urgent = false;
-        c.urgent_cleared_at = now;
-        c.urgent_cleared_reason = 'auto_on_complete';
-      }
-    } else {
-      c.completed = false;
-      delete c.completed_at;
-    }
-    
-    // 모든 컬러 완료 → 의뢰서 자동 완료
-    // v2.53 hotfix20: completed 플래그가 아니라 isColorClosed(재염/땡처리로 닫힌 컬러 포함) 기준.
-    //   재염 이관된 컬러는 completed=false여도 닫힘 → 마지막 차수 QC 완료 시 의뢰서가 완료로 넘어가야 함.
-    const allDone = colors.every(cc => isColorClosed(cc));
+    // hotfix91: 대표 확인 대기 중에는 컬러/의뢰서 완료 금지 (isColorClosed가 막음).
+    //   대표가 [확인 완료]를 누르면 confirmCeoComplete에서 비로소 완료 판정.
+    c.completed = false;
+    delete c.completed_at;
+    c.completed_blocked_by_ceo = true;
     
     const updates = {
       colors,
       updated_at: serverTimestamp(),
       updated_by: state.user.email
     };
-    if (allDone) {
-      updates.completed = true;
-      updates.completed_at = serverTimestamp();
-    } else if (wo.completed) {
+    if (wo.completed) {
       updates.completed = false;
       updates.completed_at = null;
     }
+    await updateDoc(doc(db, 'workorders', woId), updates);
+    return false;
+  }
+
+  // hotfix91: 대표 [확인 완료] — 대기 중인 차수의 ceo_confirm_pending 해제 후 정식 완료 판정.
+  //   setColorQcDone의 원래 완료 로직(컬러 완료 + 의뢰서 자동 완료)을 여기서 수행한다.
+  async function confirmCeoComplete(woId, colorIdx, receiptNo) {
+    const wo = state.allWorkOrders.find(w => w.id === woId);
+    if (!wo) throw new Error('의뢰서를 찾을 수 없음');
+    const colors = JSON.parse(JSON.stringify(wo.colors || []));
+    const c = colors[colorIdx];
+    if (!c) throw new Error('컬러 인덱스 오류');
+    migrateColorReceipts(c);
+    const now = new Date().toISOString();
+    // 대상: receiptNo 지정 시 그 차수, 아니면 대기 중인 모든 done 차수
+    (c.receipts || []).forEach(r => {
+      if (!r) return;
+      const hit = (receiptNo === undefined || receiptNo === null) ? true : (r.receipt_no === receiptNo);
+      if (hit && r.qc_status === 'done' && r.ceo_confirm_pending === true) {
+        r.ceo_confirm_pending = false;
+        r.ceo_confirm_at = now;
+        r.ceo_confirm_by = state.user.email;
+      }
+    });
+    delete c.completed_blocked_by_ceo;
+    // 정식 완료 판정 (setColorQcDone 원래 꼬리 로직)
+    const allReceiptsResolved = areAllReceiptsResolved(c);
+    const shortageBlocked = isShortageActive(c);
+    if (allReceiptsResolved && !shortageBlocked && !hasCeoConfirmPending(c) && c.fix_active !== true) {
+      c.completed = true;
+      c.completed_at = c.completed_at || now;
+      if (c.urgent) { c.urgent = false; c.urgent_cleared_at = now; c.urgent_cleared_reason = 'auto_on_complete'; }
+    } else {
+      c.completed = false;
+      delete c.completed_at;
+    }
+    const allDone = colors.every(cc => isColorClosed(cc));
+    const updates = { colors, updated_at: serverTimestamp(), updated_by: state.user.email };
+    if (allDone) { updates.completed = true; updates.completed_at = serverTimestamp(); }
+    else if (wo.completed) { updates.completed = false; updates.completed_at = null; }
     await updateDoc(doc(db, 'workorders', woId), updates);
     return allDone;
   }
@@ -11603,13 +11632,69 @@ function validateBlendSum(blends, label) {
     return reports;
   }
   function countCeoReports() { return collectCeoReports().length; }
+
+  // hotfix91: 완료 보고 수집기 — QC 합격해 "대표 확인 대기" 중인 차수를 모은다.
+  //   대표가 [확인 완료]를 누르면 비로소 완료된다. (일괄 확인 지원)
+  function collectCompleteReports() {
+    const reports = [];
+    (state.allWorkOrders || []).forEach(wo => {
+      if (wo.deleted || wo.type !== '염색가공') return;
+      (wo.colors || []).forEach((c, ci) => {
+        if (!c || !Array.isArray(c.receipts)) return;
+        c.receipts.forEach(r => {
+          if (!r || r.qc_status !== 'done' || r.ceo_confirm_pending !== true) return;
+          const qc = r.qc || {};
+          const data = {
+            width_inch: qc.width_inch, width_double: qc.width_double,
+            weight_g_per_y: qc.weight_g_per_y, weight_g_per_sqm: qc.weight_g_per_sqm,
+            shrink_width_pct: qc.shrink_width_pct, shrink_length_pct: qc.shrink_length_pct,
+            notes: qc.notes
+          };
+          let dev = null;
+          try { dev = checkSpecDeviation(data, wo); } catch (e) { dev = null; }
+          const fixCount = Array.isArray(c.fix_history) ? c.fix_history.length : 0;
+          reports.push({
+            type: 'complete',
+            isFixPassed: !!r.fix_recheck_passed,
+            woId: wo.id,
+            woNumber: wo.wo_number || '',
+            colorIdx: ci,
+            colorName: c.name || `컬러 #${ci + 1}`,
+            receiptNo: r.receipt_no,
+            item: wo.body?.item || '',
+            qc, dev,
+            fixCount,
+            fixHistory: Array.isArray(c.fix_history) ? c.fix_history : [],
+            createdAt: r.qc_done_at || '',
+            createdBy: r.qc_done_by || ''
+          });
+        });
+      });
+    });
+    reports.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+    return reports;
+  }
+  function countCompleteReports() { return collectCompleteReports().length; }
   function updateCeoReportBadge() {
     const badge = document.getElementById('ceo-report-badge');
-    if (!badge) return;
-    if (!isAdminUser()) { badge.style.display = 'none'; return; }
-    const n = countCeoReports();
-    if (n > 0) { badge.textContent = n > 99 ? '99+' : String(n); badge.style.display = 'inline-block'; }
-    else badge.style.display = 'none';
+    if (badge) {
+      if (!isAdminUser()) { badge.style.display = 'none'; }
+      else {
+        const n = countCeoReports();
+        if (n > 0) { badge.textContent = n > 99 ? '99+' : String(n); badge.style.display = 'inline-block'; }
+        else badge.style.display = 'none';
+      }
+    }
+    // hotfix91: 완료 보고 배지
+    const cbadge = document.getElementById('complete-report-badge');
+    if (cbadge) {
+      if (!isAdminUser()) { cbadge.style.display = 'none'; }
+      else {
+        const cn = countCompleteReports();
+        if (cn > 0) { cbadge.textContent = cn > 99 ? '99+' : String(cn); cbadge.style.display = 'inline-block'; }
+        else cbadge.style.display = 'none';
+      }
+    }
     if (typeof updateMobileDailyBadge === 'function') updateMobileDailyBadge();
   }
   // ===== hotfix60 대표 보고 수집기 끝 =====
@@ -11818,6 +11903,13 @@ function validateBlendSum(blends, label) {
     return getUnresolvedShortageBody(c) > 0 || getUnresolvedShortageRib(c) > 0;
   }
 
+  // hotfix91: 완료 전 대표 확인 대기 — done 처리됐으나 대표가 아직 OK 안 한 차수가 있으면 true.
+  //   (정상 QC 합격 건도 대표가 [확인 완료]를 눌러야 비로소 컬러/의뢰서가 완료된다.)
+  function hasCeoConfirmPending(c) {
+    if (!c || !Array.isArray(c.receipts)) return false;
+    return c.receipts.some(r => r && r.qc_status === 'done' && r.ceo_confirm_pending === true);
+  }
+
   // v2.53 hotfix14: 컬러가 "닫혔는지"(더 진행할 일이 없는지) 판정 — 의뢰서 자동 완료 판정용.
   //   v2.53 hotfix17: 재염을 부족분 일부만 보낸 경우 버그 수정.
   //   닫힘 = ① 정상 완료(completed===true)
@@ -11826,6 +11918,8 @@ function validateBlendSum(blends, label) {
   //   ※ 재염을 일부만(예: 부족 2/3 중 1/1) 보냈으면 미처리 부족(1/2)이 남으므로 닫지 않음.
   function isColorClosed(c) {
     if (!c) return false;
+    // hotfix91: 대표 확인 대기 중이면 아직 닫히지 않음 (대표 OK 전까지 완료 금지)
+    if (hasCeoConfirmPending(c)) return false;
     // hotfix40: 수정(fix) 진행 중이면 아직 닫히지 않음 — 수정분이 돌아와 해결돼야 완료
     if (c.fix_active === true) return false;
     if (c.completed === true) return true;
@@ -13133,12 +13227,28 @@ function validateBlendSum(blends, label) {
         if (recheck) last.recheck = Object.assign({}, recheck, { passed: true, at: now, by: state.user.email });
       }
     }
+    // hotfix91: 수정 재검수 합격도 대표 [확인 완료]를 거쳐 완료된다.
+    //   활성/마지막 done 차수를 대표 확인 대기로 표시 → 완료 보고함에 노출.
+    migrateColorReceipts(c);
+    if (Array.isArray(c.receipts) && c.receipts.length) {
+      let ti = getActiveReceiptIndex(c);
+      if (ti < 0) ti = c.receipts.length - 1;
+      const rr = c.receipts[ti];
+      if (rr) {
+        if (rr.qc_status !== 'done') { rr.qc_status = 'done'; rr.qc_done_at = now; rr.qc_done_by = state.user.email; }
+        rr.ceo_confirm_pending = true;
+        rr.ceo_confirm_at = null; rr.ceo_confirm_by = null;
+        rr.fix_recheck_passed = true;  // 완료 보고함에서 "수정 합격" 표식
+      }
+    }
+    c.completed = false; delete c.completed_at; c.completed_blocked_by_ceo = true;
     // 수정 해결로 컬러가 완벽히 닫혔으면 의뢰서 자동 완료 판정 반영
     const updates = { colors, updated_at: serverTimestamp(), updated_by: state.user.email };
     const newStamps = syncFixStamp(wo, colors);
     if (newStamps) updates.stamps = newStamps;
     const allDone = colors.length > 0 && colors.every(cc => isColorClosed(cc));
     if (allDone && !wo.completed) { updates.completed = true; updates.completed_at = serverTimestamp(); }
+    else if (wo.completed) { updates.completed = false; updates.completed_at = null; }
     await updateDoc(doc(db, 'workorders', woId), updates);
     if (newStamps) wo.stamps = newStamps;
   }
@@ -13331,7 +13441,7 @@ function validateBlendSum(blends, label) {
         <div id="fr-result" style="margin-top:12px;"></div>
         <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px;flex-wrap:wrap;" id="fr-footer">
           <button type="button" id="fr-cancel" style="padding:9px 16px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;cursor:pointer;">취소</button>
-          <button type="button" id="fr-judge" style="padding:9px 18px;border:1px solid #1e40af;border-radius:6px;background:#1e40af;color:#fff;font-weight:700;cursor:pointer;">✓ 재검수 판정</button>
+          <button type="button" id="fr-judge" style="padding:9px 18px;border:1px solid #1e40af;border-radius:6px;background:#1e40af;color:#fff;font-weight:700;cursor:pointer;">✓ 재검수 확인</button>
         </div>
       </div>`;
     modal.classList.add('show');
@@ -13416,15 +13526,16 @@ function validateBlendSum(blends, label) {
         resultEl.innerHTML = `<div style="padding:10px 12px;background:#f0fdf4;border:1px solid #bbf7d0;border-left:4px solid #16a34a;border-radius:6px;"><div style="font-weight:700;color:#15803d;margin-bottom:4px;">✓ 기준 안 — 합격</div>${rows}</div>`;
         footerEl.innerHTML = `
           <button type="button" id="fr-cancel2" style="padding:9px 16px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;cursor:pointer;">취소</button>
-          <button type="button" id="fr-pass" style="padding:9px 18px;border:1px solid #15803d;border-radius:6px;background:#16a34a;color:#fff;font-weight:700;cursor:pointer;">✓ 수정 완료 처리</button>`;
+          <button type="button" id="fr-pass" style="padding:9px 18px;border:1px solid #15803d;border-radius:6px;background:#16a34a;color:#fff;font-weight:700;cursor:pointer;">✓ 합격 — 완료 보고로 올리기</button>`;
         document.getElementById('fr-cancel2').addEventListener('click', closeModal);
         document.getElementById('fr-pass').addEventListener('click', async () => {
           try {
             await setColorFixResolve(woId, colorIdx, data);
             closeModal();
-            toast(`🔧 "${cName}" 수정 완료 — 재검수 합격`, 'success');
+            toast(`🔧 "${cName}" 재검수 합격 — 완료 보고함에서 확인해 주세요`, 'success');
+            if (isAdminUser()) state.dashView = 'completeReports';
             renderDashboard();
-          } catch (err) { toast('수정 완료 실패: ' + err.message, 'error'); }
+          } catch (err) { toast('처리 실패: ' + err.message, 'error'); }
         });
       } else {
         resultEl.innerHTML = `<div style="padding:10px 12px;background:#fef2f2;border:1px solid #fecaca;border-left:4px solid #dc2626;border-radius:6px;"><div style="font-weight:700;color:#b91c1c;margin-bottom:4px;">⚠ 기준 벗어남 — 불합격</div>${rows}<div style="font-size:11px;color:#991b1b;margin-top:6px;">아래에서 처리 방법을 선택하세요.</div></div>`;
@@ -15578,7 +15689,13 @@ function validateBlendSum(blends, label) {
   }
   
   // hotfix40: 수정 작업 중인 컬러인지 (일일보고 "🔧 수정 작업" 칸 + 완료판정용)
+  // hotfix89: 돌아온 수정분(fix_returned)은 거래처 작업이 끝나 우리 재검수 차례이므로
+  //   거래처 일일보고의 "수정 작업"에서는 제외한다(작업장에 남아있는 것만 수정 작업).
   function isFixColor(c) {
+    return !!(c && c.fix_active === true && c.fix_returned !== true);
+  }
+  // hotfix89: fix_active이지만 화면 완료판정 등에서 "수정 트랙(돌아옴 포함)"을 봐야 할 때
+  function isFixTrackColor(c) {
     return !!(c && c.fix_active === true);
   }
   
@@ -18150,6 +18267,82 @@ function validateBlendSum(blends, label) {
     });
   }
   
+  // ===== hotfix91: 완료 보고 화면 =====
+  //   QC 합격해 "대표 확인 대기" 중인 차수를 카드로 모아 보여준다.
+  //   대표가 각 카드 [✓ 확인 완료] 또는 상단 [✓ 전체 일괄 확인]으로 완료시킨다.
+  function renderCompleteReports() {
+    if (!isAdminUser()) return `<div class="dash-empty">대표 전용 화면입니다.</div>`;
+    const reports = collectCompleteReports();
+    let html = `<div style="font-size:12px;color:#555;margin:4px 0 12px;line-height:1.6;">
+      QC 합격해 <strong>대표 확인을 기다리는</strong> 건입니다. 검수값과 이력을 확인하고 <strong>[✓ 확인 완료]</strong>를 누르면 비로소 완료됩니다.
+    </div>`;
+    if (reports.length === 0) {
+      html += `<div class="dash-empty">확인 대기 중인 완료 건이 없습니다. 👍</div>`;
+      return html;
+    }
+    html += `<div style="margin:0 0 14px;padding:11px 13px;background:#f0fdf4;border:1px solid #bbf7d0;border-left:4px solid #16a34a;border-radius:6px;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+      <span style="font-size:13px;color:#15803d;font-weight:700;">✅ 확인 대기 ${reports.length}건</span>
+      <span style="display:flex;gap:8px;flex-wrap:wrap;">
+        <label style="display:inline-flex;align-items:center;gap:5px;font-size:12px;color:#15803d;font-weight:700;cursor:pointer;background:#fff;border:1px solid #bbf7d0;border-radius:6px;padding:5px 10px;"><input type="checkbox" id="complete-rep-select-all"> 전체 선택</label>
+        <button class="dash-action-btn complete-rep-sel-btn" style="background:#fff;color:#15803d;border-color:#16a34a;font-weight:700;padding:7px 14px;">✓ 선택 확인 (<span id="complete-rep-sel-count">0</span>)</button>
+        <button class="dash-action-btn complete-rep-all-btn" style="background:#16a34a;color:#fff;border-color:#15803d;font-weight:800;padding:7px 16px;">✓ 전체 일괄 확인 (${reports.length}건)</button>
+      </span>
+    </div>`;
+
+    const fmtDM = (s) => { try { return new Date(s).toLocaleDateString('ko-KR', {month:'numeric', day:'numeric'}); } catch(e){ return ''; } };
+    const devRow = (dev) => {
+      if (!dev) return '';
+      const rows = [];
+      if (dev.width) { const cc = dev.width.fail ? '#dc2626' : '#16a34a'; rows.push(`<div class="ceo-report-line"><span class="ceo-report-k">폭</span> 실측 <strong style="color:${cc};">${dev.width.actual}″</strong> / 허용 ${dev.width.lo}~${dev.width.hi}″ ${dev.width.fail ? '<strong style="color:#dc2626;">⚠</strong>' : '<span style="color:#16a34a;">정상</span>'}</div>`); }
+      if (dev.weight) { const cc = dev.weight.fail ? '#dc2626' : '#16a34a'; rows.push(`<div class="ceo-report-line"><span class="ceo-report-k">중량</span> 실측 <strong style="color:${cc};">${dev.weight.actual}g/y</strong> / 허용 ${dev.weight.lo}~${dev.weight.hi} ${dev.weight.fail ? '<strong style="color:#dc2626;">⚠</strong>' : '<span style="color:#16a34a;">정상</span>'}</div>`); }
+      if (dev.shrink) { const cc = dev.shrink.fail ? '#dc2626' : '#16a34a'; rows.push(`<div class="ceo-report-line"><span class="ceo-report-k">축률</span> 폭 <strong style="color:${cc};">${dev.shrink.w == null ? '-' : dev.shrink.w}%</strong> / 장 <strong style="color:${cc};">${dev.shrink.l == null ? '-' : dev.shrink.l}%</strong> ${dev.shrink.fail ? '<strong style="color:#dc2626;">⚠</strong>' : '<span style="color:#16a34a;">정상</span>'}</div>`); }
+      return rows.join('');
+    };
+    const fixTimeline = (rep) => {
+      if (!rep.fixCount || !Array.isArray(rep.fixHistory) || !rep.fixHistory.length) return '';
+      const steps = rep.fixHistory.map((h, i) => {
+        const sent = h.sent_at ? fmtDM(h.sent_at) : '';
+        const qty = `${num(h.body)||0}/${num(h.rib)||0}절`;
+        let res = '';
+        if (h.recheck && h.recheck.passed) res = ' → 합격';
+        else if (h.recheck && (h.recheck.defect || h.recheck.passed === false)) res = ' → 불합격';
+        else if (h.resolved_at) res = ' → 완료';
+        return `${i+1}차 ${sent} ${qty}${res}`;
+      });
+      return `<div class="ceo-report-line"><span class="ceo-report-k">수정이력</span> <span style="color:#9a3412;font-size:11.5px;">${escapeHtml(steps.join('  ·  '))}</span></div>`;
+    };
+
+    html += `<div style="display:flex;flex-direction:column;gap:10px;">`;
+    reports.forEach(rep => {
+      const when = rep.createdAt ? new Date(rep.createdAt).toLocaleString('ko-KR') : '';
+      const qc = rep.qc || {};
+      const fixBadge = rep.fixCount > 0 ? `<span class="ceo-report-tag" style="background:#f97316;">🔧 ${rep.fixCount}차 수정</span>` : '';
+      const theme = '#16a34a';
+      html += `<div class="ceo-report-card" style="border-color:#bbf7d0;border-left-color:#16a34a;" data-rep-type="complete" data-id="${rep.woId}" data-color-idx="${rep.colorIdx}" data-receipt-no="${rep.receiptNo}">
+        <div class="ceo-report-head">
+          <input type="checkbox" class="complete-rep-check" data-id="${rep.woId}" data-color-idx="${rep.colorIdx}" data-receipt-no="${rep.receiptNo}" style="width:17px;height:17px;cursor:pointer;accent-color:#16a34a;">
+          <span class="ceo-report-tag" style="background:${theme};">✅ 확인 대기</span>
+          ${fixBadge}
+          <span class="ceo-report-title">[${escapeHtml(rep.woNumber)}] ${escapeHtml(rep.colorName)}${rep.receiptNo ? ` · ${rep.receiptNo}차` : ''}</span>
+        </div>
+        <div class="ceo-report-body">
+          <div class="ceo-report-line"><span class="ceo-report-k">품목</span> ${escapeHtml(rep.item || '-')}</div>
+          ${devRow(rep.dev)}
+          ${(!rep.dev) ? `<div class="ceo-report-line"><span class="ceo-report-k">검수</span> 폭 ${qc.width_inch != null ? qc.width_inch + '″' : '-'} · 중량 ${qc.weight_g_per_y != null ? qc.weight_g_per_y + 'g/y' : '-'} · 축률 ${qc.shrink_width_pct != null ? qc.shrink_width_pct + '%' : '-'}/${qc.shrink_length_pct != null ? qc.shrink_length_pct + '%' : '-'}</div>` : ''}
+          ${fixTimeline(rep)}
+          ${qc.notes ? `<div class="ceo-report-line"><span class="ceo-report-k">특이사항</span> ${escapeHtml(qc.notes)}</div>` : ''}
+          <div class="ceo-report-line" style="color:#9ca3af;font-size:11px;"><span class="ceo-report-k">검수자</span> ${escapeHtml(rep.createdBy || '-')}${when ? ' · ' + escapeHtml(when) : ''}</div>
+        </div>
+        <div class="ceo-report-actions">
+          <button class="dash-action-btn complete-rep-view-btn" data-id="${rep.woId}">원단 보기</button>
+          <button class="dash-action-btn complete-rep-ok-btn" style="background:#16a34a;color:#fff;border-color:#15803d;font-weight:700;" data-id="${rep.woId}" data-color-idx="${rep.colorIdx}" data-receipt-no="${rep.receiptNo}">✓ 확인 완료</button>
+        </div>
+      </div>`;
+    });
+    html += `</div>`;
+    return html;
+  }
+
   // ===== 클레임(땡처리) 뷰 — v2.51 step2 =====
   // ===== hotfix60: 대표 보고함 화면 =====
   // 대표 확인이 필요한 모든 보고를 카드로 모아 보여주고, 여기서만 처리(승인/불량)한다.
@@ -19450,8 +19643,12 @@ function validateBlendSum(blends, label) {
       body = renderClaimsDash();
       addBtn.style.display = 'none';
     } else if (state.dashView === 'ceoReports') {
-      title = '🚩 대표 보고';
+      title = '⚠ 불량 보고';
       body = renderCeoReports();
+      addBtn.style.display = 'none';
+    } else if (state.dashView === 'completeReports') {
+      title = '✅ 완료 보고';
+      body = renderCompleteReports();
       addBtn.style.display = 'none';
     } else if (state.dashView === 'completed') {
       title = '✓ 완료된 의뢰서';
@@ -20671,6 +20868,83 @@ function validateBlendSum(blends, label) {
         e.stopPropagation();
         const wo = state.allWorkOrders.find(w => w.id === btn.dataset.id);
         if (wo) showPreviewModal(wo);
+      });
+    });
+
+    // hotfix91: 완료 보고함 — [원단 보기] / [✓ 확인 완료] / [✓ 전체 일괄 확인]
+    document.querySelectorAll('#dash-body .complete-rep-view-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const wo = state.allWorkOrders.find(w => w.id === btn.dataset.id);
+        if (wo) showPreviewModal(wo);
+      });
+    });
+    document.querySelectorAll('#dash-body .complete-rep-ok-btn').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (!isAdminUser()) { toast('대표만 확인할 수 있습니다', 'warning'); return; }
+        const id = btn.dataset.id;
+        const ci = parseInt(btn.dataset.colorIdx, 10);
+        const rn = btn.dataset.receiptNo !== undefined && btn.dataset.receiptNo !== '' ? parseInt(btn.dataset.receiptNo, 10) : null;
+        btn.disabled = true;
+        try {
+          const allDone = await confirmCeoComplete(id, ci, rn);
+          toast(`✓ 확인 완료${allDone ? ' — 의뢰서 완료' : ''}`, 'success');
+          renderDashboard();
+        } catch (err) { btn.disabled = false; toast('확인 실패: ' + (err.message || err), 'error'); }
+      });
+    });
+    // hotfix91: 공통 — 의뢰서별 묶어 확인 처리 (선택 목록 reps[] 받음)
+    async function __runCompleteConfirm(reps, btnEl, allLabel) {
+      if (!reps.length) { toast('선택된 건이 없습니다', 'info'); return; }
+      if (!confirm(`${reps.length}건을 완료 처리합니다.\n\n계속할까요?`)) return;
+      if (btnEl) { btnEl.disabled = true; btnEl.textContent = '처리 중...'; }
+      const byWo = {};
+      reps.forEach(r => { (byWo[r.woId] = byWo[r.woId] || []).push(r); });
+      let okCnt = 0, failCnt = 0;
+      for (const woId of Object.keys(byWo)) {
+        const seenColor = new Set();
+        for (const r of byWo[woId]) {
+          if (seenColor.has(r.colorIdx)) continue;   // 같은 컬러는 confirmCeoComplete가 차수 전부 확인
+          seenColor.add(r.colorIdx);
+          try { await confirmCeoComplete(woId, r.colorIdx, null); okCnt++; }
+          catch (err) { failCnt++; console.warn('[확인 실패]', woId, r.colorIdx, err.message); }
+        }
+      }
+      toast(`✓ 확인 완료 — ${okCnt}건 처리${failCnt ? ` · ${failCnt}건 실패` : ''}`, failCnt ? 'warning' : 'success');
+      renderDashboard();
+    }
+    // 선택 카운트 갱신
+    function __updateSelCount() {
+      const n = document.querySelectorAll('#dash-body .complete-rep-check:checked').length;
+      const el = document.getElementById('complete-rep-sel-count');
+      if (el) el.textContent = String(n);
+    }
+    document.querySelectorAll('#dash-body .complete-rep-check').forEach(cb => {
+      cb.addEventListener('change', __updateSelCount);
+    });
+    const selAll = document.getElementById('complete-rep-select-all');
+    if (selAll) selAll.addEventListener('change', () => {
+      document.querySelectorAll('#dash-body .complete-rep-check').forEach(cb => { cb.checked = selAll.checked; });
+      __updateSelCount();
+    });
+    // [✓ 선택 확인]
+    document.querySelectorAll('#dash-body .complete-rep-sel-btn').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (!isAdminUser()) { toast('대표만 확인할 수 있습니다', 'warning'); return; }
+        const checks = [...document.querySelectorAll('#dash-body .complete-rep-check:checked')];
+        const reps = checks.map(cb => ({ woId: cb.dataset.id, colorIdx: parseInt(cb.dataset.colorIdx, 10) }));
+        if (!reps.length) { toast('확인할 건을 먼저 선택하세요', 'info'); return; }
+        await __runCompleteConfirm(reps, btn);
+      });
+    });
+    // [✓ 전체 일괄 확인]
+    document.querySelectorAll('#dash-body .complete-rep-all-btn').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (!isAdminUser()) { toast('대표만 확인할 수 있습니다', 'warning'); return; }
+        await __runCompleteConfirm(collectCompleteReports(), btn);
       });
     });
     document.querySelectorAll('#dash-body .ceo-rep-approve-btn').forEach(btn => {
@@ -22403,23 +22677,15 @@ function validateBlendSum(blends, label) {
         let finalMsg;
         if (shortageActive) {
           // 부족분 남은 컬러 — 이 차수만 검수 완료, 컬러 전체 완료는 부족분 정산 후 자동
-          finalMsg = `[${wo.wo_number || ''}] "${cName}" ${activeReceiptNo ? activeReceiptNo + '차' : '이 차수'} 검수를 완료할까요?\n\n· 부족분 ${lackBody + lackRib}절이 아직 남아 있어\n  컬러 전체는 진행 중으로 유지됩니다.\n· 나머지가 모두 입고되어 검수가 끝나면\n  컬러가 자동으로 완료됩니다.`;
+          finalMsg = `[${wo.wo_number || ''}] "${cName}" ${activeReceiptNo ? activeReceiptNo + '차' : '이 차수'} 검수를 완료할까요?\n\n· 검수 결과는 [완료 보고]로 올라가\n  대표 확인 후 완료됩니다.\n· 부족분 ${lackBody + lackRib}절이 아직 남아 있습니다.`;
         } else {
-          finalMsg = willCompleteWO
-            ? `[${wo.wo_number || ''}] "${cName}" QC를 완료할까요?\n\n마지막 컬러까지 QC가 끝났습니다.\n의뢰서 전체가 완료 상태로 바뀌고,\n[완료된 의뢰서] 화면으로 옮겨집니다.`
-            : `[${wo.wo_number || ''}] "${cName}" QC를 완료할까요?\n\n이 컬러만 진행 목록에서 사라지고,\n나머지 컬러는 계속 진행됩니다.`;
+          finalMsg = `[${wo.wo_number || ''}] "${cName}" 검수를 마칠까요?\n\n검수 결과가 [✅ 완료 보고]로 올라갑니다.\n대표가 확인 완료를 누르면 완료됩니다.`;
         }
         if (!confirm(finalMsg)) return;
         
         try {
           const allDone = await setColorQcDone(woId, colorIdx, data, window.__qcModalReceiptNo);
-          if (allDone) {
-            toast(`✓ "${cName}" QC 완료 — 모든 컬러 완료로 의뢰서 자동 완료됨`, 'success');
-          } else if (shortageActive) {
-            toast(`✓ "${cName}" ${activeReceiptNo ? activeReceiptNo + '차 ' : ''}검수 완료 — 부족분 입고 후 자동 완료됩니다`, 'success');
-          } else {
-            toast(`✓ "${cName}" QC 완료 처리됨`, 'success');
-          }
+          toast(`✓ "${cName}" 검수 완료 — [✅ 완료 보고]에서 확인해 주세요`, 'success');
           modal.classList.remove('show');
         } catch (e) {
           toast('완료 실패: ' + e.message, 'error');
@@ -23643,7 +23909,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix89';
+  const VERSION = 'v2.53 hotfix92';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix34: 편직 의뢰서 [성격] 시스템 도입 — 정규/재고/샘플/완료 4태그, 자동분류, 표 ● 배지, [성격▼] 필터, 완료체크 양방향연동
   // hotfix33: 클레임(땡처리) 내역서 양식 통일 — 부분/전체 모두 정식 표 양식 + 이미지복사/인쇄/수정 동일 버튼
