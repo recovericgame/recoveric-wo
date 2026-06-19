@@ -16216,6 +16216,24 @@ function validateBlendSum(blends, label) {
   }
   
   // ===== 전체 대시보드 (overview) =====
+  // hotfix97: 진행 행을 3구역으로 분류 — 'worker'(직원 작업 대기) / 'manager'(담당자 확인 대기) / 'normal'(일반 진행)
+  //   염색가공 컬러 행에만 의미가 있고, 그 외 유형/요약행은 'normal'.
+  function classifyOverviewSection(wo, colorIdx) {
+    if (!wo || wo.type !== '염색가공' || colorIdx < 0) return 'normal';
+    const c = wo.colors?.[colorIdx];
+    if (!c) return 'normal';
+    // 담당자(대표) 확인 라인: 완료 보고 대기 / 규격(축률)이상 / 재검수 대기(돌아옴) / 불량
+    if (hasCeoConfirmPending(c)) return 'manager';
+    const qs = getColorQcStatus(wo, colorIdx);
+    if (qs === 'shrink' || qs === 'defect') return 'manager';
+    if (c.fix_active === true && c.fix_returned === true) return 'manager';
+    // 직원 작업 대기: QC 대기(none/pending) / 수정중(작업장) / 부족분 입고 대기
+    if (c.fix_active === true && c.fix_returned !== true) return 'worker';
+    if (qs === 'pending' || qs === 'none') return 'worker';
+    if (isShortageActive(c)) return 'worker';
+    return 'normal';
+  }
+
   function renderOverview() {
     const all = state.allWorkOrders.filter(wo => !wo.deleted);
     // v2.53: 염색가공 의뢰서 receipts 마이그레이션 (lazy)
@@ -16579,7 +16597,27 @@ function validateBlendSum(blends, label) {
           overviewRows.push({ wo, colorIdx: gr.colorIdx, isFirstRow: n === 0, totalRows, rowKind: gr.rowKind, doneCount: gr.doneCount, doneColor: gr.doneColor });
         });
       });
-      
+
+      // hotfix97: 의뢰서(그룹) 단위로 구역 결정 후 직원→담당자→일반 순으로 재배치.
+      //   그룹 내 행 중 가장 우선(worker>manager>normal? — 직원이 할 일이 있으면 직원 구역)
+      //   기준: 한 의뢰서에 직원 작업과 담당자 확인이 섞이면, "직원 작업"을 우선으로 본다
+      //   (직원이 먼저 끝내야 담당자 차례가 오므로).
+      const sectionRank = { worker: 0, manager: 1, normal: 2 };
+      const woSection = {};
+      overviewRows.forEach(r => {
+        const sec = classifyOverviewSection(r.wo, r.colorIdx);
+        const cur = woSection[r.wo.id];
+        if (cur === undefined || sectionRank[sec] < sectionRank[cur]) woSection[r.wo.id] = sec;
+      });
+      // 그룹 순서 유지하며 구역별 안정 정렬 (같은 의뢰서 행은 인접 유지)
+      const woOrder = [];
+      overviewRows.forEach(r => { if (!woOrder.includes(r.wo.id)) woOrder.push(r.wo.id); });
+      woOrder.sort((a, b) => (sectionRank[woSection[a]] - sectionRank[woSection[b]]));
+      const orderedRows = [];
+      woOrder.forEach(woId => { overviewRows.filter(r => r.wo.id === woId).forEach(r => orderedRows.push(r)); });
+      overviewRows.length = 0;
+      orderedRows.forEach(r => overviewRows.push(r));
+
       html += `<div class="dash-table-wrap"><table class="dash-table dash-table-color-rows dash-table-no-select dash-table-overview"><thead><tr>
         <th class="col-no">NO</th>
         ${sortableTh('overview', 'type', '유형')}
@@ -16598,7 +16636,32 @@ function validateBlendSum(blends, label) {
         <th class="col-action col-act-delete">삭제</th>
       </tr></thead><tbody>`;
       
+      // hotfix97: 구역 머리행 삽입용 — 직전 구역 추적
+      let __lastSection = null;
+      const __sectionMeta = {
+        worker:  { label: '🔧 직원 작업 대기',   sub: 'QC·수정·부족분 입고 — 직원이 처리할 일',  bg: '#fff7ed', bd: '#f97316', fg: '#9a3412' },
+        manager: { label: '🚩 담당자 확인 대기', sub: '완료 보고·규격 이상·재검수 — 대표/담당 확인', bg: '#fef2f2', bd: '#dc2626', fg: '#991b1b' },
+        normal:  { label: '▫ 일반 진행',          sub: '특이사항 없이 진행 중',                       bg: '#f8fafc', bd: '#94a3b8', fg: '#475569' }
+      };
+      const __sectionsEnabled = (tf === 'all' || tf === '염색가공');
+      const __sectionCounts = { worker: 0, manager: 0, normal: 0 };
+      if (__sectionsEnabled) {
+        const _seen = new Set();
+        overviewRows.forEach(r => { if (!_seen.has(r.wo.id)) { _seen.add(r.wo.id); __sectionCounts[woSection[r.wo.id]]++; } });
+      }
       overviewRows.forEach(({ wo, colorIdx, isFirstRow, totalRows, rowKind, doneCount, doneColor }) => {
+        // 구역 머리행 (염색가공/전체 보기에서만, 의뢰서 첫 행 시점에 구역 전환 감지)
+        if (__sectionsEnabled && isFirstRow) {
+          const sec = woSection[wo.id] || 'normal';
+          if (sec !== __lastSection) {
+            __lastSection = sec;
+            const m = __sectionMeta[sec];
+            html += `<tr class="ov-section-head"><td colspan="14" style="background:${m.bg};border-left:4px solid ${m.bd};padding:9px 14px;">
+              <span style="font-weight:800;font-size:13px;color:${m.fg};">${m.label} <span style="background:${m.bd};color:#fff;border-radius:10px;padding:1px 9px;font-size:11.5px;margin-left:4px;">${__sectionCounts[sec]}</span></span>
+              <span style="font-size:11.5px;color:#9ca3af;margin-left:10px;">${m.sub}</span>
+            </td></tr>`;
+          }
+        }
         const elapsed = daysSince(wo.date);
         const overdueClass = elapsed >= 5 ? 'overdue' : '';
         const groupBoundaryClass = isFirstRow ? 'wo-group-first' : 'wo-group-cont';
@@ -23954,7 +24017,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix96';
+  const VERSION = 'v2.53 hotfix97';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix34: 편직 의뢰서 [성격] 시스템 도입 — 정규/재고/샘플/완료 4태그, 자동분류, 표 ● 배지, [성격▼] 필터, 완료체크 양방향연동
   // hotfix33: 클레임(땡처리) 내역서 양식 통일 — 부분/전체 모두 정식 표 양식 + 이미지복사/인쇄/수정 동일 버튼
