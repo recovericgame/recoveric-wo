@@ -18425,6 +18425,7 @@ function validateBlendSum(blends, label) {
         </div>
         <div class="ceo-report-actions">
           <button class="dash-action-btn complete-rep-view-btn" data-id="${rep.woId}">원단 보기</button>
+          <button class="dash-action-btn complete-rep-defect-btn" style="background:#fff;color:#b91c1c;border-color:#dc2626;font-weight:700;" data-id="${rep.woId}" data-color-idx="${rep.colorIdx}" data-receipt-no="${rep.receiptNo}">⚠ 불량 처리</button>
           <button class="dash-action-btn complete-rep-ok-btn" style="background:#16a34a;color:#fff;border-color:#15803d;font-weight:700;" data-id="${rep.woId}" data-color-idx="${rep.colorIdx}" data-receipt-no="${rep.receiptNo}">✓ 확인 완료</button>
         </div>
       </div>`;
@@ -20969,6 +20970,18 @@ function validateBlendSum(blends, label) {
         if (wo) showPreviewModal(wo);
       });
     });
+    // hotfix99: 완료 보고에서 [⚠ 불량 처리] — QC 모달을 열어 대표가 불량 사유 체크 후 처리
+    document.querySelectorAll('#dash-body .complete-rep-defect-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (!isAdminUser()) { toast('대표만 처리할 수 있습니다', 'warning'); return; }
+        const id = btn.dataset.id;
+        const ci = parseInt(btn.dataset.colorIdx, 10);
+        const rn = btn.dataset.receiptNo !== undefined && btn.dataset.receiptNo !== '' ? parseInt(btn.dataset.receiptNo, 10) : undefined;
+        toast('불량 사유를 선택하고 [⚠ 불량 처리]를 눌러주세요', 'info');
+        openQcModal(id, ci, rn);
+      });
+    });
     document.querySelectorAll('#dash-body .complete-rep-ok-btn').forEach(btn => {
       btn.addEventListener('click', async (e) => {
         e.stopPropagation();
@@ -22476,6 +22489,7 @@ function validateBlendSum(blends, label) {
             <textarea id="qc-notes" placeholder="검수 시 특이사항을 기록해 주세요.">${escapeHtml(qc.notes || '')}</textarea>
           </div>
         </div>
+        ${(isDefectMode || isAcceptMode || isDiscardMode || isDoneMode) ? `
         <div class="qc-judgment-bar">
           <div class="qc-judgment-title">검수 판정:</div>
           <label class="${initJudgment === 'normal' ? 'normal-active' : ''}" id="qc-judgment-normal-label">
@@ -22494,6 +22508,12 @@ function validateBlendSum(blends, label) {
             <textarea id="qc-defect-memo" placeholder="예시) [05/08 14:30] 가공소 발송, 5/15 입고 예정">${escapeHtml(qc.defect_memo || '')}</textarea>
           </div>
         </div>
+        ` : `
+        <div style="margin-top:10px;padding:9px 12px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;font-size:12px;color:#1e40af;line-height:1.6;">
+          검수값을 입력하고 <strong>[검수 완료]</strong>를 누르면 <strong>[✅ 완료 보고]</strong>로 올라가 대표 확인 후 완료됩니다.<br>
+          이상이 있으면 특이사항에 적어 주세요. <strong>불량 판정은 대표가 보고 화면에서 처리</strong>합니다.
+        </div>
+        `}
         <div class="qc-modal-footer">
           <div class="qc-footer-left">
             ${shortageActive ? '이 차수(입고분)는 검수 완료할 수 있습니다. 부족분이 모두 채워지면 컬러가 자동 완료됩니다.'
@@ -22529,13 +22549,10 @@ function validateBlendSum(blends, label) {
               <button type="button" class="qc-modal-btn discard" id="qc-discard" title="수정 불가 → 클레임(땡처리) 진입">⚠ 땡처리</button>
             ` : ''}
             ${(!isDefectMode && !isAcceptMode && !isDiscardMode && !shortageActive) ? `
-              <button type="button" class="qc-modal-btn" id="qc-rework" title="같은 컬러를 작업장에 다시 보내 손봄 (일부 또는 전부 — 색은 그대로)">🔧 수정 보내기</button>
-              <button type="button" class="qc-modal-btn defect" id="qc-mark-defect" title="불량 처리 (불량 사유 1개 이상 체크 필요)">⚠ 불량 처리</button>
-              <button type="button" class="qc-modal-btn primary" id="qc-finish">${isDoneMode ? '완료 데이터 갱신' : 'QC 완료'}</button>
+              ${isDoneMode ? '<button type="button" class="qc-modal-btn defect" id="qc-mark-defect" title="대표 확인 결과 불량 — 사유 체크 후 처리">⚠ 불량 처리</button>' : ''}
+              <button type="button" class="qc-modal-btn primary" id="qc-finish">${isDoneMode ? '완료 데이터 갱신' : '검수 완료'}</button>
             ` : ''}
             ${(!isDefectMode && !isAcceptMode && !isDiscardMode && shortageActive) ? `
-              <button type="button" class="qc-modal-btn" id="qc-rework" title="같은 컬러를 작업장에 다시 보내 손봄 (일부 또는 전부 — 색은 그대로)">🔧 수정 보내기</button>
-              <button type="button" class="qc-modal-btn defect" id="qc-mark-defect" title="불량 처리 (불량 사유 1개 이상 체크 필요)">⚠ 불량 처리</button>
               <button type="button" class="qc-modal-btn primary" id="qc-finish" title="이 차수(입고분)만 검수 완료합니다. 부족분이 모두 채워지면 컬러가 자동 완료됩니다.">${activeReceiptNo ? activeReceiptNo + '차 검수 완료' : '이 차수 검수 완료'}</button>
             ` : ''}
           </div>
@@ -24017,7 +24034,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix98';
+  const VERSION = 'v2.53 hotfix99';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix34: 편직 의뢰서 [성격] 시스템 도입 — 정규/재고/샘플/완료 4태그, 자동분류, 표 ● 배지, [성격▼] 필터, 완료체크 양방향연동
   // hotfix33: 클레임(땡처리) 내역서 양식 통일 — 부분/전체 모두 정식 표 양식 + 이미지복사/인쇄/수정 동일 버튼
