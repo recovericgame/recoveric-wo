@@ -1689,11 +1689,12 @@
   
   .dash-table .col-no { width: 110px; font-weight: 700; }
   /* hotfix114: NO/공유코드 칸 — 평소 숨김 + 마우스오버 시 표시 (가독성·폭 절약) */
-  .dash-table .col-no.id-hover { width: 34px; min-width: 34px; font-weight: 700; text-align: center; position: relative; white-space: nowrap; }
+  .dash-table .col-no.id-hover { width: 30px; min-width: 30px; font-weight: 700; text-align: center; position: relative; white-space: nowrap; cursor: help; }
   .dash-table .col-no.id-hover .id-text { display: none; }
-  .dash-table .col-no.id-hover::after { content: '⋯'; color: #b6c0cc; font-weight: 700; }
-  .dash-table .col-no.id-hover:hover::after { content: ''; }
-  .dash-table .col-no.id-hover:hover .id-text { display: inline-block; position: absolute; left: 4px; top: 50%; transform: translateY(-50%); background: #1f2937; color: #fff; padding: 3px 9px; border-radius: 4px; white-space: nowrap; z-index: 60; font-size: 11px; font-weight: 700; box-shadow: 0 2px 10px rgba(0,0,0,.28); }
+  .dash-table .col-no.id-hover::after { content: '⋯'; color: #b6c0cc; font-weight: 800; font-size: 15px; letter-spacing: 1px; }
+  .dash-table .col-no.id-hover:hover::after { color: #1e3a8a; }
+  .dash-table .col-no.id-hover:hover .id-text { display: inline-block; position: absolute; left: 50%; bottom: calc(100% - 4px); transform: translateX(-50%); background: #111827; color: #fff; padding: 5px 11px; border-radius: 6px; white-space: nowrap; z-index: 90; font-size: 12px; font-weight: 800; letter-spacing: .3px; box-shadow: 0 6px 18px rgba(0,0,0,.32); pointer-events: none; }
+  .dash-table .col-no.id-hover:hover .id-text::after { content: ''; position: absolute; top: 100%; left: 50%; transform: translateX(-50%); border: 5px solid transparent; border-top-color: #111827; }
   .dash-table .col-cat { width: 56px; text-align: center; color: #475569; }
   .dash-table .col-stamps { width: 102px; }
   .dash-table .col-date { width: 75px; text-align: center; }
@@ -10642,6 +10643,16 @@ function validateBlendSum(blends, label) {
         });
         return minOrder;
       }
+      case 'org': {
+        const nm = String(wo.items?.[0]?.item || '').trim();
+        const sp = (state.fabricSpecs || []).find(s => s && s.name === nm);
+        return (sp && sp.cat) || '~';
+      }
+      case 'gubun': {
+        const nm = String(wo.items?.[0]?.item || '').trim();
+        const sp = (state.fabricSpecs || []).find(s => s && s.name === nm);
+        return (sp && sp.gubun) || '~';
+      }
       case 'item': {
         // 품목/사종 정렬: 유형별로 적절한 품목 필드 사용
         if (wo.type === '원사') return wo.yarns?.[0]?.type || '~';
@@ -17398,12 +17409,12 @@ function validateBlendSum(blends, label) {
     html += `<div class="dash-bulk-bar-slot" data-type="편직"></div><div class="dash-table-wrap"><table class="dash-table" data-list-type="편직"><thead><tr>
       <th class="col-select" title="선택"></th>
       ${sortableTh('knit', 'shared_code', '공유코드', 'col-no')}
-      <th class="col-stamps">스탬프</th>
+      ${sortableTh('knit', 'stamps', '스탬프', 'col-stamps')}
       ${sortableTh('knit', 'date', '의뢰일', 'col-date')}
       ${sortableTh('knit', 'vendor', '편직 공장')}
       ${sortableTh('knit', 'item', '품목')}
-      <th class="col-cat">구분</th>
-      <th class="col-cat">조직</th>
+      ${sortableTh('knit', 'gubun', '구분', 'col-cat')}
+      ${sortableTh('knit', 'org', '조직', 'col-cat')}
       <th>컬러</th>
       <th class="col-action">총 출고량</th>
       <th class="col-num">재고(절)</th>
@@ -19951,6 +19962,7 @@ function validateBlendSum(blends, label) {
     let body = '';
     let title = '';
     
+    try {
     if (state.dashView === 'overview') {
       title = '📊 전체 대시보드';
       body = renderOverview();
@@ -20010,6 +20022,10 @@ function validateBlendSum(blends, label) {
       title = '📐 원단 기본 스펙 (관리자 전용)';
       body = renderFabricSpecs();
       addBtn.style.display = 'none';
+    }
+    } catch (__renderErr) {
+      console.error('[renderDashboard]', __renderErr);
+      body = `<div class="dash-empty" style="color:#b91c1c;text-align:left;padding:18px;">화면을 그리는 중 오류가 발생했습니다.<br><br><strong>${escapeHtml(__renderErr && __renderErr.message || String(__renderErr))}</strong><br><br>이 메시지를 캡처해 알려주시면 바로 고치겠습니다.</div>`;
     }
     
     titleEl.textContent = title;
@@ -24372,7 +24388,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix115';
+  const VERSION = 'v2.53 hotfix116';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix34: 편직 의뢰서 [성격] 시스템 도입 — 정규/재고/샘플/완료 4태그, 자동분류, 표 ● 배지, [성격▼] 필터, 완료체크 양방향연동
   // hotfix33: 클레임(땡처리) 내역서 양식 통일 — 부분/전체 모두 정식 표 양식 + 이미지복사/인쇄/수정 동일 버튼
