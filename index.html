@@ -12074,6 +12074,10 @@ function validateBlendSum(blends, label) {
   // 누적 입고 몸판 수량
   function getReceivedBody(c) {
     if (!c) return 0;
+    // hotfix123: 차수(receipts)가 있으면 항상 실제 합산을 우선 — 캐시 received_body가 낡아 부족이 틀어지던 문제 방지
+    if (Array.isArray(c.receipts) && c.receipts.length > 0) {
+      return getReceiptsTotalBody(c);
+    }
     if (c.received_body !== undefined && c.received_body !== null && c.received_body !== '') {
       return num(c.received_body);
     }
@@ -12083,6 +12087,9 @@ function validateBlendSum(blends, label) {
   // 누적 입고 리프 수량
   function getReceivedRib(c) {
     if (!c) return 0;
+    if (Array.isArray(c.receipts) && c.receipts.length > 0) {
+      return getReceiptsTotalRib(c);
+    }
     if (c.received_rib !== undefined && c.received_rib !== null && c.received_rib !== '') {
       return num(c.received_rib);
     }
@@ -14063,6 +14070,14 @@ function validateBlendSum(blends, label) {
       return nums.join(' · ');
     };
     let rowsHtml = `<tr class="hr-order"><td class="hr-date">—</td><td class="hr-stage">📋 최초 의뢰</td><td class="num">${ordered_body}</td><td class="num">${ordered_rib}</td><td>주문 <strong>${ordered_body}/${ordered_rib}</strong>절</td></tr>`;
+    // (나) 관리자 전용 — 입고 차수 수정/삭제 버튼
+    const _histAdmin = (typeof isAdminUser === 'function') && isAdminUser();
+    const _inAdminBtns = (rn) => _histAdmin
+      ? `<div class="hr-admin" style="margin-top:6px;display:flex;gap:6px;">`
+        + `<button type="button" class="hr-edit-rcpt" data-rn="${rn}" style="font-size:11px;font-weight:700;background:#eef2ff;color:#1e3a8a;border:1px solid #c7d2fe;border-radius:4px;padding:3px 10px;cursor:pointer;">✏ 입고 수정</button>`
+        + `<button type="button" class="hr-del-rcpt" data-rn="${rn}" style="font-size:11px;font-weight:700;background:#fef2f2;color:#b91c1c;border:1px solid #fecaca;border-radius:4px;padding:3px 10px;cursor:pointer;">🗑 차수 삭제</button>`
+        + `</div>`
+      : '';
     events.forEach(e => {
       const dateStr = fmtD(e.at);
       if (e.kind === 'in') {
@@ -14081,7 +14096,7 @@ function validateBlendSum(blends, label) {
           result = `<span class="hb ${cls}">${lbl}</span> <span class="hr-nums">${nums}${lot}</span>${note}${by}`;
         }
         const isLatest = (_latestEditedReceiptNo != null && e.receipt_no === _latestEditedReceiptNo);
-        rowsHtml += `<tr class="hr-in${isLatest ? ' hr-latest' : ''}"><td class="hr-date">${dateStr}</td><td class="hr-stage">📦 ${e.receipt_no}차 입고</td><td class="num">${e.body}</td><td class="num">${e.rib}</td><td>${result}${e.memo ? `<div class="hr-note">입고메모: ${escapeHtml(e.memo)}</div>` : ''}</td></tr>`;
+        rowsHtml += `<tr class="hr-in${isLatest ? ' hr-latest' : ''}"><td class="hr-date">${dateStr}</td><td class="hr-stage">📦 ${e.receipt_no}차 입고</td><td class="num">${e.body}</td><td class="num">${e.rib}</td><td>${result}${e.memo ? `<div class="hr-note">입고메모: ${escapeHtml(e.memo)}</div>` : ''}${_inAdminBtns(e.receipt_no)}</td></tr>`;
       } else if (e.kind === 'fix') {
         let res;
         if (e.recheck && e.recheck.passed) res = `보냄 → <span class="hb hb-ok">✓ 합격</span>${e.resolved_at ? ` <span class="hr-date">${fmtD(e.resolved_at)}</span>` : ''}`;
@@ -14122,6 +14137,121 @@ function validateBlendSum(blends, label) {
         ${bodyHtml}
       </div>`;
     document.getElementById('hist-modal-bg').classList.add('show');
+
+    // (나) 관리자 전용 — 입고 차수 삭제/수정 핸들러
+    if (_histAdmin) {
+      document.querySelectorAll('#hist-modal-body .hr-del-rcpt').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const rn = parseInt(btn.dataset.rn, 10);
+          if (!confirm(`⚠ ${rn}차 입고 기록을 삭제합니다.\n\n· 이 차수의 입고량(몸판/리프)이 누적에서 빠집니다.\n· 다른 차수 번호는 그대로 유지됩니다.\n· 완료 상태였다면 진행 중으로 풀립니다.\n\n삭제할까요?`)) return;
+          try {
+            await revertReceiptToPending(woId, colorIdx, rn);
+            toast(`${rn}차 입고 삭제됨`, 'success');
+            openHistoryModal(woId, colorIdx);
+            renderDashboard();
+          } catch (err) { toast('삭제 실패: ' + (err.message || err), 'error'); }
+        });
+      });
+      document.querySelectorAll('#hist-modal-body .hr-edit-rcpt').forEach(btn => {
+        btn.addEventListener('click', () => openReceiptEditModal(woId, colorIdx, parseInt(btn.dataset.rn, 10)));
+      });
+    }
+  }
+
+  // (나) 입고 차수 수정 모달 — 관리자 전용
+  function openReceiptEditModal(woId, colorIdx, receiptNo) {
+    if (!(typeof isAdminUser === 'function' && isAdminUser())) { toast('관리자만 수정할 수 있습니다', 'error'); return; }
+    const wo = state.allWorkOrders.find(w => w.id === woId);
+    if (!wo) return;
+    const c = (wo.colors || [])[colorIdx];
+    if (!c) return;
+    migrateColorReceipts(c);
+    const r = (c.receipts || []).find(x => x.receipt_no === receiptNo);
+    if (!r) { toast('차수를 찾을 수 없음', 'error'); return; }
+    document.getElementById('rcpt-edit-modal')?.remove();
+    const iS = 'width:100%;padding:7px 9px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;box-sizing:border-box;font-family:inherit;';
+    const lbl = 'font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;';
+    const lot = (r.qc && r.qc.lot_no != null) ? String(r.qc.lot_no) : '';
+    const wrap = document.createElement('div');
+    wrap.id = 'rcpt-edit-modal';
+    wrap.className = 'dash-modal-bg show';
+    wrap.innerHTML = `<div class="dash-modal" style="max-width:430px;">
+      <div class="dash-modal-head"><span>✏ ${receiptNo}차 입고 수정</span><button class="dash-modal-close" id="re-close">✕</button></div>
+      <div style="padding:15px 17px;display:flex;flex-direction:column;gap:12px;">
+        <div style="display:flex;gap:10px;">
+          <div style="flex:1;"><label style="${lbl}">몸판 (절)</label><input type="number" step="0.1" id="re-body" value="${r.received_body != null ? r.received_body : ''}" style="${iS}"></div>
+          <div style="flex:1;"><label style="${lbl}">리프 (절)</label><input type="number" step="0.1" id="re-rib" value="${r.received_rib != null ? r.received_rib : ''}" style="${iS}"></div>
+        </div>
+        <div><label style="${lbl}">LOT 번호</label><input type="text" id="re-lot" value="${escapeHtml(lot)}" style="${iS}" placeholder="예: 2406-A"></div>
+        <div><label style="${lbl}">입고 메모</label><input type="text" lang="ko" id="re-memo" value="${escapeHtml(r.memo || '')}" style="${iS}"></div>
+        <div style="font-size:11px;color:#9ca3af;line-height:1.5;">※ 수량을 바꾸면 누적 입고·부족분이 자동 재계산됩니다.<br>※ 폭·중량·축률 등 QC 판정값은 QC 창에서 수정하세요.</div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;">
+          <button class="dash-action-btn" id="re-cancel" style="padding:7px 16px;">취소</button>
+          <button class="dash-action-btn" id="re-save" style="background:#1e3a8a;color:#fff;font-weight:700;padding:7px 18px;">저장</button>
+        </div>
+      </div></div>`;
+    document.body.appendChild(wrap);
+    const close = () => wrap.remove();
+    wrap.querySelector('#re-close').onclick = close;
+    wrap.querySelector('#re-cancel').onclick = close;
+    wrap.addEventListener('click', (e) => { if (e.target === wrap) close(); });
+    setTimeout(() => wrap.querySelector('#re-body')?.focus(), 50);
+    wrap.querySelector('#re-save').onclick = async () => {
+      const vals = {
+        body: wrap.querySelector('#re-body').value.trim(),
+        rib: wrap.querySelector('#re-rib').value.trim(),
+        lot: wrap.querySelector('#re-lot').value.trim(),
+        memo: wrap.querySelector('#re-memo').value.trim()
+      };
+      try {
+        await saveReceiptEdit(woId, colorIdx, receiptNo, vals);
+        toast(`${receiptNo}차 입고 수정됨`, 'success');
+        close();
+        openHistoryModal(woId, colorIdx);
+        renderDashboard();
+      } catch (err) { toast('수정 실패: ' + (err.message || err), 'error'); }
+    };
+  }
+
+  // (나) 입고 차수 수정 저장 — deep copy + 누적·부족분 재계산 (revert 로직과 동일 기준)
+  async function saveReceiptEdit(woId, colorIdx, receiptNo, vals) {
+    if (!(typeof isAdminUser === 'function' && isAdminUser())) throw new Error('관리자만 수정할 수 있습니다');
+    const wo = state.allWorkOrders.find(w => w.id === woId);
+    if (!wo) throw new Error('의뢰서를 찾을 수 없음');
+    const colors = JSON.parse(JSON.stringify(wo.colors || []));
+    const c = colors[colorIdx];
+    if (!c) throw new Error('컬러 인덱스 오류');
+    migrateColorReceipts(c);
+    const r = (c.receipts || []).find(x => x.receipt_no === receiptNo);
+    if (!r) throw new Error('차수를 찾을 수 없음');
+    // NaN-safe: 빈 값 → 0, 숫자는 그대로 (0 허용)
+    const toNum = (v) => { if (v === '' || v == null) return 0; const n = parseFloat(v); return isNaN(n) ? 0 : n; };
+    r.received_body = toNum(vals.body);
+    r.received_rib = toNum(vals.rib);
+    r.memo = vals.memo || '';
+    if (vals.lot) { r.qc = r.qc || {}; r.qc.lot_no = vals.lot; }
+    else if (r.qc) { delete r.qc.lot_no; }
+    // 누적 입고 재계산 (남은 receipts 합산)
+    const newRecBody = c.receipts.reduce((s, x) => s + (parseFloat(x.received_body) || 0), 0);
+    const newRecRib = c.receipts.reduce((s, x) => s + (parseFloat(x.received_rib) || 0), 0);
+    c.received_body = newRecBody;
+    c.received_rib = newRecRib;
+    // 부족분 재계산 — 수량 줄여 부족 재발생 시 미해결로, 완료였으면 진행중으로
+    const orderedBody = parseFloat(c.body) || 0, orderedRib = parseFloat(c.rib) || 0;
+    const totalShortage = (orderedBody - newRecBody) + (orderedRib - newRecRib);
+    const updates = { colors, updated_at: serverTimestamp(), updated_by: state.user.email };
+    if (totalShortage > 0) {
+      if (c.shortage_status === 'resolved' || !c.shortage_status) {
+        c.shortage_status = 'expected';
+        delete c.shortage_resolved_at;
+        delete c.shortage_resolved_by;
+      }
+      if (c.completed) { c.completed = false; delete c.completed_at; }
+      if (wo.completed) { updates.completed = false; updates.completed_at = null; }
+    }
+    await updateDoc(doc(db, 'workorders', woId), updates);
+    wo.colors = colors;
+    if (updates.completed === false) { wo.completed = false; wo.completed_at = null; }
   }
 
   // ==================== v2.52: 부족분 입력 / 추가 입고 / 상태 변경 모달 ====================
@@ -19263,11 +19393,29 @@ function validateBlendSum(blends, label) {
           </div>
           <div><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">혼용률</label><input type="text" id="fs-f-blend" style="${inputStyle}" placeholder="예: C55% P45%"></div>
           <div style="border-top:1px solid #e5e7eb;padding-top:10px;margin-top:2px;">
-            <div style="font-size:12px;font-weight:700;color:#1e3a8a;margin-bottom:6px;">주의사항 기본값 <span style="font-weight:400;color:#9ca3af;font-size:11px;">— 한 줄에 하나, 형식: ★ 항목 : 값 (작업의뢰서에서 [📐 기준 불러오기] 시 채워짐)</span></div>
-            <div style="display:flex;flex-direction:column;gap:7px;">
-              <div><label style="font-size:11px;font-weight:700;color:#6b7280;display:block;margin-bottom:3px;">■ 염색</label><textarea id="fs-f-caution-dye" style="${inputStyle}min-height:70px;resize:vertical;" placeholder="★ 터치 : 부드럽게&#10;★ 선바이오 : X&#10;※ 대전방지제 : O"></textarea></div>
-              <div><label style="font-size:11px;font-weight:700;color:#6b7280;display:block;margin-bottom:3px;">■ 가공</label><textarea id="fs-f-caution-proc" style="${inputStyle}min-height:70px;resize:vertical;" placeholder="★ 유연제 : O&#10;★ KC인증 : O&#10;※ 견뢰도 : O"></textarea></div>
-              <div><label style="font-size:11px;font-weight:700;color:#6b7280;display:block;margin-bottom:3px;">■ 후가공 (선택)</label><textarea id="fs-f-caution-post" style="${inputStyle}min-height:50px;resize:vertical;" placeholder="★ 기모 :&#10;※ 워싱 :"></textarea></div>
+            <div style="font-size:12px;font-weight:700;color:#1e3a8a;margin-bottom:6px;">주의사항 기본값 <span style="font-weight:400;color:#9ca3af;font-size:11px;">— ★/※ 선택 + 항목 + 값 입력. [＋ 항목 추가]로 줄을 늘립니다 (작업의뢰서 [📐 기준 불러오기] 시 채워짐)</span></div>
+            <div style="display:flex;flex-direction:column;gap:9px;">
+              <div>
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:3px;">
+                  <label style="font-size:11px;font-weight:700;color:#6b7280;">■ 염색</label>
+                  <button type="button" class="fs-caution-add" data-stage="dyeing" style="font-size:11px;background:#eef2ff;color:#1e3a8a;border:1px solid #c7d2fe;border-radius:4px;padding:2px 9px;cursor:pointer;font-weight:700;">＋ 항목 추가</button>
+                </div>
+                <div class="caution-rows" id="fs-cautions-dyeing" data-stage="dyeing"></div>
+              </div>
+              <div>
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:3px;">
+                  <label style="font-size:11px;font-weight:700;color:#6b7280;">■ 가공</label>
+                  <button type="button" class="fs-caution-add" data-stage="processing" style="font-size:11px;background:#eef2ff;color:#1e3a8a;border:1px solid #c7d2fe;border-radius:4px;padding:2px 9px;cursor:pointer;font-weight:700;">＋ 항목 추가</button>
+                </div>
+                <div class="caution-rows" id="fs-cautions-processing" data-stage="processing"></div>
+              </div>
+              <div>
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:3px;">
+                  <label style="font-size:11px;font-weight:700;color:#6b7280;">■ 후가공 (선택)</label>
+                  <button type="button" class="fs-caution-add" data-stage="post" style="font-size:11px;background:#eef2ff;color:#1e3a8a;border:1px solid #c7d2fe;border-radius:4px;padding:2px 9px;cursor:pointer;font-weight:700;">＋ 항목 추가</button>
+                </div>
+                <div class="caution-rows" id="fs-cautions-post" data-stage="post"></div>
+              </div>
             </div>
           </div>
           <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:6px;">
@@ -21514,12 +21662,59 @@ function validateBlendSum(blends, label) {
         document.getElementById('fs-f-gy').value = (s.gy != null ? s.gy : '');
         document.getElementById('fs-f-blend').value = s.blend || '';
         const sc = s.cautions || {};
-        document.getElementById('fs-f-caution-dye').value = cautionRowsToLines(sc.dyeing);
-        document.getElementById('fs-f-caution-proc').value = cautionRowsToLines(sc.processing);
-        document.getElementById('fs-f-caution-post').value = cautionRowsToLines(sc.post);
+        fillFsCautions('dyeing', sc.dyeing);
+        fillFsCautions('processing', sc.processing);
+        fillFsCautions('post', sc.post);
         modal.classList.add('show');
         setTimeout(() => document.getElementById('fs-f-name').focus(), 50);
       };
+      // (가) 주의사항 행 빌더 — 작지 폼과 동일 구조 {mark,label,value}
+      function fsCautionRowHTML(row) {
+        row = row || { mark: '※', label: '', value: '' };
+        return `<div class="caution-row">
+          <select class="c-mark">
+            <option value="★" ${row.mark==='★'?'selected':''}>★</option>
+            <option value="※" ${(row.mark==='※'||!row.mark)?'selected':''}>※</option>
+            <option value="●" ${row.mark==='●'?'selected':''}>●</option>
+          </select>
+          <input type="text" lang="ko" class="c-label" placeholder="항목명 (예: 터치)" value="${escapeHtml(row.label||'')}">
+          <input type="text" lang="ko" class="c-value" placeholder="값 (예: 부드럽게)" value="${escapeHtml(row.value||'')}">
+          <button type="button" class="btn-del" title="삭제">X</button>
+        </div>`;
+      }
+      function bindFsCautionRow(rowEl) {
+        const del = rowEl.querySelector('.btn-del');
+        if (del) del.addEventListener('click', () => rowEl.remove());
+      }
+      function fillFsCautions(stage, arr) {
+        const box = document.getElementById('fs-cautions-' + stage);
+        if (!box) return;
+        const rows = Array.isArray(arr) ? arr : [];
+        box.innerHTML = rows.length ? rows.map(r => fsCautionRowHTML(r)).join('') : '';
+        box.querySelectorAll('.caution-row').forEach(bindFsCautionRow);
+      }
+      function collectFsCautions(stage) {
+        const box = document.getElementById('fs-cautions-' + stage);
+        if (!box) return [];
+        const arr = [];
+        box.querySelectorAll('.caution-row').forEach(row => {
+          const mark = (row.querySelector('.c-mark')?.value) || '※';
+          const label = (row.querySelector('.c-label')?.value || '').trim();
+          const value = (row.querySelector('.c-value')?.value || '').trim();
+          if (label || value) arr.push({ mark, label, value });
+        });
+        return arr;
+      }
+      // ＋ 항목 추가 버튼 (모달 내 3개 공정)
+      modal.querySelectorAll('.fs-caution-add').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const box = document.getElementById('fs-cautions-' + btn.dataset.stage);
+          if (!box) return;
+          box.insertAdjacentHTML('beforeend', fsCautionRowHTML());
+          bindFsCautionRow(box.lastElementChild);
+          box.lastElementChild.querySelector('.c-label')?.focus();
+        });
+      });
       const closeModal = () => { modal.classList.remove('show'); editingSpecIdx = null; };
       document.getElementById('fs-add-btn')?.addEventListener('click', () => openModal(-1));
       document.querySelectorAll('.fs-edit-btn').forEach(b => b.addEventListener('click', () => openModal(parseInt(b.dataset.idx, 10))));
@@ -21539,11 +21734,11 @@ function validateBlendSum(blends, label) {
           gy: document.getElementById('fs-f-gy').value.trim(),
           blend: document.getElementById('fs-f-blend').value.trim()
         };
-        // hotfix69: 주의사항 기본값 (비어있는 공정은 저장 안 함)
+        // hotfix69/122: 주의사항 기본값 — 행 빌더에서 수집 (비어있는 공정은 저장 안 함)
         const cz = {
-          dyeing: parseCautionLines(document.getElementById('fs-f-caution-dye').value),
-          processing: parseCautionLines(document.getElementById('fs-f-caution-proc').value),
-          post: parseCautionLines(document.getElementById('fs-f-caution-post').value)
+          dyeing: collectFsCautions('dyeing'),
+          processing: collectFsCautions('processing'),
+          post: collectFsCautions('post')
         };
         if (cz.dyeing.length || cz.processing.length || cz.post.length) entry.cautions = cz;
         const list = getFabricSpecs().map(x => ({ ...x }));
@@ -24377,7 +24572,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix121';
+  const VERSION = 'v2.53 hotfix123';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix34: 편직 의뢰서 [성격] 시스템 도입 — 정규/재고/샘플/완료 4태그, 자동분류, 표 ● 배지, [성격▼] 필터, 완료체크 양방향연동
   // hotfix33: 클레임(땡처리) 내역서 양식 통일 — 부분/전체 모두 정식 표 양식 + 이미지복사/인쇄/수정 동일 버튼
