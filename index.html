@@ -1688,6 +1688,7 @@
   }
   
   .dash-table .col-no { width: 110px; font-weight: 700; }
+  .dash-table .col-cat { width: 56px; text-align: center; color: #475569; }
   .dash-table .col-stamps { width: 102px; }
   .dash-table .col-date { width: 75px; text-align: center; }
   .dash-table .col-num { text-align: center; width: 58px; }
@@ -17259,14 +17260,29 @@ function validateBlendSum(blends, label) {
       list.flatMap(wo => (wo.items || []).map(it => (it.item || '').trim()).filter(Boolean))
     )].sort();
     
-    // hotfix37/38: 2차 품목 검색 (품목명/공유코드/컬러 부분일치). 빈 값이면 전체.
+    // hotfix37/38: 2차 품목 검색 (품목명/공유코드/컬러/구분 부분일치). 빈 값이면 전체.
+    // hotfix113: 구분(cat)은 품목 사전(원단 기본 스펙)에서 품목명으로 조회
+    const __specs = (state.fabricSpecs && state.fabricSpecs.length) ? state.fabricSpecs : SEED_FABRIC_SPECS;
+    const __catByName = {};
+    __specs.forEach(s => { if (s && s.name) __catByName[String(s.name).trim()] = s.cat || ''; });
+    const catOfItem = (nm) => __catByName[String(nm || '').trim()] || '';
+    const catsOfWo = (wo) => [...new Set((wo.items || []).map(it => catOfItem(it.item)).filter(Boolean))];
+
     const itemSearch = (state.knitItemSearch || '').trim().toLowerCase();
     if (itemSearch) {
       list = list.filter(wo => (wo.items || []).some(it =>
         (it.item || '').toLowerCase().includes(itemSearch) ||
         (it.shared_code || it.wo_no || '').toLowerCase().includes(itemSearch) ||
-        (it.color || '').toLowerCase().includes(itemSearch)
+        (it.color || '').toLowerCase().includes(itemSearch) ||
+        (catOfItem(it.item) || '').toLowerCase().includes(itemSearch)
       ));
+    }
+
+    // hotfix113: 구분 필터용 옵션(현재 보이는 목록 기준) + 적용
+    const knitCatOptions = [...new Set(list.flatMap(wo => catsOfWo(wo)))].sort();
+    const knitCatFilter = state.knitCatFilter || '';
+    if (knitCatFilter && knitCatFilter !== 'all') {
+      list = list.filter(wo => catsOfWo(wo).includes(knitCatFilter));
     }
     
     let html = renderAddRowBar('knit');
@@ -17342,6 +17358,11 @@ function validateBlendSum(blends, label) {
       <input type="text" id="knit-item-search" list="knit-item-options" value="${escapeHtml(state.knitItemSearch || '')}" placeholder="전체 (선택 또는 입력)" autocomplete="off" style="font-size:11px;padding:4px 9px;border:1px solid #ccc;border-radius:3px;width:170px;">
       <datalist id="knit-item-options">${knitItemOptions.map(it => `<option value="${escapeHtml(it)}"></option>`).join('')}</datalist>
       ${itemSearch ? `<button id="knit-item-search-clear" style="font-size:10px;padding:4px 8px;border:1px solid #ccc;background:#fff;border-radius:3px;cursor:pointer;">✕ 전체</button>` : ''}
+      <span style="font-size:11px;color:#1f2937;font-weight:700;margin-left:6px;">🧵 구분</span>
+      <select id="knit-cat-filter" style="font-size:11px;padding:4px 9px;border:1px solid #ccc;border-radius:3px;">
+        <option value="all"${!knitCatFilter || knitCatFilter === 'all' ? ' selected' : ''}>전체</option>
+        ${knitCatOptions.map(c => `<option value="${escapeHtml(c)}"${knitCatFilter === c ? ' selected' : ''}>${escapeHtml(c)}</option>`).join('')}
+      </select>
       <span style="margin-left:auto;"></span>
       <button id="knit-capture-btn" class="dash-action-btn" style="background:#1e3a8a;color:#fff;font-weight:700;padding:5px 12px;">📷 재고 이미지</button>
       <button id="knit-print-btn" class="dash-action-btn" style="background:#374151;color:#fff;font-weight:700;padding:5px 12px;">🖨 인쇄</button>
@@ -17362,6 +17383,7 @@ function validateBlendSum(blends, label) {
       ${sortableTh('knit', 'date', '의뢰일', 'col-date')}
       ${sortableTh('knit', 'vendor', '편직 공장')}
       ${sortableTh('knit', 'item', '품목')}
+      <th class="col-cat">구분</th>
       <th>컬러</th>
       <th class="col-num">의뢰 절</th>
       <th class="col-num">예상 kg</th>
@@ -17448,6 +17470,7 @@ function validateBlendSum(blends, label) {
         <td class="col-date">${formatYMD(wo.date)}</td>
         <td>${escapeHtml(wo.recipient || '-')}</td>
         <td>${itemLines}</td>
+        <td class="col-cat">${items.length > 0 ? items.map(i => { const c = catOfItem(i.item); return `<div class="size-line">${c ? escapeHtml(c) : '-'}</div>`; }).join('') : '-'}</td>
         <td>${colorLines}</td>
         <td class="col-num">${julLines}</td>
         <td class="col-num">${combinedKg.toFixed(1)}kg${inboundJul > 0 ? `<div style="font-size:10px;color:#6b7280;">의뢰 ${totalKg.toFixed(0)}+입고 ${inboundKg.toFixed(0)}</div>` : ''}</td>
@@ -21063,6 +21086,10 @@ function validateBlendSum(blends, label) {
     }
     const knitSearchClearEl = document.getElementById('knit-item-search-clear');
     if (knitSearchClearEl) knitSearchClearEl.addEventListener('click', () => { state.knitItemSearch = ''; renderDashboard(); });
+
+    // hotfix113: 구분 필터
+    const knitCatEl = document.getElementById('knit-cat-filter');
+    if (knitCatEl) knitCatEl.addEventListener('change', () => { state.knitCatFilter = knitCatEl.value || ''; renderDashboard(); });
     
     // hotfix37: 편직 재고 이미지 캡쳐 (액션 컬럼 숨긴 채 → 클립보드/다운로드)
     const knitCapBtn = document.getElementById('knit-capture-btn');
@@ -24329,7 +24356,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix112';
+  const VERSION = 'v2.53 hotfix113';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix34: 편직 의뢰서 [성격] 시스템 도입 — 정규/재고/샘플/완료 4태그, 자동분류, 표 ● 배지, [성격▼] 필터, 완료체크 양방향연동
   // hotfix33: 클레임(땡처리) 내역서 양식 통일 — 부분/전체 모두 정식 표 양식 + 이미지복사/인쇄/수정 동일 버튼
