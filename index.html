@@ -16668,9 +16668,11 @@ function validateBlendSum(blends, label) {
           const tj = items.reduce((s, i) => s + (parseFloat(i.jul) || 0), 0);
           const tk = items.reduce((s, i) => s + (parseFloat(i.jul) || 0) * (parseFloat(i.kg_per_jul) || 21), 0);
           const sh = w.greige_shipments || [];
-          const shj = sh.reduce((s, x) => s + (x.dir === 'in' ? 0 : (parseFloat(x.jul) || 0)), 0);
-          const shk = sh.reduce((s, x) => s + (x.dir === 'in' ? 0 : (parseFloat(x.kg) || 0)), 0);
-          sj += (tj - shj); sk += (tk - shk);
+          const outj = sh.reduce((s, x) => s + (x.dir === 'in' ? 0 : (parseFloat(x.jul) || 0)), 0);
+          const outk = sh.reduce((s, x) => s + (x.dir === 'in' ? 0 : (parseFloat(x.kg) || 0)), 0);
+          const inj = sh.reduce((s, x) => s + (x.dir === 'in' ? (parseFloat(x.jul) || 0) : 0), 0);
+          const ink = sh.reduce((s, x) => s + (x.dir === 'in' ? (parseFloat(x.kg) || 0) : 0), 0);
+          sj += (tj + inj - outj); sk += (tk + ink - outk);
         });
         const opts = ['all', ...vendors].map(v => `<option value="${escapeHtml(v)}" ${cv === v ? 'selected' : ''}>${v === 'all' ? '전체 업체' : escapeHtml(v)}</option>`).join('');
         const kindLabel = { all: '편직', regular: '기획', stock: '재고', sample: '샘플' }[kk] || '편직';
@@ -17100,7 +17102,9 @@ function validateBlendSum(blends, label) {
       const sh = wo.greige_shipments || [];
       const shJul = sh.reduce((s, x) => s + (x.dir === 'in' ? 0 : (parseFloat(x.jul) || 0)), 0);
       const shKg = sh.reduce((s, x) => s + (x.dir === 'in' ? 0 : (parseFloat(x.kg) || 0)), 0);
-      const remainJul = totalJul - shJul;
+      const inJ = sh.reduce((s, x) => s + (x.dir === 'in' ? (parseFloat(x.jul) || 0) : 0), 0);
+      const inK = sh.reduce((s, x) => s + (x.dir === 'in' ? (parseFloat(x.kg) || 0) : 0), 0);
+      const remainJul = totalJul + inJ - shJul;
       const julColor = remainJul < 0 ? '#c00' : remainJul === 0 ? '#047857' : '#c0271f';
 
       let r = `<tr class="${overdueClass}" data-row-id="${wo.id}">
@@ -17110,7 +17114,7 @@ function validateBlendSum(blends, label) {
         <td class="col-date">${formatYMD(wo.date)}</td>
         <td>${itemLines}</td>
         <td>${colorLines}</td>
-        <td class="col-num" style="font-weight:700;color:${julColor};" title="예상 재고 절 = 의뢰 ${totalJul}절 − 생지 출고 ${shJul}절">${remainJul}절</td>
+        <td class="col-num" style="font-weight:700;color:${julColor};" title="예상 재고 절 = 의뢰 ${totalJul}절${inJ > 0 ? ' + 입고 ' + inJ + '절' : ''} − 출고 ${shJul}절">${remainJul}절</td>
         <td>${escapeHtml(wo.recipient || '-')}</td>
         ${renderEditableCell(wo, 'internal_memo', wo.internal_memo, 'text')}
         <td class="col-action col-act-view"><button class="dash-action-btn dash-view-btn" data-id="${wo.id}">보기</button>${gsStatusBadge(wo)}</td>`;
@@ -17279,10 +17283,12 @@ function validateBlendSum(blends, label) {
       const totJul = items.reduce((s,i) => s + (parseFloat(i.jul) || 0), 0);
       const totKg  = items.reduce((s,i) => s + (parseFloat(i.jul) || 0) * (parseFloat(i.kg_per_jul) || 21), 0);
       const shipments = wo.greige_shipments || [];
-      const shJul = shipments.reduce((s,sh) => s + (sh.dir === 'in' ? 0 : (parseFloat(sh.jul) || 0)), 0);
-      const shKg  = shipments.reduce((s,sh) => s + (sh.dir === 'in' ? 0 : (parseFloat(sh.kg)  || 0)), 0);
-      sumRemainJul += (totJul - shJul);
-      sumRemainKg  += (totKg  - shKg);
+      const outJul = shipments.reduce((s,sh) => s + (sh.dir === 'in' ? 0 : (parseFloat(sh.jul) || 0)), 0);
+      const outKg  = shipments.reduce((s,sh) => s + (sh.dir === 'in' ? 0 : (parseFloat(sh.kg)  || 0)), 0);
+      const inJul  = shipments.reduce((s,sh) => s + (sh.dir === 'in' ? (parseFloat(sh.jul) || 0) : 0), 0);
+      const inKg   = shipments.reduce((s,sh) => s + (sh.dir === 'in' ? (parseFloat(sh.kg)  || 0) : 0), 0);
+      sumRemainJul += (totJul + inJul - outJul);
+      sumRemainKg  += (totKg  + inKg  - outKg);
     });
     const julColor = sumRemainJul < 0 ? '#c00' : sumRemainJul === 0 ? '#047857' : '#c0271f';
     const kgColor  = sumRemainKg  < 0 ? '#c00' : sumRemainKg  === 0 ? '#047857' : '#c0271f';
@@ -17389,27 +17395,32 @@ function validateBlendSum(blends, label) {
       // 첫 품목의 kg/절 평균 (예상 재고 계산용)
       const avgKgPerJul = totalJul > 0 ? totalKg / totalJul : 21;
       
-      // 생지 출고/입고 데이터 (다회 가능 - 누적). 입고는 잔량에서 빼지 않고 별도 현일창고 재고.
+      // 생지 출고/입고 데이터. 박 대표 모델: 입고분도 의뢰(보유)에 합산 → 예상재고 = (의뢰+입고) − 출고
       const shipments = wo.greige_shipments || [];
       const shippedJul = shipments.reduce((s,sh) => s + (sh.dir === 'in' ? 0 : (parseFloat(sh.jul) || 0)), 0);
       const shippedKg = shipments.reduce((s,sh) => s + (sh.dir === 'in' ? 0 : (parseFloat(sh.kg) || 0)), 0);
       const inboundJul = shipments.reduce((s,sh) => s + (sh.dir === 'in' ? (parseFloat(sh.jul) || 0) : 0), 0);
-      const remainJul = totalJul - shippedJul;
-      const remainKg = totalKg - shippedKg;
+      const inboundKg = shipments.reduce((s,sh) => s + (sh.dir === 'in' ? (parseFloat(sh.kg) || 0) : 0), 0);
+      const combinedJul = totalJul + inboundJul;   // 의뢰 + 입고
+      const combinedKg = totalKg + inboundKg;
+      const remainJul = combinedJul - shippedJul;  // 예상 재고
+      const remainKg = combinedKg - shippedKg;
       
       // hotfix36: 기획 완료 자동 제안 — 성격=기획 + 실제 출고 있음 + 예상 재고 절 0 이하 + 미완료
       // (자동 완료 X. 박 대표가 [완료로?] 버튼 한 번 눌러 확정. 출고 오입력으로 일시 0/음수 될 때 모르게 닫히는 것 방지)
       const showDoneSuggest = kind === 'regular' && shippedJul > 0 && remainJul <= 0 && !wo.completed;
       
-      // 생지 출고 셀 표시: 출고 내역 있으면 요약, 없으면 "+ 입력"
+      // 생지 출고 셀 표시: 출고·입고 각각 최신 날짜와 합계로 표기
+      const dm = (d) => d ? new Date(d).toLocaleDateString('ko-KR', {month:'numeric', day:'numeric'}) : '';
+      const lastOut = [...shipments].filter(s => s.dir !== 'in').pop();
+      const lastIn  = [...shipments].filter(s => s.dir === 'in').pop();
       let shipmentDisplay;
       if (shipments.length === 0) {
         shipmentDisplay = `<td class="col-action"><button class="dash-action-btn dash-shipment-btn" data-id="${wo.id}">+ 입력</button></td>`;
       } else {
-        const lastSh = shipments[shipments.length - 1];
-        const lastDate = lastSh.date ? new Date(lastSh.date).toLocaleDateString('ko-KR', {month:'numeric', day:'numeric'}) : '';
-        const inTag = inboundJul > 0 ? `<div style="font-size:10px;color:#2563eb;">📥현일재고 ${inboundJul}절</div>` : '';
-        shipmentDisplay = `<td class="col-action"><button class="dash-action-btn dash-shipment-btn" data-id="${wo.id}" title="${shipments.length}회 입·출고">${lastDate} (출고 ${shippedJul}절)</button>${inTag}</td>`;
+        const outLine = shippedJul > 0 ? `<div>${dm(lastOut && lastOut.date)} 출고 ${shippedJul}절</div>` : '';
+        const inLine  = inboundJul > 0 ? `<div style="color:#2563eb;">${dm(lastIn && lastIn.date)} 입고 ${inboundJul}절</div>` : '';
+        shipmentDisplay = `<td class="col-action"><button class="dash-action-btn dash-shipment-btn knit-ship-btn" data-id="${wo.id}" title="${shipments.length}회 입·출고 — 클릭하여 보기/수정">${outLine}${inLine || (outLine ? '' : '내역 보기')}</button></td>`;
       }
       
       // 첫 품목의 코드가 있으면 표시
@@ -17422,9 +17433,10 @@ function validateBlendSum(blends, label) {
       const colorLines = items.length > 0
         ? items.map(i => `<div class="color-line">${escapeHtml(i.color || '-')}</div>`).join('')
         : '-';
-      const julLines = items.length > 0
-        ? items.map(i => `<div class="size-line">${i.jul || 0}절</div>`).join('')
-        : '-';
+      // 의뢰 절: 입고가 있으면 합계(의뢰+입고)로 표시 + 분해 안내
+      const julLines = inboundJul > 0
+        ? `<div class="size-line" style="font-weight:700;">${combinedJul}절</div><div style="font-size:10px;color:#6b7280;">의뢰 ${totalJul} +입고 ${inboundJul}</div>`
+        : (items.length > 0 ? items.map(i => `<div class="size-line">${i.jul || 0}절</div>`).join('') : '-');
       
       html += `<tr class="${overdueClass} ${completedClass} ${kindClass}" data-row-id="${wo.id}">
         <td class="col-select"><input type="checkbox" class="dash-row-cb" data-id="${wo.id}" data-list-type="편직"></td>
@@ -17438,7 +17450,7 @@ function validateBlendSum(blends, label) {
         <td>${itemLines}</td>
         <td>${colorLines}</td>
         <td class="col-num">${julLines}</td>
-        <td class="col-num">${totalKg.toFixed(1)}kg</td>
+        <td class="col-num">${combinedKg.toFixed(1)}kg${inboundJul > 0 ? `<div style="font-size:10px;color:#6b7280;">의뢰 ${totalKg.toFixed(0)}+입고 ${inboundKg.toFixed(0)}</div>` : ''}</td>
         <td>${escapeHtml(first.yarn_input || '-')}</td>
         ${shipmentDisplay}
         <td class="col-num" style="font-weight:700;color:${remainJul < 0 ? '#c00' : remainJul === 0 ? '#047857' : '#c0271f'};">${remainJul}절</td>
@@ -23320,7 +23332,8 @@ function validateBlendSum(blends, label) {
     const inJul  = shipments.reduce((s,sh) => s + (isIn(sh) ? (parseFloat(sh.jul) || 0) : 0), 0);
     const inKg   = shipments.reduce((s,sh) => s + (isIn(sh) ? (parseFloat(sh.kg)  || 0) : 0), 0);
     const movedJul = outJul + inJul, movedKg = outKg + inKg;          // 총 이동량(참고용)
-    const remainJul = totalJul - outJul, remainKg = totalKg - outKg;   // 잔량 = 의뢰 − 출고(only). 입고는 별도 현일창고 재고로만 잡음(음수 방지)
+    const remainJul = totalJul + inJul - outJul, remainKg = totalKg + inKg - outKg;   // 예상 재고 = 의뢰 + 입고 − 출고 (입고분도 보유 대상)
+    const combinedJul = totalJul + inJul, combinedKg = totalKg + inKg;                 // 의뢰 + 입고 합계
     const avgKgPerJul = totalJul > 0 ? totalKg / totalJul : 21;
     let addDir = 'out';   // 새 추가 시 구분
     
@@ -23344,8 +23357,8 @@ function validateBlendSum(blends, label) {
           <div style="font-size:12px;line-height:1.6;">
             품목: ${escapeHtml(wo.items?.[0]?.item || '-')} / 컬러: ${escapeHtml(wo.items?.[0]?.color || '-')}<br>
             편직 공장: ${escapeHtml(wo.recipient || '-')}<br>
-            <strong>의뢰 총량: ${totalJul}절 / ${totalKg.toFixed(1)}kg</strong><br>
-            <strong style="color:${remainJul <= 0 ? '#047857' : '#c00'};">🚚 출고 ${outJul}절 / ${outKg.toFixed(1)}kg &nbsp;·&nbsp; 📥 현일창고 입고(재고) ${inJul}절 / ${inKg.toFixed(1)}kg &nbsp;→&nbsp; 잔량 ${remainJul}절 / ${remainKg.toFixed(1)}kg</strong>
+            <strong>의뢰 ${totalJul}절 / ${totalKg.toFixed(1)}kg${inJul > 0 ? ` &nbsp;+&nbsp; 📥 입고 ${inJul}절 / ${inKg.toFixed(1)}kg &nbsp;=&nbsp; 합계 ${combinedJul}절 / ${combinedKg.toFixed(1)}kg` : ''}</strong><br>
+            <strong style="color:${remainJul < 0 ? '#c00' : '#047857'};">🚚 출고 ${outJul}절 / ${outKg.toFixed(1)}kg &nbsp;→&nbsp; 📦 예상 재고 ${remainJul}절 / ${remainKg.toFixed(1)}kg</strong>
           </div>
         </div>`;
       
@@ -24316,7 +24329,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix110';
+  const VERSION = 'v2.53 hotfix111';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix34: 편직 의뢰서 [성격] 시스템 도입 — 정규/재고/샘플/완료 4태그, 자동분류, 표 ● 배지, [성격▼] 필터, 완료체크 양방향연동
   // hotfix33: 클레임(땡처리) 내역서 양식 통일 — 부분/전체 모두 정식 표 양식 + 이미지복사/인쇄/수정 동일 버튼
