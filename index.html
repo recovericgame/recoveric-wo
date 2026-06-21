@@ -1688,6 +1688,12 @@
   }
   
   .dash-table .col-no { width: 110px; font-weight: 700; }
+  /* hotfix114: NO/공유코드 칸 — 평소 숨김 + 마우스오버 시 표시 (가독성·폭 절약) */
+  .dash-table .col-no.id-hover { width: 34px; min-width: 34px; font-weight: 700; text-align: center; position: relative; white-space: nowrap; }
+  .dash-table .col-no.id-hover .id-text { display: none; }
+  .dash-table .col-no.id-hover::after { content: '⋯'; color: #b6c0cc; font-weight: 700; }
+  .dash-table .col-no.id-hover:hover::after { content: ''; }
+  .dash-table .col-no.id-hover:hover .id-text { display: inline-block; position: absolute; left: 4px; top: 50%; transform: translateY(-50%); background: #1f2937; color: #fff; padding: 3px 9px; border-radius: 4px; white-space: nowrap; z-index: 60; font-size: 11px; font-weight: 700; box-shadow: 0 2px 10px rgba(0,0,0,.28); }
   .dash-table .col-cat { width: 56px; text-align: center; color: #475569; }
   .dash-table .col-stamps { width: 102px; }
   .dash-table .col-date { width: 75px; text-align: center; }
@@ -9495,11 +9501,13 @@ window.addEventListener('firebase-ready', () => {
   async function saveFabricSpecs(items) {
     const cleaned = (items || []).map(it => ({
       name: String(it.name || '').trim(),
+      gubun: String(it.gubun || '').trim(),
       cat: String(it.cat || '').trim(),
       width: String(it.width || '').trim(),
       tube: !!it.tube,
       gy: (it.gy === '' || it.gy == null) ? null : (parseFloat(it.gy) || null),
-      blend: String(it.blend || '').trim()
+      blend: String(it.blend || '').trim(),
+      ...(it.cautions ? { cautions: it.cautions } : {})
     })).filter(it => it.name);
     const names = cleaned.map(it => it.name);
     if (new Set(names).size !== names.length) {
@@ -16407,8 +16415,8 @@ function validateBlendSum(blends, label) {
     // 미입고 = 원사 의뢰서 중 arrival_date 없는 것
     const yarnPending = yarns.filter(wo => !wo.arrival_date).length;
     
-    // 편직 진행 = 편직 의뢰서 중 knit_done_date 없는 것
-    const knitInProgress = knits.filter(wo => !wo.knit_done_date).length;
+    // 편직 진행 = 편직 의뢰서 중 knit_done_date 없는 것 (hotfix114: 기획만, 재고 제외)
+    const knitInProgress = knits.filter(wo => !wo.knit_done_date && (wo.kind || inferKnitKind(wo)) === 'regular').length;
     
     // 염색가공 미완 = 염색가공 의뢰서 중 arrival_date(최종 입고) 없는 것
     const finishIncomplete = finishes.filter(wo => !wo.arrival_date).length;
@@ -16465,9 +16473,9 @@ function validateBlendSum(blends, label) {
         <div class="kpi-sub">건 · 청구 ₩${formatMoney(_claimsAmount)}</div>
       </div>
       <div class="dash-kpi-card info clickable" data-jump="knit">
-        <div class="kpi-label">편직 진행</div>
+        <div class="kpi-label">편직 진행 (기획)</div>
         <div class="kpi-value">${knitInProgress}</div>
-        <div class="kpi-sub">건 (편직 완료일 미입력)</div>
+        <div class="kpi-sub">건 (기획 · 편직 완료일 미입력)</div>
       </div>
       <div class="dash-kpi-card info clickable" data-jump="finish">
         <div class="kpi-label">염색 및 가공 미완</div>
@@ -16481,13 +16489,8 @@ function validateBlendSum(blends, label) {
       </div>
     </div>`;
     
-    // 2행: 알림 KPI
-    html += `<div class="dash-kpi-row">
-      <div class="dash-kpi-card ${overdue > 0 ? 'warn' : ''}">
-        <div class="kpi-label">납기 5일 초과</div>
-        <div class="kpi-value">${overdue}</div>
-        <div class="kpi-sub">건 (발주일 기준)</div>
-      </div>
+    // 2행: 알림 KPI (hotfix114: 납기 5일 초과 카드 제거 — 초지급/긴급으로 갈음)
+    html += `<div class="dash-kpi-row" style="grid-template-columns:repeat(3,1fr);">
       <div class="dash-kpi-card ${urgent > 0 ? 'warn' : ''}">
         <div class="kpi-label">초지급 / 긴급</div>
         <div class="kpi-value">${urgent}</div>
@@ -16933,7 +16936,7 @@ function validateBlendSum(blends, label) {
         // 의뢰서 단위 셀 (rowspan 첫 행에만, 컬러별 분리된 염색가공만)
         const rs = (totalRows > 1) ? ` rowspan="${totalRows}"` : '';
         const woUnitCells = isFirstRow ? `
-          <td class="col-no"${rs}>${escapeHtml(wo.wo_number || '-')}</td>
+          <td class="col-no id-hover"${rs} title="${escapeHtml(wo.wo_number || '')}"><span class="id-text">${escapeHtml(wo.wo_number || '-')}</span></td>
           <td${rs}>${renderTypeBadge(wo.type)}</td>
           <td class="col-stamps"${rs}>${renderStampMini(wo.stamps) || '-'}</td>
           <td class="col-date"${rs}>${formatYMD(wo.date)}</td>
@@ -17109,7 +17112,7 @@ function validateBlendSum(blends, label) {
       const julColor = remainJul < 0 ? '#c00' : remainJul === 0 ? '#047857' : '#c0271f';
 
       let r = `<tr class="${overdueClass}" data-row-id="${wo.id}">
-        <td class="col-no" title="${escapeHtml(wo.wo_number || '')}">${escapeHtml(wo.wo_number || '-')}</td>
+        <td class="col-no id-hover" title="${escapeHtml(wo.wo_number || '')}"><span class="id-text">${escapeHtml(wo.wo_number || '-')}</span></td>
         <td>${renderTypeBadge(wo.type)}</td>
         <td><span class="kind-badge" style="background:${kMeta.bg};color:${kMeta.text};">●${kMeta.label}</span></td>
         <td class="col-date">${formatYMD(wo.date)}</td>
@@ -17206,7 +17209,7 @@ function validateBlendSum(blends, label) {
       
       html += `<tr class="${overdueClass} ${completedClass}" data-row-id="${wo.id}">
         <td class="col-select"><input type="checkbox" class="dash-row-cb" data-id="${wo.id}" data-list-type="원사"></td>
-        <td class="col-no">${escapeHtml(wo.wo_number || '-')}</td>
+        <td class="col-no id-hover" title="${escapeHtml(wo.wo_number || '')}"><span class="id-text">${escapeHtml(wo.wo_number || '-')}</span></td>
         <td class="col-lot">${lotDisplay}</td>
         <td class="col-stamps">${renderStampMini(wo.stamps) || '-'}</td>
         <td class="col-date">${formatYMD(wo.date)}</td>
@@ -17260,13 +17263,14 @@ function validateBlendSum(blends, label) {
       list.flatMap(wo => (wo.items || []).map(it => (it.item || '').trim()).filter(Boolean))
     )].sort();
     
-    // hotfix37/38: 2차 품목 검색 (품목명/공유코드/컬러/구분 부분일치). 빈 값이면 전체.
-    // hotfix113: 구분(cat)은 품목 사전(원단 기본 스펙)에서 품목명으로 조회
+    // 품목 사전(원단 기본 스펙)에서 조직(cat)·구분(gubun) 조회. hotfix115: 조직/구분 분리
     const __specs = (state.fabricSpecs && state.fabricSpecs.length) ? state.fabricSpecs : SEED_FABRIC_SPECS;
-    const __catByName = {};
-    __specs.forEach(s => { if (s && s.name) __catByName[String(s.name).trim()] = s.cat || ''; });
-    const catOfItem = (nm) => __catByName[String(nm || '').trim()] || '';
-    const catsOfWo = (wo) => [...new Set((wo.items || []).map(it => catOfItem(it.item)).filter(Boolean))];
+    const __orgByName = {}, __gubunByName = {};
+    __specs.forEach(s => { if (s && s.name) { const k = String(s.name).trim(); __orgByName[k] = s.cat || ''; __gubunByName[k] = s.gubun || ''; } });
+    const orgOfItem = (nm) => __orgByName[String(nm || '').trim()] || '';
+    const gubunOfItem = (nm) => __gubunByName[String(nm || '').trim()] || '';
+    const orgsOfWo = (wo) => [...new Set((wo.items || []).map(it => orgOfItem(it.item)).filter(Boolean))];
+    const gubunsOfWo = (wo) => [...new Set((wo.items || []).map(it => gubunOfItem(it.item)).filter(Boolean))];
 
     const itemSearch = (state.knitItemSearch || '').trim().toLowerCase();
     if (itemSearch) {
@@ -17274,16 +17278,21 @@ function validateBlendSum(blends, label) {
         (it.item || '').toLowerCase().includes(itemSearch) ||
         (it.shared_code || it.wo_no || '').toLowerCase().includes(itemSearch) ||
         (it.color || '').toLowerCase().includes(itemSearch) ||
-        (catOfItem(it.item) || '').toLowerCase().includes(itemSearch)
+        (orgOfItem(it.item) || '').toLowerCase().includes(itemSearch) ||
+        (gubunOfItem(it.item) || '').toLowerCase().includes(itemSearch)
       ));
     }
 
-    // hotfix113: 구분 필터용 옵션(현재 보이는 목록 기준) + 적용
-    const knitCatOptions = [...new Set(list.flatMap(wo => catsOfWo(wo)))].sort();
-    const knitCatFilter = state.knitCatFilter || '';
-    if (knitCatFilter && knitCatFilter !== 'all') {
-      list = list.filter(wo => catsOfWo(wo).includes(knitCatFilter));
-    }
+    // hotfix115: 구분·조직·스탬프 필터 (옵션은 현재 보이는 목록 기준)
+    const knitGubunOptions = [...new Set(list.flatMap(wo => gubunsOfWo(wo)))].sort();
+    const knitOrgOptions = [...new Set(list.flatMap(wo => orgsOfWo(wo)))].sort();
+    const knitStampOptions = [...new Set(list.flatMap(wo => (wo.stamps || [])))].sort();
+    const knitGubunFilter = state.knitGubunFilter || '';
+    const knitOrgFilter = state.knitCatFilter || '';
+    const knitStampFilter = state.knitStampFilter || '';
+    if (knitGubunFilter && knitGubunFilter !== 'all') list = list.filter(wo => gubunsOfWo(wo).includes(knitGubunFilter));
+    if (knitOrgFilter && knitOrgFilter !== 'all') list = list.filter(wo => orgsOfWo(wo).includes(knitOrgFilter));
+    if (knitStampFilter && knitStampFilter !== 'all') list = list.filter(wo => (wo.stamps || []).includes(knitStampFilter));
     
     let html = renderAddRowBar('knit');
     
@@ -17358,10 +17367,20 @@ function validateBlendSum(blends, label) {
       <input type="text" id="knit-item-search" list="knit-item-options" value="${escapeHtml(state.knitItemSearch || '')}" placeholder="전체 (선택 또는 입력)" autocomplete="off" style="font-size:11px;padding:4px 9px;border:1px solid #ccc;border-radius:3px;width:170px;">
       <datalist id="knit-item-options">${knitItemOptions.map(it => `<option value="${escapeHtml(it)}"></option>`).join('')}</datalist>
       ${itemSearch ? `<button id="knit-item-search-clear" style="font-size:10px;padding:4px 8px;border:1px solid #ccc;background:#fff;border-radius:3px;cursor:pointer;">✕ 전체</button>` : ''}
-      <span style="font-size:11px;color:#1f2937;font-weight:700;margin-left:6px;">🧵 구분</span>
+      <span style="font-size:11px;color:#1f2937;font-weight:700;margin-left:6px;">📑 구분</span>
+      <select id="knit-gubun-filter" style="font-size:11px;padding:4px 9px;border:1px solid #ccc;border-radius:3px;">
+        <option value="all"${!knitGubunFilter || knitGubunFilter === 'all' ? ' selected' : ''}>전체</option>
+        ${knitGubunOptions.map(c => `<option value="${escapeHtml(c)}"${knitGubunFilter === c ? ' selected' : ''}>${escapeHtml(c)}</option>`).join('')}
+      </select>
+      <span style="font-size:11px;color:#1f2937;font-weight:700;">🧵 조직</span>
       <select id="knit-cat-filter" style="font-size:11px;padding:4px 9px;border:1px solid #ccc;border-radius:3px;">
-        <option value="all"${!knitCatFilter || knitCatFilter === 'all' ? ' selected' : ''}>전체</option>
-        ${knitCatOptions.map(c => `<option value="${escapeHtml(c)}"${knitCatFilter === c ? ' selected' : ''}>${escapeHtml(c)}</option>`).join('')}
+        <option value="all"${!knitOrgFilter || knitOrgFilter === 'all' ? ' selected' : ''}>전체</option>
+        ${knitOrgOptions.map(c => `<option value="${escapeHtml(c)}"${knitOrgFilter === c ? ' selected' : ''}>${escapeHtml(c)}</option>`).join('')}
+      </select>
+      <span style="font-size:11px;color:#1f2937;font-weight:700;">🏷 스탬프</span>
+      <select id="knit-stamp-filter" style="font-size:11px;padding:4px 9px;border:1px solid #ccc;border-radius:3px;">
+        <option value="all"${!knitStampFilter || knitStampFilter === 'all' ? ' selected' : ''}>전체</option>
+        ${knitStampOptions.map(c => `<option value="${escapeHtml(c)}"${knitStampFilter === c ? ' selected' : ''}>${escapeHtml(c)}</option>`).join('')}
       </select>
       <span style="margin-left:auto;"></span>
       <button id="knit-capture-btn" class="dash-action-btn" style="background:#1e3a8a;color:#fff;font-weight:700;padding:5px 12px;">📷 재고 이미지</button>
@@ -17384,13 +17403,11 @@ function validateBlendSum(blends, label) {
       ${sortableTh('knit', 'vendor', '편직 공장')}
       ${sortableTh('knit', 'item', '품목')}
       <th class="col-cat">구분</th>
+      <th class="col-cat">조직</th>
       <th>컬러</th>
-      <th class="col-num">의뢰 절</th>
-      <th class="col-num">예상 kg</th>
-      <th>원사 입고</th>
-      <th class="col-action">생지 출고</th>
-      <th class="col-num">예상 재고 절</th>
-      <th class="col-num">예상 재고 kg</th>
+      <th class="col-action">총 출고량</th>
+      <th class="col-num">재고(절)</th>
+      <th class="col-num">재고(kg)</th>
       <th>📝 메모</th>
       <th class="col-action">작지</th>
       <th class="col-action">작업</th>
@@ -17432,17 +17449,12 @@ function validateBlendSum(blends, label) {
       // (자동 완료 X. 박 대표가 [완료로?] 버튼 한 번 눌러 확정. 출고 오입력으로 일시 0/음수 될 때 모르게 닫히는 것 방지)
       const showDoneSuggest = kind === 'regular' && shippedJul > 0 && remainJul <= 0 && !wo.completed;
       
-      // 생지 출고 셀 표시: 출고·입고 각각 최신 날짜와 합계로 표기
-      const dm = (d) => d ? new Date(d).toLocaleDateString('ko-KR', {month:'numeric', day:'numeric'}) : '';
-      const lastOut = [...shipments].filter(s => s.dir !== 'in').pop();
-      const lastIn  = [...shipments].filter(s => s.dir === 'in').pop();
+      // hotfix115: 총 출고량 — 누적 출고만 'n절'로 (입고/날짜 줄 제거, 깔끔). 클릭 시 입·출고 모달
       let shipmentDisplay;
       if (shipments.length === 0) {
         shipmentDisplay = `<td class="col-action"><button class="dash-action-btn dash-shipment-btn" data-id="${wo.id}">+ 입력</button></td>`;
       } else {
-        const outLine = shippedJul > 0 ? `<div>${dm(lastOut && lastOut.date)} 출고 ${shippedJul}절</div>` : '';
-        const inLine  = inboundJul > 0 ? `<div style="color:#2563eb;">${dm(lastIn && lastIn.date)} 입고 ${inboundJul}절</div>` : '';
-        shipmentDisplay = `<td class="col-action"><button class="dash-action-btn dash-shipment-btn knit-ship-btn" data-id="${wo.id}" title="${shipments.length}회 입·출고 — 클릭하여 보기/수정">${outLine}${inLine || (outLine ? '' : '내역 보기')}</button></td>`;
+        shipmentDisplay = `<td class="col-action"><button class="dash-action-btn dash-shipment-btn knit-ship-btn" data-id="${wo.id}" title="${shipments.length}회 입·출고 — 클릭하여 보기/수정">${shippedJul}절</button></td>`;
       }
       
       // 첫 품목의 코드가 있으면 표시
@@ -17455,10 +17467,6 @@ function validateBlendSum(blends, label) {
       const colorLines = items.length > 0
         ? items.map(i => `<div class="color-line">${escapeHtml(i.color || '-')}</div>`).join('')
         : '-';
-      // 의뢰 절: 입고가 있으면 합계(의뢰+입고)로 표시 + 분해 안내
-      const julLines = inboundJul > 0
-        ? `<div class="size-line" style="font-weight:700;">${combinedJul}절</div><div style="font-size:10px;color:#6b7280;">의뢰 ${totalJul} +입고 ${inboundJul}</div>`
-        : (items.length > 0 ? items.map(i => `<div class="size-line">${i.jul || 0}절</div>`).join('') : '-');
       
       html += `<tr class="${overdueClass} ${completedClass} ${kindClass}" data-row-id="${wo.id}">
         <td class="col-select"><input type="checkbox" class="dash-row-cb" data-id="${wo.id}" data-list-type="편직"></td>
@@ -17470,11 +17478,9 @@ function validateBlendSum(blends, label) {
         <td class="col-date">${formatYMD(wo.date)}</td>
         <td>${escapeHtml(wo.recipient || '-')}</td>
         <td>${itemLines}</td>
-        <td class="col-cat">${items.length > 0 ? items.map(i => { const c = catOfItem(i.item); return `<div class="size-line">${c ? escapeHtml(c) : '-'}</div>`; }).join('') : '-'}</td>
+        <td class="col-cat">${items.length > 0 ? items.map(i => { const g = gubunOfItem(i.item); return `<div class="size-line">${g ? escapeHtml(g) : '-'}</div>`; }).join('') : '-'}</td>
+        <td class="col-cat">${items.length > 0 ? items.map(i => { const o = orgOfItem(i.item); return `<div class="size-line">${o ? escapeHtml(o) : '-'}</div>`; }).join('') : '-'}</td>
         <td>${colorLines}</td>
-        <td class="col-num">${julLines}</td>
-        <td class="col-num">${combinedKg.toFixed(1)}kg${inboundJul > 0 ? `<div style="font-size:10px;color:#6b7280;">의뢰 ${totalKg.toFixed(0)}+입고 ${inboundKg.toFixed(0)}</div>` : ''}</td>
-        <td>${escapeHtml(first.yarn_input || '-')}</td>
         ${shipmentDisplay}
         <td class="col-num" style="font-weight:700;color:${remainJul < 0 ? '#c00' : remainJul === 0 ? '#047857' : '#c0271f'};">${remainJul}절</td>
         <td class="col-num" style="font-weight:700;color:${remainKg < 0 ? '#c00' : remainKg === 0 ? '#047857' : '#000'};">${remainKg.toFixed(1)}kg</td>
@@ -17680,7 +17686,7 @@ function validateBlendSum(blends, label) {
       
       const woUnitCells = isFirstRow ? `
         <td class="col-select" rowspan="${totalRows}"><input type="checkbox" class="dash-row-cb" data-id="${wo.id}" data-list-type="염색가공"></td>
-        <td class="col-no" rowspan="${totalRows}">${escapeHtml(wo.wo_number || '-')}${progressBadge}</td>
+        <td class="col-no id-hover" rowspan="${totalRows}" title="${escapeHtml(wo.wo_number || '')}"><span class="id-text">${escapeHtml(wo.wo_number || '-')}</span>${progressBadge}</td>
         <td class="col-stamps" rowspan="${totalRows}">${renderStampMini(wo.stamps) || '-'}</td>
         <td class="col-date" rowspan="${totalRows}">${formatYMD(wo.date)}</td>
         ${compact ? '' : `<td rowspan="${totalRows}">${escapeHtml(wo.production_type || '-')}</td>`}
@@ -17869,7 +17875,7 @@ function validateBlendSum(blends, label) {
       
       html += `<tr class="${overdueClass} ${completedClass}" data-row-id="${wo.id}">
         <td class="col-select"><input type="checkbox" class="dash-row-cb" data-id="${wo.id}" data-list-type="BT"></td>
-        <td class="col-no">${escapeHtml(wo.wo_number || '-')}</td>
+        <td class="col-no id-hover" title="${escapeHtml(wo.wo_number || '')}"><span class="id-text">${escapeHtml(wo.wo_number || '-')}</span></td>
         <td class="col-stamps">${renderStampMini(wo.stamps) || '-'}</td>
         <td class="col-date">${formatYMD(wo.date)}</td>
         <td>${escapeHtml(wo.recipient || '-')}</td>
@@ -17946,7 +17952,7 @@ function validateBlendSum(blends, label) {
       
       html += `<tr class="${completedClass}" data-row-id="${wo.id}">
         <td class="col-select"><input type="checkbox" class="dash-row-cb" data-id="${wo.id}" data-list-type="공문"></td>
-        <td class="col-no">${escapeHtml(wo.wo_number || '-')}</td>
+        <td class="col-no id-hover" title="${escapeHtml(wo.wo_number || '')}"><span class="id-text">${escapeHtml(wo.wo_number || '-')}</span></td>
         <td class="col-date">${formatYMD(wo.date)}</td>
         <td>${escapeHtml(wo.recipient || '-')}</td>
         <td>${escapeHtml(wo.title || '-')}</td>
@@ -18017,7 +18023,7 @@ function validateBlendSum(blends, label) {
       const partTxt = wo.gs_part === 'rib' ? '리프' : (wo.gs_part === 'body' ? '몸판' : '-');
       html += `<tr class="${completedClass}" data-row-id="${wo.id}">
         <td class="col-select"><input type="checkbox" class="dash-row-cb" data-id="${wo.id}" data-list-type="생지출고"></td>
-        <td class="col-no">${escapeHtml(wo.wo_number || '-')}</td>
+        <td class="col-no id-hover" title="${escapeHtml(wo.wo_number || '')}"><span class="id-text">${escapeHtml(wo.wo_number || '-')}</span></td>
         <td class="col-date">${formatYMD(wo.date)}</td>
         <td style="font-weight:700;">${partTxt}</td>
         <td>${escapeHtml(wo.recipient || '-')}</td>
@@ -19066,7 +19072,7 @@ function validateBlendSum(blends, label) {
       const delDate = wo.deleted_at?.toDate ? wo.deleted_at.toDate().toLocaleDateString('ko-KR', {month:'numeric', day:'numeric'}) : '-';
       
       html += `<tr class="deleted">
-        <td class="col-no">${escapeHtml(wo.wo_number || '-')}</td>
+        <td class="col-no id-hover" title="${escapeHtml(wo.wo_number || '')}"><span class="id-text">${escapeHtml(wo.wo_number || '-')}</span></td>
         <td>${escapeHtml(wo.type || '-')}</td>
         <td class="col-date">${formatYMD(wo.date)}</td>
         <td class="col-date">${delDate}</td>
@@ -19221,14 +19227,15 @@ function validateBlendSum(blends, label) {
       <button class="dash-action-btn" id="fs-reset-btn" style="margin-left:auto;font-size:11px;color:#6b7280;" title="기본 34품목으로 되돌립니다">기본 34품목 불러오기</button>
     </div>
     <div class="dash-table-wrap"><table class="dash-table"><thead><tr>
-      <th style="text-align:left;">품목명</th><th>구분</th><th>기준 폭</th><th>튜브</th><th>중량 g/y</th><th style="text-align:left;">혼용률</th><th>수정</th><th>삭제</th>
+      <th style="text-align:left;">품목명</th><th>구분</th><th>조직</th><th>기준 폭</th><th>튜브</th><th>중량 g/y</th><th style="text-align:left;">혼용률</th><th>수정</th><th>삭제</th>
     </tr></thead><tbody>`;
     if (specs.length === 0) {
-      h += `<tr><td colspan="8" style="text-align:center;color:#9ca3af;padding:18px;">등록된 품목이 없습니다. [＋ 새 품목 추가] 또는 [기본 34품목 불러오기]</td></tr>`;
+      h += `<tr><td colspan="9" style="text-align:center;color:#9ca3af;padding:18px;">등록된 품목이 없습니다. [＋ 새 품목 추가] 또는 [기본 34품목 불러오기]</td></tr>`;
     }
     specs.forEach((s, i) => {
       h += `<tr>
         <td style="font-weight:700;text-align:left;">${escapeHtml(s.name)}</td>
+        <td style="text-align:center;">${escapeHtml(s.gubun || '-')}</td>
         <td style="text-align:center;">${escapeHtml(s.cat || '-')}</td>
         <td style="text-align:center;">${s.width ? escapeHtml(s.width) + '″' : '-'}</td>
         <td style="text-align:center;">${s.tube ? '✔' : '-'}</td>
@@ -19245,7 +19252,10 @@ function validateBlendSum(blends, label) {
         <div class="dash-modal-head"><span id="fs-modal-title">품목 추가</span><button class="dash-modal-close" id="fs-modal-close">✕</button></div>
         <div style="padding:16px;display:flex;flex-direction:column;gap:11px;">
           <div><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">품목명</label><input type="text" id="fs-f-name" style="${inputStyle}" placeholder="예: 슈퍼싱글"></div>
-          <div><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">구분</label><input type="text" id="fs-f-cat" style="${inputStyle}" placeholder="예: 싱글 / 쭈리 / 기모"></div>
+          <div style="display:flex;gap:8px;">
+            <div style="flex:1;"><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">구분</label><input type="text" id="fs-f-gubun" style="${inputStyle}" placeholder="예: 몸판 / 리프 / 스와치 / 문방구"></div>
+            <div style="flex:1;"><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">조직</label><input type="text" id="fs-f-cat" style="${inputStyle}" placeholder="예: 싱글 / 쭈리 / 기모"></div>
+          </div>
           <div style="display:flex;gap:8px;align-items:flex-end;">
             <div style="flex:1;"><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">기준 폭</label><input type="text" id="fs-f-width" style="${inputStyle}" placeholder="60/62"></div>
             <label style="display:flex;align-items:center;gap:4px;white-space:nowrap;font-size:13px;cursor:pointer;padding-bottom:8px;"><input type="checkbox" id="fs-f-tube"> 튜브(×2)</label>
@@ -19610,7 +19620,7 @@ function validateBlendSum(blends, label) {
             ? wo.completed_at.toDate().toLocaleDateString('ko-KR', {month:'numeric', day:'numeric'})
             : (wo.updated_at?.toDate ? wo.updated_at.toDate().toLocaleDateString('ko-KR', {month:'numeric', day:'numeric'}) : '-');
           html += `<tr class="completed">
-            <td class="col-no">${escapeHtml(wo.wo_number || '-')}</td>
+            <td class="col-no id-hover" title="${escapeHtml(wo.wo_number || '')}"><span class="id-text">${escapeHtml(wo.wo_number || '-')}</span></td>
             <td>${escapeHtml(wo.type || '-')}</td>
             <td class="col-date">${formatYMD(wo.date)}</td>
             <td class="col-date">${completedDate}</td>
@@ -19717,7 +19727,7 @@ function validateBlendSum(blends, label) {
           }
           
           html += `<tr class="completed ${isFirst ? 'wo-group-first' : 'wo-group-cont'}">
-            ${isFirst ? `<td class="col-no" rowspan="${totalRows}">${escapeHtml(wo.wo_number || '-')}</td>` : ''}
+            ${isFirst ? `<td class="col-no id-hover" rowspan="${totalRows}" title="${escapeHtml(wo.wo_number || '')}"><span class="id-text">${escapeHtml(wo.wo_number || '-')}</span></td>` : ''}
             ${isFirst ? `<td rowspan="${totalRows}">${escapeHtml(wo.type)}</td>` : ''}
             ${isFirst ? `<td class="col-date" rowspan="${totalRows}">${formatYMD(wo.date)}</td>` : ''}
             <td class="col-date">${cDate}</td>
@@ -19781,7 +19791,7 @@ function validateBlendSum(blends, label) {
         : (wo.updated_at?.toDate ? wo.updated_at.toDate().toLocaleDateString('ko-KR', {month:'numeric', day:'numeric'}) : '-');
       
       html += `<tr class="completed">
-        <td class="col-no">${escapeHtml(wo.wo_number || '-')}</td>
+        <td class="col-no id-hover" title="${escapeHtml(wo.wo_number || '')}"><span class="id-text">${escapeHtml(wo.wo_number || '-')}</span></td>
         <td>${escapeHtml(wo.type || '-')}</td>
         <td class="col-date">${formatYMD(wo.date)}</td>
         <td class="col-date">${completedDate}</td>
@@ -21090,6 +21100,10 @@ function validateBlendSum(blends, label) {
     // hotfix113: 구분 필터
     const knitCatEl = document.getElementById('knit-cat-filter');
     if (knitCatEl) knitCatEl.addEventListener('change', () => { state.knitCatFilter = knitCatEl.value || ''; renderDashboard(); });
+    const knitGubunEl = document.getElementById('knit-gubun-filter');
+    if (knitGubunEl) knitGubunEl.addEventListener('change', () => { state.knitGubunFilter = knitGubunEl.value || ''; renderDashboard(); });
+    const knitStampEl = document.getElementById('knit-stamp-filter');
+    if (knitStampEl) knitStampEl.addEventListener('change', () => { state.knitStampFilter = knitStampEl.value || ''; renderDashboard(); });
     
     // hotfix37: 편직 재고 이미지 캡쳐 (액션 컬럼 숨긴 채 → 클립보드/다운로드)
     const knitCapBtn = document.getElementById('knit-capture-btn');
@@ -21488,6 +21502,7 @@ function validateBlendSum(blends, label) {
         const s = (idx >= 0) ? specs[idx] : { name: '', cat: '', width: '', tube: false, gy: '', blend: '' };
         document.getElementById('fs-modal-title').textContent = (idx >= 0) ? '품목 수정' : '품목 추가';
         document.getElementById('fs-f-name').value = s.name || '';
+        document.getElementById('fs-f-gubun').value = s.gubun || '';
         document.getElementById('fs-f-cat').value = s.cat || '';
         document.getElementById('fs-f-width').value = s.width || '';
         document.getElementById('fs-f-tube').checked = !!s.tube;
@@ -21512,6 +21527,7 @@ function validateBlendSum(blends, label) {
         if (!name) { toast('품목명을 입력하세요', 'error'); return; }
         const entry = {
           name,
+          gubun: document.getElementById('fs-f-gubun').value.trim(),
           cat: document.getElementById('fs-f-cat').value.trim(),
           width: document.getElementById('fs-f-width').value.trim(),
           tube: document.getElementById('fs-f-tube').checked,
@@ -24356,7 +24372,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix113';
+  const VERSION = 'v2.53 hotfix115';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix34: 편직 의뢰서 [성격] 시스템 도입 — 정규/재고/샘플/완료 4태그, 자동분류, 표 ● 배지, [성격▼] 필터, 완료체크 양방향연동
   // hotfix33: 클레임(땡처리) 내역서 양식 통일 — 부분/전체 모두 정식 표 양식 + 이미지복사/인쇄/수정 동일 버튼
