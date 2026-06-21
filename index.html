@@ -2956,6 +2956,29 @@
   .hist-empty { padding: 30px; text-align: center; color: #9ca3af; }
   .hist-claim-row { margin-top: 6px; font-size: 13px; }
   .hist-claim-row .hcr-amt { font-weight: 700; color: #b45309; }
+  /* hotfix105: 작업 이력 — 날짜순 표 */
+  .hist-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 4px; }
+  .hist-table thead th { background: #f3f4f6; color: #374151; font-size: 11.5px; font-weight: 700; text-align: left; padding: 8px 10px; border-bottom: 2px solid #e5e7eb; white-space: nowrap; }
+  .hist-table thead th.num { text-align: center; }
+  .hist-table td { padding: 9px 10px; border-bottom: 1px solid #f1f1f1; vertical-align: top; color: #374151; }
+  .hist-table td.num { text-align: center; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .hist-table .hr-stage { font-weight: 700; white-space: nowrap; }
+  .hist-table .hr-date { color: #6b7280; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .hist-table tr.hr-order td { background: #fafafa; }
+  .hist-table tr.hr-in td:first-child { box-shadow: inset 3px 0 0 #2563eb; }
+  .hist-table tr.hr-fix td:first-child { box-shadow: inset 3px 0 0 #f97316; }
+  .hist-table tr.hr-redye td:first-child { box-shadow: inset 3px 0 0 #d97706; }
+  .hist-table tr.hr-discard td:first-child { box-shadow: inset 3px 0 0 #b91c1c; }
+  .hist-table tr.hr-settle td:first-child { box-shadow: inset 3px 0 0 #047857; }
+  .hist-table tr.hr-latest td { background: #fff7ed; }
+  .hist-table .hb { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 11px; font-weight: 700; }
+  .hist-table .hb-ok { background: #dcfce7; color: #15803d; }
+  .hist-table .hb-bad { background: #fee2e2; color: #b91c1c; }
+  .hist-table .hb-warn { background: #fef3c7; color: #b45309; }
+  .hist-table .hb-wait { background: #f3f4f6; color: #6b7280; }
+  .hist-table .hr-nums { color: #4b5563; font-variant-numeric: tabular-nums; }
+  .hist-table .hr-note { color: #6b7280; font-size: 11.5px; margin-top: 3px; }
+  .hist-table .hr-by { color: #9ca3af; font-size: 11px; margin-top: 2px; }
   /* v2.53 hotfix24: 최근 검수한 차수 강조 */
   .hist-edited-tag {
     font-size: 11px; font-weight: 700; color: #6b7280;
@@ -13835,11 +13858,13 @@ function validateBlendSum(blends, label) {
     
     // 5) 수정 이력 (hotfix42) — 같은 컬러를 작업장에 다시 보내 손본 기록
     if (Array.isArray(c.fix_history)) {
-      c.fix_history.forEach(f => events.push({
+      c.fix_history.forEach((f, fi) => events.push({
         at: f.sent_at || '', kind: 'fix',
         body: num(f.body) || 0, rib: num(f.rib) || 0,
         resolved_at: f.resolved_at || '', by: f.sent_by || '',
-        note: f.note || ''
+        note: f.note || '',
+        round: f.round || (fi + 1),
+        recheck: f.recheck || null
       }));
     }
 
@@ -13974,6 +13999,59 @@ function validateBlendSum(blends, label) {
 
     if (!cardsHtml) cardsHtml = `<div class="hist-empty">아직 기록된 작업 이력이 없습니다.</div>`;
 
+    // hotfix105: 날짜순 표 — 한 행에 한 사건. 의뢰→입고→불량→수정→결과를 한눈에.
+    const fmtD = (s) => (s || '').slice(0, 10) || '-';
+    const compactQc = (qc) => {
+      if (!qc) return '';
+      const nums = [];
+      if (qc.width_inch != null) nums.push(`폭 ${qc.width_inch}″${qc.width_double ? '(더블)' : ''}`);
+      if (qc.weight_g_per_y != null) nums.push(`${qc.weight_g_per_y}g/y`);
+      else if (qc.weight_g_per_sqm != null) nums.push(`${qc.weight_g_per_sqm}g/㎡`);
+      if (qc.shrink_width_pct != null || qc.shrink_length_pct != null) nums.push(`축률 폭${qc.shrink_width_pct == null ? '-' : qc.shrink_width_pct}/장${qc.shrink_length_pct == null ? '-' : qc.shrink_length_pct}%`);
+      return nums.join(' · ');
+    };
+    let rowsHtml = `<tr class="hr-order"><td class="hr-date">—</td><td class="hr-stage">📋 최초 의뢰</td><td class="num">${ordered_body}</td><td class="num">${ordered_rib}</td><td>주문 <strong>${ordered_body}/${ordered_rib}</strong>절</td></tr>`;
+    events.forEach(e => {
+      const dateStr = fmtD(e.at);
+      if (e.kind === 'in') {
+        const st = e.qc_status;
+        let result;
+        if (st === 'pending' || st === 'none') {
+          result = `<span class="hb hb-wait">⏳ QC 대기</span>`;
+        } else {
+          const lbl = qcStatusLabel[st] || st;
+          const cls = (st === 'defect' || st === 'discard') ? 'hb-bad' : (st === 'accept' ? 'hb-warn' : 'hb-ok');
+          const qc = e.qc || {};
+          const nums = compactQc(qc);
+          const lot = qc.lot_no ? ` · LOT ${escapeHtml(String(qc.lot_no))}` : '';
+          const note = qc.notes ? `<div class="hr-note">📝 ${escapeHtml(qc.notes)}</div>` : '';
+          const by = e.qc_done_by ? `<div class="hr-by">검수 ${escapeHtml(e.qc_done_by)}${e.qc_done_at ? ' · ' + fmtD(e.qc_done_at) : ''}</div>` : '';
+          result = `<span class="hb ${cls}">${lbl}</span> <span class="hr-nums">${nums}${lot}</span>${note}${by}`;
+        }
+        const isLatest = (_latestEditedReceiptNo != null && e.receipt_no === _latestEditedReceiptNo);
+        rowsHtml += `<tr class="hr-in${isLatest ? ' hr-latest' : ''}"><td class="hr-date">${dateStr}</td><td class="hr-stage">📦 ${e.receipt_no}차 입고</td><td class="num">${e.body}</td><td class="num">${e.rib}</td><td>${result}${e.memo ? `<div class="hr-note">입고메모: ${escapeHtml(e.memo)}</div>` : ''}</td></tr>`;
+      } else if (e.kind === 'fix') {
+        let res;
+        if (e.recheck && e.recheck.passed) res = `보냄 → <span class="hb hb-ok">✓ 합격</span>${e.resolved_at ? ` <span class="hr-date">${fmtD(e.resolved_at)}</span>` : ''}`;
+        else if (e.recheck && (e.recheck.defect || e.recheck.passed === false)) res = `보냄 → <span class="hb hb-bad">✗ 불합격</span>${e.resolved_at ? ` <span class="hr-date">${fmtD(e.resolved_at)}</span>` : ''}`;
+        else if (e.resolved_at) res = `보냄 → <span class="hb hb-ok">완료</span> <span class="hr-date">${fmtD(e.resolved_at)}</span>`;
+        else res = `보냄 → <span class="hb hb-warn">진행 중</span>`;
+        const note = (e.note && e.note.trim()) ? `<div class="hr-note">요청: ${escapeHtml(e.note.trim())}</div>` : '';
+        rowsHtml += `<tr class="hr-fix"><td class="hr-date">${dateStr}</td><td class="hr-stage">🔧 수정 ${e.round || ''}차</td><td class="num">${e.body}</td><td class="num">${e.rib}</td><td>${res}${note}</td></tr>`;
+      } else if (e.kind === 'redye') {
+        rowsHtml += `<tr class="hr-redye"><td class="hr-date">${dateStr}</td><td class="hr-stage">🔄 재염 이관</td><td class="num">${e.body}</td><td class="num">${e.rib}</td><td>이관처: <strong>${escapeHtml(e.to || '-')}</strong>${e.memo ? `<div class="hr-note">${escapeHtml(e.memo)}</div>` : ''}</td></tr>`;
+      } else if (e.kind === 'discard') {
+        const cl = e.claim || {};
+        const claim = (cl.recipient || cl.amount) ? `<div class="hr-note">청구처: ${escapeHtml(cl.recipient || '(미입력)')} · ₩${formatMoney(cl.amount || 0)}</div>` : '';
+        rowsHtml += `<tr class="hr-discard"><td class="hr-date">${dateStr}</td><td class="hr-stage">⚠ 땡처리</td><td class="num">${e.body}</td><td class="num">${e.rib}</td><td><span class="hb hb-bad">땡처리</span>${e.memo ? ' ' + escapeHtml(e.memo) : ''}${claim}</td></tr>`;
+      } else if (e.kind === 'settle') {
+        rowsHtml += `<tr class="hr-settle"><td class="hr-date">${dateStr}</td><td class="hr-stage">✓ 부족분 종결</td><td class="num">${e.body}</td><td class="num">${e.rib}</td><td><span class="hb hb-ok">종결</span> ${escapeHtml(e.memo || '수율 부족 인정')}</td></tr>`;
+      }
+    });
+    const bodyHtml = events.length
+      ? `<table class="hist-table"><thead><tr><th>날짜</th><th>단계</th><th class="num">몸판</th><th class="num">리프</th><th>결과 · 비고</th></tr></thead><tbody>${rowsHtml}</tbody></table>`
+      : `<div class="hist-empty">아직 기록된 작업 이력이 없습니다.</div>`;
+
     const discardTotal = (num(c.discard_body) || 0) || (num(c.discard_rib) || 0);
     const summaryHtml = `
       <div class="hist-summary">
@@ -13989,7 +14067,7 @@ function validateBlendSum(blends, label) {
       <div class="hist-wrap">
         <div style="font-size:13px;color:#6b7280;margin-bottom:10px;">${escapeHtml(item)} · 단위: 절</div>
         ${summaryHtml}
-        ${cardsHtml}
+        ${bodyHtml}
       </div>`;
     document.getElementById('hist-modal-bg').classList.add('show');
   }
@@ -24123,7 +24201,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix104';
+  const VERSION = 'v2.53 hotfix105';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix34: 편직 의뢰서 [성격] 시스템 도입 — 정규/재고/샘플/완료 4태그, 자동분류, 표 ● 배지, [성격▼] 필터, 완료체크 양방향연동
   // hotfix33: 클레임(땡처리) 내역서 양식 통일 — 부분/전체 모두 정식 표 양식 + 이미지복사/인쇄/수정 동일 버튼
