@@ -21284,9 +21284,9 @@ function validateBlendSum(blends, label) {
         const c = (wo.colors || [])[ci] || {};
         const cName = c.name || `컬러 #${ci + 1}`;
         const r = (c.receipts || []).find(rr => rr.shrink_hold);
-        // 받은 양 전체를 기본값으로 (일부만 보낼 땐 직접 수정)
-        const defB = (typeof getReceivedBody === 'function' ? getReceivedBody(c) : 0) || (num(c.body) || 0);
-        const defR = (typeof getReceivedRib === 'function' ? getReceivedRib(c) : 0) || (num(c.rib) || 0);
+        // hotfix108: 해당 차수(축률 이상 receipt) 입고량을 기본값으로. 없으면 누적.
+        const defB = r ? (num(r.received_body) || 0) : ((typeof getReceivedBody === 'function' ? getReceivedBody(c) : 0) || (num(c.body) || 0));
+        const defR = r ? (num(r.received_rib) || 0) : ((typeof getReceivedRib === 'function' ? getReceivedRib(c) : 0) || (num(c.rib) || 0));
         const input = prompt(
           `[${wo.wo_number || ''}] "${cName}" 수정 보낼 수량 (몸판/부속)\n\n` +
           `· 같은 컬러를 작업장에 다시 보내 축률을 손봅니다 (색 그대로)\n` +
@@ -22697,6 +22697,19 @@ function validateBlendSum(blends, label) {
           이상이 있으면 특이사항에 적어 주세요. <strong>불량 판정은 대표가 보고 화면에서 처리</strong>합니다.
         </div>
         `}
+        <div id="qc-fix-panel" style="display:none;margin-top:12px;padding:14px;background:#fff7ed;border:2px solid #f97316;border-radius:8px;">
+          <div style="font-size:13px;font-weight:800;color:#c2410c;margin-bottom:4px;">🔧 수정 보내기 — 절수 지정</div>
+          <div style="font-size:11.5px;color:#9a3412;margin-bottom:10px;">${activeReceiptNo ? `이 <strong>${activeReceiptNo}차</strong> 입고분(몸판 ${activeReceipt ? (num(activeReceipt.received_body) || 0) : 0}·리프 ${activeReceipt ? (num(activeReceipt.received_rib) || 0) : 0}절)이 기본값입니다. 불량 절수만 보내려면 숫자를 고치세요.` : '보낼 절수를 입력하세요.'}</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
+            <div><label style="font-size:11px;color:#9a3412;display:block;margin-bottom:3px;font-weight:700;">몸판 절수</label><input type="number" id="qc-fix-body" value="${activeReceipt ? (num(activeReceipt.received_body) || 0) : (num(c.body) || 0)}" step="0.5" min="0" style="width:100%;padding:8px;border:1px solid #fdba74;border-radius:4px;font-size:14px;"></div>
+            <div><label style="font-size:11px;color:#9a3412;display:block;margin-bottom:3px;font-weight:700;">리프 절수</label><input type="number" id="qc-fix-rib" value="${activeReceipt ? (num(activeReceipt.received_rib) || 0) : (num(c.rib) || 0)}" step="0.5" min="0" style="width:100%;padding:8px;border:1px solid #fdba74;border-radius:4px;font-size:14px;"></div>
+          </div>
+          <div style="margin-bottom:10px;"><label style="font-size:11px;color:#9a3412;display:block;margin-bottom:3px;font-weight:700;">작업장 요청 메모 (선택)</label><input type="text" id="qc-fix-note" placeholder="예: 색 유지 · 핀홀 손봄" style="width:100%;padding:8px;border:1px solid #fdba74;border-radius:4px;"></div>
+          <div style="display:flex;gap:8px;justify-content:flex-end;">
+            <button type="button" class="qc-modal-btn" id="qc-fix-cancel">취소</button>
+            <button type="button" class="qc-modal-btn" id="qc-fix-confirm" style="background:#f97316;color:#fff;border-color:#ea580c;font-weight:700;">🔧 이 절수로 수정 보내기</button>
+          </div>
+        </div>
         <div class="qc-modal-footer">
           <div class="qc-footer-left">
             ${shortageActive ? '이 차수(입고분)는 검수 완료할 수 있습니다. 부족분이 모두 채워지면 컬러가 자동 완료됩니다.'
@@ -23041,40 +23054,38 @@ function validateBlendSum(blends, label) {
       });
     }
 
-    // [↻ 재작업 요청] — 불량 상태에서만 노출
+    // [🔧 수정 보내기] — 불량 상태에서만 노출. 절수 지정 패널을 연다(기본=현재 차수 입고량).
     const reworkBtn = document.getElementById('qc-rework');
     if (reworkBtn) {
-      reworkBtn.addEventListener('click', async () => {
+      reworkBtn.addEventListener('click', () => {
+        const panel = document.getElementById('qc-fix-panel');
+        if (!panel) return;
+        panel.style.display = 'block';
+        panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        setTimeout(() => document.getElementById('qc-fix-body')?.focus(), 60);
+      });
+    }
+    const fixCancelBtn = document.getElementById('qc-fix-cancel');
+    if (fixCancelBtn) {
+      fixCancelBtn.addEventListener('click', () => {
+        const panel = document.getElementById('qc-fix-panel');
+        if (panel) panel.style.display = 'none';
+      });
+    }
+    const fixConfirmBtn = document.getElementById('qc-fix-confirm');
+    if (fixConfirmBtn) {
+      fixConfirmBtn.addEventListener('click', async () => {
         const cName = c.name || `컬러 #${colorIdx + 1}`;
-        // 받은 양 전체를 기본값으로 (일부만 보낼 땐 직접 수정)
-        const defB = getReceivedBody(c) || (num(c.body) || 0);
-        const defR = getReceivedRib(c) || (num(c.rib) || 0);
-        const input = prompt(
-          `[${wo.wo_number || ''}] "${cName}" 수정 보낼 수량 (몸판/부속)\n\n` +
-          `· 같은 컬러를 작업장에 다시 보내 손봅니다 (색 그대로)\n` +
-          `· 일부만 보내려면 숫자를 고치세요. 예: 5/0\n` +
-          `· 받은 양 전체를 보내려면 그대로 두세요`,
-          `${defB}/${defR}`
-        );
-        if (input === null) return;  // 취소
-        const parts = String(input).split('/');
-        const fb = parseFloat(parts[0]) || 0;
-        const fr = parseFloat(parts[1]) || 0;
-        if (fb === 0 && fr === 0) { toast('수정 수량을 입력하세요 (예: 5/0)', 'error'); return; }
-        // 요청 메모 (작업장에 전달할 한 줄 — 비워도 됨)
-        const noteInput = prompt(
-          `[${wo.wo_number || ''}] "${cName}" 작업장에 전달할 요청 (선택)\n\n` +
-          `· 예: 색 유지 · 핀홀 손봄 / 색 유지\n` +
-          `· 비워두면 지시서에 빈칸으로 들어갑니다`,
-          ''
-        );
-        if (noteInput === null) return;  // 취소
+        const fb = parseFloat(document.getElementById('qc-fix-body').value) || 0;
+        const fr = parseFloat(document.getElementById('qc-fix-rib').value) || 0;
+        const noteInput = (document.getElementById('qc-fix-note').value || '').trim();
+        if (fb === 0 && fr === 0) { toast('수정 보낼 절수를 입력하세요', 'error'); return; }
         try {
           // 모달의 현재 입력값(불량 메모 포함) 먼저 저장
           const currentInput = collect();
           await saveQcData(woId, colorIdx, currentInput, window.__qcModalReceiptNo);
           await setColorFixSend(woId, colorIdx, fb, fr, window.__qcModalReceiptNo, noteInput);
-          toast(`🔧 "${cName}" 수정 ${fb}/${fr} 보냄 — 일일보고 수정 칸에 표시됩니다`, 'success');
+          toast(`🔧 "${cName}" 수정 ${fb}/${fr}절 보냄 — 일일보고 수정 칸에 표시됩니다`, 'success');
           modal.classList.remove('show');
           renderDashboard();
         } catch (e) {
@@ -24246,7 +24257,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix107';
+  const VERSION = 'v2.53 hotfix108';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix34: 편직 의뢰서 [성격] 시스템 도입 — 정규/재고/샘플/완료 4태그, 자동분류, 표 ● 배지, [성격▼] 필터, 완료체크 양방향연동
   // hotfix33: 클레임(땡처리) 내역서 양식 통일 — 부분/전체 모두 정식 표 양식 + 이미지복사/인쇄/수정 동일 버튼
