@@ -11469,6 +11469,41 @@ function validateBlendSum(blends, label) {
     await updateDoc(doc(db, 'workorders', woId), updates);
     return allDone;
   }
+
+  // hotfix104: 완료 보고(대표 확인 대기) 건을 다시 진행으로 되돌림.
+  //   직원이 잘못 합격 처리했을 때 대표가 [↩ 진행으로]를 눌러 QC 대기로 환원.
+  //   입고량·검수값은 그대로 보존(차수 삭제 아님). 상태만 'pending'으로 → 진행 직원 구역에 재등장.
+  async function revertCeoConfirmToProgress(woId, colorIdx, receiptNo) {
+    const wo = state.allWorkOrders.find(w => w.id === woId);
+    if (!wo) throw new Error('의뢰서를 찾을 수 없음');
+    const colors = JSON.parse(JSON.stringify(wo.colors || []));
+    const c = colors[colorIdx];
+    if (!c) throw new Error('컬러 인덱스 오류');
+    migrateColorReceipts(c);
+    const now = new Date().toISOString();
+    let touched = 0;
+    (c.receipts || []).forEach(r => {
+      if (!r) return;
+      const hit = (receiptNo === undefined || receiptNo === null) ? true : (r.receipt_no === receiptNo);
+      if (hit && r.qc_status === 'done' && r.ceo_confirm_pending === true) {
+        r.ceo_confirm_pending = false;
+        delete r.ceo_confirm_at;
+        delete r.ceo_confirm_by;
+        r.qc_status = 'pending';   // 진행 직원 구역에 'QC 대기'로 재등장 (입고량·검수값 보존)
+        r.reverted_at = now;
+        r.reverted_by = state.user.email;
+        touched++;
+      }
+    });
+    if (touched === 0) throw new Error('되돌릴 완료 대기 차수가 없습니다');
+    c.completed = false;
+    delete c.completed_at;
+    delete c.completed_blocked_by_ceo;
+    const updates = { colors, updated_at: serverTimestamp(), updated_by: state.user.email };
+    if (wo.completed) { updates.completed = false; updates.completed_at = null; }
+    await updateDoc(doc(db, 'workorders', woId), updates);
+    return touched;
+  }
   // ==================== v2.48 QC 끝 ====================
 
   // ==================== hotfix59: 축률 이상 보고 시스템 ====================
@@ -17374,6 +17409,13 @@ function validateBlendSum(blends, label) {
     });
     
     if (rowsToShow.length === 0) {
+      // hotfix104: 진행 중 건이 있는데 한 행도 안 보이면 → 숨은 필터(거래처·완료컬러 접기 등)가 가린 것.
+      //   한 번에 초기화 버튼으로 복구. (코드 경로상 진행 건은 항상 표시돼야 함)
+      if (totalCount > 0) {
+        html += `<div class="dash-empty">진행 중인 염색가공 <strong>${totalCount}건</strong>이 있는데 화면 필터에 가려져 있습니다.<br><br>
+          <button class="dash-action-btn" id="finish-reset-filters" style="background:#111827;color:#fff;padding:9px 20px;font-weight:700;font-size:13px;">↻ 전체 보기로 초기화</button></div>`;
+        return html;
+      }
       const emptyMsg = isFiltered 
         ? `필터 조건에 맞는 염색가공 의뢰서가 없습니다.<br><br>상단 <strong>"전체"</strong> 버튼을 눌러 필터를 해제할 수 있습니다.`
         : `${state.showCompleted ? '' : '진행 중인 '}염색가공 의뢰서가 없습니다.<br><br>위의 <strong>"+ 새 행 추가"</strong> 버튼을 눌러 직접 입력할 수 있습니다.`;
@@ -18433,6 +18475,7 @@ function validateBlendSum(blends, label) {
         <div class="ceo-report-actions">
           <button class="dash-action-btn hist-open-btn" data-hist-id="${rep.woId}" data-hist-color="${rep.colorIdx}" title="전체 작업 이력 보기" style="background:#eef2ff;color:#4338ca;border-color:#c7d2fe;font-weight:700;">📜 작업 이력</button>
           <button class="dash-action-btn complete-rep-view-btn" data-id="${rep.woId}">원단 보기</button>
+          <button class="dash-action-btn complete-rep-revert-btn" style="background:#fff;color:#374151;border-color:#9ca3af;font-weight:700;" data-id="${rep.woId}" data-color-idx="${rep.colorIdx}" data-receipt-no="${rep.receiptNo}" title="직원이 잘못 합격 처리했을 때 다시 진행(QC 대기)으로 되돌립니다">↩ 진행으로</button>
           <button class="dash-action-btn complete-rep-defect-btn" style="background:#fff;color:#b91c1c;border-color:#dc2626;font-weight:700;" data-id="${rep.woId}" data-color-idx="${rep.colorIdx}" data-receipt-no="${rep.receiptNo}">⚠ 불량 처리</button>
           <button class="dash-action-btn complete-rep-ok-btn" style="background:#16a34a;color:#fff;border-color:#15803d;font-weight:700;" data-id="${rep.woId}" data-color-idx="${rep.colorIdx}" data-receipt-no="${rep.receiptNo}">✓ 확인 완료</button>
         </div>
@@ -20258,8 +20301,19 @@ function validateBlendSum(blends, label) {
         renderDashboard();
       });
     }
+
+    // hotfix104: 진행 화면 "전체 보기로 초기화" — 숨은 필터(날짜·거래처·완료컬러 접기) 한 번에 해제
+    const finishResetBtn = document.getElementById('finish-reset-filters');
+    if (finishResetBtn) {
+      finishResetBtn.addEventListener('click', () => {
+        if (state.dateFilter && state.dateFilter.finish) { state.dateFilter.finish.preset = 'all'; state.dateFilter.finish.from = ''; state.dateFilter.finish.to = ''; saveDateFilter(); }
+        if (state.vendorFilter) { state.vendorFilter.finish = 'all'; saveVendorFilter(); }
+        state.finishHideCompletedColors = false;
+        try { localStorage.setItem('hiwos_finish_hide_completed_colors', '0'); } catch(e) {}
+        renderDashboard();
+      });
+    }
     
-    // v2.34: Overview 유형 필터 버튼
     document.querySelectorAll('#dash-body .overview-type-filter-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         const t = btn.dataset.typeFilter;
@@ -21016,7 +21070,23 @@ function validateBlendSum(blends, label) {
         } catch (err) { btn.disabled = false; toast('확인 실패: ' + (err.message || err), 'error'); }
       });
     });
-    // hotfix91: 공통 — 의뢰서별 묶어 확인 처리 (선택 목록 reps[] 받음)
+    // hotfix104: 완료 보고 [↩ 진행으로] — 잘못 합격된 건을 QC 대기로 되돌림
+    document.querySelectorAll('#dash-body .complete-rep-revert-btn').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (!isAdminUser()) { toast('대표만 처리할 수 있습니다', 'warning'); return; }
+        const id = btn.dataset.id;
+        const ci = parseInt(btn.dataset.colorIdx, 10);
+        const rn = btn.dataset.receiptNo !== undefined && btn.dataset.receiptNo !== '' ? parseInt(btn.dataset.receiptNo, 10) : null;
+        if (!confirm('이 건을 다시 진행(QC 대기)으로 되돌립니다.\n입고량·검수값은 그대로 보존되고, 직원이 다시 검수할 수 있습니다.\n\n계속할까요?')) return;
+        btn.disabled = true;
+        try {
+          await revertCeoConfirmToProgress(id, ci, rn);
+          toast('↩ 진행(QC 대기)으로 되돌렸습니다', 'success');
+          renderDashboard();
+        } catch (err) { btn.disabled = false; toast('되돌리기 실패: ' + (err.message || err), 'error'); }
+      });
+    });
     async function __runCompleteConfirm(reps, btnEl, allLabel) {
       if (!reps.length) { toast('선택된 건이 없습니다', 'info'); return; }
       if (!confirm(`${reps.length}건을 완료 처리합니다.\n\n계속할까요?`)) return;
@@ -24053,7 +24123,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix103';
+  const VERSION = 'v2.53 hotfix104';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix34: 편직 의뢰서 [성격] 시스템 도입 — 정규/재고/샘플/완료 4태그, 자동분류, 표 ● 배지, [성격▼] 필터, 완료체크 양방향연동
   // hotfix33: 클레임(땡처리) 내역서 양식 통일 — 부분/전체 모두 정식 표 양식 + 이미지복사/인쇄/수정 동일 버튼
