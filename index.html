@@ -17146,6 +17146,7 @@ function validateBlendSum(blends, label) {
       <th>납기일</th>
       <th>용도</th>
       <th class="col-date">입고일</th>
+      <th class="col-num">입고량(kg)</th>
       <th>📝 메모</th>
       <th class="col-action">작지</th>
       <th class="col-action">작업</th>
@@ -17182,6 +17183,7 @@ function validateBlendSum(blends, label) {
         <td>${escapeHtml(wo.delivery || '-')}</td>
         <td>${escapeHtml(wo.purpose || '-')}</td>
         ${renderEditableCell(wo, 'arrival_date', wo.arrival_date, 'date')}
+        ${renderEditableCell(wo, 'received_kg', wo.received_kg, 'number')}
         ${renderEditableCell(wo, 'internal_memo', wo.internal_memo, 'text')}
         <td class="col-action"><button class="dash-action-btn dash-view-btn" data-id="${wo.id}">보기</button></td>
         <td class="col-action"><button class="dash-action-btn dash-edit-btn" data-id="${wo.id}">수정</button></td>
@@ -19936,6 +19938,7 @@ function validateBlendSum(blends, label) {
         <td><input type="text" lang="ko" class="nr-delivery" placeholder="납기"></td>
         <td><input type="text" lang="ko" class="nr-purpose" placeholder="용도"></td>
         <td class="col-date"><input type="date" class="nr-arrival" placeholder="입고일"></td>
+        <td class="col-num" style="color:#9ca3af;text-align:center;">입고 후</td>
         <td><input type="text" lang="ko" class="nr-memo" placeholder="메모"></td>
         <td class="col-action" colspan="5"><div class="new-row-actions">
           <button class="save-row-btn" data-save-new="${idx}">저장</button>
@@ -23240,12 +23243,19 @@ function validateBlendSum(blends, label) {
     const shipments = wo.greige_shipments || [];
     const totalJul = (wo.items || []).reduce((s,i) => s + (parseFloat(i.jul) || 0), 0);
     const totalKg = (wo.items || []).reduce((s,i) => s + (parseFloat(i.jul) || 0) * (parseFloat(i.kg_per_jul) || 21), 0);
-    const shippedJul = shipments.reduce((s,sh) => s + (parseFloat(sh.jul) || 0), 0);
-    const shippedKg = shipments.reduce((s,sh) => s + (parseFloat(sh.kg) || 0), 0);
+    // hotfix107: 입·출고 구분. dir 없는 옛 데이터는 출고로 간주.
+    const isIn = (sh) => sh && sh.dir === 'in';
+    const outJul = shipments.reduce((s,sh) => s + (isIn(sh) ? 0 : (parseFloat(sh.jul) || 0)), 0);
+    const outKg  = shipments.reduce((s,sh) => s + (isIn(sh) ? 0 : (parseFloat(sh.kg)  || 0)), 0);
+    const inJul  = shipments.reduce((s,sh) => s + (isIn(sh) ? (parseFloat(sh.jul) || 0) : 0), 0);
+    const inKg   = shipments.reduce((s,sh) => s + (isIn(sh) ? (parseFloat(sh.kg)  || 0) : 0), 0);
+    const movedJul = outJul + inJul, movedKg = outKg + inKg;          // 편직공장에서 나간 총량(출고+입고 둘 다 떠남)
+    const remainJul = totalJul - movedJul, remainKg = totalKg - movedKg;  // 미출고 잔량
     const avgKgPerJul = totalJul > 0 ? totalKg / totalJul : 21;
+    let addDir = 'out';   // 새 추가 시 구분
     
     const modal = document.getElementById('dash-modal-bg');
-    document.getElementById('dash-modal-title').textContent = `🚚 생지 출고 입력 (${wo.wo_number || ''})`;
+    document.getElementById('dash-modal-title').textContent = `🚚 생지 입·출고 입력 (${wo.wo_number || ''})`;
     
     // 미리보기 전용 액션 버튼 숨김 (이 모달은 출고 입력용)
     ['dash-modal-image', 'dash-modal-copy', 'dash-modal-print', 'dash-modal-kakao'].forEach(id => {
@@ -23265,32 +23275,40 @@ function validateBlendSum(blends, label) {
             품목: ${escapeHtml(wo.items?.[0]?.item || '-')} / 컬러: ${escapeHtml(wo.items?.[0]?.color || '-')}<br>
             편직 공장: ${escapeHtml(wo.recipient || '-')}<br>
             <strong>의뢰 총량: ${totalJul}절 / ${totalKg.toFixed(1)}kg</strong><br>
-            <strong style="color:${shippedJul >= totalJul ? '#047857' : '#c00'};">출고 누계: ${shippedJul}절 / ${shippedKg.toFixed(1)}kg → 잔량 ${(totalJul - shippedJul)}절 / ${(totalKg - shippedKg).toFixed(1)}kg</strong>
+            <strong style="color:${remainJul <= 0 ? '#047857' : '#c00'};">🚚 출고 ${outJul}절 / ${outKg.toFixed(1)}kg &nbsp;·&nbsp; 📥 현일창고 입고(재고) ${inJul}절 / ${inKg.toFixed(1)}kg &nbsp;→&nbsp; 잔량 ${remainJul}절 / ${remainKg.toFixed(1)}kg</strong>
           </div>
         </div>`;
       
-      // 출고 내역 표
-      body += `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-        <div style="font-size:13px;font-weight:700;">📦 출고 내역</div>
-        ${viewMode === 'list' ? `<button class="dash-action-btn" id="ship-show-add" style="background:#000;color:#fff;padding:6px 14px;">+ 새 출고 추가</button>` : ''}
+      // 입·출고 내역 표
+      body += `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;gap:8px;flex-wrap:wrap;">
+        <div style="font-size:13px;font-weight:700;">📦 입·출고 내역</div>
+        ${viewMode === 'list' ? `<span style="display:flex;gap:6px;">
+          <button class="dash-action-btn" id="ship-show-add-out" style="background:#059669;color:#fff;padding:6px 14px;">+ 새 출고 추가</button>
+          <button class="dash-action-btn" id="ship-show-add-in" style="background:#2563eb;color:#fff;padding:6px 14px;">+ 새 입고 추가</button>
+        </span>` : ''}
       </div>
       <table class="dash-table" style="margin-bottom:14px;">
         <thead><tr>
-          <th style="width:18%;">출고일</th>
-          <th style="width:14%;">절수</th>
+          <th style="width:15%;">날짜</th>
+          <th style="width:12%;">구분</th>
+          <th style="width:12%;">절수</th>
           <th style="width:14%;">중량(kg)</th>
-          <th style="width:32%;">메모</th>
-          <th style="width:22%;">작업</th>
+          <th style="width:27%;">메모</th>
+          <th style="width:20%;">작업</th>
         </tr></thead><tbody>`;
       
       if (shipments.length === 0 && viewMode === 'list') {
-        body += `<tr><td colspan="5" style="text-align:center;color:#999;padding:14px;">출고 내역 없음 — 우측 상단 "+새 출고 추가" 클릭</td></tr>`;
+        body += `<tr><td colspan="6" style="text-align:center;color:#999;padding:14px;">내역 없음 — 우측 상단 "+새 출고/입고 추가" 클릭</td></tr>`;
       } else {
         shipments.forEach((sh, idx) => {
           if (viewMode === 'edit' && editIdx === idx) {
             // 수정 모드 행
             body += `<tr style="background:#fffbe6;">
               <td><input type="date" id="edit-date-${idx}" value="${sh.date || ''}" style="width:100%;padding:4px;border:1px solid #000;font-size:11px;"></td>
+              <td><select id="edit-dir-${idx}" style="width:100%;padding:4px;border:1px solid #000;font-size:11px;">
+                <option value="out"${!isIn(sh) ? ' selected' : ''}>🚚 출고</option>
+                <option value="in"${isIn(sh) ? ' selected' : ''}>📥 입고</option>
+              </select></td>
               <td><input type="number" id="edit-jul-${idx}" value="${sh.jul || 0}" step="0.5" style="width:100%;padding:4px;border:1px solid #000;font-size:11px;text-align:center;"></td>
               <td><input type="number" id="edit-kg-${idx}" value="${(parseFloat(sh.kg) || 0).toFixed(1)}" step="0.1" style="width:100%;padding:4px;border:1px solid #000;font-size:11px;text-align:center;"></td>
               <td><input type="text" id="edit-memo-${idx}" value="${escapeHtml(sh.memo || '')}" placeholder="메모" style="width:100%;padding:4px;border:1px solid #000;font-size:11px;"></td>
@@ -23300,8 +23318,12 @@ function validateBlendSum(blends, label) {
               </td>
             </tr>`;
           } else {
+            const dlabel = isIn(sh)
+              ? '<span style="color:#2563eb;font-weight:700;">📥 입고</span>'
+              : '<span style="color:#059669;font-weight:700;">🚚 출고</span>';
             body += `<tr>
               <td>${sh.date ? new Date(sh.date).toLocaleDateString('ko-KR') : '-'}</td>
+              <td style="text-align:center;">${dlabel}</td>
               <td style="text-align:center;">${sh.jul || 0}절</td>
               <td style="text-align:center;">${(parseFloat(sh.kg) || 0).toFixed(1)}kg</td>
               <td>${escapeHtml(sh.memo || '-')}</td>
@@ -23318,19 +23340,23 @@ function validateBlendSum(blends, label) {
       
       body += `</tbody></table>`;
       
-      // 새 출고 입력 영역 (viewMode=='add'일 때만)
+      // 새 입·출고 입력 영역 (viewMode=='add'일 때만)
       if (viewMode === 'add') {
-        body += `<div style="background:#fff8e1;padding:14px;border-radius:4px;border:2px solid #d97706;">
-          <div style="font-size:13px;font-weight:700;margin-bottom:10px;color:#d97706;">+ 새 출고 입력</div>
+        const isAddIn = addDir === 'in';
+        const accent = isAddIn ? '#2563eb' : '#059669';
+        const bgc = isAddIn ? '#eff6ff' : '#ecfdf5';
+        const dirTitle = isAddIn ? '📥 새 입고 입력 (현일 창고로 들여옴 → 재고로 잡힘)' : '🚚 새 출고 입력 (편직공장 → 외부 출고)';
+        body += `<div style="background:${bgc};padding:14px;border-radius:4px;border:2px solid ${accent};">
+          <div style="font-size:13px;font-weight:700;margin-bottom:10px;color:${accent};">${dirTitle}</div>
           <div style="display:grid;grid-template-columns:1fr 1fr 1fr 2fr;gap:8px;margin-bottom:12px;">
-            <div><label style="font-size:11px;color:#666;display:block;margin-bottom:3px;">출고일 *</label><input type="date" id="new-ship-date" style="width:100%;padding:6px;border:1px solid #ccc;border-radius:3px;" value="${todayYMD()}"></div>
+            <div><label style="font-size:11px;color:#666;display:block;margin-bottom:3px;">날짜 *</label><input type="date" id="new-ship-date" style="width:100%;padding:6px;border:1px solid #ccc;border-radius:3px;" value="${todayYMD()}"></div>
             <div><label style="font-size:11px;color:#666;display:block;margin-bottom:3px;">절수 *</label><input type="number" id="new-ship-jul" placeholder="30" step="0.5" style="width:100%;padding:6px;border:1px solid #ccc;border-radius:3px;"></div>
             <div><label style="font-size:11px;color:#666;display:block;margin-bottom:3px;">중량(kg)</label><input type="number" id="new-ship-kg" placeholder="비우면 자동" step="0.1" style="width:100%;padding:6px;border:1px solid #ccc;border-radius:3px;"></div>
-            <div><label style="font-size:11px;color:#666;display:block;margin-bottom:3px;">메모 (선택)</label><input type="text" id="new-ship-memo" placeholder="1차 출고 등" style="width:100%;padding:6px;border:1px solid #ccc;border-radius:3px;"></div>
+            <div><label style="font-size:11px;color:#666;display:block;margin-bottom:3px;">메모 (선택)</label><input type="text" id="new-ship-memo" placeholder="${isAddIn ? '현일창고 입고 등' : '1차 출고 등'}" style="width:100%;padding:6px;border:1px solid #ccc;border-radius:3px;"></div>
           </div>
           <div style="display:flex;gap:8px;justify-content:flex-end;">
             <button class="dash-action-btn" id="ship-cancel-btn" style="padding:8px 16px;">취소</button>
-            <button class="dash-action-btn" id="ship-submit-btn" style="padding:8px 18px;font-size:13px;background:#000;color:#fff;font-weight:700;">✓ 입력</button>
+            <button class="dash-action-btn" id="ship-submit-btn" style="padding:8px 18px;font-size:13px;background:${accent};color:#fff;font-weight:700;">✓ ${isAddIn ? '입고' : '출고'} 입력</button>
           </div>
           <div style="font-size:11px;color:#888;margin-top:10px;">※ 절수만 입력하면 평균 kg/절(${avgKgPerJul.toFixed(1)})로 자동 계산됩니다.</div>
         </div>`;
@@ -23343,13 +23369,18 @@ function validateBlendSum(blends, label) {
     };
     
     const attachShipModalHandlers = () => {
-      // "+ 새 출고 추가" 버튼 → 입력 폼 표시
-      const showAddBtn = document.getElementById('ship-show-add');
-      if (showAddBtn) {
-        showAddBtn.addEventListener('click', () => {
-          viewMode = 'add';
-          renderModal();
-          // 절수 입력칸으로 포커스
+      // "+ 새 출고/입고 추가" 버튼 → addDir 설정 후 입력 폼 표시
+      const showAddOut = document.getElementById('ship-show-add-out');
+      if (showAddOut) {
+        showAddOut.addEventListener('click', () => {
+          addDir = 'out'; viewMode = 'add'; renderModal();
+          setTimeout(() => document.getElementById('new-ship-jul')?.focus(), 50);
+        });
+      }
+      const showAddIn = document.getElementById('ship-show-add-in');
+      if (showAddIn) {
+        showAddIn.addEventListener('click', () => {
+          addDir = 'in'; viewMode = 'add'; renderModal();
           setTimeout(() => document.getElementById('new-ship-jul')?.focus(), 50);
         });
       }
@@ -23371,17 +23402,17 @@ function validateBlendSum(blends, label) {
           const jul = parseFloat(document.getElementById('new-ship-jul').value) || 0;
           let kg = parseFloat(document.getElementById('new-ship-kg').value) || 0;
           const memo = document.getElementById('new-ship-memo').value.trim();
-          if (!date) { toast('출고일을 입력하세요', 'error'); return; }
+          if (!date) { toast('날짜를 입력하세요', 'error'); return; }
           if (!jul) { toast('절수를 입력하세요', 'error'); return; }
           if (!kg) kg = jul * avgKgPerJul;
-          const newShipments = [...shipments, { date, jul, kg, memo, recorded_at: new Date().toISOString(), recorded_by: state.user?.email || '' }];
+          const newShipments = [...shipments, { date, dir: addDir, jul, kg, memo, recorded_at: new Date().toISOString(), recorded_by: state.user?.email || '' }];
           try {
             await updateDoc(doc(db, 'workorders', woId), {
               greige_shipments: newShipments,
               updated_at: serverTimestamp(),
               updated_by: state.user.email
             });
-            toast(`✓ 출고 ${jul}절 / ${kg.toFixed(1)}kg 입력됨`, 'success');
+            toast(`✓ ${addDir === 'in' ? '입고' : '출고'} ${jul}절 / ${kg.toFixed(1)}kg 입력됨`, 'success');
             // 모달 새로고침 (state.allWorkOrders가 onSnapshot으로 자동 업데이트되니 잠깐 기다림)
             setTimeout(() => openShipmentModal(woId), 200);
           } catch (e) { toast('실패: ' + e.message, 'error'); }
@@ -23402,14 +23433,15 @@ function validateBlendSum(blends, label) {
         b.addEventListener('click', async () => {
           const idx = parseInt(b.dataset.saveEdit);
           const date = document.getElementById(`edit-date-${idx}`).value;
+          const dir = (document.getElementById(`edit-dir-${idx}`)?.value === 'in') ? 'in' : 'out';
           const jul = parseFloat(document.getElementById(`edit-jul-${idx}`).value) || 0;
           let kg = parseFloat(document.getElementById(`edit-kg-${idx}`).value) || 0;
           const memo = document.getElementById(`edit-memo-${idx}`).value.trim();
-          if (!date) { toast('출고일을 입력하세요', 'error'); return; }
+          if (!date) { toast('날짜를 입력하세요', 'error'); return; }
           if (!jul) { toast('절수를 입력하세요', 'error'); return; }
           if (!kg) kg = jul * avgKgPerJul;
           const newShipments = shipments.map((sh, i) => i === idx 
-            ? { ...sh, date, jul, kg, memo, edited_at: new Date().toISOString(), edited_by: state.user?.email || '' } 
+            ? { ...sh, date, dir, jul, kg, memo, edited_at: new Date().toISOString(), edited_by: state.user?.email || '' } 
             : sh);
           try {
             await updateDoc(doc(db, 'workorders', woId), {
@@ -24214,7 +24246,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix106';
+  const VERSION = 'v2.53 hotfix107';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix34: 편직 의뢰서 [성격] 시스템 도입 — 정규/재고/샘플/완료 4태그, 자동분류, 표 ● 배지, [성격▼] 필터, 완료체크 양방향연동
   // hotfix33: 클레임(땡처리) 내역서 양식 통일 — 부분/전체 모두 정식 표 양식 + 이미지복사/인쇄/수정 동일 버튼
