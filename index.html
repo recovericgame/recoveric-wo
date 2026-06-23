@@ -15475,35 +15475,46 @@ function validateBlendSum(blends, label) {
         </div>
         
         <div class="claim-form-row">
-          <label class="claim-label">땡처리 결정 사유 <span class="claim-req">*필수</span></label>
-          <textarea id="claim-reason" class="claim-textarea" placeholder="예: 매칭 리프 로트 차이로 통일 출하 불가, 재작업 2회 후에도 폭불량 지속">${escapeHtml(initReason)}</textarea>
-        </div>
-        
-        <div class="claim-form-row">
-          <label class="claim-label">청구 대상 거래처</label>
-          <input type="text" id="claim-recipient" class="claim-input" 
-            placeholder="자동 채워지지 않은 경우 직접 입력 (나중에 보완 가능)" 
-            value="${escapeHtml(initRecipient)}">
-          <div class="claim-hint">${ctx.recipient ? '자동 채움(' + escapeHtml(ctx.recipient) + ') · 다른 책임처면 직접 수정' : '의뢰서에 거래처 정보가 없어 자동 채움 실패. 빈 채로 저장 가능, 나중에 클레임 페이지에서 보완 가능'}</div>
-        </div>
-        
-        <div class="claim-form-row">
-          <label class="claim-label">클레임 청구 금액 <span class="claim-req">*필수</span></label>
-          <div class="claim-money-wrap">
-            <span class="claim-money-prefix">₩</span>
-            <input type="text" id="claim-amount" class="claim-input claim-money" 
-              inputmode="numeric" placeholder="850,000" value="${escapeHtml(initAmount)}">
+          <label class="claim-label">처리 구분 <span class="claim-req">*필수</span></label>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <button type="button" id="cm-mode-discard" class="cm-mode-btn" style="flex:1;min-width:150px;padding:9px 12px;border:2px solid #d1d5db;border-radius:8px;background:#fff;font-weight:700;font-size:13px;cursor:pointer;line-height:1.35;">🏭 땡처리<br><span style="font-weight:400;font-size:11px;color:#6b7280;">현일 자체 부담</span></button>
+            <button type="button" id="cm-mode-claim" class="cm-mode-btn" style="flex:1;min-width:150px;padding:9px 12px;border:2px solid #d1d5db;border-radius:8px;background:#fff;font-weight:700;font-size:13px;cursor:pointer;line-height:1.35;">📨 클레임<br><span style="font-weight:400;font-size:11px;color:#6b7280;">가공소에 청구</span></button>
           </div>
+          <div class="claim-hint" id="cm-mode-hint"></div>
         </div>
-        
+
         <div class="claim-form-row">
-          <label class="claim-label">땡처리 단가 <span class="claim-opt">(선택)</span></label>
-          <div class="claim-money-wrap">
-            <span class="claim-money-prefix">₩</span>
-            <input type="text" id="claim-unit-price" class="claim-input claim-money" 
-              inputmode="numeric" placeholder="예: 5,000 (kg당)" value="${escapeHtml(initUnitPrice)}">
+          <label class="claim-label" id="claim-reason-label">결정 사유 <span class="claim-req">*필수</span></label>
+          <textarea id="claim-reason" class="claim-textarea" placeholder="예: 기모 후 폭이 32인치밖에 안 나와 출하 불가 / 재작업 2회 후에도 폭불량 지속">${escapeHtml(initReason)}</textarea>
+        </div>
+
+        <div id="claim-billing-fields">
+          <div class="claim-form-row">
+            <label class="claim-label">청구 대상 거래처 (가공소) <span class="claim-req">*필수</span></label>
+            <input type="text" id="claim-recipient" class="claim-input" 
+              placeholder="청구할 협력 가공소" 
+              value="${escapeHtml(initRecipient)}">
+            <div class="claim-hint">${ctx.recipient ? '자동 채움(' + escapeHtml(ctx.recipient) + ') · 다른 책임처면 직접 수정' : '의뢰서에 거래처 정보가 없어 자동 채움 실패 — 직접 입력'}</div>
           </div>
-          <div class="claim-hint">땡처리로 출하 시 적용된 단가 (필요한 경우만)</div>
+          
+          <div class="claim-form-row">
+            <label class="claim-label">클레임 청구 금액 <span class="claim-req">*필수</span></label>
+            <div class="claim-money-wrap">
+              <span class="claim-money-prefix">₩</span>
+              <input type="text" id="claim-amount" class="claim-input claim-money" 
+                inputmode="numeric" placeholder="850,000" value="${escapeHtml(initAmount)}">
+            </div>
+          </div>
+          
+          <div class="claim-form-row">
+            <label class="claim-label">단가 <span class="claim-opt">(선택)</span></label>
+            <div class="claim-money-wrap">
+              <span class="claim-money-prefix">₩</span>
+              <input type="text" id="claim-unit-price" class="claim-input claim-money" 
+                inputmode="numeric" placeholder="예: 5,000 (kg당)" value="${escapeHtml(initUnitPrice)}">
+            </div>
+            <div class="claim-hint">청구 시 적용된 단가 (필요한 경우만)</div>
+          </div>
         </div>
         
         <div class="claim-modal-actions">
@@ -15524,6 +15535,34 @@ function validateBlendSum(blends, label) {
     }
     attachMoneyFormatter(document.getElementById('claim-amount'));
     attachMoneyFormatter(document.getElementById('claim-unit-price'));
+
+    // hotfix131: 처리 구분 — 땡처리(자체 부담) vs 클레임(가공소 청구)
+    let claimMode = (prevClaim.claim_type === 'claim') ? 'claim' : 'discard';  // 기본: 땡처리(자체 부담)
+    function applyClaimMode() {
+      const isClaim = claimMode === 'claim';
+      const billing = document.getElementById('claim-billing-fields');
+      const dBtn = document.getElementById('cm-mode-discard');
+      const cBtn = document.getElementById('cm-mode-claim');
+      const hint = document.getElementById('cm-mode-hint');
+      const confirmBtn = document.getElementById('claim-confirm');
+      if (billing) billing.style.display = isClaim ? '' : 'none';
+      const setActive = (btn, on, color) => {
+        if (!btn) return;
+        btn.style.borderColor = on ? color : '#d1d5db';
+        btn.style.background = on ? (color === '#dc2626' ? '#fef2f2' : '#eff6ff') : '#fff';
+        btn.style.color = on ? color : '#374151';
+      };
+      setActive(dBtn, !isClaim, '#dc2626');
+      setActive(cBtn, isClaim, '#2563eb');
+      if (hint) hint.textContent = isClaim
+        ? '협력 가공소에 청구합니다 — 청구 대상·금액 입력'
+        : '현일이 자체 부담합니다 — 청구 금액·단가 없음 (사유만)';
+      document.getElementById('dash-modal-title').textContent = isClaim ? '📨 클레임 (가공소 청구) 처리' : '🏭 땡처리 (현일 자체 부담)';
+      if (confirmBtn && !confirmBtn.disabled) confirmBtn.textContent = isClaim ? '📨 클레임 확정' : '🏭 땡처리 확정';
+    }
+    document.getElementById('cm-mode-discard').addEventListener('click', () => { claimMode = 'discard'; applyClaimMode(); });
+    document.getElementById('cm-mode-claim').addEventListener('click', () => { claimMode = 'claim'; applyClaimMode(); });
+    applyClaimMode();
     
     // 첫 빈 필드 포커스
     if (!initReason) {
@@ -15542,36 +15581,45 @@ function validateBlendSum(blends, label) {
       const amountStr = document.getElementById('claim-amount').value.trim();
       const unitPriceStr = document.getElementById('claim-unit-price').value.trim();
       
-      // 필수 검증: 사유 + 금액
+      // 필수 검증: 사유는 공통. 금액·대상은 클레임 모드에서만.
       if (!reason) {
-        alert('땡처리 결정 사유는 필수입니다.\n예: 매칭 리프 로트 차이로 통일 출하 불가, 재작업 2회 지속 불량 등');
+        alert('결정 사유는 필수입니다.\n예: 기모 후 폭 32인치밖에 안 나와 출하 불가, 재작업 2회 지속 불량 등');
         document.getElementById('claim-reason').focus();
         return;
       }
-      const amount = parseMoney(amountStr);
-      if (amount <= 0) {
-        alert('클레임 청구 금액은 필수입니다.\n0원 이상의 금액을 입력해 주세요.');
-        document.getElementById('claim-amount').focus();
-        return;
-      }
-      
-      // 거래처 비었을 때 안내 (저장은 허용)
-      if (!recipient) {
-        if (!confirm('청구 대상 거래처가 비어 있습니다.\n\n빈 채로 저장하면 클레임 페이지 상단에\n"클레임 처리 안된 사항이 있습니다" 알림이 표시되며,\n나중에 거래처를 보완할 수 있습니다.\n\n그대로 진행하시겠습니까?')) {
-          document.getElementById('claim-recipient').focus();
+      let amount = 0;
+      let recipientFinal = '';
+      if (claimMode === 'claim') {
+        amount = parseMoney(amountStr);
+        if (amount <= 0) {
+          alert('클레임 청구 금액은 필수입니다.\n0원 이상의 금액을 입력해 주세요.');
+          document.getElementById('claim-amount').focus();
           return;
         }
+        recipientFinal = recipient;
+        // 거래처 비었을 때 안내 (저장은 허용)
+        if (!recipientFinal) {
+          if (!confirm('청구 대상 거래처가 비어 있습니다.\n\n빈 채로 저장하면 클레임 페이지에서 나중에 보완할 수 있습니다.\n\n그대로 진행하시겠습니까?')) {
+            document.getElementById('claim-recipient').focus();
+            return;
+          }
+        }
+      } else {
+        // 땡처리(자체 부담): 청구 없음
+        amount = 0;
+        recipientFinal = '현일텍스(자체부담)';
       }
       
       // 최종 확인
       const cName = ctx.color_name || `컬러 #${colorIdx + 1}`;
-      const confirmMsg = `[${ctx.wo_number}] "${cName}" 컬러를 땡처리로 확정하시겠습니까?\n\n` +
-        `청구 금액: ₩${formatMoney(amount)}\n` +
-        (recipient ? `청구 대상: ${recipient}\n` : '청구 대상: (미입력)\n') +
-        `\n확정 시:\n` +
-        `- 컬러는 완료 처리되어 진행 목록에서 제외\n` +
-        `- 클레임 페이지에서 정산 내역서 출력 가능\n` +
-        `- 모든 컬러가 완료되면 의뢰서 자동 완료`;
+      const isClaimMode = (claimMode === 'claim');
+      const confirmMsg = isClaimMode
+        ? `[${ctx.wo_number}] "${cName}" 컬러를 📨 클레임(가공소 청구)으로 확정하시겠습니까?\n\n` +
+          `청구 대상: ${recipientFinal || '(미입력)'}\n청구 금액: ₩${formatMoney(amount)}\n\n` +
+          `확정 시: 컬러 완료 처리 · 클레임 페이지에서 정산 내역서 출력 가능`
+        : `[${ctx.wo_number}] "${cName}" 컬러를 🏭 땡처리(현일 자체 부담)로 확정하시겠습니까?\n\n` +
+          `청구 없이 현일이 자체 부담합니다.\n\n` +
+          `확정 시: 컬러 완료 처리 · 진행 목록에서 제외`;
       if (!confirm(confirmMsg)) return;
       
       const confirmBtn = document.getElementById('claim-confirm');
@@ -15581,10 +15629,11 @@ function validateBlendSum(blends, label) {
       confirmBtn.textContent = '처리 중...';
       
       const claimData = {
+        claim_type: claimMode,                 // 'discard'(자체부담) | 'claim'(가공소청구)
         reason,
-        recipient,
+        recipient: recipientFinal,
         amount,
-        unit_price: unitPriceStr ? parseMoney(unitPriceStr) : null,
+        unit_price: (isClaimMode && unitPriceStr) ? parseMoney(unitPriceStr) : null,
         rework_count_at_discard: ctx.rework_count,
         created_at: new Date().toISOString(),
         created_by: state.user.email
@@ -15610,12 +15659,12 @@ function validateBlendSum(blends, label) {
         
         const allDone = await setColorQcDiscard(woId, colorIdx, qcDataForDiscard, claimData, window.__qcModalReceiptNo);
         modal.classList.remove('show');
-        toast(`"${cName}" 땡처리 확정${allDone ? ' · 의뢰서 자동 완료' : ''}`, 'success');
+        toast(`"${cName}" ${isClaimMode ? '클레임' : '땡처리'} 확정${allDone ? ' · 의뢰서 자동 완료' : ''}`, 'success');
       } catch (e) {
         confirmBtn.disabled = false;
         cancelBtn.disabled = false;
-        confirmBtn.textContent = '⚠ 땡처리 확정';
-        toast('땡처리 처리 실패: ' + e.message, 'error');
+        confirmBtn.textContent = isClaimMode ? '📨 클레임 확정' : '🏭 땡처리 확정';
+        toast((isClaimMode ? '클레임' : '땡처리') + ' 처리 실패: ' + e.message, 'error');
       }
     });
   }
@@ -24669,7 +24718,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix130';
+  const VERSION = 'v2.53 hotfix131';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix34: 편직 의뢰서 [성격] 시스템 도입 — 정규/재고/샘플/완료 4태그, 자동분류, 표 ● 배지, [성격▼] 필터, 완료체크 양방향연동
   // hotfix33: 클레임(땡처리) 내역서 양식 통일 — 부분/전체 모두 정식 표 양식 + 이미지복사/인쇄/수정 동일 버튼
