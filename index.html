@@ -7708,6 +7708,65 @@ function getReceiptsTotalRib(c) {
 }
 // ==================== v2.53 입고 차수 헬퍼 끝 ====================
 
+// ==================== hotfix130: 모달 공통 가드 ====================
+//  표준 모달 UX: (1) 바깥에서 "누르고~뗀" 진짜 백드롭 클릭일 때만 닫기
+//   (안에서 드래그해 텍스트 선택하다 바깥에서 떼도 안 닫힘), (2) 작성 중이면 닫기 전 확인.
+//  dash-modal-bg / hist-modal-bg 를 쓰는 모든 팝업에 한 번에 적용된다.
+function modalHasUnsavedInput(modal) {
+  if (!modal) return false;
+  const fields = modal.querySelectorAll('input, textarea, select');
+  for (let i = 0; i < fields.length; i++) {
+    const f = fields[i];
+    if (f.disabled || f.readOnly || f.type === 'hidden') continue;
+    if (f.type === 'checkbox' || f.type === 'radio') {
+      if (f.checked !== f.defaultChecked) return true;
+    } else if (f.tagName === 'SELECT') {
+      const opts = f.options;
+      for (let j = 0; j < opts.length; j++) { if (opts[j].selected !== opts[j].defaultSelected) return true; }
+    } else {
+      if ((f.value || '') !== (f.defaultValue || '')) return true;
+    }
+  }
+  return false;
+}
+function installModalGuards() {
+  ['dash-modal-bg', 'hist-modal-bg'].forEach(function (id) {
+    const modal = document.getElementById(id);
+    if (!modal || modal.__guardInstalled) return;
+    modal.__guardInstalled = true;
+    // 마우스 누름이 백드롭(모달 자신)에서 시작했는지 기록
+    modal.addEventListener('mousedown', function (e) {
+      modal.__downOnBackdrop = (e.target === modal);
+    }, true);
+    // 캡처 단계에서 닫기 시도를 먼저 가로챔
+    modal.addEventListener('click', function (e) {
+      if (!modal.classList.contains('show')) return;
+      const onBackdrop = (e.target === modal);
+      const onCloseBtn = !!(e.target.closest && e.target.closest('.dash-modal-close'));
+      if (!onBackdrop && !onCloseBtn) return;  // 모달 내부 일반 클릭은 통과
+      // 안에서 드래그를 시작해 바깥(백드롭)에서 뗀 경우 → 닫지 않음
+      if (onBackdrop && modal.__downOnBackdrop === false) {
+        e.stopImmediatePropagation();
+        e.preventDefault();
+        return;
+      }
+      // 작성하던 내용이 있으면 확인
+      if (modalHasUnsavedInput(modal)) {
+        if (!confirm('작성하던 내용이 있습니다.\n저장하지 않고 팝업을 닫을까요?')) {
+          e.stopImmediatePropagation();
+          e.preventDefault();
+        }
+      }
+    }, true);
+  });
+}
+if (typeof document !== 'undefined') {
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', installModalGuards);
+  else installModalGuards();
+}
+// ==================== hotfix130 끝 ====================
+
+
 const PROTECTED_COLOR_FIELDS = [
   'completed', 'completed_at',
   'internal_memo', 'urgent',
@@ -21910,7 +21969,17 @@ function validateBlendSum(blends, label) {
             }
           }
           await updateDoc(doc(db, 'workorders', id), updates);
+          // hotfix129: 로컬 상태 즉시 반영 + 강제 재렌더
+          //   (onSnapshot 재렌더가 보류/지연돼도 완료한 행이 바로 진행 목록에서 빠지도록)
+          if (wo) {
+            wo.completed = newState;
+            if (newState) wo.completed_at = wo.completed_at || new Date().toISOString();
+            else delete wo.completed_at;
+            if (updates.colors) wo.colors = updates.colors;
+            if (updates.kind !== undefined) wo.kind = updates.kind;
+          }
           toast(newState ? '✓ 완료 처리되었습니다' : '진행 중으로 변경됨', 'success');
+          renderDashboard();
         } catch (e) { 
           cb.checked = !newState;
           toast('실패: ' + e.message, 'error'); 
@@ -21958,7 +22027,13 @@ function validateBlendSum(blends, label) {
             });
           }
           await updateDoc(doc(db, 'workorders', id), updates);
+          // hotfix129: 로컬 즉시 반영 + 강제 재렌더
+          wo.completed = true;
+          wo.completed_at = wo.completed_at || new Date().toISOString();
+          if (updates.urgent === false) wo.urgent = false;
+          if (updates.colors) wo.colors = updates.colors;
           toast('✓ 완료 처리되었습니다', 'success');
+          renderDashboard();
         } catch (e) {
           btn.disabled = false;
           btn.textContent = '완료';
@@ -24594,7 +24669,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix128';
+  const VERSION = 'v2.53 hotfix130';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix34: 편직 의뢰서 [성격] 시스템 도입 — 정규/재고/샘플/완료 4태그, 자동분류, 표 ● 배지, [성격▼] 필터, 완료체크 양방향연동
   // hotfix33: 클레임(땡처리) 내역서 양식 통일 — 부분/전체 모두 정식 표 양식 + 이미지복사/인쇄/수정 동일 버튼
