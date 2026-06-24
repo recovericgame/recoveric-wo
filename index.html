@@ -18886,14 +18886,35 @@ function validateBlendSum(blends, label) {
           + `<div style="margin:0 0 6px 6px;padding:5px 0 2px 12px;border-left:2px solid #d1fae5;">${detail.join('')}</div>`);
       });
       (rep.fixHistory || []).forEach((h, i) => {
-        let res;
-        if (h.recheck && h.recheck.passed) res = '<span class="cr-b cr-ok">✓ 합격</span>';
-        else if (h.recheck && (h.recheck.defect || h.recheck.passed === false)) res = '<span class="cr-b cr-bad">✗ 불합격</span>';
-        else if (h.resolved_at) res = '<span class="cr-b cr-ok">완료</span>';
-        else res = '<span class="cr-b cr-warn">진행중</span>';
-        const dt = h.sent_at ? ` <span class="cr-hist-date">${fmtDM(h.sent_at)}</span>` : '';
-        const fnote = h.note ? `<div style="margin:0 0 6px 6px;padding:3px 0 2px 12px;border-left:2px solid #fed7aa;"><div class="ceo-report-line"><span class="ceo-report-k">특이사항</span> ${escapeHtml(h.note)}</div></div>` : '';
-        rows.push(`<div class="cr-hist-row"><span class="cr-hist-stage" style="color:#c2410c;">🔧 수정 ${h.round || (i + 1)}차${dt}</span><span class="cr-hist-qty">보냄 몸판 ${num(h.body) || 0} · 리프 ${num(h.rib) || 0}절 ${res}</span></div>${fnote}`);
+        const round = h.round || (i + 1);
+        const sentDt = h.sent_at ? ` <span class="cr-hist-date">${fmtDM(h.sent_at)}</span>` : '';
+        // (1) 수정/재염 보냄 — 날짜 + 보낸 수량 + 보낸 특이사항(지시)
+        const sendNote = h.note ? `<div style="margin:0 0 6px 6px;padding:3px 0 2px 12px;border-left:2px solid #fed7aa;"><div class="ceo-report-line"><span class="ceo-report-k">보낸 특이사항</span> ${escapeHtml(h.note)}</div></div>` : '';
+        rows.push(`<div class="cr-hist-row"><span class="cr-hist-stage" style="color:#c2410c;">🔧 수정 ${round}차 보냄${sentDt}</span><span class="cr-hist-qty">몸판 ${num(h.body) || 0} · 리프 ${num(h.rib) || 0}절</span></div>${sendNote}`);
+        // (2) 수정 입고(재검수) — 돌아온 원단의 QC 스펙을 1차 입고처럼 표시 (recheck 있을 때만)
+        if (h.recheck) {
+          const rc = h.recheck;
+          const toN = (v) => (v === '' || v == null || isNaN(parseFloat(v))) ? null : parseFloat(v);
+          const rqc = {
+            width_inch: toN(rc.width_inch), width_double: !!rc.width_double,
+            weight_g_per_sqm: toN(rc.weight_g_per_sqm), weight_g_per_y: toN(rc.weight_g_per_y),
+            shrink_width_pct: toN(rc.shrink_width_pct), shrink_length_pct: toN(rc.shrink_length_pct),
+            notes: rc.notes || '', lot_no: rc.lot_no || ''
+          };
+          let resBadge;
+          if (rc.passed) resBadge = '<span class="cr-b cr-ok">✓ 합격</span>';
+          else if (rc.defect || rc.passed === false) resBadge = '<span class="cr-b cr-bad">✗ 불합격</span>';
+          else resBadge = '<span class="cr-b cr-wait">검수중</span>';
+          const rcDt = rc.at ? ` <span class="cr-hist-date">${fmtDM(rc.at)}</span>` : '';
+          let rdev = null; try { rdev = woRef ? checkSpecDeviation(rqc, woRef) : null; } catch (e) { rdev = null; }
+          const rdet = [];
+          if (rqc.lot_no) rdet.push(`<div class="ceo-report-line"><span class="ceo-report-k">🏷 LOT</span> <strong style="color:#1e3a8a;background:#eff6ff;padding:1px 7px;border-radius:4px;">${escapeHtml(String(rqc.lot_no))}</strong></div>`);
+          const rdr = devRow(rdev, rqc);
+          if (rdr) rdet.push(rdr);
+          if (rqc.notes) rdet.push(`<div class="ceo-report-line"><span class="ceo-report-k">특이사항</span> ${escapeHtml(rqc.notes)}</div>`);
+          const rdetHtml = rdet.length ? `<div style="margin:0 0 6px 6px;padding:5px 0 2px 12px;border-left:2px solid #d1fae5;">${rdet.join('')}</div>` : '';
+          rows.push(`<div class="cr-hist-row"><span class="cr-hist-stage">📦 수정 ${round}차 입고${rcDt}</span><span class="cr-hist-qty">${resBadge}</span></div>${rdetHtml}`);
+        }
       });
       return `<div class="cr-hist-box"><div class="cr-hist-title">📋 작업 흐름</div>${rows.join('')}</div>`;
     };
@@ -24718,7 +24739,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix131';
+  const VERSION = 'v2.53 hotfix132';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix34: 편직 의뢰서 [성격] 시스템 도입 — 정규/재고/샘플/완료 4태그, 자동분류, 표 ● 배지, [성격▼] 필터, 완료체크 양방향연동
   // hotfix33: 클레임(땡처리) 내역서 양식 통일 — 부분/전체 모두 정식 표 양식 + 이미지복사/인쇄/수정 동일 버튼
