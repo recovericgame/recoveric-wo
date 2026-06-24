@@ -13626,7 +13626,8 @@ function validateBlendSum(blends, label) {
           </div>
           <div style="grid-column:1/3;">
             <label style="font-size:12px;font-weight:700;color:#334155;">🏷 로트(LOT) 번호</label>
-            <input type="text" id="fr-lot" lang="en" placeholder="염색 LOT 번호 — 나중에 추적용" value="${escapeHtml((c.fix_lot_no || '') )}" style="width:100%;padding:8px;border:1px solid #cbd5e1;border-radius:6px;margin-top:4px;box-sizing:border-box;font-weight:700;letter-spacing:0.5px;">
+            <input type="text" id="fr-lot" lang="en" placeholder="염색 LOT 번호 — 나중에 추적용" value="${escapeHtml((c.fix_lot_no || (c.receipts || []).slice().reverse().map(r => r && r.qc && r.qc.lot_no).find(Boolean) || ''))}" style="width:100%;padding:8px;border:1px solid #cbd5e1;border-radius:6px;margin-top:4px;box-sizing:border-box;font-weight:700;letter-spacing:0.5px;">
+            <div style="font-size:11px;color:#64748b;margin-top:3px;">1차 입고 LOT를 자동으로 가져왔습니다 · LOT가 바뀌었으면 직접 수정하세요</div>
           </div>
           <div style="grid-column:1/3;">
             <label style="font-size:12px;font-weight:700;color:#334155;">특이사항 (선택)</label>
@@ -18822,6 +18823,13 @@ function validateBlendSum(blends, label) {
     </div>`;
 
     const fmtDM = (s) => { try { return new Date(s).toLocaleDateString('ko-KR', {month:'numeric', day:'numeric'}); } catch(e){ return ''; } };
+    const fmtOrderDate = (s) => {
+      try {
+        const d = new Date(s); if (isNaN(d.getTime())) return '';
+        const wd = ['일','월','화','수','목','금','토'][d.getDay()];
+        return `${String(d.getFullYear()).slice(2)}년 ${String(d.getMonth()+1).padStart(2,'0')}월 ${String(d.getDate()).padStart(2,'0')}일 (${wd})`;
+      } catch(e){ return ''; }
+    };
     const devRow = (dev, qc) => {
       qc = qc || {};
       const rows = [];
@@ -18865,7 +18873,14 @@ function validateBlendSum(blends, label) {
     };
     const compactHistory = (rep) => {
       const woRef = (state.allWorkOrders || []).find(w => w.id === rep.woId);
-      const rows = [`<div class="cr-hist-row"><span class="cr-hist-stage">📋 의뢰</span><span class="cr-hist-qty">몸판 ${rep.orderedBody} · 리프 ${rep.orderedRib}절</span></div>`];
+      // 📋 의뢰 — 의뢰일(요일) / 의뢰수량 / 대표 LOT
+      const orderDate = woRef && woRef.date ? fmtOrderDate(woRef.date) : '';
+      const primaryLot = ((rep.receipts || []).map(r => r && r.qc && r.qc.lot_no).find(Boolean)) || rep.lotNo || '';
+      const odet = [];
+      if (orderDate) odet.push(`<div class="ceo-report-line"><span class="ceo-report-k">의뢰일</span> ${orderDate}</div>`);
+      odet.push(`<div class="ceo-report-line"><span class="ceo-report-k">의뢰수량</span> 몸판 ${rep.orderedBody} · 리프 ${rep.orderedRib}절</div>`);
+      if (primaryLot) odet.push(`<div class="ceo-report-line"><span class="ceo-report-k">🏷 LOT</span> <strong style="color:#1e3a8a;background:#eff6ff;padding:1px 7px;border-radius:4px;">${escapeHtml(String(primaryLot))}</strong></div>`);
+      const rows = [`<div class="cr-hist-row"><span class="cr-hist-stage">📋 의뢰</span></div><div style="margin:0 0 6px 6px;padding:5px 0 2px 12px;border-left:2px solid #e2e8f0;">${odet.join('')}</div>`];
       let cumB = 0, cumR = 0;
       (rep.receipts || []).forEach(r => {
         if (!r) return;
@@ -18934,7 +18949,6 @@ function validateBlendSum(blends, label) {
         </div>
         <div class="ceo-report-body">
           <div class="ceo-report-line"><span class="ceo-report-k">품목</span> ${escapeHtml(rep.item || '-')}</div>
-          <div class="ceo-report-line"><span class="ceo-report-k">의뢰수량</span> 몸판 ${rep.orderedBody} · 리프 ${rep.orderedRib}절</div>
           ${compactHistory(rep)}
           <div class="ceo-report-line" style="color:#9ca3af;font-size:11px;"><span class="ceo-report-k">검수자</span> ${escapeHtml(rep.createdBy || '-')}${when ? ' · ' + escapeHtml(when) : ''}</div>
         </div>
@@ -24739,7 +24753,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix132';
+  const VERSION = 'v2.53 hotfix133';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix34: 편직 의뢰서 [성격] 시스템 도입 — 정규/재고/샘플/완료 4태그, 자동분류, 표 ● 배지, [성격▼] 필터, 완료체크 양방향연동
   // hotfix33: 클레임(땡처리) 내역서 양식 통일 — 부분/전체 모두 정식 표 양식 + 이미지복사/인쇄/수정 동일 버튼
