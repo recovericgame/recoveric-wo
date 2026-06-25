@@ -6374,7 +6374,14 @@ const DEFAULT_SPEC_TOL = {
   weight_mode: 'pct',  // 중량 판정 방식: 'pct'(%) 또는 'gy'(절대 g/y)
   weight_pct: 5,       // 중량 ±N%
   weight_gy: 30,       // 중량 ±N g/y
-  shrink: 2.5          // 축률 N% 초과 시 보고
+  shrink: 2.5,         // 축률 N% 초과 시 보고
+  // 리프 전용 허용치 (몸판과 분리)
+  rib_width_upper: 3,
+  rib_width_lower: 0,
+  rib_weight_mode: 'pct',
+  rib_weight_pct: 5,
+  rib_weight_gy: 30,
+  rib_shrink: 2.5
 };
 
 // hotfix66: 원단 기본 스펙 34품목 (단가표 기준, 단가·피그먼트 의류 제외). settings/fabric_specs 비었을 때 기본값.
@@ -9580,7 +9587,13 @@ window.addEventListener('firebase-ready', () => {
       weight_mode: (obj.weight_mode === 'gy') ? 'gy' : 'pct',
       weight_pct: Math.max(0, num(obj.weight_pct) || 0),
       weight_gy: Math.max(0, num(obj.weight_gy) || 0),
-      shrink: Math.max(0, num(obj.shrink) || 0)
+      shrink: Math.max(0, num(obj.shrink) || 0),
+      rib_width_upper: Math.max(0, num(obj.rib_width_upper) || 0),
+      rib_width_lower: Math.max(0, num(obj.rib_width_lower) || 0),
+      rib_weight_mode: (obj.rib_weight_mode === 'gy') ? 'gy' : 'pct',
+      rib_weight_pct: Math.max(0, num(obj.rib_weight_pct) || 0),
+      rib_weight_gy: Math.max(0, num(obj.rib_weight_gy) || 0),
+      rib_shrink: Math.max(0, num(obj.rib_shrink) || 0)
     };
     await setDoc(doc(db, 'settings', 'spec_tolerance'), Object.assign({}, clean, {
       updated_at: serverTimestamp(), updated_by: state.user?.email || 'unknown'
@@ -10299,10 +10312,11 @@ function validateBlendSum(blends, label) {
       return;
     }
     // 사이드바 진행 메뉴를 전체 대시보드 필터와 통일:
-    //  [염색가공 진행] 클릭 = 전체 대시보드에서 [염색가공] 필터 누른 것과 완전히 동일하게.
+    //  [원사/편직/염색가공/B/T 진행] 클릭 = 전체 대시보드에서 해당 필터 누른 것과 완전히 동일하게.
     //  [전체 대시보드] 클릭 시 유형 필터는 전체로 초기화.
-    if (view === 'finish') {
-      state.overviewTypeFilter = '염색가공';
+    const _TYPE_VIEW_MAP = { yarn: '원사', knit: '편직', finish: '염색가공', bt: 'BT' };
+    if (_TYPE_VIEW_MAP[view]) {
+      state.overviewTypeFilter = _TYPE_VIEW_MAP[view];
       view = 'overview';
     } else if (view === 'overview') {
       state.overviewTypeFilter = 'all';
@@ -11186,8 +11200,21 @@ function validateBlendSum(blends, label) {
   //     (2) 2차/3차 저장 시 같은 칸을 덮어써 앞 차수 QC가 사라졌다.
   //   ★수정: setColorQcDone과 동일하게 receiptNo를 받아 해당 차수 receipt.qc에 저장.
   //     상태(qc_status)는 [저장만]이므로 절대 바꾸지 않는다(내용만 갱신).
-  async function saveQcData(woId, colorIdx, qcData, receiptNo) {
-    const wo = state.allWorkOrders.find(w => w.id === woId);
+  // 리프 QC 필드 빌드 (저장 경로 공용) — qcData.rib가 있으면 정규화, 없으면 이전값 보존
+  function buildRibQcField(qcData, prevQc) {
+    const n = v => (v === '' || v == null || isNaN(parseFloat(v))) ? null : parseFloat(v);
+    if (qcData && qcData.rib !== undefined) {
+      if (!qcData.rib) return { rib_checked: !!qcData.rib_checked, rib: null };
+      return { rib_checked: !!qcData.rib_checked, rib: {
+        width_inch: n(qcData.rib.width_inch), width_double: !!qcData.rib.width_double,
+        weight_g_per_y: n(qcData.rib.weight_g_per_y), weight_g_per_sqm: n(qcData.rib.weight_g_per_sqm),
+        shrink_width_pct: n(qcData.rib.shrink_width_pct), shrink_length_pct: n(qcData.rib.shrink_length_pct),
+        notes: qcData.rib.notes || ''
+      }};
+    }
+    return { rib_checked: !!(prevQc && prevQc.rib_checked), rib: (prevQc && prevQc.rib) || null };
+  }
+  async function saveQcData(woId, colorIdx, qcData, receiptNo) {    const wo = state.allWorkOrders.find(w => w.id === woId);
     if (!wo) throw new Error('의뢰서를 찾을 수 없음');
     const colors = JSON.parse(JSON.stringify(wo.colors || []));
     if (!colors[colorIdx]) throw new Error('컬러 인덱스 오류');
@@ -11210,6 +11237,18 @@ function validateBlendSum(blends, label) {
       shrink_length_pct: qcData.shrink_length_pct === '' ? null : (isNaN(parseFloat(qcData.shrink_length_pct)) ? null : parseFloat(qcData.shrink_length_pct)),
       notes: qcData.notes || '',
       lot_no: qcData.lot_no || '',
+      rib_checked: qcData.rib_checked !== undefined ? !!qcData.rib_checked : !!(prevQc && prevQc.rib_checked),
+      rib: (qcData.rib !== undefined)
+        ? (qcData.rib ? {
+            width_inch: qcData.rib.width_inch === '' ? null : (isNaN(parseFloat(qcData.rib.width_inch)) ? null : parseFloat(qcData.rib.width_inch)),
+            width_double: !!qcData.rib.width_double,
+            weight_g_per_y: qcData.rib.weight_g_per_y === '' ? null : (isNaN(parseFloat(qcData.rib.weight_g_per_y)) ? null : parseFloat(qcData.rib.weight_g_per_y)),
+            weight_g_per_sqm: qcData.rib.weight_g_per_sqm === '' ? null : (isNaN(parseFloat(qcData.rib.weight_g_per_sqm)) ? null : parseFloat(qcData.rib.weight_g_per_sqm)),
+            shrink_width_pct: qcData.rib.shrink_width_pct === '' ? null : (isNaN(parseFloat(qcData.rib.shrink_width_pct)) ? null : parseFloat(qcData.rib.shrink_width_pct)),
+            shrink_length_pct: qcData.rib.shrink_length_pct === '' ? null : (isNaN(parseFloat(qcData.rib.shrink_length_pct)) ? null : parseFloat(qcData.rib.shrink_length_pct)),
+            notes: qcData.rib.notes || ''
+          } : null)
+        : ((prevQc && prevQc.rib) || null),
       judgment: qcData.judgment || (prevQc && prevQc.judgment) || 'normal',  // 'normal' | 'defect'
       defect_flags: qcData.defect_flags || (prevQc && prevQc.defect_flags) || makeEmptyDefectFlags(),
       defect_meta: qcData.defect_meta !== undefined ? qcData.defect_meta : ((prevQc && prevQc.defect_meta) || {}),
@@ -11536,6 +11575,7 @@ function validateBlendSum(blends, label) {
       defect_flags: prevQc.defect_flags || makeEmptyDefectFlags(),
       defect_memo: prevQc.defect_memo || ''
     };
+    Object.assign(r.qc, buildRibQcField(qcData, prevQc));
     r.qc_status = 'done';
     r.qc_done_at = now;
     r.qc_done_by = state.user.email;
@@ -11718,6 +11758,52 @@ function validateBlendSum(blends, label) {
     }
     return out;
   }
+  // 리프 규격이상 판정 — wo.rib 기준 + 리프 전용 허용치(rib_*)
+  function checkSpecDeviationRib(ribData, wo) {
+    const out = { width: null, weight: null, shrink: null, any: false };
+    if (!ribData) return out;
+    const rb = (wo && wo.rib) || {};
+    const T = Object.assign({}, DEFAULT_SPEC_TOL, (state && state.specTol) || {});
+    const widthUpper = (T.rib_width_upper != null && T.rib_width_upper !== '') ? num(T.rib_width_upper) : num(T.width_upper);
+    const widthLower = (T.rib_width_lower != null && T.rib_width_lower !== '') ? num(T.rib_width_lower) : num(T.width_lower);
+    const weightMode = T.rib_weight_mode || T.weight_mode || 'pct';
+    const weightPct = (T.rib_weight_pct != null && T.rib_weight_pct !== '') ? num(T.rib_weight_pct) : num(T.weight_pct);
+    const weightGy = (T.rib_weight_gy != null && T.rib_weight_gy !== '') ? num(T.rib_weight_gy) : num(T.weight_gy);
+    const shrinkLimit = (T.rib_shrink != null && T.rib_shrink !== '') ? num(T.rib_shrink) : (num(T.shrink) || SHRINK_ALERT_THRESHOLD);
+    // 폭
+    const ws = parseWidthSpec(rb.spec_width);
+    const actualW = calcActualWidth(ribData.width_inch, !!ribData.width_double);
+    if (ws && actualW != null) {
+      const tube = !!rb.spec_width_tube;
+      const specMin = tube ? ws.min * 2 : ws.min;
+      const specMax = tube ? ws.max * 2 : ws.max;
+      const lo = specMin - (widthLower || 0), hi = specMax + (widthUpper || 0);
+      const fail = actualW < lo || actualW > hi;
+      out.width = { actual: actualW, lo, hi, specMin, specMax, tube, rawMin: ws.min, rawMax: ws.max, fail };
+      if (fail) out.any = true;
+    }
+    // 중량(g/y)
+    const tgy = parseFloat(rb.spec_gy);
+    const actualGy = (ribData.weight_g_per_y === '' || ribData.weight_g_per_y == null) ? null : parseFloat(ribData.weight_g_per_y);
+    if (isFinite(tgy) && tgy > 0 && actualGy != null && isFinite(actualGy)) {
+      let lo, hi;
+      if (weightMode === 'gy') { const m = Math.abs(weightGy || 0); lo = Math.round((tgy - m) * 10) / 10; hi = Math.round((tgy + m) * 10) / 10; }
+      else { const p = (weightPct || 0) / 100; lo = Math.round(tgy * (1 - p) * 10) / 10; hi = Math.round(tgy * (1 + p) * 10) / 10; }
+      const fail = actualGy < lo || actualGy > hi;
+      out.weight = { actual: actualGy, target: tgy, lo, hi, mode: weightMode, fail };
+      if (fail) out.any = true;
+    }
+    // 축률
+    const sw = (ribData.shrink_width_pct === '' || ribData.shrink_width_pct == null) ? null : parseFloat(ribData.shrink_width_pct);
+    const sl = (ribData.shrink_length_pct === '' || ribData.shrink_length_pct == null) ? null : parseFloat(ribData.shrink_length_pct);
+    const swFail = (sw != null && isFinite(sw) && sw > shrinkLimit);
+    const slFail = (sl != null && isFinite(sl) && sl > shrinkLimit);
+    if (sw != null || sl != null) {
+      out.shrink = { w: (sw != null && isFinite(sw)) ? sw : null, l: (sl != null && isFinite(sl)) ? sl : null, fail: swFail || slFail };
+      if (swFail || slFail) out.any = true;
+    }
+    return out;
+  }
   // 현재 축률 이상으로 대표 확인 대기 중인 건 수집
   function collectShrinkHolds() {
     const out = [];
@@ -11748,6 +11834,11 @@ function validateBlendSum(blends, label) {
         if (dev.width && dev.width.fail) fails.push('폭');
         if (dev.weight && dev.weight.fail) fails.push('중량');
         if (dev.shrink && dev.shrink.fail) fails.push('축률');
+        if (dev.rib) {
+          if (dev.rib.width && dev.rib.width.fail) fails.push('리프폭');
+          if (dev.rib.weight && dev.rib.weight.fail) fails.push('리프중량');
+          if (dev.rib.shrink && dev.rib.shrink.fail) fails.push('리프축률');
+        }
       }
       const label = fails.length ? `규격 이상 (${fails.join('·')})` : '축률 이상';
       reports.push({
@@ -11928,6 +12019,7 @@ function validateBlendSum(blends, label) {
       defect_flags: prevQc.defect_flags || makeEmptyDefectFlags(),
       defect_memo: prevQc.defect_memo || ''
     };
+    Object.assign(r.qc, buildRibQcField(qcData, prevQc));
     // 보류: done이 아니라 pending. 완료로 안 넘어감.
     r.qc_status = 'pending';
     r.shrink_hold = true;
@@ -12554,6 +12646,7 @@ function validateBlendSum(blends, label) {
       defect_meta: qcData.defect_meta !== undefined ? qcData.defect_meta : (prevQc.defect_meta || {}),
       defect_memo: qcData.defect_memo !== undefined ? qcData.defect_memo : (prevQc.defect_memo || '')
     };
+    Object.assign(r.qc, buildRibQcField(qcData, prevQc));
     r.qc_status = 'defect';
     r.defect_at = now;
     r.defect_by = state.user.email;
@@ -12635,6 +12728,7 @@ function validateBlendSum(blends, label) {
       defect_meta: qcData.defect_meta !== undefined ? qcData.defect_meta : (prevQc.defect_meta || {}),
       defect_memo: qcData.defect_memo !== undefined ? qcData.defect_memo : (prevQc.defect_memo || '')
     };
+    Object.assign(r.qc, buildRibQcField(qcData, prevQc));
     r.qc_status = 'accept';
     r.accept_at = now;
     r.accept_by = state.user.email;
@@ -12724,6 +12818,7 @@ function validateBlendSum(blends, label) {
       defect_meta: qcData.defect_meta !== undefined ? qcData.defect_meta : (prevQc.defect_meta || {}),
       defect_memo: qcData.defect_memo !== undefined ? qcData.defect_memo : (prevQc.defect_memo || '')
     };
+    Object.assign(r.qc, buildRibQcField(qcData, prevQc));
     r.qc_status = 'discard';
     r.discard_at = now;
     r.discard_by = state.user.email;
@@ -18907,6 +19002,14 @@ function validateBlendSum(blends, label) {
         const dr = devRow(dev, qc);
         if (dr) detail.push(dr);
         if (qc.notes) detail.push(`<div class="ceo-report-line"><span class="ceo-report-k">특이사항</span> ${escapeHtml(qc.notes)}</div>`);
+        // 리프 QC (검수했을 때만) — 몸판 아래 같은 형식
+        if (qc.rib_checked && qc.rib) {
+          let rdev2 = null; try { rdev2 = woRef ? checkSpecDeviationRib(qc.rib, woRef) : null; } catch (e) { rdev2 = null; }
+          const ribL = [`<div class="ceo-report-line" style="margin-top:2px;"><span class="ceo-report-k" style="color:#7c3aed;font-weight:800;">🧵 리프</span></div>`];
+          const rdr2 = devRow(rdev2, qc.rib); if (rdr2) ribL.push(rdr2);
+          if (qc.rib.notes) ribL.push(`<div class="ceo-report-line"><span class="ceo-report-k">리프 특이사항</span> ${escapeHtml(qc.rib.notes)}</div>`);
+          detail.push(`<div style="margin-top:4px;padding-top:4px;border-top:1px dashed #ddd6fe;">${ribL.join('')}</div>`);
+        }
         rows.push(`<div class="cr-hist-row"><span class="cr-hist-stage">📦 ${r.receipt_no}차 입고${dt}</span><span class="cr-hist-qty">${qcBadge(r.qc_status || 'none')}</span></div>`
           + `<div style="margin:0 0 6px 6px;padding:5px 0 2px 12px;border-left:2px solid #d1fae5;">${detail.join('')}</div>`);
       });
@@ -19489,12 +19592,35 @@ function validateBlendSum(blends, label) {
             <div style="color:#9ca3af;font-size:12px;margin-top:6px;">현재: ${T.shrink}% 초과</div>
           </div>
 
+          <div style="border-top:2px solid #ddd6fe;padding-top:16px;margin-bottom:22px;">
+            <div style="font-weight:800;margin-bottom:12px;color:#7c3aed;">🧵 리프 전용 허용치 (몸판과 분리)</div>
+            <div style="margin-bottom:14px;">
+              <div style="font-weight:700;margin-bottom:6px;font-size:13px;">리프 폭 허용치 (인치)</div>
+              <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;">
+                <label>기준 최소폭 − <input type="number" step="0.5" id="st_rib_width_lower" value="${T.rib_width_lower}" style="width:72px;padding:6px;border:1px solid #ccc;border-radius:6px;"> 까지</label>
+                <label>기준 최대폭 + <input type="number" step="0.5" id="st_rib_width_upper" value="${T.rib_width_upper}" style="width:72px;padding:6px;border:1px solid #ccc;border-radius:6px;"> 까지</label>
+              </div>
+            </div>
+            <div style="margin-bottom:14px;">
+              <div style="font-weight:700;margin-bottom:6px;font-size:13px;">리프 중량 허용치</div>
+              <div style="display:flex;flex-direction:column;gap:8px;">
+                <label><input type="radio" name="st_rib_wmode" value="pct" ${T.rib_weight_mode !== 'gy' ? 'checked' : ''}> 퍼센트 ± <input type="number" step="0.5" id="st_rib_weight_pct" value="${T.rib_weight_pct}" style="width:64px;padding:6px;border:1px solid #ccc;border-radius:6px;"> %</label>
+                <label><input type="radio" name="st_rib_wmode" value="gy" ${T.rib_weight_mode === 'gy' ? 'checked' : ''}> 절대중량 ± <input type="number" step="1" id="st_rib_weight_gy" value="${T.rib_weight_gy}" style="width:64px;padding:6px;border:1px solid #ccc;border-radius:6px;"> g/y</label>
+              </div>
+            </div>
+            <div>
+              <div style="font-weight:700;margin-bottom:6px;font-size:13px;">리프 축률 허용치</div>
+              <label><input type="number" step="0.1" id="st_rib_shrink" value="${T.rib_shrink}" style="width:72px;padding:6px;border:1px solid #ccc;border-radius:6px;"> % 초과 시 보고</label>
+            </div>
+          </div>
+
           <button type="button" onclick="window.__saveSpecTol()" style="width:100%;padding:14px;border:none;border-radius:8px;background:#1a1a1a;color:#fff;font-size:15px;font-weight:800;cursor:pointer;">허용치 저장</button>
         </div>
       </div>`;
   }
   window.__saveSpecTol = async function () {
     const mode = (document.querySelector('input[name="st_wmode"]:checked') || {}).value || 'pct';
+    const ribMode = (document.querySelector('input[name="st_rib_wmode"]:checked') || {}).value || 'pct';
     try {
       const ok = await saveSpecTol({
         width_upper: document.getElementById('st_width_upper').value,
@@ -19502,7 +19628,13 @@ function validateBlendSum(blends, label) {
         weight_mode: mode,
         weight_pct: document.getElementById('st_weight_pct').value,
         weight_gy: document.getElementById('st_weight_gy').value,
-        shrink: document.getElementById('st_shrink').value
+        shrink: document.getElementById('st_shrink').value,
+        rib_width_upper: document.getElementById('st_rib_width_upper').value,
+        rib_width_lower: document.getElementById('st_rib_width_lower').value,
+        rib_weight_mode: ribMode,
+        rib_weight_pct: document.getElementById('st_rib_weight_pct').value,
+        rib_weight_gy: document.getElementById('st_rib_weight_gy').value,
+        rib_shrink: document.getElementById('st_rib_shrink').value
       });
       if (ok) { toast('규격 허용치를 저장했습니다', 'success'); if (typeof renderDashboard === 'function') renderDashboard(); }
     } catch (e) { toast('저장 실패: ' + e.message, 'error'); }
@@ -22952,6 +23084,17 @@ function validateBlendSum(blends, label) {
     }
     
     const fmtV = v => (v === null || v === undefined || v === '') ? '' : String(v);
+    // 리프 QC (선택) — 값/기준
+    const ribq = qc.rib || {};
+    const ribBody = wo.rib || {};
+    const _ribWs = parseWidthSpec(ribBody.spec_width);
+    const _ribTube = !!ribBody.spec_width_tube;
+    const _ribBits = [];
+    if (_ribWs) { let t = `폭 ${escapeHtml(String(ribBody.spec_width))}″`; if (_ribTube) t += ` 튜브(실폭 ${_ribWs.min * 2}/${_ribWs.max * 2})`; _ribBits.push(t); }
+    if (ribBody.spec_gy != null && ribBody.spec_gy !== '') _ribBits.push(`${escapeHtml(String(ribBody.spec_gy))}g/y`);
+    const ribSpecLine = _ribBits.length
+      ? `<div style="padding:6px 10px;background:#f5f3ff;border:1px solid #ddd6fe;border-radius:6px;color:#6d28d9;font-weight:700;font-size:12px;">리프 기준 ${_ribBits.join(' · ')}</div>`
+      : `<div style="padding:6px 10px;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;color:#92400e;font-size:12px;">리프 기준 폭/중량이 없어 축률만 자동 판정됩니다.</div>`;
     const item = wo.body?.item || '-';
     const sizeText = `몸판 ${(c.body !== undefined && c.body !== null && c.body !== '') ? c.body : '-'}절 / 리프 ${(c.rib !== undefined && c.rib !== null && c.rib !== '') ? c.rib : '-'}절`;
     
@@ -23136,6 +23279,7 @@ function validateBlendSum(blends, label) {
           ${redyeDiscardBox}
         </div>
         <div class="qc-modal-form">
+          <div class="qc-field qc-field-full" style="margin-bottom:2px;"><div style="font-weight:800;font-size:13px;color:#0f172a;background:#f1f5f9;padding:4px 10px;border-radius:5px;">■ 몸판 검수</div></div>
           <div class="qc-field qc-field-full">
             <label>폭<span class="qc-unit">(인치)</span></label>
             <div class="qc-double-row">
@@ -23170,6 +23314,47 @@ function validateBlendSum(blends, label) {
           <div class="qc-field qc-field-full">
             <label>특이사항<span class="qc-unit">(선택)</span></label>
             <textarea id="qc-notes" placeholder="검수 시 특이사항을 기록해 주세요.">${escapeHtml(qc.notes || '')}</textarea>
+          </div>
+          <div class="qc-field qc-field-full" style="border-top:1px dashed #c4b5fd;padding-top:10px;margin-top:2px;">
+            <label class="qc-rib-toggle" id="qc-rib-toggle" style="display:inline-flex;align-items:center;gap:7px;cursor:pointer;font-weight:800;font-size:13px;color:#7c3aed;background:#f5f3ff;padding:6px 12px;border-radius:6px;border:1px solid #ddd6fe;">
+              <input type="checkbox" id="qc-rib-enable" ${qc.rib && qc.rib_checked ? 'checked' : ''}> 🧵 리프도 검수 (선택)
+            </label>
+          </div>
+          <div class="qc-field qc-field-full" id="qc-rib-section" style="${qc.rib && qc.rib_checked ? '' : 'display:none;'}">
+            ${ribSpecLine}
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:8px;">
+              <div class="qc-field qc-field-full" style="grid-column:1/-1;">
+                <label>리프 폭<span class="qc-unit">(인치)</span></label>
+                <div class="qc-double-row">
+                  <input type="number" step="0.1" min="0" id="qc-rib-width-inch" value="${escapeHtml(fmtV(ribq.width_inch))}" placeholder="예: 38" style="flex:0 0 130px;">
+                  <label class="qc-double-label ${ribq.width_double ? 'checked' : ''}" id="qc-rib-double-label">
+                    <input type="checkbox" id="qc-rib-width-double" ${ribq.width_double ? 'checked' : ''}> 더블
+                  </label>
+                  <span class="qc-actual-width" id="qc-rib-actual-width"></span>
+                </div>
+              </div>
+              <div class="qc-field">
+                <label>리프 스퀘어중량<span class="qc-unit">(g/㎡)</span></label>
+                <input type="number" step="1" min="0" id="qc-rib-weight-sqm" value="${escapeHtml(fmtV(ribq.weight_g_per_sqm))}" placeholder="예: 195">
+              </div>
+              <div class="qc-field">
+                <label>리프 야드중량<span class="qc-unit">(g/y · 자동계산)</span></label>
+                <input type="number" step="1" min="0" id="qc-rib-weight-y" value="${escapeHtml(fmtV(ribq.weight_g_per_y))}" placeholder="자동 계산됨" readonly tabindex="-1" title="스퀘어중량과 폭으로 자동 계산됩니다">
+                <div class="qc-auto-hint">스퀘어중량 + 폭 입력 시 자동 계산 · 자동 입력 항목</div>
+              </div>
+              <div class="qc-field">
+                <label>리프 폭축률<span class="qc-unit">(%, 소수1)</span></label>
+                <input type="number" step="0.1" id="qc-rib-shrink-w" value="${escapeHtml(fmtV(ribq.shrink_width_pct))}" placeholder="예: 3.5">
+              </div>
+              <div class="qc-field">
+                <label>리프 장축률<span class="qc-unit">(%, 소수1)</span></label>
+                <input type="number" step="0.1" id="qc-rib-shrink-l" value="${escapeHtml(fmtV(ribq.shrink_length_pct))}" placeholder="예: 5.2">
+              </div>
+              <div class="qc-field qc-field-full">
+                <label>리프 특이사항<span class="qc-unit">(선택)</span></label>
+                <textarea id="qc-rib-notes" placeholder="리프 검수 특이사항">${escapeHtml(ribq.notes || '')}</textarea>
+              </div>
+            </div>
           </div>
         </div>
         ${(isDefectMode || isAcceptMode || isDiscardMode || isDoneMode) ? `
@@ -23309,6 +23494,41 @@ function validateBlendSum(blends, label) {
     //   모달 열릴 때 폭·스퀘어가 이미 있으면 즉시 자동계산해 표시.
     recalcYard();
     
+    // 리프 검수(선택) — 토글 + 야드중량 자동계산 (몸판과 동일)
+    const ribEnable = document.getElementById('qc-rib-enable');
+    const ribSection = document.getElementById('qc-rib-section');
+    const ribFields = {
+      width_inch: document.getElementById('qc-rib-width-inch'),
+      width_double: document.getElementById('qc-rib-width-double'),
+      weight_g_per_sqm: document.getElementById('qc-rib-weight-sqm'),
+      weight_g_per_y: document.getElementById('qc-rib-weight-y'),
+      shrink_width_pct: document.getElementById('qc-rib-shrink-w'),
+      shrink_length_pct: document.getElementById('qc-rib-shrink-l'),
+      notes: document.getElementById('qc-rib-notes')
+    };
+    const ribDoubleLabel = document.getElementById('qc-rib-double-label');
+    const ribActualWidthEl = document.getElementById('qc-rib-actual-width');
+    function recalcRibYard() {
+      if (!ribFields.width_inch) return;
+      const sqm = ribFields.weight_g_per_sqm.value.trim();
+      const w = ribFields.width_inch.value.trim();
+      const isD = ribFields.width_double.checked;
+      const aw = calcActualWidth(w, isD);
+      if (ribActualWidthEl) ribActualWidthEl.innerHTML = aw != null ? `→ <strong>${aw}</strong>인치 ${isD ? '(더블)' : ''}` : '';
+      const calc = calcYardWeight(sqm, aw);
+      if (calc != null) { ribFields.weight_g_per_y.value = calc; ribFields.weight_g_per_y.classList.add('qc-auto-calc'); }
+      else { ribFields.weight_g_per_y.value = ''; ribFields.weight_g_per_y.classList.remove('qc-auto-calc'); }
+    }
+    if (ribFields.width_inch) {
+      ribFields.width_inch.addEventListener('input', recalcRibYard);
+      ribFields.weight_g_per_sqm.addEventListener('input', recalcRibYard);
+      ribFields.width_double.addEventListener('change', () => { ribDoubleLabel.classList.toggle('checked', ribFields.width_double.checked); recalcRibYard(); });
+      recalcRibYard();
+    }
+    if (ribEnable && ribSection) {
+      ribEnable.addEventListener('change', () => { ribSection.style.display = ribEnable.checked ? '' : 'none'; if (ribEnable.checked) recalcRibYard(); });
+    }
+    
     // 정상/불량 라디오 토글 → 사유 영역 펼침/숨김
     document.querySelectorAll('input[name="qc-judgment"]').forEach(r => {
       r.addEventListener('change', () => {
@@ -23392,6 +23612,16 @@ function validateBlendSum(blends, label) {
     
     function collect() {
       const judgment = document.querySelector('input[name="qc-judgment"]:checked')?.value || 'normal';
+      const ribOn = ribEnable && ribEnable.checked;
+      const rib = ribOn ? {
+        width_inch: ribFields.width_inch.value.trim(),
+        width_double: ribFields.width_double.checked,
+        weight_g_per_y: ribFields.weight_g_per_y.value.trim(),
+        weight_g_per_sqm: ribFields.weight_g_per_sqm.value.trim(),
+        shrink_width_pct: ribFields.shrink_width_pct.value.trim(),
+        shrink_length_pct: ribFields.shrink_length_pct.value.trim(),
+        notes: ribFields.notes.value.trim()
+      } : null;
       return {
         width_inch: fields.width_inch.value.trim(),
         width_double: fields.width_double.checked,
@@ -23401,6 +23631,8 @@ function validateBlendSum(blends, label) {
         shrink_length_pct: fields.shrink_length_pct.value.trim(),
         notes: fields.notes.value.trim(),
         lot_no: fields.lot_no ? fields.lot_no.value.trim() : '',
+        rib_checked: !!ribOn,
+        rib,
         judgment,
         defect_flags: collectFlags(),
         defect_meta: collectMeta(),
@@ -23477,11 +23709,16 @@ function validateBlendSum(blends, label) {
         
         // hotfix59/60/62: 규격 이상(폭/중량/축률) — 절대 바로 완료 안 됨. 대표 보고함으로 보고하고 보류.
         const specDev = checkSpecDeviation(data, wo);
-        if (specDev.any) {
+        const ribDev = (data.rib_checked && data.rib) ? checkSpecDeviationRib(data.rib, wo) : null;
+        if (ribDev && ribDev.any) specDev.rib = ribDev;  // 리프 편차 동봉(저장·표시용)
+        if (specDev.any || (ribDev && ribDev.any)) {
           const lines = [];
-          if (specDev.width && specDev.width.fail) lines.push(`· 폭 ${specDev.width.actual}″ (기준 ${specDev.width.specMin}/${specDev.width.specMax}″ → 허용 ${specDev.width.lo}~${specDev.width.hi}″)`);
-          if (specDev.weight && specDev.weight.fail) lines.push(`· 중량 ${specDev.weight.actual}g/y (기준 ${specDev.weight.target} → 허용 ${specDev.weight.lo}~${specDev.weight.hi})`);
-          if (specDev.shrink && specDev.shrink.fail) lines.push(`· 축률 폭 ${specDev.shrink.w == null ? '-' : specDev.shrink.w}% / 장 ${specDev.shrink.l == null ? '-' : specDev.shrink.l}% (기준 2.5% 이하)`);
+          if (specDev.width && specDev.width.fail) lines.push(`· 몸판 폭 ${specDev.width.actual}″ (기준 ${specDev.width.specMin}/${specDev.width.specMax}″ → 허용 ${specDev.width.lo}~${specDev.width.hi}″)`);
+          if (specDev.weight && specDev.weight.fail) lines.push(`· 몸판 중량 ${specDev.weight.actual}g/y (기준 ${specDev.weight.target} → 허용 ${specDev.weight.lo}~${specDev.weight.hi})`);
+          if (specDev.shrink && specDev.shrink.fail) lines.push(`· 몸판 축률 폭 ${specDev.shrink.w == null ? '-' : specDev.shrink.w}% / 장 ${specDev.shrink.l == null ? '-' : specDev.shrink.l}%`);
+          if (ribDev && ribDev.width && ribDev.width.fail) lines.push(`· 리프 폭 ${ribDev.width.actual}″ (기준 ${ribDev.width.specMin}/${ribDev.width.specMax}″ → 허용 ${ribDev.width.lo}~${ribDev.width.hi}″)`);
+          if (ribDev && ribDev.weight && ribDev.weight.fail) lines.push(`· 리프 중량 ${ribDev.weight.actual}g/y (기준 ${ribDev.weight.target} → 허용 ${ribDev.weight.lo}~${ribDev.weight.hi})`);
+          if (ribDev && ribDev.shrink && ribDev.shrink.fail) lines.push(`· 리프 축률 폭 ${ribDev.shrink.w == null ? '-' : ribDev.shrink.w}% / 장 ${ribDev.shrink.l == null ? '-' : ribDev.shrink.l}%`);
           const holdMsg = `🚩 규격 이상입니다.\n\n[${wo.wo_number || ''}] "${cName}"\n${lines.join('\n')}\n\n이 원단은 완료되지 않고\n대표 보고함으로 보고됩니다.\n대표가 보고함에서 확인·처리해야 완료됩니다.\n\n계속할까요?`;
           if (!confirm(holdMsg)) return;
           try {
@@ -24765,7 +25002,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix137';
+  const VERSION = 'v2.53 hotfix139';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix34: 편직 의뢰서 [성격] 시스템 도입 — 정규/재고/샘플/완료 4태그, 자동분류, 표 ● 배지, [성격▼] 필터, 완료체크 양방향연동
   // hotfix33: 클레임(땡처리) 내역서 양식 통일 — 부분/전체 모두 정식 표 양식 + 이미지복사/인쇄/수정 동일 버튼
