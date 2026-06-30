@@ -3558,6 +3558,10 @@
   .nr-stamp-chip:hover { background: #f7f5ff; }
   .nr-stamp-chip.on { background: var(--c, #555); color: #fff; }
   .nr-stamp-empty { color: #9ca3af; font-size: 10px; }
+  /* hotfix142: 편직 표 수량칸 입·출고 버튼 정렬 */
+  .ov-knit-qty { display: flex; align-items: center; gap: 6px; justify-content: flex-end; white-space: nowrap; padding: 1px 0; }
+  .ov-knit-qty .ovq-remain { min-width: 38px; text-align: right; }
+  .ov-knit-table td.col-num { white-space: nowrap; }
 
   /* ============================================================
      ★★★ B/T 의뢰서 전용 스타일 (v2.10) ★★★
@@ -17521,6 +17525,23 @@ function validateBlendSum(blends, label) {
       const inK = sh.reduce((s, x) => s + (x.dir === 'in' ? (parseFloat(x.kg) || 0) : 0), 0);
       const remainJul = totalJul + inJ - shJul;
       const julColor = remainJul < 0 ? '#c00' : remainJul === 0 ? '#047857' : '#c0271f';
+      // hotfix142: 품목별 입·출고 버튼 복구 — 화면 통합 때 사라졌던 출고/입고 진입점을 되살림
+      const itemOfSh = (x) => (x && x.item_idx != null ? x.item_idx : 0);
+      const qtyCell = items.length > 0
+        ? items.map((it, idx) => {
+            const jul = parseFloat(it.jul) || 0;
+            const kgPerJul = parseFloat(it.kg_per_jul) || 21;
+            const mine = sh.filter(x => itemOfSh(x) === idx);
+            const outJ = mine.reduce((s, x) => s + (x.dir === 'in' ? 0 : (parseFloat(x.jul) || 0)), 0);
+            const inboundJ = mine.reduce((s, x) => s + (x.dir === 'in' ? (parseFloat(x.jul) || 0) : 0), 0);
+            const remJ = (jul + inboundJ) - outJ;
+            const jc = remJ < 0 ? '#c00' : remJ === 0 ? '#047857' : '#c0271f';
+            const btn = mine.length === 0
+              ? `<button class="dash-action-btn dash-shipment-btn" data-id="${wo.id}" data-item-idx="${idx}" title="입·출고 입력">+ 입·출고</button>`
+              : `<button class="dash-action-btn dash-shipment-btn knit-ship-btn" data-id="${wo.id}" data-item-idx="${idx}" title="${mine.length}회 입·출고 — 클릭하여 보기/수정">출고 ${outJ}절${inboundJ ? ' · 입고 ' + inboundJ + '절' : ''}</button>`;
+            return `<div class="color-line ov-knit-qty"><span class="ovq-remain" style="font-weight:700;color:${jc};">${remJ}절</span>${btn}</div>`;
+          }).join('')
+        : `<span style="font-weight:700;color:${julColor};">${remainJul}절</span>`;
 
       let r = `<tr class="${overdueClass}" data-row-id="${wo.id}">
         <td class="col-no id-hover" title="${escapeHtml(wo.wo_number || '')}"><span class="id-text">${escapeHtml(wo.wo_number || '-')}</span></td>
@@ -17529,7 +17550,7 @@ function validateBlendSum(blends, label) {
         <td class="col-date">${formatYMD(wo.date)}</td>
         <td>${itemLines}</td>
         <td>${colorLines}</td>
-        <td class="col-num" style="font-weight:700;color:${julColor};" title="예상 재고 절 = 의뢰 ${totalJul}절${inJ > 0 ? ' + 입고 ' + inJ + '절' : ''} − 출고 ${shJul}절">${remainJul}절</td>
+        <td class="col-num" style="text-align:right;" title="예상 재고 절 = 의뢰 ${totalJul}절${inJ > 0 ? ' + 입고 ' + inJ + '절' : ''} − 출고 ${shJul}절">${qtyCell}</td>
         <td>${escapeHtml(wo.recipient || '-')}</td>
         ${renderEditableCell(wo, 'internal_memo', wo.internal_memo, 'text')}
         <td class="col-action col-act-view"><button class="dash-action-btn dash-view-btn" data-id="${wo.id}">보기</button>${gsStatusBadge(wo)}</td>`;
@@ -25143,7 +25164,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix141';
+  const VERSION = 'v2.53 hotfix142';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix34: 편직 의뢰서 [성격] 시스템 도입 — 정규/재고/샘플/완료 4태그, 자동분류, 표 ● 배지, [성격▼] 필터, 완료체크 양방향연동
   // hotfix33: 클레임(땡처리) 내역서 양식 통일 — 부분/전체 모두 정식 표 양식 + 이미지복사/인쇄/수정 동일 버튼
