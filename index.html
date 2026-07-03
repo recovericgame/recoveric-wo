@@ -1705,9 +1705,9 @@
      · Overdue = 좌측 4px 빨강 보더 + NO 컬럼 굵은 빨강 글자 (강조 강화)
   */
   /* hotfix120: 의미 없는 짝수행 줄무늬(zebra) 제거 — 색은 상태(불량/부족/완료 등)일 때만. 행 구분은 셀 테두리로 충분 */
-  .dash-table tr:hover td { background: #f0f7ff; }
+  .dash-table tr:hover td { background: #f6f8fc; }
   /* hotfix118: 상태 음영(부족/불량/수용/QC대기 등)보다 호버가 우선 — 마우스 올린 행 전체가 또렷이 강조 */
-  .dash-table tbody tr:not(.ov-section-head):hover td { background: #e3eeff !important; }
+  .dash-table tbody tr:not(.ov-section-head):hover td { background: #eef3fb !important; }
   .dash-table tr.completed td { color: #999; background: #f5f5f5; }
   .dash-table tr.deleted td { color: #c00; background: transparent; text-decoration: line-through; }
   .dash-table tr.deleted td:first-child { border-left: 4px solid #c00; }
@@ -1743,7 +1743,7 @@
     border-top: 1px dashed #ddd;  /* 같은 의뢰서 다음 컬러 — 점선 */
   }
   .dash-table.dash-table-color-rows tr.wo-group-cont:hover td {
-    background: #f0f7ff;
+    background: #f6f8fc;
   }
   /* rowspan 셀 가독성 — 세로 가운데 정렬 */
   .dash-table.dash-table-color-rows td[rowspan] {
@@ -4682,6 +4682,7 @@
   body.is-not-admin .dash-menu-btn[data-view="trash"],
   body.is-not-admin .dash-menu-btn[data-view="stampSettings"],
   body.is-not-admin .dash-menu-btn[data-view="fabricSpecs"],
+  body.is-not-admin .dash-menu-btn[data-view="vendors"],
   body.is-not-admin .dash-menu-btn[data-view="ceoReports"],
   body.is-not-admin .dash-menu-btn[data-view="completeReports"],
   body.is-not-admin [data-restore],
@@ -5905,6 +5906,7 @@
         <button class="dash-menu-btn" data-view="trash">휴지통</button>
         <button class="dash-menu-btn admin-only" data-view="stampSettings">스탬프 설정</button>
         <button class="dash-menu-btn admin-only" data-view="fabricSpecs">원단 기본 스펙</button>
+        <button class="dash-menu-btn admin-only" data-view="vendors">거래처 관리</button>
         <button class="dash-menu-btn admin-only" data-view="specTol">규격 허용치</button>
       </div>
     </div>
@@ -6750,6 +6752,8 @@ const state = {
   greigeItems: [],
   // hotfix66: 원단 기본 스펙 (settings/fabric_specs 구독, 없으면 SEED_FABRIC_SPECS)
   fabricSpecs: [],
+  // hotfix158: 거래처(업체) 마스터 (settings/vendors 구독) — [{name, type, memo}]. 작지 업체 선택용 사전 입력.
+  vendors: [],
   // v2.34: 전체 대시보드 유형 필터 (overview)
   overviewTypeFilter: 'all',  // 'all' | '원사' | '편직' | '염색가공' | 'BT'
   // hotfix57: 전체 대시보드에서 편직 선택 시 세부 성격 + 재고 업체 필터
@@ -9676,6 +9680,11 @@ window.addEventListener('firebase-ready', () => {
       if (typeof refreshFabricSpecDatalist === 'function') refreshFabricSpecDatalist();
       if (state.uiMode === 'dashboard' && state.dashView === 'fabricSpecs') renderDashboard();
     }, err => console.warn('[fabricSpec sub]', err.message));
+    // hotfix158: 거래처(업체) 마스터 구독 — 작지 업체 선택용 사전 입력 데이터
+    onSnapshot(doc(db, 'settings', 'vendors'), snap => {
+      state.vendors = (snap.exists() && Array.isArray(snap.data().items)) ? snap.data().items.filter(v => v && v.name) : [];
+      if (state.uiMode === 'dashboard' && state.dashView === 'vendors') renderDashboard();
+    }, err => console.warn('[vendors sub]', err.message));
     // hotfix83: 규격 허용치 구독 (대표 보고 판정 기준)
     onSnapshot(doc(db, 'settings', 'spec_tolerance'), snap => {
       state.specTol = snap.exists()
@@ -9747,6 +9756,22 @@ window.addEventListener('firebase-ready', () => {
       updated_by: state.user?.email || 'unknown'
     });
     state.fabricSpecs = cleaned;
+    return true;
+  }
+  // hotfix158: 거래처(업체) 저장 (관리자만) — settings/vendors
+  async function saveVendors(items) {
+    if (!isAdminUser()) { toast('관리자만 변경할 수 있습니다', 'error'); return false; }
+    const cleaned = (items || []).map(v => ({
+      name: String(v.name || '').trim(),
+      type: String(v.type || '').trim(),
+      memo: String(v.memo || '').trim()
+    })).filter(v => v.name);
+    await setDoc(doc(db, 'settings', 'vendors'), {
+      items: cleaned,
+      updated_at: serverTimestamp(),
+      updated_by: state.user?.email || 'unknown'
+    });
+    state.vendors = cleaned;
     return true;
   }
   // hotfix83: 규격 허용치 저장 (관리자만) — settings/spec_tolerance
@@ -10489,7 +10514,7 @@ function validateBlendSum(blends, label) {
       view = 'overview';
     }
     // hotfix66: 원단 기본 스펙도 관리자 전용
-    if ((view === 'fabricSpecs' || view === 'specTol') && !isAdminUser()) {
+    if ((view === 'fabricSpecs' || view === 'specTol' || view === 'vendors') && !isAdminUser()) {
       view = 'overview';
     }
     // v2.51 step3: 일일 보고는 페이지 전환 없이 모달만 진입
@@ -17433,7 +17458,7 @@ function validateBlendSum(blends, label) {
         <th class="col-num">수량</th>
         ${sortableTh('overview', 'vendor', state.overviewTypeFilter === '원사' ? '구매처 / 출고처' : '거래처 (공정)')}
         <th>용도</th>
-        <th>📝 메모</th>
+        <th>메모</th>
         <th class="col-action col-act-view">작지</th>
         <th class="col-action col-act-edit">수정</th>
         <th class="col-action col-act-copy">복사</th>
@@ -17460,7 +17485,7 @@ function validateBlendSum(blends, label) {
           if (sec !== __lastSection) {
             __lastSection = sec;
             const m = __sectionMeta[sec];
-            html += `<tr class="ov-section-head"><td colspan="14" style="background:${m.bg};border-left:4px solid ${m.bd};padding:9px 14px;">
+            html += `<tr class="ov-section-head"><td colspan="16" style="background:${m.bg};border-left:4px solid ${m.bd};padding:9px 14px;">
               <span style="font-weight:800;font-size:13px;color:${m.fg};">${m.label} <span style="background:${m.bd};color:#fff;border-radius:10px;padding:1px 9px;font-size:11.5px;margin-left:4px;">${__sectionCounts[sec]}</span></span>
               <span style="font-size:11.5px;color:#9ca3af;margin-left:10px;">${m.sub}</span>
             </td></tr>`;
@@ -19933,6 +19958,54 @@ function validateBlendSum(blends, label) {
   // 편집 중인 임시 데이터 (저장 전까지 화면에만)
   let editingStamps = { common: null, bt: null };
 
+  // hotfix158: 거래처(업체) 관리 화면 (관리자 전용) — 작지 업체 선택용 사전 등록 CRUD
+  let editingVendorIdx = -1;
+  const VENDOR_TYPES = ['염색처', '가공처', '후가공처', '편직처', '원사 구매처', '출고처', '기타'];
+  function renderVendors() {
+    if (!isAdminUser()) return `<div class="dash-empty">대표 전용 화면입니다.</div>`;
+    const vs = state.vendors || [];
+    const lblS = 'font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:4px;';
+    const inpS = 'width:100%;padding:9px 10px;border:1px solid var(--ui-line);border-radius:8px;box-sizing:border-box;font-family:inherit;font-size:13px;';
+    const typeChip = (t) => t
+      ? `<span style="display:inline-block;padding:2px 9px;border-radius:10px;background:var(--brand-soft);color:var(--brand-deep);font-size:11px;font-weight:700;">${escapeHtml(t)}</span>`
+      : `<span style="color:#9ca3af;">-</span>`;
+    const rows = vs.length
+      ? vs.map((v, i) => `
+        <tr>
+          <td style="font-weight:700;color:var(--ui-text);">${escapeHtml(v.name)}</td>
+          <td>${typeChip(v.type)}</td>
+          <td style="color:#6b7280;">${escapeHtml(v.memo || '')}</td>
+          <td style="text-align:right;white-space:nowrap;">
+            <button class="dash-action-btn vendor-edit-btn" data-idx="${i}">수정</button>
+            <button class="dash-action-btn vendor-del-btn" data-idx="${i}" style="color:#b91c1c;border-color:#fecaca;">삭제</button>
+          </td>
+        </tr>`).join('')
+      : `<tr><td colspan="4" style="text-align:center;color:#9ca3af;padding:26px;">등록된 거래처가 없습니다. 아래 양식에서 추가해 주세요.</td></tr>`;
+    return `
+      <div style="max-width:760px;margin:0 auto;">
+        <div style="font-size:12px;color:#6b7280;margin-bottom:12px;line-height:1.7;">작업지시서에서 선택할 거래처(업체)를 미리 등록·관리하는 곳입니다. 여기 등록한 업체는 앞으로 작지 작성 시 목록에서 바로 고를 수 있습니다.</div>
+        <div style="background:#fff;border:1px solid var(--ui-line);border-radius:12px;padding:16px 18px;margin-bottom:16px;box-shadow:var(--ui-shadow-sm);">
+          <div style="font-weight:800;font-size:13px;color:var(--brand-deep);margin-bottom:12px;" id="vendor-form-title">거래처 추가</div>
+          <div style="display:grid;grid-template-columns:1.2fr 1fr 1.5fr auto;gap:10px;align-items:end;">
+            <div><label style="${lblS}">업체명 *</label><input id="vendor-f-name" type="text" lang="ko" placeholder="예: 대흥섬유" style="${inpS}"></div>
+            <div><label style="${lblS}">구분</label><select id="vendor-f-type" style="${inpS}">${['', ...VENDOR_TYPES].map(t => `<option value="${escapeHtml(t)}">${t || '선택'}</option>`).join('')}</select></div>
+            <div><label style="${lblS}">메모 (선택)</label><input id="vendor-f-memo" type="text" lang="ko" placeholder="연락처·비고 등" style="${inpS}"></div>
+            <button id="vendor-save-btn" class="dash-action-btn" style="background:var(--brand);color:#fff;border-color:var(--brand-deep);font-weight:700;padding:10px 18px;">추가</button>
+          </div>
+          <div id="vendor-cancel-wrap" style="display:none;margin-top:10px;"><button id="vendor-cancel-btn" class="dash-action-btn">수정 취소</button></div>
+        </div>
+        <table class="dash-table" style="width:100%;">
+          <thead><tr>
+            <th style="text-align:left;">업체명</th>
+            <th style="text-align:left;">구분</th>
+            <th style="text-align:left;">메모</th>
+            <th style="text-align:right;">관리</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+  }
+
   // hotfix83: 규격 허용치 설정 화면 (관리자 전용) — 현재값 표시 + 변경
   function renderSpecTol() {
     const T = getSpecTol();
@@ -20849,6 +20922,10 @@ function validateBlendSum(blends, label) {
     } else if (state.dashView === 'fabricSpecs') {
       title = '원단 기본 스펙 (관리자 전용)';
       body = renderFabricSpecs();
+      addBtn.style.display = 'none';
+    } else if (state.dashView === 'vendors') {
+      title = '거래처 관리 (관리자 전용)';
+      body = renderVendors();
       addBtn.style.display = 'none';
     }
     } catch (__renderErr) {
@@ -22421,6 +22498,78 @@ function validateBlendSum(blends, label) {
     }
 
     // hotfix66: 원단 기본 스펙 화면 핸들러
+    (function attachVendorHandlers() {
+      const saveBtn = document.getElementById('vendor-save-btn');
+      if (!saveBtn) return;  // 거래처 화면일 때만 동작
+      const nameEl = document.getElementById('vendor-f-name');
+      const typeEl = document.getElementById('vendor-f-type');
+      const memoEl = document.getElementById('vendor-f-memo');
+      const titleEl = document.getElementById('vendor-form-title');
+      const cancelWrap = document.getElementById('vendor-cancel-wrap');
+      const resetForm = () => {
+        editingVendorIdx = -1;
+        if (nameEl) nameEl.value = '';
+        if (typeEl) typeEl.value = '';
+        if (memoEl) memoEl.value = '';
+        if (titleEl) titleEl.textContent = '거래처 추가';
+        saveBtn.textContent = '추가';
+        if (cancelWrap) cancelWrap.style.display = 'none';
+      };
+      // 편집 진입 상태 복원(재렌더 후에도 편집 중이면 폼 채움)
+      if (editingVendorIdx >= 0 && (state.vendors || [])[editingVendorIdx]) {
+        const v = state.vendors[editingVendorIdx];
+        if (nameEl) nameEl.value = v.name || '';
+        if (typeEl) typeEl.value = v.type || '';
+        if (memoEl) memoEl.value = v.memo || '';
+        if (titleEl) titleEl.textContent = '거래처 수정';
+        saveBtn.textContent = '저장';
+        if (cancelWrap) cancelWrap.style.display = 'block';
+      }
+      saveBtn.addEventListener('click', async () => {
+        const name = (nameEl?.value || '').trim();
+        if (!name) { toast('업체명을 입력해 주세요', 'error'); nameEl?.focus(); return; }
+        const entry = { name, type: (typeEl?.value || '').trim(), memo: (memoEl?.value || '').trim() };
+        const list = JSON.parse(JSON.stringify(state.vendors || []));
+        // 중복 업체명 방지(자기 자신 제외)
+        const dupIdx = list.findIndex((v, i) => v.name === name && i !== editingVendorIdx);
+        if (dupIdx >= 0) { toast('같은 업체명이 이미 있습니다', 'error'); return; }
+        if (editingVendorIdx >= 0) list[editingVendorIdx] = entry;
+        else list.push(entry);
+        try {
+          const ok = await saveVendors(list);
+          if (ok === false) return;
+          resetForm();
+          toast(`거래처 "${name}" 저장 완료`, 'success');
+          renderDashboard();
+        } catch (err) { toast('저장 실패: ' + err.message, 'error'); }
+      });
+      const cancelBtn = document.getElementById('vendor-cancel-btn');
+      if (cancelBtn) cancelBtn.addEventListener('click', () => { resetForm(); });
+      document.querySelectorAll('#dash-body .vendor-edit-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          editingVendorIdx = parseInt(btn.dataset.idx, 10);
+          renderDashboard();  // 재렌더 → 위 복원 로직이 폼 채움
+        });
+      });
+      document.querySelectorAll('#dash-body .vendor-del-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const idx = parseInt(btn.dataset.idx, 10);
+          const v = (state.vendors || [])[idx];
+          if (!v) return;
+          if (!confirm(`거래처 "${v.name}"을(를) 삭제할까요?`)) return;
+          const list = JSON.parse(JSON.stringify(state.vendors || []));
+          list.splice(idx, 1);
+          try {
+            const ok = await saveVendors(list);
+            if (ok === false) return;
+            if (editingVendorIdx === idx) editingVendorIdx = -1;
+            toast(`거래처 "${v.name}" 삭제`, 'warning');
+            renderDashboard();
+          } catch (err) { toast('삭제 실패: ' + err.message, 'error'); }
+        });
+      });
+    })();
+
     (function attachFabricSpecHandlers() {
       const modal = document.getElementById('fs-modal');
       if (!modal) return;
@@ -25489,10 +25638,10 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix157';
+  const VERSION = 'v2.53 hotfix158';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
-  // hotfix157: 재염된 색이 "✓ QC"(완료)로 뜨던 문제 수정 — 재염 이관된 색은 QC 완료보다 재염 우선 분류(부족분 무관, QC 미완은 여전히 pattern 유지), 표기 "재염 이관"→"재염중", 완료 그룹에서 빼 진행 영역에 표시(의뢰서 완료 판정 isColorClosed은 별개라 영향 없음).
-  // hotfix156: 로그인 파란 리뉴얼. hotfix155: 팝업/카드 이모지·재염 표기. hotfix153: 되돌리기 근본수정.
+  // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
+  // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
   // hotfix34: 편직 의뢰서 [성격] 시스템 도입 — 정규/재고/샘플/완료 4태그, 자동분류, 표 ● 배지, [성격▼] 필터, 완료체크 양방향연동
   // hotfix33: 클레임(땡처리) 내역서 양식 통일 — 부분/전체 모두 정식 표 양식 + 이미지복사/인쇄/수정 동일 버튼
   // hotfix32: 편직진행 화면 - 거래처별/전체 "예상 재고 절·kg" 합계 박스 추가 (필터 줄 우측)
