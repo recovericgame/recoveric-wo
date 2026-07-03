@@ -5946,7 +5946,7 @@
         <div class="section-title">기본 정보</div>
         <div class="row row-2">
           <div class="field"><label>발주일</label><input type="date" id="y_date"></div>
-          <div class="field"><label>수신처 (원사 공장)</label><input type="text" lang="ko" id="y_supplier" placeholder="한국 씨엔티 오재선 팀장님"></div>
+          <div class="field"><label>수신처 (원사 공장)</label><input type="text" lang="ko" id="y_supplier" list="vendorDatalist" placeholder="한국 씨엔티 오재선 팀장님"><datalist id="vendorDatalist"></datalist></div>
         </div>
         <div class="row row-2">
           <div class="field">
@@ -5980,7 +5980,7 @@
         <div class="section-title">기본 정보</div>
         <div class="row row-3">
           <div class="field"><label>의뢰일</label><input type="date" id="k_date"></div>
-          <div class="field"><label>수신처 (편직 공장)</label><input type="text" lang="ko" id="k_recipient" placeholder="세원"></div>
+          <div class="field"><label>수신처 (편직 공장)</label><input type="text" lang="ko" id="k_recipient" list="vendorDatalist" placeholder="세원"></div>
           <div class="field"><label>성격 <span style="color:#9ca3af;font-weight:400;">(자동 추천)</span></label>
             <select id="k_kind">
               <option value="regular">기획 — 일반 발주</option>
@@ -6033,7 +6033,7 @@
               <option value="샘플">샘플</option><option value="재염">재염</option>
             </select>
           </div>
-          <div class="field"><label>최종납품처</label><input type="text" lang="ko" id="f_dest" placeholder="세원"></div>
+          <div class="field"><label>최종납품처</label><input type="text" lang="ko" id="f_dest" list="vendorDatalist" placeholder="세원"></div>
         </div>
       </div>
       <div class="section">
@@ -6128,7 +6128,7 @@
         <div class="section-title">기본 정보</div>
         <div class="row row-2">
           <div class="field"><label>발주일</label><input type="date" id="bt_date"></div>
-          <div class="field"><label>수신처 (염색공장)</label><input type="text" lang="ko" id="bt_recipient" placeholder="대흥, 송원 등"></div>
+          <div class="field"><label>수신처 (염색공장)</label><input type="text" lang="ko" id="bt_recipient" list="vendorDatalist" placeholder="대흥, 송원 등"></div>
         </div>
         <div class="row row-2">
           <div class="field"><label>품명</label><input type="text" lang="ko" id="bt_item" placeholder="울트라싱글(헬비싱글) 등"></div>
@@ -6997,9 +6997,9 @@ function renderFinishRecipients() {
   const sv = state.savedFinishRecipients || {};
   const cols = [dye,proc,post].filter(x=>x).length || 1;
   let html = `<div class="row" style="grid-template-columns: repeat(${cols}, 1fr); gap: 8px;">`;
-  if (dye) html += `<div class="field"><label>염색처</label><input type="text" lang="ko" id="f_r_dye" placeholder="대흥염색" value="${escapeHtml(sv.dye || '')}"></div>`;
-  if (proc) html += `<div class="field"><label>가공처</label><input type="text" lang="ko" id="f_r_proc" placeholder="대흥가공" value="${escapeHtml(sv.proc || '')}"></div>`;
-  if (post) html += `<div class="field"><label>후가공처</label><input type="text" lang="ko" id="f_r_post" placeholder="후가공 업체" value="${escapeHtml(sv.post || '')}"></div>`;
+  if (dye) html += `<div class="field"><label>염색처</label><input type="text" lang="ko" id="f_r_dye" list="vendorDatalist" placeholder="대흥염색" value="${escapeHtml(sv.dye || '')}"></div>`;
+  if (proc) html += `<div class="field"><label>가공처</label><input type="text" lang="ko" id="f_r_proc" list="vendorDatalist" placeholder="대흥가공" value="${escapeHtml(sv.proc || '')}"></div>`;
+  if (post) html += `<div class="field"><label>후가공처</label><input type="text" lang="ko" id="f_r_post" list="vendorDatalist" placeholder="후가공 업체" value="${escapeHtml(sv.post || '')}"></div>`;
   html += '</div>';
   c.innerHTML = html;
   c.querySelectorAll('input').forEach(inp => inp.addEventListener('input', () => { render(); markDirty(); }));
@@ -9685,6 +9685,7 @@ window.addEventListener('firebase-ready', () => {
     // hotfix158: 거래처(업체) 마스터 구독 — 작지 업체 선택용 사전 입력 데이터
     onSnapshot(doc(db, 'settings', 'vendors'), snap => {
       state.vendors = (snap.exists() && Array.isArray(snap.data().items)) ? snap.data().items.filter(v => v && v.name) : [];
+      if (typeof refreshVendorDatalist === 'function') refreshVendorDatalist();
       if (state.uiMode === 'dashboard' && state.dashView === 'vendors') renderDashboard();
     }, err => console.warn('[vendors sub]', err.message));
     // hotfix83: 규격 허용치 구독 (대표 보고 판정 기준)
@@ -9815,6 +9816,17 @@ window.addEventListener('firebase-ready', () => {
     const dl = document.getElementById('fabric-spec-datalist');
     if (!dl) return;
     dl.innerHTML = getFabricSpecs().map(s => `<option value="${escapeHtml(s.name)}"></option>`).join('');
+  }
+
+  // hotfix160: 작성 화면 업체칸 자동완성 — 거래처(설정, settings/vendors) 목록을 datalist로.
+  //   자유입력 겸용(타이핑하면 필터). 원사구매처/편직처/최종납품처/염색·가공·후가공처 공통 사용.
+  function refreshVendorDatalist() {
+    const dl = document.getElementById('vendorDatalist');
+    if (!dl) return;
+    const names = Array.from(new Set((state.vendors || [])
+      .map(v => (v && v.name ? String(v.name).trim() : ''))
+      .filter(Boolean)));
+    dl.innerHTML = names.map(n => `<option value="${escapeHtml(n)}"></option>`).join('');
   }
 
   // hotfix66/69/73: 몸판 품목 → 원단 기본 스펙에서 폭·중량·튜브·혼용율(·주의사항) 채움.
@@ -13694,6 +13706,28 @@ function validateBlendSum(blends, label) {
     }
     await updateDoc(doc(db, 'workorders', woId), { colors, updated_at: serverTimestamp(), updated_by: state.user.email });
     wo.colors = colors;   // hotfix153 교훈: onSnapshot 전 화면 즉시 반영
+  }
+
+  // hotfix160: 재염 취소·되돌리기 — 재염중(막다른) 상태의 색을 이전 상태로 복귀
+  //   재염 이관 표식/수량을 해제 → getColorQcStatus가 실제 상태(부족/진행/QC)로 재판정.
+  //   ※ 자식 재염 의뢰서는 별도 건이라 여기서 삭제하지 않음(필요 시 목록에서 직접 삭제).
+  async function setColorRedyeCancel(woId, colorIdx) {
+    const wo = state.allWorkOrders.find(w => w.id === woId);
+    if (!wo) throw new Error('의뢰서를 찾을 수 없음');
+    const colors = JSON.parse(JSON.stringify(wo.colors || []));
+    const c = colors[colorIdx];
+    if (!c) throw new Error('컬러 인덱스 오류');
+    const now = new Date().toISOString();
+    const prevTo = c.redye_transferred_to || '';
+    if (!Array.isArray(c.redye_history)) c.redye_history = [];
+    c.redye_history.push({ at: now, by: state.user.email, to: prevTo, body: 0, rib: 0, memo: '재염 취소·되돌리기', cancelled: true });
+    delete c.redye_transferred_to;
+    delete c.redye_transferred_at;
+    delete c.redye_transferred_by;
+    c.redye_body = 0;
+    c.redye_rib = 0;
+    await updateDoc(doc(db, 'workorders', woId), { colors, updated_at: serverTimestamp(), updated_by: state.user.email });
+    wo.colors = colors;   // hotfix153 교훈: 화면 즉시 반영
   }
 
   async function setColorFixCancel(woId, colorIdx) {
@@ -17705,7 +17739,7 @@ function validateBlendSum(blends, label) {
           } else if (qcSt === 'redye') {
             // v2.53 hotfix8: 재염 이관된 컬러 — 새 의뢰서 번호 꼬리표 (닫힘 상태)
             const _toNo = (c && c.redye_transferred_to) ? c.redye_transferred_to : '';
-            completeCell = `<td class="col-action col-act-complete"><span class="redye-transferred-tag" title="이 컬러는 ${escapeHtml(_toNo)} 의뢰서로 재염 처리 중입니다 — QC 완료가 아닙니다">재염중${_toNo ? ' (→ ' + escapeHtml(_toNo) + ')' : ''}</span></td>`;
+            completeCell = `<td class="col-action col-act-complete"><span class="redye-transferred-tag" title="이 컬러는 ${escapeHtml(_toNo)} 의뢰서로 재염 처리 중입니다 — QC 완료가 아닙니다">재염중${_toNo ? ' (→ ' + escapeHtml(_toNo) + ')' : ''}</span>${isAdminUser() ? `<button class="dash-action-btn dash-redye-cancel-btn" data-id="${wo.id}" data-color-idx="${colorIdx}" title="이 색의 재염 이관을 취소하고 이전 상태로 되돌립니다 (재염 의뢰서는 별도로 남습니다)" style="margin-left:6px;background:#fff;color:#b45309;border-color:#fbbf24;font-size:10px;padding:2px 7px;">재염 취소</button>` : ''}</td>`;
           } else if (qcSt === 'discard') {
             completeCell = `<td class="col-action col-act-complete"><span class="dash-discard-stamp">⚠ 땡처리</span></td>`;
           } else if (qcSt === 'accept') {
@@ -18499,7 +18533,7 @@ function validateBlendSum(blends, label) {
         } else if (qcSt === 'redye') {
           // v2.53 hotfix8: 재염 이관된 컬러 — 새 의뢰서 번호 꼬리표 (닫힘 상태)
           const _toNo = (c && c.redye_transferred_to) ? c.redye_transferred_to : '';
-          completeCell = `<td class="col-action"><span class="redye-transferred-tag" title="이 컬러는 ${escapeHtml(_toNo)} 의뢰서로 재염 처리 중입니다 — QC 완료가 아닙니다">재염중${_toNo ? ' (→ ' + escapeHtml(_toNo) + ')' : ''}</span></td>`;
+          completeCell = `<td class="col-action"><span class="redye-transferred-tag" title="이 컬러는 ${escapeHtml(_toNo)} 의뢰서로 재염 처리 중입니다 — QC 완료가 아닙니다">재염중${_toNo ? ' (→ ' + escapeHtml(_toNo) + ')' : ''}</span>${isAdminUser() ? `<button class="dash-action-btn dash-redye-cancel-btn" data-id="${wo.id}" data-color-idx="${colorIdx}" title="이 색의 재염 이관을 취소하고 이전 상태로 되돌립니다 (재염 의뢰서는 별도로 남습니다)" style="margin-left:6px;background:#fff;color:#b45309;border-color:#fbbf24;font-size:10px;padding:2px 7px;">재염 취소</button>` : ''}</td>`;
         } else if (qcSt === 'discard') {
           completeCell = `<td class="col-action"><span class="dash-discard-stamp">⚠ 땡처리</span></td>`;
         } else if (qcSt === 'accept') {
@@ -22303,6 +22337,30 @@ function validateBlendSum(blends, label) {
       });
     });
 
+    // hotfix160: [재염 취소] — 재염중(막다른) 색을 이전 상태로 복귀 (관리자 전용, 확인 후)
+    document.querySelectorAll('#dash-body .dash-redye-cancel-btn').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (!isAdminUser()) { toast('재염 취소는 대표만 가능합니다', 'info'); return; }
+        const id = btn.dataset.id;
+        const ci = parseInt(btn.dataset.colorIdx, 10);
+        const wo = state.allWorkOrders.find(w => w.id === id);
+        const c = wo ? (wo.colors || [])[ci] || {} : {};
+        const cName = c.name || `컬러 #${ci + 1}`;
+        const toNo = c.redye_transferred_to || '';
+        if (!confirm(`"${cName}" 재염을 취소하고 이전 상태로 되돌립니다.\n\n· 재염중 표식이 사라지고 부족·완료·재염 버튼 상태로 복귀합니다\n· 재염으로 만들어진 의뢰서${toNo ? `(${toNo})` : ''}는 그대로 남습니다 — 필요 없으면 목록에서 직접 삭제해 주세요\n\n계속할까요?`)) return;
+        btn.disabled = true;
+        try {
+          await setColorRedyeCancel(id, ci);
+          toast(`"${cName}" 재염 취소 — 이전 상태로 복귀했습니다`, 'success');
+          renderDashboard();
+        } catch (err) {
+          btn.disabled = false;
+          toast('처리 실패: ' + (err.message || err), 'error');
+        }
+      });
+    });
+
     document.querySelectorAll('#dash-body .dash-shrink-review-btn').forEach(btn => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -25737,7 +25795,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix159';
+  const VERSION = 'v2.53 hotfix160';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
