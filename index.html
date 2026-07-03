@@ -7987,7 +7987,9 @@ const PROTECTED_COLOR_FIELDS = [
   // v2.53 hotfix91: 완료 전 대표 확인 대기 (정상 QC도 대표 OK 후 완료)
   'completed_blocked_by_ceo',
   // v2.53 hotfix93: 수정 재검수 로트(LOT) 번호 — 추적용
-  'fix_lot_no'
+  'fix_lot_no',
+  // v2.53 hotfix159: 후가공(송원 등) 3공정 게이트 — 컬러별 넘김/완료 날짜
+  'post_sent_date', 'post_done_date'
 ];
 
 // ===== hotfix34: 편직 성격(kind) 시스템 =====
@@ -13669,6 +13671,31 @@ function validateBlendSum(blends, label) {
   }
 
   // hotfix76/81: 수정 취소(되돌리기) — 잘못 보낸 수정을 무르고, 해당 차수를 수정 직전 상태로 복원
+  // hotfix159: 후가공(송원 등) 3공정 게이트 — 컬러별 [넘김]/[완료]/[되돌리기]
+  //   stage: 'send'(가공완료·넘김) | 'done'(후가공완료·입고대기) | 'revert-sent'(넘김취소) | 'revert-done'(완료취소)
+  async function setColorPostStage(woId, colorIdx, stage) {
+    const wo = state.allWorkOrders.find(w => w.id === woId);
+    if (!wo) throw new Error('의뢰서를 찾을 수 없음');
+    const colors = JSON.parse(JSON.stringify(wo.colors || []));
+    const c = colors[colorIdx];
+    if (!c) throw new Error('컬러 인덱스 오류');
+    const ymd = todayYMD();
+    if (stage === 'send') {
+      c.post_sent_date = ymd;
+      delete c.post_done_date;
+    } else if (stage === 'done') {
+      if (!c.post_sent_date) c.post_sent_date = ymd;
+      c.post_done_date = ymd;
+    } else if (stage === 'revert-sent') {
+      delete c.post_sent_date;
+      delete c.post_done_date;
+    } else if (stage === 'revert-done') {
+      delete c.post_done_date;
+    }
+    await updateDoc(doc(db, 'workorders', woId), { colors, updated_at: serverTimestamp(), updated_by: state.user.email });
+    wo.colors = colors;   // hotfix153 교훈: onSnapshot 전 화면 즉시 반영
+  }
+
   async function setColorFixCancel(woId, colorIdx) {
     const wo = state.allWorkOrders.find(w => w.id === woId);
     if (!wo) throw new Error('의뢰서를 찾을 수 없음');
@@ -17697,7 +17724,23 @@ function validateBlendSum(blends, label) {
             completeCell = `<td class="col-action col-act-complete"><button class="dash-action-btn qc-done-btn" data-id="${wo.id}" data-color-idx="${colorIdx}" data-qc-action="open">✓ QC${receiptLabel}</button>${shortageBtn}</td>`;
           } else {
             // 진행 중 (none) — [완료] 옆에 [부족] 버튼 노출
-            completeCell = `<td class="col-action col-act-complete"><button class="dash-action-btn dash-color-qc-init-btn" data-id="${wo.id}" data-color-idx="${colorIdx}">완료</button><button class="dash-action-btn dash-shortage-btn" data-id="${wo.id}" data-color-idx="${colorIdx}" title="입고 수량이 의뢰량과 다른 경우 (예: 10절 의뢰 → 9절만 입고)">부족</button>${isAdminUser() ? `<button class="dash-action-btn dash-color-redye-btn" data-id="${wo.id}" data-color-idx="${colorIdx}" title="입고 전이라도 재염 처리 — 몸판만 재염(리프 0)도 가능" style="background:#fef3c7;color:#b45309;border-color:#fbbf24;font-weight:700;">🔄 재염</button>` : ''}</td>`;
+            // hotfix159: 후가공(송원 등) 3공정 건은 입고 전 [넘김]→[후가공 완료] 게이트를 먼저 거친다
+            const isPostWo = !!(wo.processes && wo.processes.post && wo.recipients && wo.recipients.post);
+            const postDest = escapeHtml((wo.recipients && wo.recipients.post) || '후가공처');
+            const postSent = c && c.post_sent_date;
+            const postDone = c && c.post_done_date;
+            const redyeBtn = isAdminUser() ? `<button class="dash-action-btn dash-color-redye-btn" data-id="${wo.id}" data-color-idx="${colorIdx}" title="입고 전이라도 재염 처리 — 몸판만 재염(리프 0)도 가능" style="background:#fef3c7;color:#b45309;border-color:#fbbf24;font-weight:700;">재염</button>` : '';
+            if (isPostWo && !postDone && !postSent) {
+              // 1단계: 가공 완료 → 후가공처(송원)로 넘김
+              completeCell = `<td class="col-action col-act-complete"><button class="dash-action-btn dash-post-send-btn" data-id="${wo.id}" data-color-idx="${colorIdx}" title="가공 완료 후 ${postDest}(으)로 넘긴 것으로 기록합니다" style="background:#eff6ff;color:#1d4ed8;border-color:#bfdbfe;font-weight:700;">가공 완료·${postDest} 넘김</button></td>`;
+            } else if (isPostWo && !postDone && postSent) {
+              // 2단계: 후가공중 — 넘긴 날짜 표시 + [후가공 완료·입고 대기] + 관리자 [넘김 취소]
+              completeCell = `<td class="col-action col-act-complete"><span style="display:inline-block;padding:2px 8px;margin-right:6px;border-radius:6px;background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;font-size:11px;font-weight:700;" title="${postDest}에서 후가공 진행 중입니다">후가공중·${postDest} <span style="font-weight:600;opacity:.85;">(${escapeHtml(formatYMD(postSent))} 넘김)</span></span><button class="dash-action-btn dash-post-done-btn" data-id="${wo.id}" data-color-idx="${colorIdx}" title="${postDest} 후가공이 끝나 입고 대기로 넘깁니다" style="background:#2563eb;color:#fff;border-color:#1d4ed8;font-weight:700;">후가공 완료·입고 대기</button>${isAdminUser() ? `<button class="dash-action-btn dash-post-revert-btn" data-id="${wo.id}" data-color-idx="${colorIdx}" data-stage="sent" title="잘못 넘겼으면 되돌리기" style="background:#fff;color:#1d4ed8;border-color:#bfdbfe;font-size:10px;padding:2px 7px;">넘김 취소</button>` : ''}</td>`;
+            } else {
+              // 일반 진행 중 (후가공 없음 또는 후가공 완료 후 입고 전)
+              const postDoneInfo = (isPostWo && postDone) ? `<span style="display:inline-block;padding:2px 8px;margin-right:6px;border-radius:6px;background:#ecfdf5;color:#047857;border:1px solid #a7f3d0;font-size:11px;font-weight:700;" title="${postDest} 후가공 완료 (${escapeHtml(formatYMD(postDone))}) — 입고를 진행하세요">후가공 완료·${postDest}</span>${isAdminUser() ? `<button class="dash-action-btn dash-post-revert-btn" data-id="${wo.id}" data-color-idx="${colorIdx}" data-stage="done" title="후가공 완료를 취소하고 후가공중으로 되돌리기" style="background:#fff;color:#1d4ed8;border-color:#bfdbfe;font-size:10px;padding:2px 7px;">되돌리기</button>` : ''}` : '';
+              completeCell = `<td class="col-action col-act-complete">${postDoneInfo}<button class="dash-action-btn dash-color-qc-init-btn" data-id="${wo.id}" data-color-idx="${colorIdx}">완료</button><button class="dash-action-btn dash-shortage-btn" data-id="${wo.id}" data-color-idx="${colorIdx}" title="입고 수량이 의뢰량과 다른 경우 (예: 10절 의뢰 → 9절만 입고)">부족</button>${redyeBtn}</td>`;
+            }
           }
         } else {
           // 의뢰서 단위 완료 버튼 (rowspan 첫 행에만)
@@ -22204,6 +22247,62 @@ function validateBlendSum(blends, label) {
 
     // hotfix60: [🚩 축률 이상] → 인라인에서 바로 완료시키지 않고, 대표 보고함으로 이동해서 관리.
     //   (관리자: 대표 보고함 화면으로 / 직원: 안내만)
+    // hotfix159: 후가공(송원 등) 3공정 — [넘김] / [후가공 완료] / [되돌리기]
+    document.querySelectorAll('#dash-body .dash-post-send-btn').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const id = btn.dataset.id;
+        const ci = parseInt(btn.dataset.colorIdx, 10);
+        const wo = state.allWorkOrders.find(w => w.id === id);
+        const dest = (wo && wo.recipients && wo.recipients.post) || '후가공처';
+        btn.disabled = true;
+        try {
+          await setColorPostStage(id, ci, 'send');
+          toast(`${dest} 넘김 기록 — 후가공중으로 표시됩니다`, 'success');
+          renderDashboard();
+        } catch (err) {
+          btn.disabled = false;
+          toast('처리 실패: ' + (err.message || err), 'error');
+        }
+      });
+    });
+
+    document.querySelectorAll('#dash-body .dash-post-done-btn').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const id = btn.dataset.id;
+        const ci = parseInt(btn.dataset.colorIdx, 10);
+        btn.disabled = true;
+        try {
+          await setColorPostStage(id, ci, 'done');
+          toast('후가공 완료 — 입고 대기로 넘어갑니다', 'success');
+          renderDashboard();
+        } catch (err) {
+          btn.disabled = false;
+          toast('처리 실패: ' + (err.message || err), 'error');
+        }
+      });
+    });
+
+    document.querySelectorAll('#dash-body .dash-post-revert-btn').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (!isAdminUser()) { toast('되돌리기는 대표만 가능합니다', 'info'); return; }
+        const id = btn.dataset.id;
+        const ci = parseInt(btn.dataset.colorIdx, 10);
+        const stage = btn.dataset.stage === 'done' ? 'revert-done' : 'revert-sent';
+        btn.disabled = true;
+        try {
+          await setColorPostStage(id, ci, stage);
+          toast(stage === 'revert-done' ? '후가공중으로 되돌렸습니다' : '넘김을 취소했습니다', 'success');
+          renderDashboard();
+        } catch (err) {
+          btn.disabled = false;
+          toast('처리 실패: ' + (err.message || err), 'error');
+        }
+      });
+    });
+
     document.querySelectorAll('#dash-body .dash-shrink-review-btn').forEach(btn => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -25638,7 +25737,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix158';
+  const VERSION = 'v2.53 hotfix159';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
