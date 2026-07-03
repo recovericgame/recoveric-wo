@@ -14042,7 +14042,7 @@ function validateBlendSum(blends, label) {
     document.getElementById('dash-modal-body').innerHTML = `
       <div style="padding:16px 18px;">
         <div style="font-size:13px;color:#334155;margin-bottom:4px;">[${escapeHtml(wo.wo_number || '')}] <strong>${escapeHtml(cName)}</strong></div>
-        <div style="font-size:12px;color:#f97316;font-weight:700;margin-bottom:6px;">🔧 수정중 ${fb}/${fr}절 — 작업장에서 돌아온 원단을 다시 검수합니다</div>
+        <div style="font-size:12px;color:#f97316;font-weight:700;margin-bottom:6px;">수정중 ${fb}/${fr}절 — 작업장에서 돌아온 원단을 다시 검수합니다</div>
         <details style="margin:6px 0 10px;border:1px solid #fed7aa;border-radius:6px;background:#fff7ed;">
           <summary style="cursor:pointer;padding:8px 12px;font-size:12px;font-weight:700;color:#9a3412;">✏️ 수정 내용 고치기 / 취소 (잘못 보냈을 때)</summary>
           <div style="padding:10px 12px;border-top:1px solid #fed7aa;">
@@ -17104,7 +17104,7 @@ function validateBlendSum(blends, label) {
   
   // hotfix101: 진행 행 3구역 분류 (박 대표 확정 정의)
   //   · 직원 확인 대기(위): QC 대기 / ✓QC(n차) / 📥 재검수 대기(돌아옴 처리돼 직원이 재검수할 차례)
-  //   · 담당자(대표) 확인 대기(아래): 🔧 수정중 n/n / 확인 대기(완료보고) / 🚩 규격이상·불량 / 완료·부족(none)
+  //   · 담당자(대표) 확인 대기(아래): 수정중 n/n / 확인 대기(완료보고) / 🚩 규격이상·불량 / 완료·부족(none)
   //   (hotfix102: 일반 진행 구역 폐지 — 두 구역만. 직원 외 모든 건은 담당자 구역으로.)
   function classifyOverviewSection(wo, colorIdx) {
     if (!wo || wo.type !== '염색가공' || colorIdx < 0) return 'manager';
@@ -17475,9 +17475,13 @@ function validateBlendSum(blends, label) {
         // hotfix39: 완료된 컬러를 숨기지 않고 보존 — 미완료 컬러 먼저, 완료 컬러는 "✓ 완료 N개" 접이식 요약 행
         // hotfix52: 수정 중(fix_active) 컬러는 완료로 보지 않음 (QC 후 수정 보내면 흐려지던 문제 fix)
         // hotfix157: 재염중(getColorQcStatus==='redye') 컬러도 완료 그룹에서 제외 → 진행 영역에 "재염중" 표시(대표 지시: 재염된 색은 QC 완료로 보이면 안 됨). 의뢰서 완료 판정(isColorClosed)은 별개라 영향 없음.
-        const _isRedyeActive = (i) => getColorQcStatus(wo, i) === 'redye';
-        const incompleteIdxs = colors.map((c, i) => i).filter(i => !isColorCompleted(wo, i) || isFixColor(colors[i]) || _isRedyeActive(i));
-        const completedIdxs  = colors.map((c, i) => i).filter(i =>  isColorCompleted(wo, i) && !isFixColor(colors[i]) && !_isRedyeActive(i));
+        // hotfix162: 재염 색 처리 구분 —
+        //   · 재염으로 종결(미처리 부족 0 · 입고 차수 QC 완료)된 색 → 완료 그룹으로(담당자 알림에서 빠짐, "재염중" 표기 유지)
+        //   · 재염 진행 중(부족 남음 · QC 미완)인 색 → 진행 영역 유지
+        const _isRedyeClosed = (i) => getColorQcStatus(wo, i) === 'redye' && isColorClosed(colors[i]);
+        const _doneForGroup  = (i) => (isColorCompleted(wo, i) || _isRedyeClosed(i)) && !isFixColor(colors[i]);
+        const incompleteIdxs = colors.map((c, i) => i).filter(i => !_doneForGroup(i));
+        const completedIdxs  = colors.map((c, i) => i).filter(i =>  _doneForGroup(i));
         const ovExpanded = state.ovColorExpand && state.ovColorExpand.has(wo.id);
         const groupRows = [];
         incompleteIdxs.forEach(ci => groupRows.push({ colorIdx: ci, rowKind: 'color' }));
@@ -17537,8 +17541,8 @@ function validateBlendSum(blends, label) {
       // hotfix97: 구역 머리행 삽입용 — 직전 구역 추적
       let __lastSection = null;
       const __sectionMeta = {
-        worker:  { label: '🔧 직원 확인 대기',   sub: 'QC · 재검수 대기 — 직원이 처리할 일',          bg: '#fff7ed', bd: '#f97316', fg: '#9a3412' },
-        manager: { label: '🚩 담당자 확인 대기', sub: '수정중 · 완료 · 부족 · 규격 이상 — 대표/담당 확인', bg: '#fef2f2', bd: '#dc2626', fg: '#991b1b' }
+        worker:  { label: '직원 확인 대기',   sub: 'QC · 재검수 대기 — 직원이 처리할 일',          bg: '#fff7ed', bd: '#f97316', fg: '#9a3412' },
+        manager: { label: '담당자 확인 대기', sub: '수정중 · 완료 · 부족 · 규격 이상 — 대표/담당 확인', bg: '#fef2f2', bd: '#dc2626', fg: '#991b1b' }
       };
       const __sectionsEnabled = (tf === 'all' || tf === '염색가공');
       const __sectionCounts = { worker: 0, manager: 0 };
@@ -17739,9 +17743,9 @@ function validateBlendSum(blends, label) {
           if (c && c.fix_active === true) {
             const _fb = num(c.fix_body)||0, _fr = num(c.fix_rib)||0;
             if (c.fix_returned === true) {
-              completeCell = `<td class="col-action col-act-complete"><button class="dash-action-btn dash-fix-resolve-btn fix-returned-btn" style="background:#dc2626;color:#fff;border-color:#b91c1c;font-weight:800;" data-id="${wo.id}" data-color-idx="${colorIdx}" title="수정분 ${_fb}/${_fr} 돌아옴 — 클릭하여 재검수">📥 재검수 대기 ${_fb}/${_fr}</button>${isAdminUser() ? `<button class="dash-action-btn dash-fix-return-toggle" style="background:#fff;color:#92400e;border-color:#fdba74;font-size:10px;padding:2px 6px;" data-id="${wo.id}" data-color-idx="${colorIdx}" data-ret="0" title="아직 안 돌아왔으면 되돌리기">↩</button>` : ''}</td>`;
+              completeCell = `<td class="col-action col-act-complete"><button class="dash-action-btn dash-fix-resolve-btn fix-returned-btn" style="background:#dc2626;color:#fff;border-color:#b91c1c;font-weight:800;" data-id="${wo.id}" data-color-idx="${colorIdx}" title="수정분 ${_fb}/${_fr} 돌아옴 — 클릭하여 재검수">재검수 대기 ${_fb}/${_fr}</button>${isAdminUser() ? `<button class="dash-action-btn dash-fix-return-toggle" style="background:#fff;color:#92400e;border-color:#fdba74;font-size:10px;padding:2px 6px;" data-id="${wo.id}" data-color-idx="${colorIdx}" data-ret="0" title="아직 안 돌아왔으면 되돌리기">↩</button>` : ''}</td>`;
             } else {
-              completeCell = `<td class="col-action col-act-complete"><button class="dash-action-btn dash-fix-resolve-btn" style="background:#f97316;color:#fff;border-color:#ea580c;" data-id="${wo.id}" data-color-idx="${colorIdx}" title="수정 ${_fb}/${_fr} — 돌아오면 클릭 → 재검수창">🔧 수정중 ${_fb}/${_fr}</button>${isAdminUser() ? `<button class="dash-action-btn dash-fix-return-toggle" style="background:#fee2e2;color:#b91c1c;border-color:#fca5a5;font-size:10px;padding:2px 7px;font-weight:700;" data-id="${wo.id}" data-color-idx="${colorIdx}" data-ret="1" title="수정분 송장 도착 → 재검수 대기로 표시">📥 돌아옴</button>` : ''}</td>`;
+              completeCell = `<td class="col-action col-act-complete"><button class="dash-action-btn dash-fix-resolve-btn" style="background:#f97316;color:#fff;border-color:#ea580c;" data-id="${wo.id}" data-color-idx="${colorIdx}" title="수정 ${_fb}/${_fr} — 돌아오면 클릭 → 재검수창">수정중 ${_fb}/${_fr}</button>${isAdminUser() ? `<button class="dash-action-btn dash-fix-return-toggle" style="background:#fee2e2;color:#b91c1c;border-color:#fca5a5;font-size:10px;padding:2px 7px;font-weight:700;" data-id="${wo.id}" data-color-idx="${colorIdx}" data-ret="1" title="수정분 송장 도착 → 재검수 대기로 표시">돌아옴</button>` : ''}</td>`;
             }
           } else if (qcSt === 'redye') {
             // v2.53 hotfix8: 재염 이관된 컬러 — 새 의뢰서 번호 꼬리표 (닫힘 상태)
@@ -17750,12 +17754,12 @@ function validateBlendSum(blends, label) {
           } else if (qcSt === 'discard') {
             completeCell = `<td class="col-action col-act-complete"><span class="dash-discard-stamp">⚠ 땡처리</span></td>`;
           } else if (qcSt === 'accept') {
-            completeCell = `<td class="col-action col-act-complete"><button class="dash-action-btn dash-defect-btn" style="background:#fbbf24;color:#000;border-color:#d97706;" data-id="${wo.id}" data-color-idx="${colorIdx}" data-qc-action="open" title="그대로 사용 처리됨 — 클릭하여 상세 확인">⚠ 수용${receiptLabel}</button>${shortageBtn}</td>`;
+            completeCell = `<td class="col-action col-act-complete"><button class="dash-action-btn dash-defect-btn" style="background:#fbbf24;color:#000;border-color:#d97706;" data-id="${wo.id}" data-color-idx="${colorIdx}" data-qc-action="open" title="그대로 사용 처리됨 — 클릭하여 상세 확인">수용${receiptLabel}</button>${shortageBtn}</td>`;
           } else if (qcSt === 'defect') {
-            completeCell = `<td class="col-action col-act-complete"><button class="dash-action-btn dash-defect-btn" data-id="${wo.id}" data-color-idx="${colorIdx}" data-qc-action="open" title="불량 처리됨 — 클릭하여 처리 진행">⚠ 불량${receiptLabel}</button>${shortageBtn}</td>`;
+            completeCell = `<td class="col-action col-act-complete"><button class="dash-action-btn dash-defect-btn" data-id="${wo.id}" data-color-idx="${colorIdx}" data-qc-action="open" title="불량 처리됨 — 클릭하여 처리 진행">불량${receiptLabel}</button>${shortageBtn}</td>`;
           } else if (qcSt === 'shrink') {
             // hotfix59: 축률 이상 — 대표 확인 대기 (완료 안 됨)
-            completeCell = `<td class="col-action col-act-complete"><button class="dash-action-btn dash-shrink-review-btn" style="background:#dc2626;color:#fff;border-color:#b91c1c;" data-id="${wo.id}" data-color-idx="${colorIdx}" title="규격 이상(폭/중량/축률) — ${isAdminUser() ? '클릭하여 확인·처리' : '대표 확인 대기 중'}">🚩 규격 이상${receiptLabel}</button>${shortageBtn}</td>`;
+            completeCell = `<td class="col-action col-act-complete"><button class="dash-action-btn dash-shrink-review-btn" style="background:#dc2626;color:#fff;border-color:#b91c1c;" data-id="${wo.id}" data-color-idx="${colorIdx}" title="규격 이상(폭/중량/축률) — ${isAdminUser() ? '클릭하여 확인·처리' : '대표 확인 대기 중'}">규격 이상${receiptLabel}</button>${shortageBtn}</td>`;
           } else if (qcSt === 'pending') {
             completeCell = `<td class="col-action col-act-complete"><button class="dash-action-btn qc-pending-btn" data-id="${wo.id}" data-color-idx="${colorIdx}" data-qc-action="open">QC 대기${receiptLabel}</button>${shortageBtn}</td>`;
           } else if (qcSt === 'done' && c && hasCeoConfirmPending(c)) {
@@ -18533,9 +18537,9 @@ function validateBlendSum(blends, label) {
           // hotfix89: 돌아왔으면 [📥 재검수 대기] 강조 + 관리자 [돌아옴] 토글
           const _fb = num(c.fix_body)||0, _fr = num(c.fix_rib)||0;
           if (c.fix_returned === true) {
-            completeCell = `<td class="col-action"><button class="dash-action-btn dash-fix-resolve-btn fix-returned-btn" style="background:#dc2626;color:#fff;border-color:#b91c1c;font-weight:800;" data-id="${wo.id}" data-color-idx="${colorIdx}" title="수정분 ${_fb}/${_fr} 돌아옴 — 클릭하여 재검수">📥 재검수 대기 ${_fb}/${_fr}</button>${isAdminUser() ? `<button class="dash-action-btn dash-fix-return-toggle" style="background:#fff;color:#92400e;border-color:#fdba74;font-size:10px;padding:2px 6px;" data-id="${wo.id}" data-color-idx="${colorIdx}" data-ret="0" title="아직 안 돌아왔으면 되돌리기">↩</button>` : ''}</td>`;
+            completeCell = `<td class="col-action"><button class="dash-action-btn dash-fix-resolve-btn fix-returned-btn" style="background:#dc2626;color:#fff;border-color:#b91c1c;font-weight:800;" data-id="${wo.id}" data-color-idx="${colorIdx}" title="수정분 ${_fb}/${_fr} 돌아옴 — 클릭하여 재검수">재검수 대기 ${_fb}/${_fr}</button>${isAdminUser() ? `<button class="dash-action-btn dash-fix-return-toggle" style="background:#fff;color:#92400e;border-color:#fdba74;font-size:10px;padding:2px 6px;" data-id="${wo.id}" data-color-idx="${colorIdx}" data-ret="0" title="아직 안 돌아왔으면 되돌리기">↩</button>` : ''}</td>`;
           } else {
-            completeCell = `<td class="col-action"><button class="dash-action-btn dash-fix-resolve-btn" style="background:#f97316;color:#fff;border-color:#ea580c;" data-id="${wo.id}" data-color-idx="${colorIdx}" title="수정 ${_fb}/${_fr} — 돌아오면 클릭 → 재검수창">🔧 수정중 ${_fb}/${_fr}</button>${isAdminUser() ? `<button class="dash-action-btn dash-fix-return-toggle" style="background:#fee2e2;color:#b91c1c;border-color:#fca5a5;font-size:10px;padding:2px 7px;font-weight:700;" data-id="${wo.id}" data-color-idx="${colorIdx}" data-ret="1" title="수정분 송장 도착 → 재검수 대기로 표시">📥 돌아옴</button>` : ''}</td>`;
+            completeCell = `<td class="col-action"><button class="dash-action-btn dash-fix-resolve-btn" style="background:#f97316;color:#fff;border-color:#ea580c;" data-id="${wo.id}" data-color-idx="${colorIdx}" title="수정 ${_fb}/${_fr} — 돌아오면 클릭 → 재검수창">수정중 ${_fb}/${_fr}</button>${isAdminUser() ? `<button class="dash-action-btn dash-fix-return-toggle" style="background:#fee2e2;color:#b91c1c;border-color:#fca5a5;font-size:10px;padding:2px 7px;font-weight:700;" data-id="${wo.id}" data-color-idx="${colorIdx}" data-ret="1" title="수정분 송장 도착 → 재검수 대기로 표시">돌아옴</button>` : ''}</td>`;
           }
         } else if (qcSt === 'redye') {
           // v2.53 hotfix8: 재염 이관된 컬러 — 새 의뢰서 번호 꼬리표 (닫힘 상태)
@@ -18544,12 +18548,12 @@ function validateBlendSum(blends, label) {
         } else if (qcSt === 'discard') {
           completeCell = `<td class="col-action"><span class="dash-discard-stamp">⚠ 땡처리</span></td>`;
         } else if (qcSt === 'accept') {
-          completeCell = `<td class="col-action"><button class="dash-action-btn dash-defect-btn" style="background:#fbbf24;color:#000;border-color:#d97706;" data-id="${wo.id}" data-color-idx="${colorIdx}" data-qc-action="open" title="그대로 사용 처리됨">⚠ 수용${receiptLabel}</button>${shortageBtn}</td>`;
+          completeCell = `<td class="col-action"><button class="dash-action-btn dash-defect-btn" style="background:#fbbf24;color:#000;border-color:#d97706;" data-id="${wo.id}" data-color-idx="${colorIdx}" data-qc-action="open" title="그대로 사용 처리됨">수용${receiptLabel}</button>${shortageBtn}</td>`;
         } else if (qcSt === 'defect') {
-          completeCell = `<td class="col-action"><button class="dash-action-btn dash-defect-btn" data-id="${wo.id}" data-color-idx="${colorIdx}" data-qc-action="open" title="불량 처리됨">⚠ 불량${receiptLabel}</button>${shortageBtn}</td>`;
+          completeCell = `<td class="col-action"><button class="dash-action-btn dash-defect-btn" data-id="${wo.id}" data-color-idx="${colorIdx}" data-qc-action="open" title="불량 처리됨">불량${receiptLabel}</button>${shortageBtn}</td>`;
         } else if (qcSt === 'shrink') {
           // hotfix59: 축률 이상 — 대표 확인 대기 (완료 안 됨)
-          completeCell = `<td class="col-action"><button class="dash-action-btn dash-shrink-review-btn" style="background:#dc2626;color:#fff;border-color:#b91c1c;" data-id="${wo.id}" data-color-idx="${colorIdx}" title="규격 이상(폭/중량/축률) — ${isAdminUser() ? '클릭하여 확인·처리' : '대표 확인 대기 중'}">🚩 규격 이상${receiptLabel}</button>${shortageBtn}</td>`;
+          completeCell = `<td class="col-action"><button class="dash-action-btn dash-shrink-review-btn" style="background:#dc2626;color:#fff;border-color:#b91c1c;" data-id="${wo.id}" data-color-idx="${colorIdx}" title="규격 이상(폭/중량/축률) — ${isAdminUser() ? '클릭하여 확인·처리' : '대표 확인 대기 중'}">규격 이상${receiptLabel}</button>${shortageBtn}</td>`;
         } else if (qcSt === 'pending') {
           completeCell = `<td class="col-action"><button class="dash-action-btn qc-pending-btn" data-id="${wo.id}" data-color-idx="${colorIdx}" data-qc-action="open">QC 대기${receiptLabel}</button>${shortageBtn}</td>`;
         } else if (qcSt === 'done' && c && hasCeoConfirmPending(c)) {
@@ -22282,7 +22286,7 @@ function validateBlendSum(blends, label) {
       });
     });
 
-    // hotfix89: [📥 돌아옴] / [↩] → 수정분 돌아옴 표식 토글
+    // hotfix89: [돌아옴] / [↩] → 수정분 돌아옴 표식 토글
     document.querySelectorAll('#dash-body .dash-fix-return-toggle').forEach(btn => {
       btn.addEventListener('click', async (e) => {
         e.stopPropagation();
@@ -22611,7 +22615,7 @@ function validateBlendSum(blends, label) {
         }
       });
     });
-    // hotfix68: 대표 보고함 — 수정 재검수 불합격 카드 [수정 합격 인정] / [다시 수정] / [⚠ 불량]
+    // hotfix68: 대표 보고함 — 수정 재검수 불합격 카드 [수정 합격 인정] / [다시 수정] / [불량]
     document.querySelectorAll('#dash-body .ceo-fix-approve-btn').forEach(btn => {
       btn.addEventListener('click', async (e) => {
         e.stopPropagation();
@@ -24170,11 +24174,11 @@ function validateBlendSum(blends, label) {
             <input type="radio" name="qc-judgment" value="normal" ${initJudgment === 'normal' ? 'checked' : ''}> ✓ 정상
           </label>
           <label class="${initJudgment === 'defect' ? 'defect-active' : ''}" id="qc-judgment-defect-label">
-            <input type="radio" name="qc-judgment" value="defect" ${initJudgment === 'defect' ? 'checked' : ''}> ⚠ 불량 발견
+            <input type="radio" name="qc-judgment" value="defect" ${initJudgment === 'defect' ? 'checked' : ''}> 불량 발견
           </label>
         </div>
         <div class="qc-defect-section ${initJudgment === 'defect' ? '' : 'collapsed'}" id="qc-defect-section">
-          <div class="qc-defect-warning">⚠ 불량 발견 시에만 체크 — 체크하면 불량 처리됩니다</div>
+          <div class="qc-defect-warning">불량 발견 시에만 체크 — 체크하면 불량 처리됩니다</div>
           ${defectChecksHtml}
           <div class="qc-defect-memo">
             <label>📝 불량 처리 메모 (해결 과정 기록 — 수정/재염/입고 등)</label>
@@ -24204,7 +24208,7 @@ function validateBlendSum(blends, label) {
           <div class="qc-footer-left">
             ${shortageActive ? '이 차수(입고분)는 검수 완료할 수 있습니다. 부족분이 모두 채워지면 컬러가 자동 완료됩니다.'
               : qcStatus === 'done' ? '✓ 완료된 컬러 — 데이터 수정 후 저장하면 즉시 반영됩니다.'
-              : isDefectMode ? '⚠ 불량 상태 — 재작업 요청 / 그대로 사용 / 땡처리 중 선택'
+              : isDefectMode ? '불량 상태 — 재작업 요청 / 그대로 사용 / 땡처리 중 선택'
               : isAcceptMode ? '⚠ 그대로 사용된 컬러 — 검수 데이터 보존됨'
               : isDiscardMode ? '⚠ 땡처리된 컬러 — 클레임 카테고리에서 정산 진행'
               : '검수값을 입력하고 판정을 선택한 뒤 [QC 완료] 또는 [불량 처리]를 누르세요.'}
@@ -24493,7 +24497,7 @@ function validateBlendSum(blends, label) {
         
         // 불량 판정인데 [QC 완료]를 누른 경우 안내
         if (data.judgment === 'defect') {
-          alert('판정이 [⚠ 불량 발견]입니다.\n\n[불량 처리] 버튼을 누르거나, 판정을 [✓ 정상]으로 변경해 주세요.');
+          alert('판정이 [불량 발견]입니다.\n\n[불량 처리] 버튼을 누르거나, 판정을 [✓ 정상]으로 변경해 주세요.');
           return;
         }
         
@@ -24525,7 +24529,7 @@ function validateBlendSum(blends, label) {
           if (ribDev && ribDev.width && ribDev.width.fail) lines.push(`· 리프 폭 ${ribDev.width.actual}″ (기준 ${ribDev.width.specMin}/${ribDev.width.specMax}″ → 허용 ${ribDev.width.lo}~${ribDev.width.hi}″)`);
           if (ribDev && ribDev.weight && ribDev.weight.fail) lines.push(`· 리프 중량 ${ribDev.weight.actual}g/y (기준 ${ribDev.weight.target} → 허용 ${ribDev.weight.lo}~${ribDev.weight.hi})`);
           if (ribDev && ribDev.shrink && ribDev.shrink.fail) lines.push(`· 리프 축률 폭 ${ribDev.shrink.w == null ? '-' : ribDev.shrink.w}% / 장 ${ribDev.shrink.l == null ? '-' : ribDev.shrink.l}%`);
-          const holdMsg = `🚩 규격 이상입니다.\n\n[${wo.wo_number || ''}] "${cName}"\n${lines.join('\n')}\n\n이 원단은 완료되지 않고\n대표 보고함으로 보고됩니다.\n대표가 보고함에서 확인·처리해야 완료됩니다.\n\n계속할까요?`;
+          const holdMsg = `규격 이상입니다.\n\n[${wo.wo_number || ''}] "${cName}"\n${lines.join('\n')}\n\n이 원단은 완료되지 않고\n대표 보고함으로 보고됩니다.\n대표가 보고함에서 확인·처리해야 완료됩니다.\n\n계속할까요?`;
           if (!confirm(holdMsg)) return;
           try {
             await setColorShrinkHold(woId, colorIdx, data, window.__qcModalReceiptNo, specDev);
@@ -24569,7 +24573,7 @@ function validateBlendSum(blends, label) {
         // 사유 1개 이상 체크 필수
         const checkedCount = countCheckedDefects(data.defect_flags);
         if (checkedCount === 0) {
-          alert('불량 사유를 1개 이상 체크해 주세요.\n\n([⚠ 불량 발견] 영역에서 해당 사유를 클릭)');
+          alert('불량 사유를 1개 이상 체크해 주세요.\n\n([불량 발견] 영역에서 해당 사유를 클릭)');
           // 라디오 자동 전환
           const defectRadio = document.querySelector('input[name="qc-judgment"][value="defect"]');
           if (defectRadio) {
@@ -25825,7 +25829,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix161';
+  const VERSION = 'v2.53 hotfix162';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
