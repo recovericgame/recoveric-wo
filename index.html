@@ -854,6 +854,7 @@
   .overview-status-filter-btn.sf-fix.active    { background: #f97316; color: #fff; border-color: #ea580c; }
   .overview-status-filter-btn.sf-lack.active   { background: #d97706; color: #fff; border-color: #b45309; }
   .overview-status-filter-btn.sf-urgent.active { background: #dc2626; color: #fff; border-color: #b91c1c; }
+  .overview-status-filter-btn.sf-redye.active  { background: #f59e0b; color: #fff; border-color: #d97706; }
   /* hotfix57: 전체 대시보드 편직 세부(기획/재고/샘플) 버튼 */
   .ov-knit-kind-btn {
     padding: 4px 12px; font-size: 12px; font-weight: 700;
@@ -5489,6 +5490,8 @@
   /* 거래처별 보고서 (캡쳐 대상) — v2.53 hotfix26 레터헤드 리뉴얼 */
   .dr-report {
     background: #fff;
+    width: 960px;
+    box-sizing: border-box;
     padding: 26px 28px 20px;
     border: 1px solid #e3e6ea;
     border-radius: 8px;
@@ -5567,11 +5570,12 @@
     padding: 9px 2px 9px 4px;
     font-size: 13px;
   }
-  .dr-table th.dr-date { width: 1%; }
-  .dr-table th.dr-item { width: auto; }
-  .dr-table th.dr-color { width: auto; }
-  .dr-table th.dr-qty,
-  .dr-table th.dr-lack { width: 1%; text-align: right; }
+  .dr-table th.dr-date, .dr-table td.dr-date { width: 66px; white-space: nowrap; }
+  .dr-table th.dr-elapsed, .dr-table td.dr-elapsed { width: 50px; white-space: nowrap; text-align: center; color: #6b7280; font-variant-numeric: tabular-nums; }
+  .dr-table th.dr-item, .dr-table td.dr-item { width: 165px; }
+  .dr-table th.dr-color, .dr-table td.dr-color { width: 190px; }
+  .dr-table th.dr-qty, .dr-table td.dr-qty { width: 88px; text-align: right; }
+  .dr-table th.dr-lack, .dr-table td.dr-lack { width: auto; text-align: left; white-space: normal; }
   .dr-table td.dr-date {
     color: #6b7280;
     font-variant-numeric: tabular-nums;
@@ -5585,8 +5589,11 @@
     font-variant-numeric: tabular-nums;
   }
   .dr-table td.dr-lack {
-    text-align: right;
+    text-align: left;
     font-variant-numeric: tabular-nums;
+    color: #6b7280;
+    font-size: 11.5px;
+    line-height: 1.55;
   }
 
   /* 보고서 하단 수량 합계 박스 */
@@ -16933,6 +16940,15 @@ function validateBlendSum(blends, label) {
     const orderedBody = isFinite(bodyN) && bodyN > 0 ? bodyN : 0;
     const orderedRib = isFinite(ribN) && ribN > 0 ? ribN : 0;
 
+    // hotfix178: 경과일(발주일 → 오늘) 컬럼
+    const _elapsedDays = (() => {
+      if (!wo.date) return '';
+      const d0 = new Date(wo.date + 'T00:00:00');
+      const now = new Date(); now.setHours(0, 0, 0, 0);
+      const diff = Math.floor((now.getTime() - d0.getTime()) / 86400000);
+      return diff >= 0 ? diff + '일' : '';
+    })();
+
     // hotfix40: 수정 항목 — 의뢰칸에 "수정 보낸 수량"만, 비고에 "원래 N/N 中 X/X 수정 · 날짜"
     if (isFix) {
       const fb = num(c.fix_body) || 0;
@@ -16954,6 +16970,7 @@ function validateBlendSum(blends, label) {
       return `<tr class="dr-row dr-fix-row${urgent ? ' dr-urgent' : ''}">
         <td class="dr-urgent-col">${markF}</td>
         <td class="dr-date">${escapeHtml(shortOrderDate(wo.date))}</td>
+        <td class="dr-elapsed">${_elapsedDays}</td>
         <td class="dr-item">${tagHtmlF}${escapeHtml(item_text)}</td>
         <td class="dr-color">${escapeHtml(color_text)}</td>
         <td class="dr-qty">${qtyCellF}</td>
@@ -16986,6 +17003,7 @@ function validateBlendSum(blends, label) {
     return `<tr class="${rowCls}">
       <td class="dr-urgent-col">${markCell}</td>
       <td class="dr-date">${escapeHtml(shortOrderDate(wo.date))}</td>
+      <td class="dr-elapsed">${_elapsedDays}</td>
       <td class="dr-item">${tagHtml}${escapeHtml(item_text)}</td>
       <td class="dr-color">${escapeHtml(color_text)}</td>
       <td class="dr-qty">${qtyCell}</td>
@@ -17045,6 +17063,7 @@ function validateBlendSum(blends, label) {
           <tr>
             <th class="dr-urgent-col"></th>
             <th class="dr-date">발주일</th>
+            <th class="dr-elapsed">경과</th>
             <th class="dr-item">품목 / 사종</th>
             <th class="dr-color">컬러</th>
             <th class="dr-qty">의뢰 (몸/부)</th>
@@ -17053,7 +17072,7 @@ function validateBlendSum(blends, label) {
         </thead>
         <tbody>${normalItems.map(renderReportRow).join('')}${
           fixItems.length > 0
-            ? `<tr class="dr-fix-divider"><td colspan="6">수정 작업</td></tr>` + fixItems.map(renderReportRow).join('')
+            ? `<tr class="dr-fix-divider"><td colspan="7">수정 작업</td></tr>` + fixItems.map(renderReportRow).join('')
             : ''
         }</tbody>
       </table>
@@ -17544,13 +17563,16 @@ function validateBlendSum(blends, label) {
     const woHasFix = (wo) => wo.type === '염색가공' && (wo.colors || []).some(c => c && c.fix_active === true);
     const woHasLack = (wo) => wo.type === '염색가공' && (wo.colors || []).some(c => c && (getUnresolvedShortageBody(c) > 0 || getUnresolvedShortageRib(c) > 0) && c.qc_status !== 'discard');
     const woIsUrgent = (wo) => !!wo.urgent || (wo.colors || []).some(c => c && c.urgent);
+    // hotfix177: 재염 필터 — "재염" 스탬프가 붙은 의뢰서(재염 작지)를 바로 모아 보기
+    const woHasRedye = (wo) => Array.isArray(wo.stamps) && wo.stamps.includes('재염');
     const sf = state.ovStatusFilter || 'all';
     // 상태 카운트는 현재 유형 필터 적용 후 풀 기준 (유형 바꾸면 그 유형 내 카운트)
     const statusPool = (tf === 'all') ? allIng : allIng.filter(wo => wo.type === tf);
     const statusCounts = {
       fix: statusPool.filter(woHasFix).length,
       lack: statusPool.filter(woHasLack).length,
-      urgent: statusPool.filter(woIsUrgent).length
+      urgent: statusPool.filter(woIsUrgent).length,
+      redye: statusPool.filter(woHasRedye).length
     };
     const statusBtn = (val, label, cls) => {
       const cnt = statusCounts[val] || 0;
@@ -17583,6 +17605,7 @@ function validateBlendSum(blends, label) {
         ${statusBtn('fix', '수정', 'sf-fix')}
         ${statusBtn('lack', '부족', 'sf-lack')}
         ${statusBtn('urgent', '긴급', 'sf-urgent')}
+        ${statusBtn('redye', '재염', 'sf-redye')}
         ${renderVendorFilterBar('overview', overviewVendorOptions)}
       </div>
     </div>`;
@@ -17645,6 +17668,7 @@ function validateBlendSum(blends, label) {
     if (sf === 'fix') filteredIng = filteredIng.filter(woHasFix);
     else if (sf === 'lack') filteredIng = filteredIng.filter(woHasLack);
     else if (sf === 'urgent') filteredIng = filteredIng.filter(woIsUrgent);
+    else if (sf === 'redye') filteredIng = filteredIng.filter(woHasRedye);
     // v2.44: 거래처 필터 적용 (overview는 getDashList 비사용이므로 직접 적용)
     filteredIng = applyVendorFilter(filteredIng, 'overview');
     const allIngSorted = sortWorkOrders(filteredIng, 'overview');
@@ -26384,7 +26408,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix176';
+  const VERSION = 'v2.53 hotfix178';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
