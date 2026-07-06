@@ -10805,6 +10805,37 @@ function validateBlendSum(blends, label) {
     const arr = getWoVendorNames(wo);
     return arr.length ? arr[0] : '~';  // 거래처 없는 의뢰서는 가장 뒤로
   }
+  // hotfix168: 거래처(공정) 업체별 컬러 — 대표명 기준으로 안정적 색 배정(같은 업체는 어디서나 같은 색).
+  //   읽기 좋은 밝은 배경+진한 글자 팔레트에서 이름 해시로 자동 선택. (별칭도 대표명으로 통일돼 같은 색)
+  const VENDOR_COLOR_PALETTE = [
+    { bg:'#eff6ff', fg:'#1d4ed8', bd:'#bfdbfe' },
+    { bg:'#ecfdf5', fg:'#047857', bd:'#a7f3d0' },
+    { bg:'#fef3c7', fg:'#b45309', bd:'#fde68a' },
+    { bg:'#fce7f3', fg:'#be185d', bd:'#fbcfe8' },
+    { bg:'#f3e8ff', fg:'#7c3aed', bd:'#e9d5ff' },
+    { bg:'#e0f2fe', fg:'#0369a1', bd:'#bae6fd' },
+    { bg:'#fee2e2', fg:'#b91c1c', bd:'#fecaca' },
+    { bg:'#f0fdfa', fg:'#0f766e', bd:'#99f6e4' },
+    { bg:'#fff7ed', fg:'#c2410c', bd:'#fed7aa' },
+    { bg:'#f7fee7', fg:'#4d7c0f', bd:'#d9f99d' },
+    { bg:'#eef2ff', fg:'#4338ca', bd:'#c7d2fe' },
+    { bg:'#fdf2f8', fg:'#9d174d', bd:'#fbcfe8' }
+  ];
+  function getVendorColor(rawName) {
+    const nm = normalizeVendorName(rawName);
+    if (!nm) return null;
+    let h = 0;
+    for (let i = 0; i < nm.length; i++) h = (h * 31 + nm.charCodeAt(i)) >>> 0;
+    return VENDOR_COLOR_PALETTE[h % VENDOR_COLOR_PALETTE.length];
+  }
+  // 컬러 칩(대표명 표시 + 업체별 색). 등록 안 된 표기는 원래 이름 그대로.
+  function vendorChip(rawName) {
+    const nm = normalizeVendorName(rawName);
+    if (!nm) return '-';
+    const c = getVendorColor(rawName);
+    if (!c) return escapeHtml(nm);
+    return `<span style="display:inline-block;padding:1px 8px;border-radius:10px;background:${c.bg};color:${c.fg};border:1px solid ${c.bd};font-weight:700;font-size:11px;line-height:1.7;">${escapeHtml(nm)}</span>`;
+  }
   // 콤보 옵션 추출 (해당 viewKey에 해당하는 의뢰서들에서 거래처 모음)
   function extractVendorOptions(list) {
     const set = new Set();
@@ -17756,9 +17787,9 @@ function validateBlendSum(blends, label) {
             sizeHtml = cl.sizeHtml;
           }
           const recList = [];
-          if (wo.processes?.dyeing && wo.recipients?.dyeing) recList.push(`<div class="vendor-line"><span class="vendor-tag">염색</span>${escapeHtml(wo.recipients.dyeing)}</div>`);
-          if (wo.processes?.processing && wo.recipients?.processing) recList.push(`<div class="vendor-line"><span class="vendor-tag">가공</span>${escapeHtml(wo.recipients.processing)}</div>`);
-          if (wo.processes?.post && wo.recipients?.post) recList.push(`<div class="vendor-line"><span class="vendor-tag">후가공</span>${escapeHtml(wo.recipients.post)}</div>`);
+          if (wo.processes?.dyeing && wo.recipients?.dyeing) recList.push(`<div class="vendor-line"><span class="vendor-tag">염색</span>${vendorChip(wo.recipients.dyeing)}</div>`);
+          if (wo.processes?.processing && wo.recipients?.processing) recList.push(`<div class="vendor-line"><span class="vendor-tag">가공</span>${vendorChip(wo.recipients.processing)}</div>`);
+          if (wo.processes?.post && wo.recipients?.post) recList.push(`<div class="vendor-line"><span class="vendor-tag">후가공</span>${vendorChip(wo.recipients.post)}</div>`);
           vendorHtml = recList.length > 0 ? recList.join('') : '-';
           
         } else if (wo.type === 'BT') {
@@ -17883,7 +17914,7 @@ function validateBlendSum(blends, label) {
             } else if (isPostWo && postDone) {
               // 3단계: 후가공 완료 → 입고 대기(위 라벨 + 아래 [완료]/[부족]/[재염]으로 후가공품 QC 진행)
               const revertBtn = isAdminUser() ? `<button class="dash-action-btn dash-post-revert-btn" data-id="${wo.id}" data-color-idx="${colorIdx}" data-stage="done" title="후가공 완료를 취소하고 후가공중으로 되돌리기" style="background:#fff;color:#1d4ed8;border-color:#bfdbfe;font-size:10px;padding:3px 7px;">되돌리기</button>` : '';
-              completeCell = `<td class="col-action col-act-complete"><div style="display:flex;flex-direction:column;gap:5px;align-items:stretch;white-space:normal;min-width:118px;"><span style="display:block;padding:3px 8px;border-radius:6px;background:#ecfdf5;color:#047857;border:1px solid #a7f3d0;font-size:11px;font-weight:700;text-align:center;" title="${postDest} 후가공 완료 (${escapeHtml(formatYMD(postDone))}) — 입고를 진행하세요">후가공 완료·${postDest}</span><div style="display:flex;gap:4px;justify-content:center;flex-wrap:wrap;"><button class="dash-action-btn dash-color-qc-init-btn" data-id="${wo.id}" data-color-idx="${colorIdx}">완료</button><button class="dash-action-btn dash-shortage-btn" data-id="${wo.id}" data-color-idx="${colorIdx}" title="입고 수량이 의뢰량과 다른 경우 (예: 10절 의뢰 → 9절만 입고)">부족</button>${redyeBtn}</div>${revertBtn}</div></td>`;
+              completeCell = `<td class="col-action col-act-complete"><div style="display:flex;flex-direction:column;gap:5px;align-items:stretch;white-space:normal;min-width:168px;"><span style="display:block;padding:3px 8px;border-radius:6px;background:#ecfdf5;color:#047857;border:1px solid #a7f3d0;font-size:11px;font-weight:700;text-align:center;" title="${postDest} 후가공 완료 (${escapeHtml(formatYMD(postDone))}) — 입고를 진행하세요">후가공 완료·${postDest}</span><div style="display:flex;gap:4px;justify-content:center;flex-wrap:nowrap;white-space:nowrap;"><button class="dash-action-btn dash-color-qc-init-btn" data-id="${wo.id}" data-color-idx="${colorIdx}">완료</button><button class="dash-action-btn dash-shortage-btn" data-id="${wo.id}" data-color-idx="${colorIdx}" title="입고 수량이 의뢰량과 다른 경우 (예: 10절 의뢰 → 9절만 입고)">부족</button>${redyeBtn}</div>${revertBtn}</div></td>`;
             } else {
               // 일반 진행 중 (후가공 없음) — [완료] 옆 [부족]
               completeCell = `<td class="col-action col-act-complete"><button class="dash-action-btn dash-color-qc-init-btn" data-id="${wo.id}" data-color-idx="${colorIdx}">완료</button><button class="dash-action-btn dash-shortage-btn" data-id="${wo.id}" data-color-idx="${colorIdx}" title="입고 수량이 의뢰량과 다른 경우 (예: 10절 의뢰 → 9절만 입고)">부족</button>${redyeBtn}</td>`;
@@ -26044,7 +26075,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix167';
+  const VERSION = 'v2.53 hotfix168';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
