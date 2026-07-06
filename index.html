@@ -3609,6 +3609,26 @@
   .nr-stamp-chip:hover { background: #f7f5ff; }
   .nr-stamp-chip.on { background: var(--c, #555); color: #fff; }
   .nr-stamp-empty { color: #9ca3af; font-size: 10px; }
+  /* hotfix165: 빠른 작성 폼 카드 — 표에서 분리한 라벨형 입력(정렬 무너짐 방지, 입력 편의) */
+  .qa-form { background: #fff; border-radius: 8px; padding: 14px 16px; }
+  .qa-form .qa-stamp-block { margin-bottom: 16px; }
+  .qa-form .qa-flabel { font-size: 11px; font-weight: 700; color: #64748b; margin-bottom: 5px; display: block; }
+  .qa-form .qa-flabel .qa-fsub { font-weight: 400; color: #9ca3af; }
+  .qa-form .qa-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px 14px; }
+  .qa-form .qa-field.qa-wide { grid-column: 1 / -1; }
+  .qa-form .qa-field input,
+  .qa-form .qa-field select { width: 100%; box-sizing: border-box; height: 38px; padding: 0 10px; border: 1px solid var(--ui-line); border-radius: 8px; font-family: inherit; font-size: 13px; background: #fff; color: var(--ui-text); }
+  .qa-form .qa-field input:focus,
+  .qa-form .qa-field select:focus { outline: none; border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-soft); }
+  .qa-form .qa-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+  .qa-form .qa-actions button { padding: 9px 22px; font-size: 13px; border-radius: 8px; cursor: pointer; font-family: inherit; font-weight: 700; }
+  .qa-form .save-row-btn { background: var(--brand); color: #fff; border: 1px solid var(--brand-deep); }
+  .qa-form .save-row-btn:hover { background: var(--brand-deep); }
+  .qa-form .cancel-row-btn { background: #fff; color: #6b7280; border: 1px solid #d1d5db; }
+  .qa-form .cancel-row-btn:hover { background: #f3f4f6; color: #374151; }
+  .qa-form .nr-stamp-cell { gap: 6px; }
+  .qa-form .nr-stamp-chip { padding: 4px 11px; font-size: 12px; }
+  @media (max-width: 700px) { .qa-form .qa-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
   /* hotfix144: 편직 표 수량/입·출고 분리 컬럼 */
   .ov-knit-table td.col-num { white-space: nowrap; }
   .ov-knit-ship-cell { white-space: nowrap; text-align: center; }
@@ -21104,16 +21124,15 @@ function validateBlendSum(blends, label) {
   const _QA_TYPE_MAP = { '원사': 'yarn', '편직': 'knit', '염색가공': 'finish', 'BT': 'bt' };
   const _QA_LABEL = { yarn: '원사', knit: '편직', finish: '염색가공', bt: 'B/T' };
   function buildQuickAddCard(typeKey) {
-    let table = buildEmptyTableHeader(typeKey);
-    if (!table) return '';
-    // 빈 tbody에 입력 줄 1개 주입
-    table = table.replace('<tbody></tbody>', `<tbody>${buildNewRowHtml(typeKey, 0)}</tbody>`);
+    // hotfix165: 표 행 대신 라벨형 폼 카드로 (열 정렬 무너짐 방지 · 입력 편의)
+    const form = buildQuickAddForm(typeKey, 0);
+    if (!form) return '';
     return `<div class="quick-add-card" id="quick-add-card">
       <div class="qa-head">
         <span class="qa-badge">+ 새 ${_QA_LABEL[typeKey]} 의뢰서</span>
-        <span class="qa-hint">한 줄에 채우고 [저장]을 누르면 아래 목록에 바로 추가됩니다 · 스탬프는 칩을 눌러 선택</span>
+        <span class="qa-hint">칸을 채우고 [저장]을 누르면 아래 목록에 바로 추가됩니다 · 스탬프는 칩을 눌러 선택</span>
       </div>
-      ${table}
+      ${form}
     </div>`;
   }
   // 카드 열기/닫기 (같은 유형 버튼 다시 누르면 닫힘)
@@ -21145,6 +21164,75 @@ function validateBlendSum(blends, label) {
       return `<span class="nr-stamp-chip" data-stamp="${escapeHtml(m.name)}" style="--c:${hex};">${escapeHtml(m.name)}</span>`;
     }).join('');
     return `<div class="nr-stamp-cell">${chips}</div>`;
+  }
+
+  // hotfix165: 빠른 작성 폼 카드(라벨형). 표 행(buildNewRowHtml)과 필드 클래스(.nr-*)·data 속성 동일 → saveNewRow 그대로 재사용.
+  //   컨테이너는 div.new-row (saveNewRow/attachNewRowHandlers는 .new-row 선택자로 tr·div 모두 매칭).
+  function buildQuickAddForm(type, idx) {
+    const today = todayYMD();
+    const stampBlock = `<div class="qa-stamp-block"><div class="qa-flabel">스탬프 <span class="qa-fsub">(눌러서 선택)</span></div>${buildQuickStampCell(type)}</div>`;
+    const actions = `<div class="qa-actions">
+      <button class="cancel-row-btn" data-cancel-new="${idx}">취소</button>
+      <button class="save-row-btn" data-save-new="${idx}">저장</button>
+    </div>`;
+    let grid = '';
+    if (type === 'yarn') {
+      grid = `<div class="qa-grid">
+        <div class="qa-field"><label class="qa-flabel">발주일</label><input type="date" class="nr-date" value="${today}"></div>
+        <div class="qa-field"><label class="qa-flabel">수신처 <span class="qa-fsub">(원사 공장)</span></label><input type="text" lang="ko" class="nr-supplier" placeholder="한국 씨엔티"></div>
+        <div class="qa-field"><label class="qa-flabel">사종</label><input type="text" lang="ko" class="nr-item" placeholder="SD 450/192"></div>
+        <div class="qa-field"><label class="qa-flabel">수량</label><input type="number" class="nr-qty" placeholder="수량" step="0.5"></div>
+        <div class="qa-field"><label class="qa-flabel">단위</label><select class="nr-unit"><option value="박스">박스</option><option value="kg">kg</option><option value="고리">고리</option></select></div>
+        <div class="qa-field"><label class="qa-flabel">출고처</label><input type="text" lang="ko" class="nr-dest" placeholder="출고처"></div>
+        <div class="qa-field"><label class="qa-flabel">납기일</label><input type="text" lang="ko" class="nr-delivery" placeholder="납기"></div>
+        <div class="qa-field"><label class="qa-flabel">용도</label><input type="text" lang="ko" class="nr-purpose" placeholder="용도"></div>
+        <div class="qa-field"><label class="qa-flabel">입고일 <span class="qa-fsub">(입고 후 기록)</span></label><input type="date" class="nr-arrival"></div>
+        <div class="qa-field qa-wide"><label class="qa-flabel">메모</label><input type="text" lang="ko" class="nr-memo" placeholder="메모"></div>
+      </div>`;
+    } else if (type === 'knit') {
+      grid = `<div class="qa-grid">
+        <div class="qa-field"><label class="qa-flabel">성격</label><select class="nr-kind"><option value="regular">기획(PL)</option><option value="stock">재고(ST)</option><option value="sample">샘플(SP)</option></select></div>
+        <div class="qa-field"><label class="qa-flabel">의뢰일</label><input type="date" class="nr-date" value="${today}"></div>
+        <div class="qa-field"><label class="qa-flabel">편직공장</label><input type="text" lang="ko" class="nr-recipient" placeholder="세원" list="nr-knit-vendor-list-${idx}"><datalist id="nr-knit-vendor-list-${idx}">${getKnitVendorList().map(v => `<option value="${escapeHtml(v)}"></option>`).join('')}</datalist></div>
+        <div class="qa-field"><label class="qa-flabel">품목</label><input type="text" lang="ko" class="nr-item" placeholder="품목"></div>
+        <div class="qa-field"><label class="qa-flabel">컬러</label><input type="text" lang="ko" class="nr-color" placeholder="컬러"></div>
+        <div class="qa-field"><label class="qa-flabel">의뢰절</label><input type="number" class="nr-jul" placeholder="절" step="0.5"></div>
+        <div class="qa-field"><label class="qa-flabel">절당 kg</label><input type="number" class="nr-kgper" value="21" step="0.1"></div>
+        <div class="qa-field"><label class="qa-flabel">원사입고</label><input type="text" lang="ko" class="nr-yarn" placeholder="원사입고"></div>
+        <div class="qa-field qa-wide"><label class="qa-flabel">메모</label><input type="text" lang="ko" class="nr-memo" placeholder="메모"></div>
+      </div>`;
+    } else if (type === 'finish') {
+      grid = `<div class="qa-grid">
+        <div class="qa-field"><label class="qa-flabel">발주일</label><input type="date" class="nr-date" value="${today}"></div>
+        <div class="qa-field"><label class="qa-flabel">구분</label><select class="nr-prodtype"><option value="오더">오더</option><option value="기획">기획</option><option value="샘플">샘플</option><option value="재염">재염</option></select></div>
+        <div class="qa-field"><label class="qa-flabel">최종납품처</label><input type="text" lang="ko" class="nr-final" placeholder="세원"></div>
+        <div class="qa-field"><label class="qa-flabel">몸판품목</label><input type="text" lang="ko" class="nr-bodyitem" placeholder="노블와플"></div>
+        <div class="qa-field"><label class="qa-flabel">컬러</label><input type="text" lang="ko" class="nr-color" placeholder="컬러"></div>
+        <div class="qa-field"><label class="qa-flabel">몸판/리프 절 <span class="qa-fsub">(예: 30/5)</span></label><input type="text" class="nr-julbr" placeholder="30/5"></div>
+        <div class="qa-field"><label class="qa-flabel">염색처</label><input type="text" lang="ko" class="nr-rdye" placeholder="대흥"></div>
+        <div class="qa-field"><label class="qa-flabel">생지 투입일</label><input type="date" class="nr-dyein"></div>
+        <div class="qa-field"><label class="qa-flabel">염색 완료일</label><input type="date" class="nr-dyedone"></div>
+        <div class="qa-field"><label class="qa-flabel">가공처</label><input type="text" lang="ko" class="nr-rproc" placeholder="대흥"></div>
+        <div class="qa-field"><label class="qa-flabel">가공 완료일</label><input type="date" class="nr-procdone"></div>
+        <div class="qa-field"><label class="qa-flabel">후가공처</label><input type="text" lang="ko" class="nr-rpost" placeholder="송원"></div>
+        <div class="qa-field"><label class="qa-flabel">후가공 완료일</label><input type="date" class="nr-postdone"></div>
+        <div class="qa-field"><label class="qa-flabel">LOT</label><input type="text" lang="ko" class="nr-lot" placeholder="LOT"></div>
+        <div class="qa-field qa-wide"><label class="qa-flabel">메모</label><input type="text" lang="ko" class="nr-memo" placeholder="메모"></div>
+      </div>`;
+    } else if (type === 'bt') {
+      grid = `<div class="qa-grid">
+        <div class="qa-field"><label class="qa-flabel">발주일</label><input type="date" class="nr-date" value="${today}"></div>
+        <div class="qa-field"><label class="qa-flabel">염색공장</label><input type="text" lang="ko" class="nr-recipient" placeholder="대흥, 송원 등"></div>
+        <div class="qa-field"><label class="qa-flabel">품명</label><input type="text" lang="ko" class="nr-item" placeholder="품명"></div>
+        <div class="qa-field"><label class="qa-flabel">혼용율</label><input type="text" lang="ko" class="nr-blend" placeholder="혼용율"></div>
+        <div class="qa-field"><label class="qa-flabel">결과 수령일</label><input type="date" class="nr-result-date"></div>
+        <div class="qa-field"><label class="qa-flabel">판정</label><input type="text" lang="ko" class="nr-judgment" placeholder="판정"></div>
+        <div class="qa-field qa-wide"><label class="qa-flabel">메모</label><input type="text" lang="ko" class="nr-memo" placeholder="메모"></div>
+      </div>`;
+    } else {
+      return '';
+    }
+    return `<div class="new-row qa-form" data-new-idx="${idx}" data-new-type="${type}">${stampBlock}${grid}${actions}</div>`;
   }
 
   function buildNewRowHtml(type, idx) {
@@ -21348,13 +21436,13 @@ function validateBlendSum(blends, label) {
   
   // 새 행 취소 (DOM에서 제거)
   function cancelNewRow(type, idx) {
-    const row = document.querySelector(`tr.new-row[data-new-idx="${idx}"][data-new-type="${type}"]`);
+    const row = document.querySelector(`.new-row[data-new-idx="${idx}"][data-new-type="${type}"]`);
     if (row) row.remove();
   }
   
   // 새 행 저장 (Firebase에 저장)
   async function saveNewRow(type, idx) {
-    const row = document.querySelector(`tr.new-row[data-new-idx="${idx}"][data-new-type="${type}"]`);
+    const row = document.querySelector(`.new-row[data-new-idx="${idx}"][data-new-type="${type}"]`);
     if (!row) return;
     // hotfix141: 빠른 작성 줄에서 선택한 스탬프 칩 수집
     const _selStamps = Array.from(row.querySelectorAll('.nr-stamp-chip.on')).map(c => c.dataset.stamp);
@@ -21511,7 +21599,7 @@ function validateBlendSum(blends, label) {
       if (b.dataset.handlerAttached) return;
       b.dataset.handlerAttached = '1';
       b.addEventListener('click', () => {
-        const row = b.closest('tr.new-row');
+        const row = b.closest('.new-row');
         const type = row.dataset.newType;
         const idx = parseInt(row.dataset.newIdx);
         saveNewRow(type, idx);
@@ -21521,7 +21609,7 @@ function validateBlendSum(blends, label) {
       if (b.dataset.handlerAttached) return;
       b.dataset.handlerAttached = '1';
       b.addEventListener('click', () => {
-        const row = b.closest('tr.new-row');
+        const row = b.closest('.new-row');
         const type = row.dataset.newType;
         const idx = parseInt(row.dataset.newIdx);
         cancelNewRow(type, idx);
@@ -25881,7 +25969,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix164';
+  const VERSION = 'v2.53 hotfix165';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
