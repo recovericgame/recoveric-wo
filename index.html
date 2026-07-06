@@ -1589,6 +1589,8 @@
   .dash-table-overview th { white-space: normal; padding-left: 4px; padding-right: 4px; line-height: 1.25; }
   .dash-table-overview td { padding-left: 4px; padding-right: 4px; word-break: break-word; }
   .dash-table-overview .col-action { white-space: nowrap; }
+  /* hotfix174: 용도 열은 원사 purpose 전용 — 염색가공·편직·BT 화면에선 숨김 */
+  .dash-table.hide-purpose .col-purpose { display: none; }
   .ov-done-toggle { background: none; border: none; color: #6b7280; font-size: 11px; font-weight: 700; cursor: pointer; padding: 2px 6px; }
   .ov-done-toggle:hover { color: #111; text-decoration: underline; }
 
@@ -13887,6 +13889,24 @@ function validateBlendSum(blends, label) {
     wo.colors = colors;   // hotfix153 교훈: 화면 즉시 반영
   }
 
+  // hotfix174: 복사로 만든 재염(연결 없음) 대응 — 완료된 색을 수동으로 "재염 처리"로 표시.
+  //   redye_transferred_to 설정 → 완료/QC에서 빠지고 "재염 처리" 그룹으로 이동(hotfix173). 새 의뢰서는 만들지 않음(이미 복사로 생성).
+  async function setColorRedyeMark(woId, colorIdx, targetNo) {
+    const wo = state.allWorkOrders.find(w => w.id === woId);
+    if (!wo) throw new Error('의뢰서를 찾을 수 없음');
+    const colors = JSON.parse(JSON.stringify(wo.colors || []));
+    const c = colors[colorIdx];
+    if (!c) throw new Error('컬러 인덱스 오류');
+    const now = new Date().toISOString();
+    c.redye_transferred_to = (targetNo && String(targetNo).trim()) ? String(targetNo).trim() : '재염';
+    c.redye_transferred_at = now;
+    c.redye_transferred_by = state.user.email;
+    if (!Array.isArray(c.redye_history)) c.redye_history = [];
+    c.redye_history.push({ at: now, by: state.user.email, to: c.redye_transferred_to, body: 0, rib: 0, memo: '재염 처리 표시(복사본 연결)' });
+    await updateDoc(doc(db, 'workorders', woId), { colors, updated_at: serverTimestamp(), updated_by: state.user.email });
+    wo.colors = colors;   // 화면 즉시 반영
+  }
+
   async function setColorFixCancel(woId, colorIdx) {
     const wo = state.allWorkOrders.find(w => w.id === woId);
     if (!wo) throw new Error('의뢰서를 찾을 수 없음');
@@ -17685,7 +17705,7 @@ function validateBlendSum(blends, label) {
       overviewRows.length = 0;
       orderedRows.forEach(r => overviewRows.push(r));
 
-      html += `<div class="dash-table-wrap"><table class="dash-table dash-table-color-rows dash-table-no-select dash-table-overview"><thead><tr>
+      html += `<div class="dash-table-wrap"><table class="dash-table dash-table-color-rows dash-table-no-select dash-table-overview${(tf === 'all' || tf === '원사') ? '' : ' hide-purpose'}"><thead><tr>
         <th class="col-no">NO</th>
         ${sortableTh('overview', 'type', '유형')}
         ${sortableTh('overview', 'stamps', '스탬프', 'col-stamps')}
@@ -17695,7 +17715,7 @@ function validateBlendSum(blends, label) {
         <th>컬러</th>
         <th class="col-num">수량</th>
         ${sortableTh('overview', 'vendor', state.overviewTypeFilter === '원사' ? '구매처 / 출고처' : '거래처 (공정)')}
-        <th>용도</th>
+        <th class="col-purpose">용도</th>
         <th>메모</th>
         <th class="col-action col-act-view">작지</th>
         <th class="col-action col-act-edit">수정</th>
@@ -17936,7 +17956,8 @@ function validateBlendSum(blends, label) {
             // hotfix101: QC 합격했으나 대표 확인 대기 — ✓QC가 아니라 [확인 대기]로 구분
             completeCell = `<td class="col-action col-act-complete"><button class="dash-action-btn dash-goto-complete-rep" style="background:#16a34a;color:#fff;border-color:#15803d;font-weight:700;" data-id="${wo.id}" data-color-idx="${colorIdx}" title="완료 보고에서 대표 확인 대기 중 — 클릭하여 완료 보고로 이동">확인 대기${receiptLabel}</button>${shortageBtn}</td>`;
           } else if (qcSt === 'done') {
-            completeCell = `<td class="col-action col-act-complete"><button class="dash-action-btn qc-done-btn" data-id="${wo.id}" data-color-idx="${colorIdx}" data-qc-action="open">✓ QC${receiptLabel}</button>${shortageBtn}</td>`;
+            const redyeMarkBtn = isAdminUser() ? `<button class="dash-action-btn dash-color-redye-mark-btn" data-id="${wo.id}" data-color-idx="${colorIdx}" title="이 색을 재염 처리로 표시 — 완료/QC에서 빼고 재염 처리 그룹으로 이동(복사로 만든 재염 의뢰서와 연결)" style="background:#fef3c7;color:#b45309;border-color:#fbbf24;font-weight:700;">재염</button>` : '';
+            completeCell = `<td class="col-action col-act-complete"><button class="dash-action-btn qc-done-btn" data-id="${wo.id}" data-color-idx="${colorIdx}" data-qc-action="open">✓ QC${receiptLabel}</button>${shortageBtn}${redyeMarkBtn}</td>`;
           } else {
             // 진행 중 (none) — [완료] 옆에 [부족] 버튼 노출
             // hotfix159: 후가공(송원 등) 3공정 건은 입고 전 [넘김]→[후가공 완료] 게이트를 먼저 거친다
@@ -22814,6 +22835,30 @@ function validateBlendSum(blends, label) {
       });
     });
 
+    // hotfix174: [재염] 표시 — 완료된 색을 수동으로 재염 처리로 표시(복사로 만든 재염 대응)
+    document.querySelectorAll('#dash-body .dash-color-redye-mark-btn').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (!isAdminUser()) { toast('재염 처리는 대표만 가능합니다', 'info'); return; }
+        const id = btn.dataset.id;
+        const ci = parseInt(btn.dataset.colorIdx, 10);
+        const wo = state.allWorkOrders.find(w => w.id === id);
+        const c = wo ? (wo.colors || [])[ci] || {} : {};
+        const cName = c.name || `컬러 #${ci + 1}`;
+        const targetNo = prompt(`"${cName}"를 재염 처리로 표시합니다.\n(완료/QC에서 빠지고 "재염 처리" 그룹으로 이동합니다)\n\n연결할 재염 의뢰서 번호를 입력하세요. 모르면 비워두고 확인.`, '');
+        if (targetNo === null) return;
+        btn.disabled = true;
+        try {
+          await setColorRedyeMark(id, ci, targetNo);
+          toast(`"${cName}" 재염 처리로 표시했습니다`, 'success');
+          renderDashboard();
+        } catch (err) {
+          btn.disabled = false;
+          toast('처리 실패: ' + (err.message || err), 'error');
+        }
+      });
+    });
+
     document.querySelectorAll('#dash-body .dash-shrink-review-btn').forEach(btn => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -26299,7 +26344,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix173';
+  const VERSION = 'v2.53 hotfix174';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
