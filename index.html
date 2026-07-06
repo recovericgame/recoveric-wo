@@ -17639,9 +17639,11 @@ function validateBlendSum(blends, label) {
         //   · 재염으로 종결(미처리 부족 0 · 입고 차수 QC 완료)된 색 → 완료 그룹으로(담당자 알림에서 빠짐, "재염중" 표기 유지)
         //   · 재염 진행 중(부족 남음 · QC 미완)인 색 → 진행 영역 유지
         const _isRedyeClosed = (i) => getColorQcStatus(wo, i) === 'redye' && isColorClosed(colors[i]);
-        const _doneForGroup  = (i) => (isColorCompleted(wo, i) || _isRedyeClosed(i)) && !isFixColor(colors[i]);
-        const incompleteIdxs = colors.map((c, i) => i).filter(i => !_doneForGroup(i));
-        const completedIdxs  = colors.map((c, i) => i).filter(i =>  _doneForGroup(i));
+        // hotfix173: 재염 이관된 색은 "완료"가 아니라 별도 "재염 처리" 그룹으로 접는다(대표 확정). 완료로 오해 방지 + 원본↔재염 추적.
+        const _isCompletedForGroup = (i) => isColorCompleted(wo, i) && !isFixColor(colors[i]) && !_isRedyeClosed(i);
+        const incompleteIdxs = colors.map((c, i) => i).filter(i => !_isCompletedForGroup(i) && !_isRedyeClosed(i));
+        const completedIdxs  = colors.map((c, i) => i).filter(i =>  _isCompletedForGroup(i));
+        const redyeIdxs      = colors.map((c, i) => i).filter(i =>  _isRedyeClosed(i));
         const ovExpanded = state.ovColorExpand && state.ovColorExpand.has(wo.id);
         const groupRows = [];
         incompleteIdxs.forEach(ci => groupRows.push({ colorIdx: ci, rowKind: 'color' }));
@@ -17649,13 +17651,17 @@ function validateBlendSum(blends, label) {
           groupRows.push({ colorIdx: -1, rowKind: 'doneSummary', doneCount: completedIdxs.length });
           if (ovExpanded) completedIdxs.forEach(ci => groupRows.push({ colorIdx: ci, rowKind: 'color', doneColor: true }));
         }
+        if (redyeIdxs.length > 0) {
+          groupRows.push({ colorIdx: -1, rowKind: 'redyeSummary', redyeCount: redyeIdxs.length });
+          if (ovExpanded) redyeIdxs.forEach(ci => groupRows.push({ colorIdx: ci, rowKind: 'color', redyeColor: true }));
+        }
         if (groupRows.length === 0) {
           overviewRows.push({ wo, colorIdx: -1, isFirstRow: true, totalRows: 1, rowKind: 'color' });
           return;
         }
         const totalRows = groupRows.length;
         groupRows.forEach((gr, n) => {
-          overviewRows.push({ wo, colorIdx: gr.colorIdx, isFirstRow: n === 0, totalRows, rowKind: gr.rowKind, doneCount: gr.doneCount, doneColor: gr.doneColor });
+          overviewRows.push({ wo, colorIdx: gr.colorIdx, isFirstRow: n === 0, totalRows, rowKind: gr.rowKind, doneCount: gr.doneCount, redyeCount: gr.redyeCount, doneColor: gr.doneColor, redyeColor: gr.redyeColor });
         });
       });
 
@@ -17710,7 +17716,7 @@ function validateBlendSum(blends, label) {
         const _seen = new Set();
         overviewRows.forEach(r => { if (!_seen.has(r.wo.id)) { _seen.add(r.wo.id); __sectionCounts[woSection[r.wo.id]]++; } });
       }
-      overviewRows.forEach(({ wo, colorIdx, isFirstRow, totalRows, rowKind, doneCount, doneColor }) => {
+      overviewRows.forEach(({ wo, colorIdx, isFirstRow, totalRows, rowKind, doneCount, doneColor, redyeCount, redyeColor }) => {
         // 구역 머리행 (염색가공/전체 보기에서만, 의뢰서 첫 행 시점에 구역 전환 감지)
         if (__sectionsEnabled && isFirstRow) {
           const sec = woSection[wo.id] || 'normal';
@@ -17838,13 +17844,17 @@ function validateBlendSum(blends, label) {
         
         // 의뢰서 단위 셀 (rowspan 첫 행에만, 컬러별 분리된 염색가공만)
         const rs = (totalRows > 1) ? ` rowspan="${totalRows}"` : '';
+        // hotfix173: 재염으로 생성된 의뢰서는 원본 출처 표식(◀ 원본번호에서 재염)
+        const _redyeOriginBadge = (wo.redye_origin && wo.redye_origin.wo_number)
+          ? `<div title="원본: ${escapeHtml(wo.redye_origin.color_name || '')} — ${escapeHtml(wo.redye_origin.wo_number)}" style="display:inline-block;margin-top:4px;font-size:10px;color:#b45309;background:#fef3c7;border:1px solid #fbbf24;border-radius:8px;padding:1px 7px;font-weight:700;">◀ ${escapeHtml(wo.redye_origin.wo_number)}에서 재염</div>`
+          : '';
         const woUnitCells = isFirstRow ? `
           <td class="col-no id-hover"${rs} title="${escapeHtml(wo.wo_number || '')}"><span class="id-text">${escapeHtml(wo.wo_number || '-')}</span></td>
           <td${rs}>${renderTypeBadge(wo.type)}</td>
           <td class="col-stamps"${rs}>${renderStampMini(wo.stamps) || '-'}</td>
           <td class="col-date"${rs}>${formatYMD(wo.date)}</td>
           <td class="col-num"${rs}>${elapsed}일</td>
-          <td${rs}>${escapeHtml(item)}</td>` : '';
+          <td${rs}>${escapeHtml(item)}${_redyeOriginBadge}</td>` : '';
         
         // 컬러/수량 셀 (컬러별 분리 염색가공이면 매 행, 아니면 첫 행에만 rowspan)
         let colorSizeCells;
@@ -17980,7 +17990,16 @@ function validateBlendSum(blends, label) {
           memoCellF = '<td></td>';
           completeCellF = '<td class="col-action col-act-complete"></td>';
           doneRowClass = 'ov-done-summary-row';
+        } else if (rowKind === 'redyeSummary') {
+          // hotfix173: 재염 이관된 색 별도 접기 — 완료와 구분(주황), 펼치면 각 색의 "재염중 (→번호)" 링크 노출
+          const ovExp = state.ovColorExpand && state.ovColorExpand.has(wo.id);
+          colorSizeCellsF = `<td colspan="2" class="ov-done-summary"><button class="ov-done-toggle" data-wo="${wo.id}" style="color:#b45309;font-weight:700;">🔄 재염 처리 ${redyeCount}개 ${ovExp ? '▴ 접기' : '▾ 펼치기'}</button></td>`;
+          memoCellF = '<td></td>';
+          completeCellF = '<td class="col-action col-act-complete"></td>';
+          doneRowClass = 'ov-done-summary-row';
         } else if (doneColor) {
+          doneRowClass = 'ov-color-done';
+        } else if (redyeColor) {
           doneRowClass = 'ov-color-done';
         }
         
@@ -26280,7 +26299,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix172';
+  const VERSION = 'v2.53 hotfix173';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
