@@ -5816,6 +5816,8 @@
   .dash-menu-btn.active::before { background: var(--brand); width: 3px; border-radius: 3px; left: 3px; top: 7px; bottom: 7px; opacity: 1; }
   .dash-menu-btn.submenu { color: var(--ui-text-mute); }
   .dash-menu-btn.submenu.active { color: var(--brand-deep); }
+  /* hotfix175: 진행 상황 카테고리 라벨 */
+  .dash-menu-section-label { font-size: 11px; font-weight: 800; color: var(--ui-text-mute); letter-spacing: 0.02em; padding: 8px 12px 4px; }
   .dash-menu-btn[data-view="completeReports"].active { background: #ecfdf3 !important; color: #067647 !important; border-color: transparent !important; box-shadow: none; }
   .dash-menu-btn[data-view="completeReports"].active::before { background: #16a34a; }
   .dash-menu-btn[data-view="ceoReports"].active { background: #fef3f2 !important; color: #b42318 !important; border-color: transparent !important; box-shadow: none; }
@@ -5917,11 +5919,11 @@
     <!-- 대시보드 모드 사이드바 -->
     <div id="sidebar-dashboard" style="display:none;">
       <div class="dash-menu">
-        <button class="dash-menu-btn active" data-view="overview">전체 대시보드</button>
-        <button class="dash-menu-btn submenu" data-view="yarn">ㄴ 원사 진행</button>
-        <button class="dash-menu-btn submenu" data-view="knit">ㄴ 편직 진행</button>
-        <button class="dash-menu-btn submenu" data-view="finish">ㄴ 염색가공 진행</button>
-        <button class="dash-menu-btn submenu" data-view="bt">ㄴ B/T 진행</button>
+        <div class="dash-menu-section-label">진행 상황</div>
+        <button class="dash-menu-btn" data-view="yarn">원사 진행</button>
+        <button class="dash-menu-btn" data-view="knit">편직 진행</button>
+        <button class="dash-menu-btn active" data-view="finish">염색가공 진행</button>
+        <button class="dash-menu-btn" data-view="bt">B/T 진행</button>
         <button class="dash-menu-btn" data-view="kpiboard">현황판</button>
         <button class="dash-menu-btn admin-only" data-view="completeReports" style="background:#f0fdf4;border:1px solid #bbf7d0;color:#15803d;font-weight:800;">완료 보고<span class="ceo-report-badge" id="complete-report-badge" style="display:none;background:#16a34a;">0</span></button>
         <button class="dash-menu-btn admin-only" data-view="ceoReports" style="background:#fef2f2;border:1px solid #fecaca;color:#b91c1c;font-weight:800;">불량 보고<span class="ceo-report-badge" id="ceo-report-badge" style="display:none;">0</span></button>
@@ -6783,7 +6785,7 @@ const state = {
   // hotfix158: 거래처(업체) 마스터 (settings/vendors 구독) — [{name, type, memo}]. 작지 업체 선택용 사전 입력.
   vendors: [],
   // v2.34: 전체 대시보드 유형 필터 (overview)
-  overviewTypeFilter: 'all',  // 'all' | '원사' | '편직' | '염색가공' | 'BT'
+  overviewTypeFilter: '염색가공',  // hotfix175: 전체 뷰 제거 — 기본은 염색가공 섹션
   // hotfix57: 전체 대시보드에서 편직 선택 시 세부 성격 + 재고 업체 필터
   ovKnitKind: 'all',    // 'all' | 'regular'(기획) | 'stock'(재고) | 'sample'(샘플)
   ovKnitVendor: 'all',  // 재고 성격일 때 편직공장 선택 (전체/업체명)
@@ -10654,7 +10656,7 @@ function validateBlendSum(blends, label) {
       state.overviewTypeFilter = _TYPE_VIEW_MAP[view];
       view = 'overview';
     } else if (view === 'overview') {
-      state.overviewTypeFilter = 'all';
+      state.overviewTypeFilter = '염색가공';  // hotfix175: 전체 뷰 제거 — 섹션(염색가공) 기본
     }
     state.dashView = view;
     syncSidebarActive();
@@ -13907,8 +13909,33 @@ function validateBlendSum(blends, label) {
     wo.colors = colors;   // 화면 즉시 반영
   }
 
-  async function setColorFixCancel(woId, colorIdx) {
-    const wo = state.allWorkOrders.find(w => w.id === woId);
+  // hotfix175: 자식(재염) 의뢰서에서 원본 색으로 복귀 — 부모의 redye_transferred_to 제거 → 원본에 색이 다시 나타남. 자식은 그대로 남음(필요 없으면 별도 삭제).
+  async function restoreRedyeToOrigin(childWoId) {
+    const child = state.allWorkOrders.find(w => w.id === childWoId);
+    if (!child || !child.redye_origin) throw new Error('원본 정보를 찾을 수 없음');
+    const origin = child.redye_origin;
+    const parent = state.allWorkOrders.find(w => w.id === origin.wo_id)
+      || state.allWorkOrders.find(w => w.wo_number === origin.wo_number);
+    if (!parent) throw new Error('원본 의뢰서를 찾을 수 없음');
+    const colors = JSON.parse(JSON.stringify(parent.colors || []));
+    let ci = colors.findIndex(c => c.redye_transferred_to && String(c.redye_transferred_to).trim() === String(child.wo_number || '').trim());
+    if (ci < 0) ci = colors.findIndex(c => (c.name || '') === (origin.color_name || ''));
+    if (ci < 0) throw new Error('원본 색을 찾을 수 없음');
+    const c = colors[ci];
+    const now = new Date().toISOString();
+    if (!Array.isArray(c.redye_history)) c.redye_history = [];
+    c.redye_history.push({ at: now, by: state.user.email, to: c.redye_transferred_to || '', body: 0, rib: 0, memo: '원본 복귀', cancelled: true });
+    delete c.redye_transferred_to;
+    delete c.redye_transferred_at;
+    delete c.redye_transferred_by;
+    c.redye_body = 0;
+    c.redye_rib = 0;
+    await updateDoc(doc(db, 'workorders', parent.id), { colors, updated_at: serverTimestamp(), updated_by: state.user.email });
+    parent.colors = colors;
+    return { parentNo: parent.wo_number, colorName: c.name || '' };
+  }
+
+  async function setColorFixCancel(woId, colorIdx) {    const wo = state.allWorkOrders.find(w => w.id === woId);
     if (!wo) throw new Error('의뢰서를 찾을 수 없음');
     const colors = JSON.parse(JSON.stringify(wo.colors || []));
     const c = colors[colorIdx];
@@ -17548,7 +17575,6 @@ function validateBlendSum(blends, label) {
     html += `<div style="display:flex;align-items:center;gap:8px;margin:4px 0 10px;flex-wrap:wrap;">
       <div style="font-weight:800;font-size:15px;letter-spacing:-0.02em;color:var(--ui-text);">진행 중 의뢰서</div>
       <div class="overview-type-filter-bar" style="display:flex;gap:4px;margin-left:auto;align-items:center;">
-        ${typeBtn('all', '전체')}
         ${typeBtn('원사', '원사')}
         ${typeBtn('편직', '편직')}
         ${typeBtn('염색가공', '염색가공')}
@@ -17659,21 +17685,17 @@ function validateBlendSum(blends, label) {
         //   · 재염으로 종결(미처리 부족 0 · 입고 차수 QC 완료)된 색 → 완료 그룹으로(담당자 알림에서 빠짐, "재염중" 표기 유지)
         //   · 재염 진행 중(부족 남음 · QC 미완)인 색 → 진행 영역 유지
         const _isRedyeClosed = (i) => getColorQcStatus(wo, i) === 'redye' && isColorClosed(colors[i]);
-        // hotfix173: 재염 이관된 색은 "완료"가 아니라 별도 "재염 처리" 그룹으로 접는다(대표 확정). 완료로 오해 방지 + 원본↔재염 추적.
+        // hotfix175: 재염으로 완전히 빠져나간 색은 원본 의뢰서에서 숨긴다(별도 재염 의뢰서로 관리). 재염 취소(원본 복귀) 시 다시 나타남.
+        //   · 부분 재염(부족 남음, 미종결)은 진행 영역에 "재염중"으로 유지.
         const _isCompletedForGroup = (i) => isColorCompleted(wo, i) && !isFixColor(colors[i]) && !_isRedyeClosed(i);
         const incompleteIdxs = colors.map((c, i) => i).filter(i => !_isCompletedForGroup(i) && !_isRedyeClosed(i));
         const completedIdxs  = colors.map((c, i) => i).filter(i =>  _isCompletedForGroup(i));
-        const redyeIdxs      = colors.map((c, i) => i).filter(i =>  _isRedyeClosed(i));
         const ovExpanded = state.ovColorExpand && state.ovColorExpand.has(wo.id);
         const groupRows = [];
         incompleteIdxs.forEach(ci => groupRows.push({ colorIdx: ci, rowKind: 'color' }));
         if (completedIdxs.length > 0) {
           groupRows.push({ colorIdx: -1, rowKind: 'doneSummary', doneCount: completedIdxs.length });
           if (ovExpanded) completedIdxs.forEach(ci => groupRows.push({ colorIdx: ci, rowKind: 'color', doneColor: true }));
-        }
-        if (redyeIdxs.length > 0) {
-          groupRows.push({ colorIdx: -1, rowKind: 'redyeSummary', redyeCount: redyeIdxs.length });
-          if (ovExpanded) redyeIdxs.forEach(ci => groupRows.push({ colorIdx: ci, rowKind: 'color', redyeColor: true }));
         }
         if (groupRows.length === 0) {
           overviewRows.push({ wo, colorIdx: -1, isFirstRow: true, totalRows: 1, rowKind: 'color' });
@@ -17866,7 +17888,7 @@ function validateBlendSum(blends, label) {
         const rs = (totalRows > 1) ? ` rowspan="${totalRows}"` : '';
         // hotfix173: 재염으로 생성된 의뢰서는 원본 출처 표식(◀ 원본번호에서 재염)
         const _redyeOriginBadge = (wo.redye_origin && wo.redye_origin.wo_number)
-          ? `<div title="원본: ${escapeHtml(wo.redye_origin.color_name || '')} — ${escapeHtml(wo.redye_origin.wo_number)}" style="display:inline-block;margin-top:4px;font-size:10px;color:#b45309;background:#fef3c7;border:1px solid #fbbf24;border-radius:8px;padding:1px 7px;font-weight:700;">◀ ${escapeHtml(wo.redye_origin.wo_number)}에서 재염</div>`
+          ? `<div style="margin-top:4px;display:inline-flex;align-items:center;gap:4px;flex-wrap:wrap;"><span title="원본: ${escapeHtml(wo.redye_origin.color_name || '')} — ${escapeHtml(wo.redye_origin.wo_number)}" style="font-size:10px;color:#b45309;background:#fef3c7;border:1px solid #fbbf24;border-radius:8px;padding:1px 7px;font-weight:700;">◀ ${escapeHtml(wo.redye_origin.wo_number)}에서 재염</span>${isAdminUser() ? `<button class="dash-redye-restore-btn" data-child-id="${wo.id}" title="이 색을 원본 의뢰서로 되돌립니다 (재염 취소)" style="font-size:10px;color:#b45309;background:#fff;border:1px solid #fbbf24;border-radius:8px;padding:1px 6px;cursor:pointer;font-weight:700;">↩ 원본 복귀</button>` : ''}</div>`
           : '';
         const woUnitCells = isFirstRow ? `
           <td class="col-no id-hover"${rs} title="${escapeHtml(wo.wo_number || '')}"><span class="id-text">${escapeHtml(wo.wo_number || '-')}</span></td>
@@ -22835,6 +22857,25 @@ function validateBlendSum(blends, label) {
       });
     });
 
+    // hotfix175: [↩ 원본 복귀] — 자식(재염) 의뢰서에서 원본 색을 원본 의뢰서로 되돌림
+    document.querySelectorAll('#dash-body .dash-redye-restore-btn').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (!isAdminUser()) { toast('원본 복귀는 대표만 가능합니다', 'info'); return; }
+        const childId = btn.dataset.childId;
+        if (!confirm('이 색을 원본 의뢰서로 되돌립니다.\n\n· 원본 의뢰서에 해당 색이 다시 나타납니다\n· 이 재염 의뢰서는 그대로 남습니다 (필요 없으면 목록에서 직접 삭제)\n\n계속할까요?')) return;
+        btn.disabled = true;
+        try {
+          const r = await restoreRedyeToOrigin(childId);
+          toast(`"${r.colorName}" 원본(${r.parentNo})으로 복귀했습니다`, 'success');
+          renderDashboard();
+        } catch (err) {
+          btn.disabled = false;
+          toast('복귀 실패: ' + (err.message || err), 'error');
+        }
+      });
+    });
+
     // hotfix174: [재염] 표시 — 완료된 색을 수동으로 재염 처리로 표시(복사로 만든 재염 대응)
     document.querySelectorAll('#dash-body .dash-color-redye-mark-btn').forEach(btn => {
       btn.addEventListener('click', async (e) => {
@@ -26344,7 +26385,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix174';
+  const VERSION = 'v2.53 hotfix175';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
