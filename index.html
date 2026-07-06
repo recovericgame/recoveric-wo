@@ -20203,6 +20203,107 @@ function validateBlendSum(blends, label) {
     if (v.type) return [v.type];
     return [];
   }
+  // hotfix170: 별칭 정리 도우미 — 기존 의뢰서에 실제 쓰인 거래처 표기를 스캔해 대표 거래처로 묶기.
+  //   ★원본 의뢰서는 미변경★ — settings/vendors의 aliases[]에만 기록. 표시·필터·선택이 대표명으로 통일됨.
+  function scanVendorUsage() {
+    const counts = {};
+    const bump = (s) => { const k = String(s || '').trim(); if (k) counts[k] = (counts[k] || 0) + 1; };
+    (state.allWorkOrders || []).forEach(wo => {
+      if (!wo) return;
+      if (wo.supplier) bump(wo.supplier);
+      if (wo.recipient) bump(wo.recipient);
+      const r = wo.recipients || {};
+      bump(r.dyeing); bump(r.processing); bump(r.post);
+    });
+    return counts;
+  }
+  async function bindVendorAlias(raw, targetName) {
+    const list = JSON.parse(JSON.stringify(state.vendors || []));
+    const v = list.find(x => String(x.name).trim() === targetName);
+    if (!v) { toast('대표 거래처를 찾을 수 없습니다', 'error'); return false; }
+    v.aliases = Array.isArray(v.aliases) ? v.aliases : [];
+    if (!v.aliases.some(a => String(a).trim() === raw)) v.aliases.push(raw);
+    try {
+      const ok = await saveVendors(list);
+      if (ok === false) return false;
+      toast(`"${raw}" → ${targetName}(으)로 묶었습니다`, 'success');
+      return true;
+    } catch (err) { toast('저장 실패: ' + err.message, 'error'); return false; }
+  }
+  async function createVendorFromRaw(raw) {
+    const list = JSON.parse(JSON.stringify(state.vendors || []));
+    if (list.some(x => String(x.name).trim() === raw)) { toast('이미 등록된 거래처입니다', 'error'); return false; }
+    list.push({ name: raw, types: [], memo: '', aliases: [] });
+    try {
+      const ok = await saveVendors(list);
+      if (ok === false) return false;
+      toast(`"${raw}"을(를) 새 거래처로 등록했습니다`, 'success');
+      return true;
+    } catch (err) { toast('저장 실패: ' + err.message, 'error'); return false; }
+  }
+  function openVendorAliasHelper() {
+    if (!isAdminUser()) return;
+    const counts = scanVendorUsage();
+    const vs = state.vendors || [];
+    const names = Object.keys(counts).sort((a, b) => counts[b] - counts[a]);
+    const vendorOptions = vs.map(v => `<option value="${escapeHtml(v.name)}">${escapeHtml(v.name)}</option>`).join('');
+    const need = [], done = [];
+    names.forEach(raw => {
+      const isRep = vs.some(v => String(v.name).trim() === raw);
+      const isAlias = vs.some(v => (Array.isArray(v.aliases) ? v.aliases : []).some(a => String(a).trim() === raw));
+      if (isRep) {
+        done.push(`<tr><td style="font-weight:700;">${escapeHtml(raw)}</td><td style="text-align:center;color:#6b7280;">${counts[raw]}</td><td style="color:#047857;font-weight:700;">대표 거래처</td></tr>`);
+      } else if (isAlias) {
+        done.push(`<tr><td>${escapeHtml(raw)}</td><td style="text-align:center;color:#6b7280;">${counts[raw]}</td><td style="color:#1d4ed8;">→ ${escapeHtml(normalizeVendorName(raw))}</td></tr>`);
+      } else {
+        need.push(`<tr>
+          <td style="font-weight:700;">${escapeHtml(raw)}</td>
+          <td style="text-align:center;color:#6b7280;">${counts[raw]}</td>
+          <td><select class="va-target" style="width:100%;padding:6px;border:1px solid var(--ui-line);border-radius:6px;font-size:12px;font-family:inherit;"><option value="">— 대표 거래처 선택 —</option>${vendorOptions}</select></td>
+          <td style="text-align:center;white-space:nowrap;">
+            <button class="dash-action-btn va-bind-btn" style="background:var(--brand);color:#fff;border-color:var(--brand-deep);">묶기</button>
+            <button class="dash-action-btn va-new-btn" data-raw="${escapeHtml(raw)}">새 거래처로</button>
+          </td>
+        </tr>`);
+      }
+    });
+    const needTable = need.length
+      ? `<table class="dash-table" style="width:100%;font-size:12px;"><thead><tr><th style="text-align:left;">실제 표기</th><th style="text-align:center;">사용</th><th style="text-align:left;">묶을 대표 거래처</th><th style="text-align:center;">적용</th></tr></thead><tbody>${need.join('')}</tbody></table>`
+      : `<div style="text-align:center;color:#047857;padding:20px;font-weight:700;">정리할 표기가 없습니다. 모두 대표 거래처로 묶여 있습니다.</div>`;
+    const doneTable = done.length
+      ? `<details style="margin-top:16px;"><summary style="cursor:pointer;font-size:12px;color:#6b7280;font-weight:700;">정리됨 (${done.length}) 펼치기</summary><table class="dash-table" style="width:100%;font-size:12px;margin-top:8px;"><thead><tr><th style="text-align:left;">표기</th><th style="text-align:center;">사용</th><th style="text-align:left;">상태</th></tr></thead><tbody>${done.join('')}</tbody></table></details>`
+      : '';
+    const html = `<div style="padding:18px 20px;">
+      <div style="font-size:12px;color:#6b7280;line-height:1.7;margin-bottom:14px;background:#f8fafc;border:1px solid var(--ui-line);border-radius:8px;padding:12px 14px;">
+        기존 의뢰서에 실제 쓰인 거래처 표기를 모았습니다. 아직 안 묶인 표기를 대표 거래처로 골라 <b>묶기</b>만 하면, 화면·필터·선택에서 대표 이름 하나로 통일됩니다.<br><span style="color:#9ca3af;">저장된 의뢰서 원본은 바뀌지 않습니다.</span>
+      </div>
+      <div style="font-weight:800;font-size:13px;color:#b45309;margin-bottom:8px;">정리 필요 (${need.length})</div>
+      ${needTable}
+      ${doneTable}
+    </div>`;
+    const modal = document.getElementById('dash-modal-bg');
+    document.getElementById('dash-modal-title').textContent = '🔗 거래처 표기 통일 도우미';
+    document.getElementById('dash-modal-body').innerHTML = html;
+    ['dash-modal-image', 'dash-modal-copy', 'dash-modal-print', 'dash-modal-kakao'].forEach(id => { const b = document.getElementById(id); if (b) b.style.display = 'none'; });
+    modal.classList.add('show');
+    document.querySelectorAll('#dash-modal-body .va-bind-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const tr = btn.closest('tr');
+        const raw = tr.querySelector('.va-new-btn') ? tr.querySelector('.va-new-btn').dataset.raw : '';
+        const target = tr.querySelector('.va-target') ? tr.querySelector('.va-target').value : '';
+        if (!target) { toast('묶을 대표 거래처를 선택해 주세요', 'error'); return; }
+        if (await bindVendorAlias(raw, target)) openVendorAliasHelper();
+      });
+    });
+    document.querySelectorAll('#dash-modal-body .va-new-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const raw = btn.dataset.raw;
+        if (!confirm(`"${raw}"을(를) 새 대표 거래처로 등록할까요?`)) return;
+        if (await createVendorFromRaw(raw)) openVendorAliasHelper();
+      });
+    });
+  }
+
   function renderVendors() {
     if (!isAdminUser()) return `<div class="dash-empty">대표 전용 화면입니다.</div>`;
     const vs = state.vendors || [];
@@ -20226,7 +20327,10 @@ function validateBlendSum(blends, label) {
       : `<tr><td colspan="5" style="text-align:center;color:#9ca3af;padding:26px;">등록된 거래처가 없습니다. 아래 양식에서 추가해 주세요.</td></tr>`;
     return `
       <div style="max-width:760px;margin:0 auto;">
-        <div style="font-size:12px;color:#6b7280;margin-bottom:12px;line-height:1.7;">작업지시서에서 선택할 거래처(업체)를 미리 등록·관리하는 곳입니다. 여기 등록한 업체는 앞으로 작지 작성 시 목록에서 바로 고를 수 있습니다.</div>
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:12px;">
+          <div style="font-size:12px;color:#6b7280;line-height:1.7;">작업지시서에서 선택할 거래처(업체)를 미리 등록·관리하는 곳입니다. 여기 등록한 업체는 앞으로 작지 작성 시 목록에서 바로 고를 수 있습니다.</div>
+          <button id="vendor-alias-helper-btn" class="dash-action-btn" style="white-space:nowrap;background:var(--brand-soft);color:var(--brand-deep);border-color:var(--brand-light);font-weight:700;">🔗 표기 통일 도우미</button>
+        </div>
         <div style="background:#fff;border:1px solid var(--ui-line);border-radius:12px;padding:16px 18px;margin-bottom:16px;box-shadow:var(--ui-shadow-sm);">
           <div style="font-weight:800;font-size:13px;color:var(--brand-deep);margin-bottom:12px;" id="vendor-form-title">거래처 추가</div>
           <div style="display:grid;grid-template-columns:1.3fr 2fr;gap:10px;margin-bottom:12px;">
@@ -22958,6 +23062,8 @@ function validateBlendSum(blends, label) {
       });
       const cancelBtn = document.getElementById('vendor-cancel-btn');
       if (cancelBtn) cancelBtn.addEventListener('click', () => { resetForm(); });
+      const aliasHelperBtn = document.getElementById('vendor-alias-helper-btn');
+      if (aliasHelperBtn) aliasHelperBtn.addEventListener('click', () => openVendorAliasHelper());
       document.querySelectorAll('#dash-body .vendor-edit-btn').forEach(btn => {
         btn.addEventListener('click', () => {
           editingVendorIdx = parseInt(btn.dataset.idx, 10);
@@ -26088,7 +26194,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix169';
+  const VERSION = 'v2.53 hotfix170';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
