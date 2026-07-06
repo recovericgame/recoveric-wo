@@ -9833,10 +9833,18 @@ window.addEventListener('firebase-ready', () => {
     if (!isAdminUser()) { toast('관리자만 변경할 수 있습니다', 'error'); return false; }
     const cleaned = (items || []).map(v => {
       const types = Array.isArray(v.types) ? v.types.filter(Boolean) : (v.type ? [String(v.type).trim()] : []);
+      // hotfix166: 다른 표기(별칭) 보존 — 대표명과 중복·빈값 제거
+      const nm = String(v.name || '').trim();
+      const aliases = Array.from(new Set(
+        (Array.isArray(v.aliases) ? v.aliases : [])
+          .map(a => String(a || '').trim())
+          .filter(a => a && a !== nm)
+      ));
       return {
-        name: String(v.name || '').trim(),
+        name: nm,
         types,
-        memo: String(v.memo || '').trim()
+        memo: String(v.memo || '').trim(),
+        aliases
       };
     }).filter(v => v.name);
     await setDoc(doc(db, 'settings', 'vendors'), {
@@ -10758,20 +10766,39 @@ function validateBlendSum(blends, label) {
   loadDateFilter();
   
   // ===== v2.44: 거래처 필터 (5개 화면) =====
-  // 의뢰서에서 거래처명 배열 추출 (콤보 옵션 / 필터 매칭에 사용)
+  // hotfix166: 다른 표기(별칭) 정규화 — 의뢰서에 저장된 표기(예: "송원")를 거래처 관리의
+  //   대표명(예: "송원텍스")으로 표시·필터 단계에서만 치환. ★원본 의뢰서 데이터는 미변경★.
+  //   등록된 별칭이 없으면 원래 표기 그대로 반환(안전).
+  function normalizeVendorName(raw) {
+    const s = String(raw || '').trim();
+    if (!s) return s;
+    const vs = (typeof state !== 'undefined' && Array.isArray(state.vendors)) ? state.vendors : [];
+    for (const v of vs) {
+      if (!v) continue;
+      if (String(v.name || '').trim() === s) return String(v.name).trim();
+      const al = Array.isArray(v.aliases) ? v.aliases : [];
+      if (al.some(a => String(a || '').trim() === s)) return String(v.name).trim();
+    }
+    return s;
+  }
+  // 의뢰서에서 거래처명 배열 추출 (콤보 옵션 / 필터 매칭에 사용) — hotfix166: 대표명으로 정규화 후 중복 제거
   // 염색가공은 dyeing/processing/post를 모두 별도 옵션으로 노출
   function getWoVendorNames(wo) {
     if (!wo) return [];
-    if (wo.type === '원사') return wo.supplier ? [wo.supplier] : [];
-    if (wo.type === '편직') return wo.recipient ? [wo.recipient] : [];
-    if (wo.type === '염색가공') {
+    let raw = [];
+    if (wo.type === '원사') raw = wo.supplier ? [wo.supplier] : [];
+    else if (wo.type === '편직') raw = wo.recipient ? [wo.recipient] : [];
+    else if (wo.type === '염색가공') {
       const r = wo.recipients || {};
-      return [r.dyeing, r.processing, r.post].filter(Boolean);
+      raw = [r.dyeing, r.processing, r.post].filter(Boolean);
     }
-    if (wo.type === 'BT') return wo.recipient ? [wo.recipient] : [];
-    if (wo.type === '공문') return wo.recipient ? [wo.recipient] : [];
-    if (wo.type === '생지출고') return wo.recipient ? [wo.recipient] : [];
-    return [];
+    else if (wo.type === 'BT') raw = wo.recipient ? [wo.recipient] : [];
+    else if (wo.type === '공문') raw = wo.recipient ? [wo.recipient] : [];
+    else if (wo.type === '생지출고') raw = wo.recipient ? [wo.recipient] : [];
+    const seen = new Set();
+    const out = [];
+    raw.forEach(n => { const nm = normalizeVendorName(n); if (nm && !seen.has(nm)) { seen.add(nm); out.push(nm); } });
+    return out;
   }
   // 정렬용 대표 거래처명 (가장 앞 것 기준)
   function getWoVendorSortKey(wo) {
@@ -20142,13 +20169,14 @@ function validateBlendSum(blends, label) {
         <tr>
           <td style="font-weight:700;color:var(--ui-text);">${escapeHtml(v.name)}</td>
           <td>${(getVendorTypes(v).length ? getVendorTypes(v).map(t => typeChip(t)).join(' ') : typeChip(''))}</td>
+          <td style="color:#6b7280;font-size:12px;">${(Array.isArray(v.aliases) && v.aliases.length) ? v.aliases.map(a => escapeHtml(a)).join(', ') : '<span style="color:#c7cbd1;">-</span>'}</td>
           <td style="color:#6b7280;">${escapeHtml(v.memo || '')}</td>
           <td style="text-align:right;white-space:nowrap;">
             <button class="dash-action-btn vendor-edit-btn" data-idx="${i}">수정</button>
             <button class="dash-action-btn vendor-del-btn" data-idx="${i}" style="color:#b91c1c;border-color:#fecaca;">삭제</button>
           </td>
         </tr>`).join('')
-      : `<tr><td colspan="4" style="text-align:center;color:#9ca3af;padding:26px;">등록된 거래처가 없습니다. 아래 양식에서 추가해 주세요.</td></tr>`;
+      : `<tr><td colspan="5" style="text-align:center;color:#9ca3af;padding:26px;">등록된 거래처가 없습니다. 아래 양식에서 추가해 주세요.</td></tr>`;
     return `
       <div style="max-width:760px;margin:0 auto;">
         <div style="font-size:12px;color:#6b7280;margin-bottom:12px;line-height:1.7;">작업지시서에서 선택할 거래처(업체)를 미리 등록·관리하는 곳입니다. 여기 등록한 업체는 앞으로 작지 작성 시 목록에서 바로 고를 수 있습니다.</div>
@@ -20164,6 +20192,11 @@ function validateBlendSum(blends, label) {
               ${VENDOR_TYPES.map(t => `<label style="display:inline-flex;align-items:center;gap:5px;font-size:13px;cursor:pointer;color:var(--ui-text);"><input type="checkbox" class="vendor-type-cb" value="${escapeHtml(t)}" style="accent-color:var(--brand);width:15px;height:15px;"> ${escapeHtml(t)}</label>`).join('')}
             </div>
           </div>
+          <div style="margin-bottom:12px;">
+            <label style="${lblS}">다른 표기 <span style="font-weight:400;color:#9ca3af;">(같은 업체를 부르는 다른 이름 — 쉼표로 구분. 예: 송원텍스의 다른 표기 → 송원)</span></label>
+            <input id="vendor-f-aliases" type="text" lang="ko" placeholder="예: 송원, 송원염직" style="${inpS}">
+            <div style="font-size:11px;color:#9ca3af;margin-top:5px;line-height:1.6;">여기 적은 표기로 저장된 기존 의뢰서도 화면·필터에서 이 대표 이름으로 묶여 보입니다. (저장된 의뢰서 원본은 바뀌지 않습니다)</div>
+          </div>
           <div style="display:flex;justify-content:flex-end;align-items:center;gap:8px;">
             <div id="vendor-cancel-wrap" style="display:none;"><button id="vendor-cancel-btn" class="dash-action-btn">수정 취소</button></div>
             <button id="vendor-save-btn" class="dash-action-btn" style="background:var(--brand);color:#fff;border-color:var(--brand-deep);font-weight:700;padding:10px 22px;">추가</button>
@@ -20173,6 +20206,7 @@ function validateBlendSum(blends, label) {
           <thead><tr>
             <th style="text-align:left;">업체명</th>
             <th style="text-align:left;">구분</th>
+            <th style="text-align:left;">다른 표기</th>
             <th style="text-align:left;">메모</th>
             <th style="text-align:right;">관리</th>
           </tr></thead>
@@ -22826,6 +22860,7 @@ function validateBlendSum(blends, label) {
       if (!saveBtn) return;  // 거래처 화면일 때만 동작
       const nameEl = document.getElementById('vendor-f-name');
       const memoEl = document.getElementById('vendor-f-memo');
+      const aliasEl = document.getElementById('vendor-f-aliases');
       const titleEl = document.getElementById('vendor-form-title');
       const cancelWrap = document.getElementById('vendor-cancel-wrap');
       const getCheckedTypes = () => Array.from(document.querySelectorAll('#vendor-f-types .vendor-type-cb'))
@@ -22838,6 +22873,7 @@ function validateBlendSum(blends, label) {
         editingVendorIdx = -1;
         if (nameEl) nameEl.value = '';
         if (memoEl) memoEl.value = '';
+        if (aliasEl) aliasEl.value = '';
         setCheckedTypes([]);
         if (titleEl) titleEl.textContent = '거래처 추가';
         saveBtn.textContent = '추가';
@@ -22848,6 +22884,7 @@ function validateBlendSum(blends, label) {
         const v = state.vendors[editingVendorIdx];
         if (nameEl) nameEl.value = v.name || '';
         if (memoEl) memoEl.value = v.memo || '';
+        if (aliasEl) aliasEl.value = (Array.isArray(v.aliases) ? v.aliases : []).join(', ');
         setCheckedTypes(getVendorTypes(v));
         if (titleEl) titleEl.textContent = '거래처 수정';
         saveBtn.textContent = '저장';
@@ -22856,7 +22893,8 @@ function validateBlendSum(blends, label) {
       saveBtn.addEventListener('click', async () => {
         const name = (nameEl?.value || '').trim();
         if (!name) { toast('업체명을 입력해 주세요', 'error'); nameEl?.focus(); return; }
-        const entry = { name, types: getCheckedTypes(), memo: (memoEl?.value || '').trim() };
+        const aliases = (aliasEl?.value || '').split(',').map(s => s.trim()).filter(s => s && s !== name);
+        const entry = { name, types: getCheckedTypes(), memo: (memoEl?.value || '').trim(), aliases };
         const list = JSON.parse(JSON.stringify(state.vendors || []));
         // 중복 업체명 방지(자기 자신 제외)
         const dupIdx = list.findIndex((v, i) => v.name === name && i !== editingVendorIdx);
@@ -25969,7 +26007,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix165';
+  const VERSION = 'v2.53 hotfix166';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
