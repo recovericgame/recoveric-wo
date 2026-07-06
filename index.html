@@ -6893,7 +6893,7 @@ function addYarnRow(data={}) {
     </select>
     <input type="number" class="y-kgbox" placeholder="30.5" value="${data.kg_per_box ?? ''}" step="0.01">
     <input type="text" class="y-totalkg" readonly value="${data.total_kg ? data.total_kg.toFixed(2)+'kg' : ''}" style="background:#f5f5f5;font-size:11px;text-align:right;">
-    <input type="text" lang="ko" class="y-dest" placeholder="NSC섬유" value="${escapeHtml(data.dest || '')}">
+    <select class="y-dest" data-vtype="출고처" title="등록된 출고처에서 선택" style="font-family:inherit;">${vendorOptionsHTML('출고처', data.dest || '')}</select>
     <button class="btn-del">X</button>
   `;
   const updateKg = () => {
@@ -7015,6 +7015,21 @@ function updateColorEmptyWarning() {
 }
 
 // ===== 수신처 =====
+// hotfix172: 거래처 옵션 HTML 생성(행 단위 셀렉트 등에서 재사용) — 구분(vtype) 필터 + 현재값 대표명 정규화 + 미등록 보존
+function vendorOptionsHTML(vtype, currentVal) {
+  const vendors = (typeof state !== 'undefined' && state.vendors) ? state.vendors : [];
+  const matched = vendors.filter(v => {
+    const types = Array.isArray(v && v.types) ? v.types : (v && v.type ? [v.type] : []);
+    return types.length === 0 || types.includes(vtype) || types.includes('기타');
+  });
+  const names = Array.from(new Set(matched.map(v => (v && v.name ? String(v.name).trim() : '')).filter(Boolean)))
+    .sort((a, b) => a.localeCompare(b, 'ko'));
+  const norm = currentVal ? (typeof normalizeVendorName === 'function' ? normalizeVendorName(currentVal) : currentVal) : '';
+  let opts = `<option value="">— 선택 —</option>` +
+    names.map(n => `<option value="${escapeHtml(n)}"${n === norm ? ' selected' : ''}>${escapeHtml(n)}</option>`).join('');
+  if (norm && !names.includes(norm)) opts += `<option value="${escapeHtml(norm)}" selected>${escapeHtml(norm)} (미등록)</option>`;
+  return opts;
+}
 // hotfix171: 업체칸 선택 전용 — 등록 거래처(대표명)에서만 선택. 저장/복사 로직이 읽는 값은 숨은 input(id=targetId)에 보관.
 //   복사·수정 시 저장된 표기(별칭 포함)는 대표명으로 정규화해 자동 선택되고, 목록에 없는 미등록 표기는 옵션으로 보존.
 function vendorSelectHTML(targetId, vtype, currentVal) {
@@ -16781,7 +16796,8 @@ function validateBlendSum(blends, label) {
       const recipientToProcs = {};
       PROCESS_DEFS.forEach(p => {
         if (!processes[p.key]) return;   // 비활성 공정 무시
-        const r = (recipients[p.key] || '').trim();
+        // hotfix172: 거래처별 일일 보고도 대표명으로 정규화해 묶는다(송원=송원텍스, 대흥섬유=대흥 등)
+        const r = normalizeVendorName((recipients[p.key] || '').trim());
         if (!r) return;                  // 거래처 미입력 무시
         if (!recipientToProcs[r]) recipientToProcs[r] = [];
         recipientToProcs[r].push(p.short);
@@ -20318,6 +20334,58 @@ function validateBlendSum(blends, label) {
     });
   }
 
+  // hotfix172: 거래처 합치기 — 둘 다 등록된 중복 거래처(예: 쌍방 / 쌍방섬유)를 하나로 통합.
+  //   from의 이름·별칭·구분을 to로 흡수(다른 표기로) 후 from 삭제. ★저장된 의뢰서 원본은 미변경★.
+  async function mergeVendors(fromName, toName) {
+    if (!isAdminUser() || !fromName || !toName || fromName === toName) return false;
+    const list = JSON.parse(JSON.stringify(state.vendors || []));
+    const from = list.find(v => String(v.name).trim() === fromName);
+    const to = list.find(v => String(v.name).trim() === toName);
+    if (!from || !to) { toast('거래처를 찾을 수 없습니다', 'error'); return false; }
+    to.aliases = Array.isArray(to.aliases) ? to.aliases : [];
+    [from.name, ...(Array.isArray(from.aliases) ? from.aliases : [])].forEach(a => {
+      const s = String(a || '').trim();
+      if (s && s !== to.name && !to.aliases.some(x => String(x).trim() === s)) to.aliases.push(s);
+    });
+    const toTypes = Array.isArray(to.types) ? to.types : [];
+    (Array.isArray(from.types) ? from.types : []).forEach(t => { if (t && !toTypes.includes(t)) toTypes.push(t); });
+    to.types = toTypes;
+    const idx = list.findIndex(v => String(v.name).trim() === fromName);
+    if (idx >= 0) list.splice(idx, 1);
+    try {
+      const ok = await saveVendors(list);
+      if (ok === false) return false;
+      toast(`"${fromName}" → "${toName}"(으)로 합쳤습니다`, 'success');
+      return true;
+    } catch (err) { toast('합치기 실패: ' + err.message, 'error'); return false; }
+  }
+  function openVendorMergeModal(fromName) {
+    if (!isAdminUser()) return;
+    const vs = state.vendors || [];
+    const others = vs.filter(v => String(v.name).trim() !== fromName);
+    const opts = `<option value="">— 합칠 대상 선택 —</option>` + others.map(v => `<option value="${escapeHtml(v.name)}">${escapeHtml(v.name)}</option>`).join('');
+    const html = `<div style="padding:18px 20px;">
+      <div style="font-size:13px;color:var(--ui-text);line-height:1.7;margin-bottom:14px;"><b>「${escapeHtml(fromName)}」</b>을(를) 다른 거래처로 합칩니다.<br><span style="font-size:12px;color:#6b7280;">「${escapeHtml(fromName)}」과 그 다른 표기가 아래에서 고른 대표 거래처의 <b>다른 표기</b>로 옮겨지고, 「${escapeHtml(fromName)}」 항목은 삭제됩니다. 저장된 의뢰서 원본은 바뀌지 않습니다.</span></div>
+      <select id="vendor-merge-target" style="width:100%;padding:10px;border:1px solid var(--ui-line);border-radius:8px;font-size:14px;font-family:inherit;margin-bottom:16px;">${opts}</select>
+      <div style="display:flex;justify-content:flex-end;gap:8px;">
+        <button class="dash-action-btn" id="vendor-merge-cancel">취소</button>
+        <button class="dash-action-btn" id="vendor-merge-confirm" style="background:var(--brand);color:#fff;border-color:var(--brand-deep);font-weight:700;">합치기</button>
+      </div>
+    </div>`;
+    const modal = document.getElementById('dash-modal-bg');
+    document.getElementById('dash-modal-title').textContent = '🔀 거래처 합치기';
+    document.getElementById('dash-modal-body').innerHTML = html;
+    ['dash-modal-image', 'dash-modal-copy', 'dash-modal-print', 'dash-modal-kakao'].forEach(id => { const b = document.getElementById(id); if (b) b.style.display = 'none'; });
+    modal.classList.add('show');
+    document.getElementById('vendor-merge-cancel').addEventListener('click', () => modal.classList.remove('show'));
+    document.getElementById('vendor-merge-confirm').addEventListener('click', async () => {
+      const to = document.getElementById('vendor-merge-target').value;
+      if (!to) { toast('합칠 대상을 선택해 주세요', 'error'); return; }
+      if (!confirm(`"${fromName}"을(를) "${to}"(으)로 합칠까요?`)) return;
+      if (await mergeVendors(fromName, to)) { modal.classList.remove('show'); renderDashboard(); }
+    });
+  }
+
   function renderVendors() {
     if (!isAdminUser()) return `<div class="dash-empty">대표 전용 화면입니다.</div>`;
     const vs = state.vendors || [];
@@ -20335,6 +20403,7 @@ function validateBlendSum(blends, label) {
           <td style="color:#6b7280;">${escapeHtml(v.memo || '')}</td>
           <td style="text-align:right;white-space:nowrap;">
             <button class="dash-action-btn vendor-edit-btn" data-idx="${i}">수정</button>
+            <button class="dash-action-btn vendor-merge-btn" data-name="${escapeHtml(v.name)}" title="이 거래처를 다른 거래처로 합치기">합치기</button>
             <button class="dash-action-btn vendor-del-btn" data-idx="${i}" style="color:#b91c1c;border-color:#fecaca;">삭제</button>
           </td>
         </tr>`).join('')
@@ -23078,6 +23147,9 @@ function validateBlendSum(blends, label) {
       if (cancelBtn) cancelBtn.addEventListener('click', () => { resetForm(); });
       const aliasHelperBtn = document.getElementById('vendor-alias-helper-btn');
       if (aliasHelperBtn) aliasHelperBtn.addEventListener('click', () => openVendorAliasHelper());
+      document.querySelectorAll('#dash-body .vendor-merge-btn').forEach(btn => {
+        btn.addEventListener('click', () => openVendorMergeModal(btn.dataset.name));
+      });
       document.querySelectorAll('#dash-body .vendor-edit-btn').forEach(btn => {
         btn.addEventListener('click', () => {
           editingVendorIdx = parseInt(btn.dataset.idx, 10);
@@ -26208,7 +26280,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix171';
+  const VERSION = 'v2.53 hotfix172';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
