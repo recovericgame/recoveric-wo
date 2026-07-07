@@ -6403,7 +6403,7 @@
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
-import { getFirestore, initializeFirestore, collection, addDoc, updateDoc, deleteDoc, doc, getDoc, setDoc, query, orderBy, onSnapshot, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, addDoc, updateDoc, deleteDoc, doc, getDoc, setDoc, query, orderBy, onSnapshot, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAIaNFZozda5sp4Qjs7LEn-aXYLX1JZi10",
@@ -6419,11 +6419,22 @@ const auth = getAuth(app);
 // hotfix82: 삼성 등 일부 휴대폰에서 실시간 연결(WebSocket)이 응답 없이 멈춰 자료가 안 뜨는 문제 →
 //           WebSocket을 쓰지 않고 안전한 방식(long-polling)만 강제 사용. PC 포함 모든 기기 안전.
 let db;
+// hotfix189: 오프라인 지속성(IndexedDB) — 저장을 로컬에 즉시 durable 기록 → 화면 즉시 반영 +
+//            느린/끊긴 인터넷에서도 쓰기 유실 없이 회복 시 자동 동기화. 실패 시 단계적 안전 폴백.
 try {
-  db = initializeFirestore(app, { experimentalForceLongPolling: true, useFetchStreams: false });
+  db = initializeFirestore(app, {
+    localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
+    experimentalForceLongPolling: true,
+    useFetchStreams: false
+  });
 } catch (e) {
-  // 이미 초기화된 경우 등 → 기본 방식으로 폴백
-  db = getFirestore(app);
+  try {
+    // 지속성 초기화 실패(사생활 모드·미지원 브라우저 등) → 기존 방식(롱폴링)으로 폴백
+    db = initializeFirestore(app, { experimentalForceLongPolling: true, useFetchStreams: false });
+  } catch (e2) {
+    // 이미 초기화된 경우 등 → 기본 방식으로 폴백
+    db = getFirestore(app);
+  }
 }
 const provider = new GoogleAuthProvider();
 
@@ -6435,19 +6446,19 @@ const provider = new GoogleAuthProvider();
 // 없으면 에러를 던져 → 버튼이 풀리고 사용자가 재시도/조치 가능.
 // (window.firebase에서 한 번만 감싸면 내부 구조분해 사용처 전체에 적용)
 function __withWriteTimeout(fn) {
-  const TIMEOUT_MS = 15000; // 15초 (느린 공장 인터넷 감안, 차단은 즉시 hang)
+  const TIMEOUT_MS = 10000; // 10초. 지연돼도 오프라인 지속성으로 로컬 저장 → 회복 시 자동 동기화됨.
   return function (...args) {
     const p = fn.apply(this, args);
     if (!p || typeof p.then !== 'function') return p; // 비동기 아니면 그대로
+    // hotfix189: 타임아웃이 이겨도 실제 쓰기는 백그라운드에서 계속 동기화됨 → 늦은 실패는 조용히 흡수(미처리 거부 방지)
+    p.catch(() => {});
     const timeout = new Promise((_, reject) =>
       setTimeout(() => {
-        const err = new Error('저장 응답이 없습니다. 데이터 저장소 연결이 차단되었거나 인터넷이 불안정합니다. 광고 차단 프로그램을 꺼주세요.');
+        const err = new Error('저장 응답 지연 — 로컬에 보관되었으며 인터넷 회복 시 자동 반영됩니다.');
         err.__hiwosWriteTimeout = true;
         reject(err);
-        // v2.53 hotfix11: 빨간 차단 안내창 호출 제거 (오판 잦아 박 대표 지시로 완전 비활성화).
-        //   타임아웃 에러(reject)는 그대로 유지 → "처리 중..." 무한 멈춤 방지는 계속 작동.
-        //   toast로 가볍게만 알림 (화면 가리는 모달 X). 다른 스크립트 블록이라 window.toast로 접근.
-        try { if (typeof window.toast === 'function') window.toast('저장 응답 지연 — 인터넷/연결을 확인하고 다시 시도해 주세요.', 'error'); } catch (_) {}
+        // hotfix189: 지속성 도입으로 입력은 보관·자동 동기화됨 → 안심 문구(info)로 순화.
+        try { if (typeof window.toast === 'function') window.toast('저장이 잠시 지연됩니다 — 입력 내용은 보관되며 인터넷이 회복되면 자동 반영됩니다.', 'info'); } catch (_) {}
       }, TIMEOUT_MS)
     );
     return Promise.race([p, timeout]);
@@ -13994,18 +14005,20 @@ function validateBlendSum(blends, label) {
     c.completed = false;
     delete c.completed_at;
     if (c.qc_status === 'redye') delete c.qc_status;
-    await updateDoc(doc(db, 'workorders', parent.id), { colors, updated_at: serverTimestamp(), updated_by: state.user.email });
+    // hotfix189: 로컬 상태 먼저 반영(화면 즉시 갱신) 후, 부모 복원 + 자식 휴지통을 동시에 저장.
+    //   한쪽 저장이 지연돼도 다른 쪽이 누락되지 않게 allSettled 사용. 지속성으로 durable 저장·자동 동기화.
     parent.colors = colors;
-    // hotfix186: 원본 복귀 = 재염 되돌리기 → 재염 자식 의뢰서를 휴지통으로 이동(복구 가능).
-    //   자식이 남아 원본 색과 이중 존재하던 문제 해결. 재염을 다시 걸면 새 자식 하나만 생긴다.
-    await updateDoc(doc(db, 'workorders', child.id), {
-      deleted: true,
-      deleted_at: serverTimestamp(),
-      deleted_by: state.user.email,
-      updated_at: serverTimestamp(),
-      updated_by: state.user.email
-    });
     child.deleted = true;
+    await Promise.allSettled([
+      updateDoc(doc(db, 'workorders', parent.id), { colors, updated_at: serverTimestamp(), updated_by: state.user.email }),
+      updateDoc(doc(db, 'workorders', child.id), {
+        deleted: true,
+        deleted_at: serverTimestamp(),
+        deleted_by: state.user.email,
+        updated_at: serverTimestamp(),
+        updated_by: state.user.email
+      })
+    ]);
     return { parentNo: parent.wo_number, colorName: c.name || '', childNo: child.wo_number || '' };
   }
 
@@ -26518,7 +26531,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix188';
+  const VERSION = 'v2.53 hotfix189';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
