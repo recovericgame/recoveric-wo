@@ -11353,6 +11353,18 @@ function validateBlendSum(blends, label) {
     return '';
   }
   
+  // hotfix190: 재염을 [원본 복귀]로 되돌렸는데(마지막 재염 이력이 '원본 복귀'), 현재 재염 진행도 아니고
+  //   되돌린 뒤 다시 입고/QC된 흔적도 없는 색 → 진행 영역에 있어야 하는데 예전 저장 실패로 completed=true가 남은 잔재.
+  //   이런 색은 완료로 보지 않고 진행 영역으로 자동 복귀시킨다(저장 없이 화면에서 스스로 치유).
+  function wasRedyeRestoredIdle(c) {
+    if (!c || c.redye_transferred_to) return false;
+    const h = Array.isArray(c.redye_history) ? c.redye_history : [];
+    const last = h[h.length - 1];
+    if (!(last && last.cancelled && last.memo === '원본 복귀')) return false;
+    const reprocessed = Array.isArray(c.receipts) && c.receipts.some(r => r && r.qc_status);
+    return !reprocessed;
+  }
+  
   // 컬러별 완료 판정 (color.completed 우선, 없으면 의뢰서 completed)
   function isColorCompleted(wo, colorIdx) {
     const c = wo.colors?.[colorIdx];
@@ -11360,6 +11372,8 @@ function validateBlendSum(blends, label) {
     // hotfix188: 재염을 되돌린 흔적만 남은 비정상 상태(qc_status='redye'인데 재염이관 표식 없음)는
     //   미완료로 본다 → 진행 영역으로 자동 복귀. 저장 지연 등으로 표식이 덜 지워져도 화면이 스스로 정상화.
     if (c.qc_status === 'redye' && !c.redye_transferred_to) return false;
+    // hotfix190: 원본 복귀 잔재(completed=true만 남음)도 진행 영역으로 자동 복귀
+    if (wasRedyeRestoredIdle(c)) return false;
     if (c.completed === true) return true;
     if (c.completed === false) return false;
     // color.completed 미정 → 의뢰서 completed로 판정
@@ -12669,6 +12683,8 @@ function validateBlendSum(blends, label) {
     if (!c) return false;
     // hotfix188: 재염 되돌린 흔적만 남은 비정상 상태는 닫힘으로 보지 않는다(진행 영역 유지)
     if (c.qc_status === 'redye' && !c.redye_transferred_to) return false;
+    // hotfix190: 원본 복귀 잔재(completed=true만 남음)도 닫힘 아님 → 진행 영역 유지
+    if (wasRedyeRestoredIdle(c)) return false;
     // hotfix91: 대표 확인 대기 중이면 아직 닫히지 않음 (대표 OK 전까지 완료 금지)
     if (hasCeoConfirmPending(c)) return false;
     // hotfix40: 수정(fix) 진행 중이면 아직 닫히지 않음 — 수정분이 돌아와 해결돼야 완료
@@ -26531,7 +26547,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix189';
+  const VERSION = 'v2.53 hotfix190';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
