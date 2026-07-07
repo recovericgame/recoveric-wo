@@ -13986,7 +13986,17 @@ function validateBlendSum(blends, label) {
     c.redye_rib = 0;
     await updateDoc(doc(db, 'workorders', parent.id), { colors, updated_at: serverTimestamp(), updated_by: state.user.email });
     parent.colors = colors;
-    return { parentNo: parent.wo_number, colorName: c.name || '' };
+    // hotfix186: 원본 복귀 = 재염 되돌리기 → 재염 자식 의뢰서를 휴지통으로 이동(복구 가능).
+    //   자식이 남아 원본 색과 이중 존재하던 문제 해결. 재염을 다시 걸면 새 자식 하나만 생긴다.
+    await updateDoc(doc(db, 'workorders', child.id), {
+      deleted: true,
+      deleted_at: serverTimestamp(),
+      deleted_by: state.user.email,
+      updated_at: serverTimestamp(),
+      updated_by: state.user.email
+    });
+    child.deleted = true;
+    return { parentNo: parent.wo_number, colorName: c.name || '', childNo: child.wo_number || '' };
   }
 
   async function setColorFixCancel(woId, colorIdx) {    const wo = state.allWorkOrders.find(w => w.id === woId);
@@ -22977,11 +22987,11 @@ function validateBlendSum(blends, label) {
         e.stopPropagation();
         if (!isAdminUser()) { toast('원본 복귀는 대표만 가능합니다', 'info'); return; }
         const childId = btn.dataset.childId;
-        if (!confirm('이 색을 원본 의뢰서로 되돌립니다.\n\n· 원본 의뢰서에 해당 색이 다시 나타납니다\n· 이 재염 의뢰서는 그대로 남습니다 (필요 없으면 목록에서 직접 삭제)\n\n계속할까요?')) return;
+        if (!confirm('이 색을 원본 의뢰서로 되돌립니다.\n\n· 원본 의뢰서에 해당 색이 다시 나타납니다\n· 이 재염 의뢰서는 휴지통으로 이동합니다 (복구 가능)\n\n계속할까요?')) return;
         btn.disabled = true;
         try {
           const r = await restoreRedyeToOrigin(childId);
-          toast(`"${r.colorName}" 원본(${r.parentNo})으로 복귀했습니다`, 'success');
+          toast(`"${r.colorName}" 원본(${r.parentNo})으로 복귀 — 재염 의뢰서는 휴지통으로 이동했습니다`, 'success');
           renderDashboard();
         } catch (err) {
           btn.disabled = false;
@@ -26498,7 +26508,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix185';
+  const VERSION = 'v2.53 hotfix186';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
