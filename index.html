@@ -40,9 +40,9 @@
     --brand-light: #93c5fd;
     --brand-soft: #eff6ff;
     --brand-grad: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
-    /* v2.4 잉크 절약 팔레트 */
-    --ink-bg: #f5f5f5;
-    --ink-bg-2: #fafafa;
+    /* v2.4 잉크 절약 팔레트 / hotfix180: 회색→매우 연한 파랑(브랜드 톤). 흑백 프린트 시 연한 회색으로 출력됨 */
+    --ink-bg: #eef4fd;
+    --ink-bg-2: #f5f9ff;
     --ink-text: #000000;
     --ink-border: #000000;
     /* hotfix150: 앱 화면 디자인 토큰 (참고 ERP 톤 — 부드러운 중립 회색·라운드·그림자) */
@@ -5595,6 +5595,20 @@
     font-size: 12px;
   }
   .dr-table td.dr-color { color: #1a2230; font-weight: 600; }
+  /* hotfix179: 컬러 앞 재염/수정 스탬프 (해당 없으면 빈칸) */
+  .dr-cchip {
+    display: inline-block;
+    font-size: 10.5px;
+    font-weight: 800;
+    line-height: 1.4;
+    padding: 1px 6px;
+    border-radius: 6px;
+    margin-right: 5px;
+    vertical-align: middle;
+    letter-spacing: -0.2px;
+  }
+  .dr-cchip.redye { background: #fef3c7; border: 1px solid #f5b942; color: #b45309; }
+  .dr-cchip.fix   { background: #ffedd5; border: 1px solid #fb923c; color: #c2410c; }
   .dr-table td.dr-qty {
     text-align: right;
     font-weight: 700;
@@ -16878,7 +16892,18 @@ function validateBlendSum(blends, label) {
         const fix = isFixColor(c);
         if (!fix && !isReportableColor(c)) return;
         
-        recipientList.forEach(r => {
+        // hotfix181: 후가공처로 넘어간 색(post_sent_date 있음)은 후가공(후) 담당 거래처에만 표시.
+        //   → 이전 공정 거래처(염색/가공, 예: 대흥)에는 더 이상 뜨지 않는다.
+        //   후가공 담당 거래처가 없을 때만 기존대로 전체 표시(색이 사라지지 않도록 안전장치).
+        const movedToPost = !!c.post_sent_date;
+        const postRecipients = movedToPost
+          ? recipientList.filter(r => recipientToProcs[r].includes('후'))
+          : [];
+        const targetRecipients = (movedToPost && postRecipients.length > 0)
+          ? postRecipients
+          : recipientList;
+        
+        targetRecipients.forEach(r => {
           const procs = recipientToProcs[r];   // 예: ['염', '가']
           // processTag 생성: 단일이면 '염색'/'가공'/'후가공', 합성이면 '염가', '염후', '가후', '염가후'
           let processTag;
@@ -16934,9 +16959,16 @@ function validateBlendSum(blends, label) {
     if (!n) return '0';
     return Number.isInteger(n) ? String(n) : n.toFixed(1);
   }
+  // hotfix179: 컬러 앞에 붙는 재염/수정 스탬프. 재염(자식 의뢰서=redye_origin) 우선, 그 외 수정. 둘 다 아니면 빈칸.
+  function drColorStamp(wo, isFix) {
+    if (wo && wo.redye_origin && wo.redye_origin.wo_number) return '<span class="dr-cchip redye">재염</span>';
+    if (isFix) return '<span class="dr-cchip fix">수정</span>';
+    return '';
+  }
   function renderReportRow(item) {
     const { wo, colorIdx, processTag, isFix } = item;
     const c = (wo.colors || [])[colorIdx] || {};
+    const _colorStamp = drColorStamp(wo, isFix);
     
     // 긴급 여부 (컬러 단위가 우선, 없으면 의뢰서 단위)
     const urgent = !!c.urgent || !!wo.urgent;
@@ -16985,7 +17017,7 @@ function validateBlendSum(blends, label) {
         <td class="dr-date">${escapeHtml(shortOrderDate(wo.date))}</td>
         <td class="dr-elapsed">${_elapsedDays}</td>
         <td class="dr-item">${tagHtmlF}${escapeHtml(item_text)}</td>
-        <td class="dr-color">${escapeHtml(color_text)}</td>
+        <td class="dr-color">${_colorStamp}${escapeHtml(color_text)}</td>
         <td class="dr-qty">${qtyCellF}</td>
         <td class="dr-lack dr-lack-fix">${remarkF}</td>
       </tr>`;
@@ -17018,7 +17050,7 @@ function validateBlendSum(blends, label) {
       <td class="dr-date">${escapeHtml(shortOrderDate(wo.date))}</td>
       <td class="dr-elapsed">${_elapsedDays}</td>
       <td class="dr-item">${tagHtml}${escapeHtml(item_text)}</td>
-      <td class="dr-color">${escapeHtml(color_text)}</td>
+      <td class="dr-color">${_colorStamp}${escapeHtml(color_text)}</td>
       <td class="dr-qty">${qtyCell}</td>
       <td class="dr-lack">${remarkCell}</td>
     </tr>`;
@@ -26443,7 +26475,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix179';
+  const VERSION = 'v2.53 hotfix182';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
