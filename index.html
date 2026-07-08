@@ -14038,6 +14038,33 @@ function validateBlendSum(blends, label) {
     return { parentNo: parent.wo_number, colorName: c.name || '', childNo: child.wo_number || '' };
   }
 
+  // hotfix191: [↩ 진행으로] — 재염을 여러 번 왔다갔다 하는 등으로 완료칸에 잘못 남은 색을 진행 중으로 강제 복귀.
+  //   관리자 전용. 이름/의뢰수량만 유지하고 완료·QC·재염·입고 등 진행 표식을 모두 초기화한다.
+  async function forceColorToProgress(woId, colorIdx) {
+    const wo = state.allWorkOrders.find(w => w.id === woId);
+    if (!wo) throw new Error('의뢰서를 찾을 수 없음');
+    const colors = JSON.parse(JSON.stringify(wo.colors || []));
+    const c = colors[colorIdx];
+    if (!c) throw new Error('컬러 인덱스 오류');
+    const now = new Date().toISOString();
+    c.completed = false;
+    delete c.completed_at;
+    delete c.qc_status;
+    delete c.redye_transferred_to; delete c.redye_transferred_at; delete c.redye_transferred_by;
+    c.redye_body = 0; c.redye_rib = 0;
+    delete c.shortage_status;
+    delete c.discard_body; delete c.discard_rib; delete c.discard_at;
+    delete c.dye_in_at; delete c.dye_done_at;
+    delete c.post_sent_date; delete c.post_done_date;
+    c.fix_active = false; delete c.fix_body; delete c.fix_rib; delete c.fix_returned;
+    c.receipts = [];
+    if (!Array.isArray(c.redye_history)) c.redye_history = [];
+    c.redye_history.push({ at: now, by: state.user.email, memo: '진행으로 강제 복귀(관리자) — 완료/QC/입고 표식 초기화', cancelled: true });
+    await updateDoc(doc(db, 'workorders', woId), { colors, updated_at: serverTimestamp(), updated_by: state.user.email });
+    wo.colors = colors;
+    return { colorName: c.name || '' };
+  }
+
   async function setColorFixCancel(woId, colorIdx) {    const wo = state.allWorkOrders.find(w => w.id === woId);
     if (!wo) throw new Error('의뢰서를 찾을 수 없음');
     const colors = JSON.parse(JSON.stringify(wo.colors || []));
@@ -18205,6 +18232,11 @@ function validateBlendSum(blends, label) {
           doneRowClass = 'ov-done-summary-row';
         } else if (doneColor) {
           doneRowClass = 'ov-color-done';
+          // hotfix191: 완료 색행에 [↩ 진행으로] (관리자) — 재염 왔다갔다 등으로 잘못 완료칸에 남은 색을 한 번에 진행으로 복귀
+          if (isAdminUser()) {
+            const _backBtn = `<button class="dash-action-btn dash-color-to-progress-btn" data-id="${wo.id}" data-color-idx="${colorIdx}" title="이 색을 진행 중으로 되돌립니다 (완료·QC·재염·입고 표식 초기화)" style="background:#fff;color:#1d4ed8;border-color:#93c5fd;font-size:10px;padding:2px 7px;font-weight:700;margin-left:6px;">↩ 진행으로</button>`;
+            completeCellF = completeCell.replace(/<\/td>\s*$/, _backBtn + '</td>');
+          }
         } else if (redyeColor) {
           doneRowClass = 'ov-color-done';
         }
@@ -23020,6 +23052,29 @@ function validateBlendSum(blends, label) {
       });
     });
 
+    // hotfix191: [↩ 진행으로] — 완료칸 색을 진행 중으로 강제 복귀 (관리자, 재염 왔다갔다 잔재 정리)
+    document.querySelectorAll('#dash-body .dash-color-to-progress-btn').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (!isAdminUser()) { toast('진행으로 되돌리기는 대표만 가능합니다', 'info'); return; }
+        const id = btn.dataset.id;
+        const ci = parseInt(btn.dataset.colorIdx, 10);
+        const wo = state.allWorkOrders.find(w => w.id === id);
+        const c = wo ? (wo.colors || [])[ci] || {} : {};
+        const cName = c.name || `컬러 #${ci + 1}`;
+        if (!confirm(`"${cName}"를 진행 중으로 되돌립니다.\n\n· 완료·QC·재염·입고 표식이 초기화되고 진행 영역으로 돌아옵니다\n· 이름과 의뢰 수량은 그대로 유지됩니다\n\n계속할까요?`)) return;
+        btn.disabled = true;
+        try {
+          const r = await forceColorToProgress(id, ci);
+          toast(`"${r.colorName}" 진행 중으로 되돌렸습니다`, 'success');
+          renderDashboard();
+        } catch (err) {
+          btn.disabled = false;
+          toast('되돌리기 실패: ' + (err.message || err), 'error');
+        }
+      });
+    });
+
     // hotfix175: [↩ 원본 복귀] — 자식(재염) 의뢰서에서 원본 색을 원본 의뢰서로 되돌림
     document.querySelectorAll('#dash-body .dash-redye-restore-btn').forEach(btn => {
       btn.addEventListener('click', async (e) => {
@@ -26547,7 +26602,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix190';
+  const VERSION = 'v2.53 hotfix191';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
