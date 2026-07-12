@@ -169,7 +169,15 @@
   /* hotfix76: 이력 항목 [수정]/[복사] 버튼 분리 — 클릭=미리보기(원본 보호) */
   .history-item .item-btns { position: absolute; top: 50%; right: 8px; transform: translateY(-50%); display: flex; flex-direction: column; gap: 4px; }
   .history-item .item-btns .item-copy-btn,
+  .history-item .item-btns .item-delete-btn,
   .history-item .item-btns .item-edit-btn { position: static; transform: none; top: auto; right: auto; padding: 3px 10px; }
+  /* Phase1 A-1: 이력 [삭제] → 휴지통 (관리자 전용) */
+  .history-item .item-delete-btn {
+    background: #fff; border: 1px solid #fca5a5; color: #dc2626;
+    border-radius: 3px; cursor: pointer; font-size: 11px; font-weight: 700; font-family: inherit;
+  }
+  .history-item .item-delete-btn:hover { background: #dc2626; color: #fff; border-color: #dc2626; }
+  .history-item.active .item-delete-btn { background: #fff; color: #dc2626; }
   .history-item .item-edit-btn {
     background: #1e3a8a; border: none; color: #fff;
     border-radius: 3px; cursor: pointer; font-size: 11px; font-weight: 700; font-family: inherit;
@@ -10299,6 +10307,7 @@ window.addEventListener('firebase-ready', () => {
             <button class="item-edit-btn" data-id="${wo.id}" title="원본을 수정합니다">수정</button>
             <button class="item-cancel-btn" data-id="${wo.id}" title="편집을 취소합니다">취소</button>
             <button class="item-copy-btn" data-id="${wo.id}" title="새 의뢰서로 복사합니다">복사</button>
+            ${isAdminUser() ? `<button class="item-delete-btn" data-id="${wo.id}" title="휴지통으로 보냅니다 (복구 가능)">삭제</button>` : ''}
           </div>
           <div class="item-num"><span class="item-type">${wo.type || '-'}</span>${escapeHtml(wo.wo_number) || ''}</div>
           <div class="item-title">${escapeHtml(title)}</div>
@@ -10309,7 +10318,7 @@ window.addEventListener('firebase-ready', () => {
     list.querySelectorAll('.history-item').forEach(el => {
       el.addEventListener('click', (e) => {
         // hotfix76/77: [수정]/[취소]/[복사] 버튼은 각자 처리 — 항목 클릭은 '미리보기(읽기전용)'로 원본 보호
-        if (e.target.closest('.item-copy-btn') || e.target.closest('.item-edit-btn') || e.target.closest('.item-cancel-btn')) return;
+        if (e.target.closest('.item-copy-btn') || e.target.closest('.item-edit-btn') || e.target.closest('.item-cancel-btn') || e.target.closest('.item-delete-btn')) return;
         const wo = state.allWorkOrders.find(x => x.id === el.dataset.id);
         if (wo) showPreviewModal(wo);
       });
@@ -10361,6 +10370,33 @@ window.addEventListener('firebase-ready', () => {
           document.querySelectorAll('.history-item').forEach(el => el.classList.remove('active'));
           render();
           toast('복사 완료. 수정 후 저장하세요', 'success');
+        }
+      });
+    });
+
+    // Phase1 A-1: [삭제] → 휴지통 이동(soft delete, 복구 가능). 관리자 전용 + 경고 팝업. 전 유형(생지출고 포함) 공통.
+    list.querySelectorAll('.item-delete-btn').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (!isAdminUser()) { toast('삭제는 대표만 가능합니다', 'info'); return; }
+        const id = btn.dataset.id;
+        const wo = state.allWorkOrders.find(x => x.id === id);
+        if (!wo) return;
+        if (!confirm(`이 의뢰서를 휴지통으로 보낼까요?\n\n[${wo.wo_number || ''}]\n\n(휴지통에서 복구할 수 있습니다. 완전 삭제가 아닙니다.)`)) return;
+        btn.disabled = true;
+        try {
+          await updateDoc(doc(db, 'workorders', id), {
+            deleted: true,
+            deleted_at: serverTimestamp(),
+            deleted_by: state.user.email,
+            updated_at: serverTimestamp(),
+            updated_by: state.user.email
+          });
+          if (state.currentWorkOrderId === id) { state.currentWorkOrderId = null; state.currentWoNumber = null; }
+          toast('휴지통으로 이동했습니다 (복구 가능)', 'success');
+        } catch (err) {
+          btn.disabled = false;
+          toast('삭제 실패: ' + (err.message || err), 'error');
         }
       });
     });
@@ -19294,9 +19330,13 @@ function validateBlendSum(blends, label) {
   }
 
   // ===== hotfix48: 생지출고의뢰 만들기 모달 (염색작지 [보기] → 자동채움) =====
+  // Phase1 A-2: 생지출고 [보기] → 닫으면 카드 선택 화면으로 복귀하기 위한 기준 작지 id
+  let __greigeReturnFnId = null;
   function openGreigeOrderModal(fnId) {
     const fn = state.allWorkOrders.find(w => w.id === fnId);
     if (!fn) { toast('염색작지를 찾을 수 없습니다', 'error'); return; }
+    // Phase1 A-2: 카드 화면 진입 시 복귀 플래그 해제(여기가 '처음 화면'이므로)
+    __greigeReturnFnId = null;
 
     // 공통 자동값
     const dest = gsFirstProcessVendor(fn);  // 출고처 = 첫 공정처(염색처 우선)
@@ -19445,7 +19485,7 @@ function validateBlendSum(blends, label) {
               <button type="button" id="gs-view-${part}" style="padding:7px 14px;border:1px solid #047857;border-radius:5px;background:#fff;color:#047857;font-weight:700;cursor:pointer;font-size:12.5px;">출고의뢰서 보기</button>
             </div>`;
           const vb = document.getElementById(`gs-view-${part}`);
-          if (vb) vb.addEventListener('click', () => { modal.classList.remove('show'); showPreviewModal(wo); });
+          if (vb) vb.addEventListener('click', () => { __greigeReturnFnId = fn.id; modal.classList.remove('show'); showPreviewModal(wo); });
         }
       });
     });
@@ -25808,11 +25848,15 @@ function validateBlendSum(blends, label) {
     const _b = document.getElementById('dash-modal-bg');
     const _box = _b && _b.querySelector('.dash-modal'); if (_box) _box.classList.remove('dash-modal--wide');
     _b.classList.remove('show');
+    // Phase1 A-2: 생지출고의뢰서 보기에서 닫으면 카드 선택 화면으로 복귀
+    if (__greigeReturnFnId) { const _rid = __greigeReturnFnId; __greigeReturnFnId = null; openGreigeOrderModal(_rid); }
   });
   document.getElementById('dash-modal-bg').addEventListener('click', (e) => {
     if (e.target.id === 'dash-modal-bg') {
       const _box = e.target.querySelector('.dash-modal'); if (_box) _box.classList.remove('dash-modal--wide');
       document.getElementById('dash-modal-bg').classList.remove('show');
+      // Phase1 A-2: 배경 클릭으로 닫아도 카드 선택 화면으로 복귀
+      if (__greigeReturnFnId) { const _rid = __greigeReturnFnId; __greigeReturnFnId = null; openGreigeOrderModal(_rid); }
     }
   });
   // v2.53 hotfix21: 전체 작업 이력 모달 닫기
@@ -26602,7 +26646,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix191';
+  const VERSION = 'v2.53 hotfix192';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
