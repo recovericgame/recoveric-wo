@@ -5975,6 +5975,7 @@
         <button class="dash-menu-btn" data-view="knit">편직 진행</button>
         <button class="dash-menu-btn active" data-view="finish">염색가공 진행</button>
         <button class="dash-menu-btn" data-view="bt">B/T 진행</button>
+        <button class="dash-menu-btn" data-view="print">나염 진행</button>
         <button class="dash-menu-btn" data-view="kpiboard">현황판</button>
         <button class="dash-menu-btn admin-only" data-view="completeReports" style="background:#f0fdf4;border:1px solid #bbf7d0;color:#15803d;font-weight:800;">완료 보고<span class="ceo-report-badge" id="complete-report-badge" style="display:none;background:#16a34a;">0</span></button>
         <button class="dash-menu-btn admin-only" data-view="ceoReports" style="background:#fef2f2;border:1px solid #fecaca;color:#b91c1c;font-weight:800;">불량 보고<span class="ceo-report-badge" id="ceo-report-badge" style="display:none;">0</span></button>
@@ -17803,6 +17804,7 @@ function validateBlendSum(blends, label) {
         ${typeBtn('편직', '편직')}
         ${typeBtn('염색가공', '염색가공')}
         ${typeBtn('BT', 'BT')}
+        <button class="overview-type-filter-btn ov-goto-print" data-goto="print">나염 <span style="opacity:0.7;font-weight:500;">${allIng.filter(w => w.type === '나염').length}</span></button>
         <span style="width:1px;height:20px;background:#d1d5db;margin:0 4px;"></span>
         ${statusBtn('fix', '수정', 'sf-fix')}
         ${statusBtn('lack', '부족', 'sf-lack')}
@@ -21598,6 +21600,389 @@ function validateBlendSum(blends, label) {
     }
   }
   
+  // ===== 나염작업지시서 모듈 (type: '나염') =====
+  const PRINT_TYPES = [
+    { code: 'AP', label: '안료나염' },
+    { code: 'BP', label: '본염' },
+    { code: 'DT', label: '디지털나염' },
+    { code: 'JP', label: '전사나염' },
+  ];
+  const PRINT_SUPPLY = ['본사', '염색공장', '가공공장', '후가공공장'];
+  const PRINT_PALETTE = [
+    ['검정', '#111111'], ['흰색', '#ffffff'], ['회색', '#9aa0a6'], ['빨강', '#e2231a'], ['주황', '#f57c00'],
+    ['노랑', '#f7d000'], ['연두', '#8bc34a'], ['초록', '#2e7d32'], ['청록', '#009688'], ['하늘', '#4fc3f7'],
+    ['파랑', '#1976d2'], ['남색', '#1a237e'], ['보라', '#7b1fa2'], ['분홍', '#ec407a'], ['갈색', '#8b6d4f'],
+    ['베이지', '#e8dcc0'], ['크림', '#efe6d2'], ['카키', '#6b6b3a'], ['와인', '#7b1e3b'], ['골드', '#c9a227'],
+  ];
+  const PRINT_COLOR_MAP = Object.fromEntries(PRINT_PALETTE);
+  function printTypeLabel(code) { const t = PRINT_TYPES.find(x => x.code === code); return t ? t.label : (code || ''); }
+  function printColorHex(name, fallback) { return PRINT_COLOR_MAP[(name || '').trim()] || fallback || '#ffffff'; }
+
+  let __printDraft = null;
+
+  function blankPrintRow() {
+    return { supply: '본사', fabric: '', fabric_color: '검정', fabric_hex: '#111111', print_color: '흰색', print_hex: '#ffffff', qty: '', note: '' };
+  }
+
+  function openPrintOrderModal(woId) {
+    const wo = woId ? state.allWorkOrders.find(w => w.id === woId) : null;
+    __printDraft = wo ? {
+      id: wo.id,
+      print_type: wo.print_type || 'AP',
+      design_name: wo.design_name || '',
+      design_image: wo.design_image || '',
+      dest: wo.dest || '가공공장',
+      rows: Array.isArray(wo.print_rows) && wo.print_rows.length ? JSON.parse(JSON.stringify(wo.print_rows)) : [blankPrintRow()],
+      proc_memo: wo.proc_memo || '',
+      post_memo: wo.post_memo || '',
+    } : {
+      id: null, print_type: 'AP', design_name: '', design_image: '', dest: '가공공장',
+      rows: [blankPrintRow()], proc_memo: '', post_memo: '',
+    };
+    const modal = document.getElementById('dash-modal-bg');
+    document.getElementById('dash-modal-title').textContent = woId ? '나염작업지시서 수정' : '새 나염작업지시서';
+    ['dash-modal-image', 'dash-modal-copy', 'dash-modal-print', 'dash-modal-kakao'].forEach(id => {
+      const b = document.getElementById(id); if (b) b.style.display = 'none';
+    });
+    document.getElementById('dash-modal-body').innerHTML = renderPrintModalBody();
+    modal.classList.add('show');
+    attachPrintModalHandlers();
+  }
+
+  function printColorInput(kind, i, name, hex) {
+    return `<div style="display:flex;align-items:center;gap:5px;">
+      <input type="color" class="np-${kind}-hex" data-i="${i}" value="${hex || '#ffffff'}" style="width:26px;height:26px;padding:0;border:1px solid #ccc;border-radius:5px;cursor:pointer;background:#fff;">
+      <input type="text" class="np-${kind}-name" data-i="${i}" list="np-color-names" value="${escapeHtml(name || '')}" placeholder="색이름" style="width:74px;padding:5px 6px;border:1px solid #d0d5dd;border-radius:5px;font-size:12px;">
+    </div>`;
+  }
+
+  function renderPrintRow(row, i) {
+    const supplyOpts = PRINT_SUPPLY.map(s => `<option value="${s}"${row.supply === s ? ' selected' : ''}>${s}</option>`).join('');
+    return `<tr data-i="${i}">
+      <td style="text-align:center;color:#888;">${i + 1}</td>
+      <td><select class="np-supply" data-i="${i}" style="width:100%;padding:5px;border:1px solid #d0d5dd;border-radius:5px;font-size:12px;">${supplyOpts}</select></td>
+      <td><input type="text" class="np-fabric" data-i="${i}" value="${escapeHtml(row.fabric || '')}" placeholder="나염용원단명" style="width:100%;padding:5px 6px;border:1px solid #d0d5dd;border-radius:5px;font-size:12px;"></td>
+      <td>${printColorInput('fabcolor', i, row.fabric_color, row.fabric_hex)}</td>
+      <td>${printColorInput('printcolor', i, row.print_color, row.print_hex)}</td>
+      <td><input type="number" class="np-qty" data-i="${i}" value="${row.qty === '' || row.qty == null ? '' : row.qty}" placeholder="절" style="width:60px;padding:5px 6px;border:1px solid #d0d5dd;border-radius:5px;font-size:12px;text-align:right;"></td>
+      <td><input type="text" class="np-note" data-i="${i}" value="${escapeHtml(row.note || '')}" placeholder="비고" style="width:100%;padding:5px 6px;border:1px solid #d0d5dd;border-radius:5px;font-size:12px;"></td>
+      <td style="text-align:center;"><button class="np-row-del" data-i="${i}" title="이 줄 삭제" style="border:1px solid #fca5a5;background:#fff;color:#dc2626;border-radius:5px;width:26px;height:26px;cursor:pointer;font-weight:700;">×</button></td>
+    </tr>`;
+  }
+
+  function renderPrintModalBody() {
+    const d = __printDraft;
+    const typeOpts = PRINT_TYPES.map(t => `<option value="${t.code}"${d.print_type === t.code ? ' selected' : ''}>${t.label} (${t.code})</option>`).join('');
+    const destOpts = PRINT_SUPPLY.map(s => `<option value="${s}"${d.dest === s ? ' selected' : ''}>${s}</option>`).join('');
+    const rowsHtml = d.rows.map((r, i) => renderPrintRow(r, i)).join('');
+    const imgHtml = d.design_image
+      ? `<img src="${d.design_image}" style="max-width:100%;max-height:180px;object-fit:contain;">`
+      : '<span style="color:#9aa4b2;font-size:12px;">클릭해서 디자인<br>컬러 사진 1장 첨부</span>';
+    return `
+    <datalist id="np-color-names">${PRINT_PALETTE.map(p => `<option value="${p[0]}">`).join('')}</datalist>
+    <div style="display:flex;flex-direction:column;gap:14px;">
+      <div style="display:grid;grid-template-columns:180px 1fr;gap:14px;">
+        <div>
+          <label style="font-size:12px;font-weight:700;color:#334;">디자인 이미지</label>
+          <label id="np-img-box" style="margin-top:5px;display:flex;align-items:center;justify-content:center;height:190px;border:1px dashed #b9c2d0;border-radius:8px;background:#f8fafc;cursor:pointer;text-align:center;overflow:hidden;">
+            ${imgHtml}
+            <input type="file" id="np-img-file" accept="image/*" style="display:none;">
+          </label>
+          ${d.design_image ? '<button id="np-img-clear" style="margin-top:6px;font-size:11px;border:1px solid #d0d5dd;background:#fff;border-radius:5px;padding:3px 8px;cursor:pointer;">이미지 지우기</button>' : ''}
+        </div>
+        <div style="display:flex;flex-direction:column;gap:10px;">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+            <div><label style="font-size:12px;font-weight:700;color:#334;">나염종류</label>
+              <select id="np-type" style="width:100%;margin-top:4px;padding:7px;border:1px solid #d0d5dd;border-radius:6px;font-size:13px;">${typeOpts}</select></div>
+            <div><label style="font-size:12px;font-weight:700;color:#334;">출고처 (나염 후)</label>
+              <select id="np-dest" style="width:100%;margin-top:4px;padding:7px;border:1px solid #d0d5dd;border-radius:6px;font-size:13px;">${destOpts}</select></div>
+          </div>
+          <div><label style="font-size:12px;font-weight:700;color:#334;">디자인명</label>
+            <input type="text" id="np-design-name" value="${escapeHtml(d.design_name || '')}" placeholder="예: 플로럴 A" style="width:100%;margin-top:4px;padding:7px;border:1px solid #d0d5dd;border-radius:6px;font-size:13px;"></div>
+          <div style="font-size:11px;color:#8b95a5;">※ 디자인 이미지는 비율 그대로 자동 축소되어 첨부됩니다(왜곡 없음).</div>
+        </div>
+      </div>
+
+      <div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+          <label style="font-size:13px;font-weight:800;color:#1d4ed8;">나염 조합표 (나염용원단 × 나염컬러)</label>
+          <button id="np-add-row" style="border:1px solid #2563eb;background:#2563eb;color:#fff;border-radius:6px;padding:5px 12px;font-size:12px;font-weight:700;cursor:pointer;">+ 줄 추가</button>
+        </div>
+        <table style="width:100%;border-collapse:collapse;font-size:12px;">
+          <thead><tr style="background:#eef4fd;">
+            <th style="border:1px solid #d0d5dd;padding:6px;width:30px;">No</th>
+            <th style="border:1px solid #d0d5dd;padding:6px;width:96px;">공급처</th>
+            <th style="border:1px solid #d0d5dd;padding:6px;">나염용원단명</th>
+            <th style="border:1px solid #d0d5dd;padding:6px;width:120px;">원단컬러</th>
+            <th style="border:1px solid #d0d5dd;padding:6px;width:120px;">나염컬러</th>
+            <th style="border:1px solid #d0d5dd;padding:6px;width:66px;">수량(절)</th>
+            <th style="border:1px solid #d0d5dd;padding:6px;">비고</th>
+            <th style="border:1px solid #d0d5dd;padding:6px;width:34px;"></th>
+          </tr></thead>
+          <tbody id="np-rows">${rowsHtml}</tbody>
+        </table>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+        <div><label style="font-size:12px;font-weight:700;color:#334;">가공 지시 / 가공조건 <span style="color:#64748b;font-weight:500;">· 출고처 자동표기</span></label>
+          <textarea id="np-proc-memo" rows="3" placeholder="예: 기모 2회, 텐터 폭 160cm, 건조기 무수축" style="width:100%;margin-top:4px;padding:7px;border:1px solid #d0d5dd;border-radius:6px;font-size:12.5px;resize:vertical;">${escapeHtml(d.proc_memo || '')}</textarea></div>
+        <div><label style="font-size:12px;font-weight:700;color:#334;">후가공 지시 / 특이사항</label>
+          <textarea id="np-post-memo" rows="3" placeholder="예: 폭 160cm 고정, 첫 롤 검단 후 진행" style="width:100%;margin-top:4px;padding:7px;border:1px solid #d0d5dd;border-radius:6px;font-size:12.5px;resize:vertical;">${escapeHtml(d.post_memo || '')}</textarea></div>
+      </div>
+
+      <div style="display:flex;justify-content:flex-end;gap:8px;padding-top:4px;border-top:1px solid #eef;">
+        <button id="np-save" style="border:none;background:#2563eb;color:#fff;border-radius:8px;padding:10px 22px;font-size:14px;font-weight:800;cursor:pointer;">저장</button>
+      </div>
+    </div>`;
+  }
+
+  function syncPrintDraftFromForm() {
+    const d = __printDraft; if (!d) return;
+    const g = id => document.getElementById(id);
+    if (g('np-type')) d.print_type = g('np-type').value;
+    if (g('np-dest')) d.dest = g('np-dest').value;
+    if (g('np-design-name')) d.design_name = g('np-design-name').value;
+    if (g('np-proc-memo')) d.proc_memo = g('np-proc-memo').value;
+    if (g('np-post-memo')) d.post_memo = g('np-post-memo').value;
+    document.querySelectorAll('#np-rows tr').forEach(tr => {
+      const i = parseInt(tr.dataset.i, 10); const r = d.rows[i]; if (!r) return;
+      const q = sel => tr.querySelector(sel);
+      r.supply = q('.np-supply')?.value || '본사';
+      r.fabric = q('.np-fabric')?.value || '';
+      r.fabric_color = q('.np-fabcolor-name')?.value || '';
+      r.fabric_hex = q('.np-fabcolor-hex')?.value || '#ffffff';
+      r.print_color = q('.np-printcolor-name')?.value || '';
+      r.print_hex = q('.np-printcolor-hex')?.value || '#ffffff';
+      const qv = q('.np-qty')?.value; r.qty = qv === '' ? '' : Number(qv);
+      r.note = q('.np-note')?.value || '';
+    });
+  }
+
+  function rerenderPrintRows() {
+    document.getElementById('np-rows').innerHTML = __printDraft.rows.map((r, i) => renderPrintRow(r, i)).join('');
+    bindPrintRowEvents();
+  }
+
+  function bindPrintRowEvents() {
+    document.querySelectorAll('#np-rows .np-row-del').forEach(btn => {
+      btn.addEventListener('click', () => {
+        syncPrintDraftFromForm();
+        const i = parseInt(btn.dataset.i, 10);
+        __printDraft.rows.splice(i, 1);
+        if (!__printDraft.rows.length) __printDraft.rows.push(blankPrintRow());
+        rerenderPrintRows();
+      });
+    });
+    // 색 선택 시 이름↔칩 동기화 (칩 색을 바꾸면 이름 자동 추정 없음 — 이름은 사용자 입력 유지)
+    document.querySelectorAll('#np-rows .np-fabcolor-name, #np-rows .np-printcolor-name').forEach(inp => {
+      inp.addEventListener('change', () => {
+        const hex = printColorHex(inp.value, null);
+        if (hex) { const hexInput = inp.parentElement.querySelector('input[type=color]'); if (hexInput) hexInput.value = hex; }
+      });
+    });
+  }
+
+  function attachPrintModalHandlers() {
+    document.getElementById('np-add-row').addEventListener('click', () => {
+      syncPrintDraftFromForm();
+      __printDraft.rows.push(blankPrintRow());
+      rerenderPrintRows();
+    });
+    bindPrintRowEvents();
+    const imgBox = document.getElementById('np-img-box');
+    const imgFile = document.getElementById('np-img-file');
+    if (imgFile) imgFile.addEventListener('change', () => {
+      const f = imgFile.files && imgFile.files[0]; if (!f) return;
+      resizePrintImage(f, 1000, dataUrl => {
+        syncPrintDraftFromForm();
+        __printDraft.design_image = dataUrl;
+        document.getElementById('dash-modal-body').innerHTML = renderPrintModalBody();
+        attachPrintModalHandlers();
+      });
+    });
+    const clearBtn = document.getElementById('np-img-clear');
+    if (clearBtn) clearBtn.addEventListener('click', () => {
+      syncPrintDraftFromForm();
+      __printDraft.design_image = '';
+      document.getElementById('dash-modal-body').innerHTML = renderPrintModalBody();
+      attachPrintModalHandlers();
+    });
+    document.getElementById('np-save').addEventListener('click', savePrintOrder);
+  }
+
+  function resizePrintImage(file, maxW, cb) {
+    const rd = new FileReader();
+    rd.onload = e => {
+      const img = new Image();
+      img.onload = () => {
+        let w = img.width, h = img.height;
+        if (w > maxW) { h = Math.round(h * maxW / w); w = maxW; }
+        const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+        cv.getContext('2d').drawImage(img, 0, 0, w, h);
+        try { cb(cv.toDataURL('image/jpeg', 0.85)); } catch (_) { cb(e.target.result); }
+      };
+      img.onerror = () => cb(e.target.result);
+      img.src = e.target.result;
+    };
+    rd.readAsDataURL(file);
+  }
+
+  async function savePrintOrder() {
+    if (!isAdminUser()) { toast('나염작지 저장은 대표만 가능합니다', 'info'); return; }
+    syncPrintDraftFromForm();
+    const d = __printDraft;
+    if (!d.design_name.trim()) { toast('디자인명을 입력해 주세요', 'error'); return; }
+    const validRows = d.rows.filter(r => (r.fabric || '').trim() || r.qty);
+    if (!validRows.length) { toast('조합표에 최소 1줄을 입력해 주세요', 'error'); return; }
+    const totalQty = validRows.reduce((s, r) => s + (Number(r.qty) || 0), 0);
+    const btn = document.getElementById('np-save'); if (btn) btn.disabled = true;
+    try {
+      if (d.id) {
+        await updateDoc(doc(db, 'workorders', d.id), {
+          print_type: d.print_type, design_name: d.design_name.trim(), design_image: d.design_image || '',
+          dest: d.dest, print_rows: validRows, proc_memo: d.proc_memo, post_memo: d.post_memo,
+          print_total_qty: totalQty, subject: `[${printTypeLabel(d.print_type)}] ${d.design_name.trim()}`,
+          updated_at: serverTimestamp(), updated_by: state.user.email
+        });
+        toast('나염작지 수정 완료', 'success');
+      } else {
+        const today = new Date();
+        const ymd = String(today.getFullYear()).slice(2) + String(today.getMonth() + 1).padStart(2, '0') + String(today.getDate()).padStart(2, '0');
+        const prefix = d.print_type;
+        let n = state.allWorkOrders.filter(w => w.wo_number && w.wo_number.startsWith(`${prefix}-${ymd}`)).length;
+        let wo_number;
+        do { n++; wo_number = `${prefix}-${ymd}-${String(n).padStart(2, '0')}`; }
+        while (state.allWorkOrders.some(w => w.wo_number === wo_number));
+        await addDoc(collection(db, 'workorders'), {
+          type: '나염', wo_number, date: todayYMD(), title: '나염 작업 지시서',
+          print_type: d.print_type, design_name: d.design_name.trim(), design_image: d.design_image || '',
+          dest: d.dest, print_rows: validRows, proc_memo: d.proc_memo, post_memo: d.post_memo,
+          print_total_qty: totalQty, subject: `[${printTypeLabel(d.print_type)}] ${d.design_name.trim()}`,
+          stamps: [], memo: '', completed: false, deleted: false,
+          created_at: serverTimestamp(), updated_at: serverTimestamp(),
+          created_by: state.user.email, updated_by: state.user.email
+        });
+        toast(`나염작지 ${wo_number} 생성`, 'success');
+      }
+      document.getElementById('dash-modal-bg').classList.remove('show');
+      renderDashboard();
+    } catch (e) {
+      if (btn) btn.disabled = false;
+      toast('저장 실패: ' + (e.message || e), 'error');
+    }
+  }
+
+  function renderPrintDash() {
+    const list = (state.allWorkOrders || [])
+      .filter(w => w.type === '나염' && !w.deleted)
+      .sort((a, b) => (b.wo_number || '').localeCompare(a.wo_number || ''));
+    if (!list.length) {
+      return `<div class="dash-empty" style="text-align:center;padding:40px;color:#7a8699;">등록된 나염작업지시서가 없습니다.<br><br>우측 상단 <strong>[+ 새 나염작지]</strong> 버튼으로 만들어 보세요.</div>`;
+    }
+    const rows = list.map(w => {
+      const rowCount = (w.print_rows || []).length;
+      const admin = isAdminUser();
+      return `<tr>
+        <td style="font-weight:700;color:#1d4ed8;">${escapeHtml(w.wo_number || '')}</td>
+        <td style="text-align:center;"><span style="background:#1e293b;color:#fff;border-radius:5px;padding:2px 8px;font-size:11px;font-weight:700;">${escapeHtml(printTypeLabel(w.print_type))}</span></td>
+        <td>${escapeHtml(w.design_name || '')}</td>
+        <td style="text-align:center;">${escapeHtml(w.dest || '')}</td>
+        <td style="text-align:center;">${rowCount}줄</td>
+        <td style="text-align:center;">${w.print_total_qty || 0} 절</td>
+        <td style="text-align:center;white-space:nowrap;">
+          <button class="dash-action-btn np-view" data-id="${w.id}" style="background:#eef4fd;color:#1d4ed8;">보기</button>
+          ${admin ? `<button class="dash-action-btn np-edit" data-id="${w.id}">수정</button>` : ''}
+          ${admin ? `<button class="dash-action-btn np-del" data-id="${w.id}" style="background:#fff;border-color:#fca5a5;color:#dc2626;">삭제</button>` : ''}
+        </td>
+      </tr>`;
+    }).join('');
+    return `<table class="dash-table"><thead><tr>
+      <th>작지번호</th><th style="text-align:center;">나염종류</th><th>디자인명</th>
+      <th style="text-align:center;">출고처</th><th style="text-align:center;">조합</th><th style="text-align:center;">수량</th><th style="text-align:center;">관리</th>
+    </tr></thead><tbody>${rows}</tbody></table>`;
+  }
+
+  function printPreviewHTML(wo) {
+    const rows = (wo.print_rows || []);
+    const total = wo.print_total_qty || rows.reduce((s, r) => s + (Number(r.qty) || 0), 0);
+    const chip = (name, hex) => `<span style="display:inline-block;width:12px;height:12px;border-radius:3px;border:1px solid rgba(0,0,0,.22);vertical-align:-2px;margin-right:6px;background:${hex || '#fff'};"></span>${escapeHtml(name || '')}`;
+    const rowsHtml = rows.map((r, i) => `<tr>
+      <td style="border:1px solid #111;padding:7px;text-align:center;">${i + 1}</td>
+      <td style="border:1px solid #111;padding:7px;text-align:center;">${escapeHtml(r.supply || '')}</td>
+      <td style="border:1px solid #111;padding:7px;text-align:left;">${escapeHtml(r.fabric || '')}</td>
+      <td style="border:1px solid #111;padding:7px;text-align:left;padding-left:12px;white-space:nowrap;">${chip(r.fabric_color, r.fabric_hex)}</td>
+      <td style="border:1px solid #111;padding:7px;text-align:left;padding-left:12px;white-space:nowrap;">${chip(r.print_color, r.print_hex)}</td>
+      <td style="border:1px solid #111;padding:7px;text-align:center;">${r.qty || 0}</td>
+      <td style="border:1px solid #111;padding:7px;text-align:center;">${escapeHtml(r.note || '-')}</td>
+    </tr>`).join('');
+    const imgHtml = wo.design_image ? `<img src="${wo.design_image}" style="max-width:100%;max-height:200px;object-fit:contain;">` : '<span style="color:#9aa4b2;font-size:12px;">디자인 이미지 없음</span>';
+    return `<div id="np-print-sheet" style="background:#fff;color:#111;font-family:'Pretendard',sans-serif;padding:8px 4px;">
+      <div style="border-bottom:3px solid #111;padding-bottom:8px;">
+        <div style="font-size:21px;font-weight:800;letter-spacing:-.5px;">현일텍스 주식회사 · HYUNIL-TEX CORP.</div>
+        <div style="margin-top:5px;font-size:11.5px;">■ 경기도 포천시 소흘읍 한성길 77 &nbsp;&nbsp; ■ TEL 031-541-8651/8656 &nbsp;&nbsp; ■ hyuniltex88@naver.com</div>
+      </div>
+      <div style="border:2px solid #111;margin-top:12px;text-align:center;padding:10px;font-size:23px;font-weight:800;letter-spacing:10px;">나 염 작 업 지 시 서</div>
+      <div style="display:flex;justify-content:space-between;margin-top:8px;font-size:12px;"><span>날짜 : ${escapeHtml(wo.date || '')}</span><span>제목 : 나염 작업의 건</span></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">
+        <span style="background:#2563eb;color:#fff;border-radius:999px;padding:5px 12px;font-size:12.5px;font-weight:800;">${escapeHtml(wo.wo_number || '')}</span>
+        <span style="border:1px solid #cddcf5;background:#eef4fd;color:#1d4ed8;border-radius:999px;padding:5px 12px;font-size:12.5px;font-weight:700;">나염종류 ${escapeHtml(printTypeLabel(wo.print_type))}</span>
+        <span style="border:1px solid #cddcf5;background:#eef4fd;color:#1d4ed8;border-radius:999px;padding:5px 12px;font-size:12.5px;font-weight:700;">디자인 ${escapeHtml(wo.design_name || '')}</span>
+        <span style="border:1px solid #cddcf5;background:#eef4fd;color:#1d4ed8;border-radius:999px;padding:5px 12px;font-size:12.5px;font-weight:700;">출고처 ${escapeHtml(wo.dest || '')}</span>
+      </div>
+      <div style="display:grid;grid-template-columns:220px 1fr;gap:14px;margin-top:14px;">
+        <div style="border:1px solid #111;">
+          <div style="background:#eef4fd;border-bottom:1px solid #111;text-align:center;font-size:12px;font-weight:800;padding:5px;">디자인 이미지</div>
+          <div style="height:200px;display:flex;align-items:center;justify-content:center;background:#f7f9fc;overflow:hidden;">${imgHtml}</div>
+        </div>
+        <table style="width:100%;border-collapse:collapse;font-size:12.5px;">
+          <tr><th style="border:1px solid #111;background:#eef4fd;padding:7px 9px;width:92px;">디자인명</th><td style="border:1px solid #111;padding:7px 9px;">${escapeHtml(wo.design_name || '')}</td><th style="border:1px solid #111;background:#eef4fd;padding:7px 9px;width:92px;">나염종류</th><td style="border:1px solid #111;padding:7px 9px;">${escapeHtml(printTypeLabel(wo.print_type))}</td></tr>
+          <tr><th style="border:1px solid #111;background:#eef4fd;padding:7px 9px;">출고처</th><td style="border:1px solid #111;padding:7px 9px;">${escapeHtml(wo.dest || '')}</td><th style="border:1px solid #111;background:#eef4fd;padding:7px 9px;">작지번호</th><td style="border:1px solid #111;padding:7px 9px;">${escapeHtml(wo.wo_number || '')}</td></tr>
+          <tr><th style="border:1px solid #111;background:#eef4fd;padding:7px 9px;">수량 합계</th><td style="border:1px solid #111;padding:7px 9px;">${total} 절</td><th style="border:1px solid #111;background:#eef4fd;padding:7px 9px;">담당</th><td style="border:1px solid #111;padding:7px 9px;">${escapeHtml((wo.created_by || '').split('@')[0] || '')}</td></tr>
+        </table>
+      </div>
+      <div style="margin:16px 0 6px;font-size:13px;font-weight:800;color:#1d4ed8;">나염 조합표 (나염용원단 × 나염컬러)</div>
+      <table style="width:100%;border-collapse:collapse;font-size:12.5px;">
+        <thead><tr style="background:#eef4fd;">
+          <th style="border:1px solid #111;padding:7px;width:34px;">No</th><th style="border:1px solid #111;padding:7px;width:90px;">공급처</th>
+          <th style="border:1px solid #111;padding:7px;">나염용원단명</th><th style="border:1px solid #111;padding:7px;width:120px;">원단컬러</th>
+          <th style="border:1px solid #111;padding:7px;width:120px;">나염컬러</th><th style="border:1px solid #111;padding:7px;width:70px;">수량(절)</th><th style="border:1px solid #111;padding:7px;width:80px;">비고</th>
+        </tr></thead>
+        <tbody>${rowsHtml}</tbody>
+        <tfoot><tr><td colspan="5" style="border:1px solid #111;padding:7px;text-align:right;font-weight:800;background:#fafbfe;">합계</td><td style="border:1px solid #111;padding:7px;text-align:center;font-weight:800;background:#fafbfe;">${total}</td><td style="border:1px solid #111;background:#fafbfe;"></td></tr></tfoot>
+      </table>
+      <div style="border:1px solid #111;margin-top:16px;"><div style="background:#eef4fd;border-bottom:1px solid #111;font-size:12px;font-weight:800;padding:6px 9px;">가공 지시 / 가공조건 · 출고처 : ${escapeHtml(wo.dest || '')}</div><div style="padding:10px;font-size:12.5px;min-height:44px;line-height:1.6;white-space:pre-wrap;">${escapeHtml(wo.proc_memo || '')}</div></div>
+      <div style="border:1px solid #111;margin-top:12px;"><div style="background:#eef4fd;border-bottom:1px solid #111;font-size:12px;font-weight:800;padding:6px 9px;">후가공 지시 / 특이사항</div><div style="padding:10px;font-size:12.5px;min-height:44px;line-height:1.6;white-space:pre-wrap;">${escapeHtml(wo.post_memo || '')}</div></div>
+      <div style="margin-top:14px;font-size:11px;color:#555;">※ 본 지시서 한 장에 나염 지시와 후가공 지시가 함께 담겨 있습니다. 나염공장·후가공공장에 이미지로 복사하여 전달합니다.</div>
+      <div style="margin-top:6px;text-align:right;font-size:12px;font-weight:700;">현일텍스 주식회사 드림</div>
+    </div>`;
+  }
+
+  function openPrintPreview(woId) {
+    const wo = state.allWorkOrders.find(w => w.id === woId); if (!wo) return;
+    document.getElementById('dash-modal-title').textContent = `나염작업지시서 · ${wo.wo_number || ''}`;
+    ['dash-modal-image', 'dash-modal-copy', 'dash-modal-print', 'dash-modal-kakao'].forEach(id => {
+      const b = document.getElementById(id); if (b) b.style.display = 'none';
+    });
+    document.getElementById('dash-modal-body').innerHTML =
+      `<div style="display:flex;gap:8px;justify-content:flex-end;margin-bottom:10px;">
+        <button id="np-pv-img" class="dash-action-btn" style="background:#2563eb;color:#fff;">이미지 저장(카톡용)</button>
+        <button id="np-pv-print" class="dash-action-btn">인쇄</button>
+      </div>` + printPreviewHTML(wo);
+    document.getElementById('dash-modal-bg').classList.add('show');
+    document.getElementById('np-pv-print').addEventListener('click', () => {
+      const w = window.open('', '_blank');
+      w.document.write(`<html><head><meta charset="utf-8"><title>${escapeHtml(wo.wo_number || '나염작지')}</title><link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.css"></head><body style="margin:14mm;">${printPreviewHTML(wo)}</body></html>`);
+      w.document.close(); setTimeout(() => { w.focus(); w.print(); }, 400);
+    });
+    document.getElementById('np-pv-img').addEventListener('click', () => {
+      const el = document.getElementById('np-print-sheet');
+      if (typeof html2canvas !== 'function') { toast('이미지 모듈 로딩 중입니다. 잠시 후 다시 시도해 주세요', 'info'); return; }
+      html2canvas(el, { scale: 2, backgroundColor: '#ffffff' }).then(canvas => {
+        const a = document.createElement('a'); a.href = canvas.toDataURL('image/png'); a.download = `${wo.wo_number || '나염작지'}.png`; a.click();
+      }).catch(() => toast('이미지 생성 실패', 'error'));
+    });
+  }
+
   // 메인 대시보드 렌더
   function renderDashboard() {
     const titleEl = document.getElementById('dash-title');
@@ -21652,6 +22037,11 @@ function validateBlendSum(blends, label) {
       title = '생지출고 목록';
       body = renderGSDash();
       addBtn.style.display = 'none';   // 생지출고는 염색작지 [보기]에서 자동 생성
+    } else if (state.dashView === 'print') {
+      title = 'ㄴ 나염 진행';
+      body = renderPrintDash();
+      addBtn.textContent = '+ 새 나염작지';
+      addBtn.style.display = 'inline-block';
     } else if (state.dashView === 'claims') {
       title = '클레임(땡처리)';
       body = renderClaimsDash();
@@ -22324,6 +22714,10 @@ function validateBlendSum(blends, label) {
       });
     }
     
+    document.querySelectorAll('#dash-body .ov-goto-print').forEach(btn => {
+      btn.addEventListener('click', () => switchDashView('print'));
+    });
+
     document.querySelectorAll('#dash-body .overview-type-filter-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         const t = btn.dataset.typeFilter;
@@ -23109,6 +23503,28 @@ function validateBlendSum(blends, label) {
           btn.disabled = false;
           toast('처리 실패: ' + (err.message || err), 'error');
         }
+      });
+    });
+
+    // 나염작지 목록 버튼
+    document.querySelectorAll('#dash-body .np-view').forEach(btn => {
+      btn.addEventListener('click', (e) => { e.stopPropagation(); openPrintPreview(btn.dataset.id); });
+    });
+    document.querySelectorAll('#dash-body .np-edit').forEach(btn => {
+      btn.addEventListener('click', (e) => { e.stopPropagation(); openPrintOrderModal(btn.dataset.id); });
+    });
+    document.querySelectorAll('#dash-body .np-del').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (!isAdminUser()) { toast('삭제는 대표만 가능합니다', 'info'); return; }
+        const id = btn.dataset.id;
+        const wo = state.allWorkOrders.find(w => w.id === id); if (!wo) return;
+        if (!confirm(`이 나염작지를 휴지통으로 보낼까요?\n\n[${wo.wo_number || ''}] ${wo.design_name || ''}\n\n(휴지통에서 복구할 수 있습니다)`)) return;
+        btn.disabled = true;
+        try {
+          await updateDoc(doc(db, 'workorders', id), { deleted: true, deleted_at: serverTimestamp(), deleted_by: state.user.email, updated_at: serverTimestamp(), updated_by: state.user.email });
+          toast('휴지통으로 이동했습니다', 'success');
+        } catch (err) { btn.disabled = false; toast('삭제 실패: ' + (err.message || err), 'error'); }
       });
     });
 
@@ -25919,6 +26335,11 @@ function validateBlendSum(blends, label) {
       toggleQuickAdd(typeKey);
       return;
     }
+    // 나염 진행: 전용 작성 모달
+    if (state.dashView === 'print') {
+      openPrintOrderModal(null);
+      return;
+    }
     // 그 외(공문 등)는 기존처럼 작성 모드로 이동
     switchUiMode('write');
     if (state.dashView === 'of') switchType('공문');
@@ -26666,7 +27087,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix193';
+  const VERSION = 'v2.53 hotfix194';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
