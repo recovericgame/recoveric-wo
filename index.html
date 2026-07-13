@@ -6279,6 +6279,8 @@
       </div>
     </div>
     
+    <div id="form-print" style="display:none;"></div>
+    
     <div class="actions">
       <button class="btn-save" id="save-btn">저장</button>
       <button type="button" id="cancel-form-btn" style="flex:0 0 auto;background:#fff;color:#6b7280;border:1px solid #d1d5db;font-weight:700;padding:0 20px;border-radius:6px;cursor:pointer;font-size:14px;">취소</button>
@@ -8432,6 +8434,9 @@ function switchType(type, skipReset=false) {
   document.getElementById('form-finish').style.display = type === '염색가공' ? 'block' : 'none';
   document.getElementById('form-bt').style.display = type === 'BT' ? 'block' : 'none';
   document.getElementById('form-of').style.display = type === '공문' ? 'block' : 'none';
+  // 나염 인라인 폼 숨김 + 공용 저장영역 복구 (나염은 별도 경로로 표시됨)
+  const _fpEl = document.getElementById('form-print'); if (_fpEl) _fpEl.style.display = 'none';
+  const _actEl = document.querySelector('.form-panel .actions'); if (_actEl) _actEl.style.display = '';
   // BT, 공문은 공통 스탬프(상단) 영역 숨김
   const commonStampSec = document.querySelector('.form-panel .stamp-section');
   if (commonStampSec) commonStampSec.style.display = (type === 'BT' || type === '공문') ? 'none' : 'block';
@@ -9191,6 +9196,8 @@ function fitCellText() {
 }
 
 function render() {
+  // 나염은 전용 실시간 미리보기 사용 (일반 render 경로에서 미리보기가 지워지지 않게)
+  if (state.currentType === '나염') { if (window.__nayeomPreview) window.__nayeomPreview(); return; }
   try {
     const d = getFormData();
     let html = '';
@@ -10411,6 +10418,12 @@ window.addEventListener('firebase-ready', () => {
   }
   
   function loadWorkOrder(wo) {
+    // 나염작지는 전용 인라인 폼으로 로드 (가운데 폼 + 오른쪽 실시간 미리보기)
+    if (wo && wo.type === '나염') {
+      document.querySelectorAll('.history-item').forEach(el => el.classList.toggle('active', el.dataset.id === wo.id));
+      if (window.__showNayeomForm) window.__showNayeomForm(wo.id);
+      return;
+    }
     state.currentWorkOrderId = wo.id;
     state.currentWoNumber = wo.wo_number || null;
     // v2.32: 수정 입력 중 뱃지 ON (setFormData가 자동으로 처리)
@@ -21649,14 +21662,42 @@ function validateBlendSum(blends, label) {
       id: null, print_type: 'AP', design_name: '', design_image: '', dest: '가공공장',
       stamps: [], rows: [blankPrintRow()], proc_memo: '', post_memo: '',
     };
-    const modal = document.getElementById('dash-modal-bg');
-    document.getElementById('dash-modal-title').textContent = woId ? '나염작업지시서 수정' : '새 나염작업지시서';
-    ['dash-modal-image', 'dash-modal-copy', 'dash-modal-print', 'dash-modal-kakao'].forEach(id => {
-      const b = document.getElementById(id); if (b) b.style.display = 'none';
-    });
-    document.getElementById('dash-modal-body').innerHTML = renderPrintModalBody();
-    modal.classList.add('show');
+    // 인라인 작성 화면(가운데 폼 + 오른쪽 실시간 미리보기)
+    switchUiMode('write');
+    document.querySelectorAll('.type-btn').forEach(b => b.classList.toggle('active', b.dataset.type === '나염'));
+    ['form-yarn', 'form-knit', 'form-finish', 'form-bt', 'form-of'].forEach(id => { const el = document.getElementById(id); if (el) el.style.display = 'none'; });
+    const commonStamp = document.querySelector('.form-panel .stamp-section'); if (commonStamp) commonStamp.style.display = 'none';
+    const actions = document.querySelector('.form-panel .actions'); if (actions) actions.style.display = 'none';
+    state.currentType = '나염';
+    const badgeEl = document.getElementById('type-badge'); if (badgeEl) { badgeEl.textContent = '나염 작업지시서'; badgeEl.dataset.type = '나염'; }
+    const kakaoBtn = document.getElementById('btn-kakao'); if (kakaoBtn) kakaoBtn.style.display = 'none';
+    const fp = document.getElementById('form-print');
+    fp.style.display = 'block';
+    fp.innerHTML = renderPrintModalBody();
     attachPrintModalHandlers();
+    renderNayeomLivePreview();
+  }
+  window.__showNayeomForm = (id) => openPrintOrderModal(id);
+  window.__nayeomPreview = () => renderNayeomLivePreview();
+
+  function nayeomDraftToWo() {
+    const d = __printDraft || {};
+    const total = (d.rows || []).reduce((s, r) => s + (Number(r.qty) || 0), 0);
+    const existing = d.id ? state.allWorkOrders.find(w => w.id === d.id) : null;
+    return {
+      wo_number: existing ? existing.wo_number : '(저장 시 자동 생성)',
+      date: existing ? (existing.date || todayYMD()) : todayYMD(),
+      print_type: d.print_type, design_name: d.design_name, design_image: d.design_image,
+      dest: d.dest, print_rows: d.rows || [], print_total_qty: total, stamps: d.stamps || [],
+      proc_memo: d.proc_memo, post_memo: d.post_memo, created_by: (existing && existing.created_by) || state.user?.email || ''
+    };
+  }
+
+  function renderNayeomLivePreview() {
+    if (state.currentType !== '나염') return;
+    syncPrintDraftFromForm();
+    const pc = document.getElementById('preview-container');
+    if (pc) pc.innerHTML = `<div class="wo-doc" style="background:#fff;padding:18px 20px;">${printPreviewHTML(nayeomDraftToWo())}</div>`;
   }
 
   function printColorInput(kind, i, name, hex) {
@@ -21779,6 +21820,7 @@ function validateBlendSum(blends, label) {
   function rerenderPrintRows() {
     document.getElementById('np-rows').innerHTML = __printDraft.rows.map((r, i) => renderPrintRow(r, i)).join('');
     bindPrintRowEvents();
+    renderNayeomLivePreview();
   }
 
   function bindPrintRowEvents() {
@@ -21814,20 +21856,29 @@ function validateBlendSum(blends, label) {
       resizePrintImage(f, 1000, dataUrl => {
         syncPrintDraftFromForm();
         __printDraft.design_image = dataUrl;
-        document.getElementById('dash-modal-body').innerHTML = renderPrintModalBody();
+        document.getElementById('form-print').innerHTML = renderPrintModalBody();
         attachPrintModalHandlers();
+        renderNayeomLivePreview();
       });
     });
     const clearBtn = document.getElementById('np-img-clear');
     if (clearBtn) clearBtn.addEventListener('click', () => {
       syncPrintDraftFromForm();
       __printDraft.design_image = '';
-      document.getElementById('dash-modal-body').innerHTML = renderPrintModalBody();
+      document.getElementById('form-print').innerHTML = renderPrintModalBody();
       attachPrintModalHandlers();
+      renderNayeomLivePreview();
     });
     document.getElementById('np-save').addEventListener('click', savePrintOrder);
     const cancelBtn = document.getElementById('np-cancel');
-    if (cancelBtn) cancelBtn.addEventListener('click', () => { document.getElementById('dash-modal-bg').classList.remove('show'); });
+    if (cancelBtn) cancelBtn.addEventListener('click', () => { if (confirm('입력 내용을 지우고 새로 시작할까요?')) openPrintOrderModal(null); });
+    // 실시간 미리보기 (입력/선택 변경 시 오른쪽 갱신) — #form-print에 위임 바인딩(1회)
+    const fpEl = document.getElementById('form-print');
+    if (fpEl && !fpEl.__npLiveBound) {
+      fpEl.addEventListener('input', renderNayeomLivePreview);
+      fpEl.addEventListener('change', renderNayeomLivePreview);
+      fpEl.__npLiveBound = true;
+    }
     document.querySelectorAll('#np-stamps .np-stamp').forEach(chip => {
       chip.addEventListener('click', () => {
         const s = chip.dataset.stamp;
@@ -21838,6 +21889,7 @@ function validateBlendSum(blends, label) {
         chip.style.background = on ? '#2563eb' : '#fff';
         chip.style.color = on ? '#fff' : '#475569';
         chip.style.borderColor = on ? '#2563eb' : '#d0d5dd';
+        renderNayeomLivePreview();
       });
     });
   }
@@ -21899,6 +21951,10 @@ function validateBlendSum(blends, label) {
       }
       document.getElementById('dash-modal-bg').classList.remove('show');
       renderDashboard();
+      if (typeof renderHistory === 'function') renderHistory();
+      if (state.currentType === '나염' && document.getElementById('form-print') && document.getElementById('form-print').style.display !== 'none') {
+        openPrintOrderModal(null);   // 저장 후 새 작성 준비 (오른쪽 미리보기 초기화)
+      }
     } catch (e) {
       if (btn) btn.disabled = false;
       toast('저장 실패: ' + (e.message || e), 'error');
@@ -27123,7 +27179,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix197';
+  const VERSION = 'v2.53 hotfix198';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
