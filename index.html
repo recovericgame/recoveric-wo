@@ -21615,6 +21615,7 @@ function validateBlendSum(blends, label) {
     { code: 'JP', label: '전사나염' },
   ];
   const PRINT_SUPPLY = ['본사', '염색공장', '가공공장', '후가공공장'];
+  const PRINT_STAMPS = ['초지급', '첫탕', '샘플', '부류', '미리작지', '컬러견본확인', '작지수정'];
   const PRINT_PALETTE = [
     ['검정', '#111111'], ['흰색', '#ffffff'], ['회색', '#9aa0a6'], ['빨강', '#e2231a'], ['주황', '#f57c00'],
     ['노랑', '#f7d000'], ['연두', '#8bc34a'], ['초록', '#2e7d32'], ['청록', '#009688'], ['하늘', '#4fc3f7'],
@@ -21640,12 +21641,13 @@ function validateBlendSum(blends, label) {
       design_name: wo.design_name || '',
       design_image: wo.design_image || '',
       dest: wo.dest || '가공공장',
+      stamps: Array.isArray(wo.stamps) ? wo.stamps.filter(s => PRINT_STAMPS.includes(s)) : [],
       rows: Array.isArray(wo.print_rows) && wo.print_rows.length ? JSON.parse(JSON.stringify(wo.print_rows)) : [blankPrintRow()],
       proc_memo: wo.proc_memo || '',
       post_memo: wo.post_memo || '',
     } : {
       id: null, print_type: 'AP', design_name: '', design_image: '', dest: '가공공장',
-      rows: [blankPrintRow()], proc_memo: '', post_memo: '',
+      stamps: [], rows: [blankPrintRow()], proc_memo: '', post_memo: '',
     };
     const modal = document.getElementById('dash-modal-bg');
     document.getElementById('dash-modal-title').textContent = woId ? '나염작업지시서 수정' : '새 나염작업지시서';
@@ -21708,6 +21710,13 @@ function validateBlendSum(blends, label) {
           <div><label style="font-size:12px;font-weight:700;color:#334;">디자인명</label>
             <input type="text" id="np-design-name" value="${escapeHtml(d.design_name || '')}" placeholder="예: 플로럴 A" style="width:100%;margin-top:4px;padding:7px;border:1px solid #d0d5dd;border-radius:6px;font-size:13px;"></div>
           <div style="font-size:11px;color:#8b95a5;">※ 디자인 이미지는 비율 그대로 자동 축소되어 첨부됩니다(왜곡 없음).</div>
+        </div>
+      </div>
+
+      <div>
+        <label style="font-size:12px;font-weight:700;color:#334;">스탬프</label>
+        <div id="np-stamps" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:5px;">
+          ${PRINT_STAMPS.map(s => `<button type="button" class="np-stamp${(d.stamps || []).includes(s) ? ' active' : ''}" data-stamp="${s}" style="border:1px solid ${(d.stamps || []).includes(s) ? '#2563eb' : '#d0d5dd'};background:${(d.stamps || []).includes(s) ? '#2563eb' : '#fff'};color:${(d.stamps || []).includes(s) ? '#fff' : '#475569'};border-radius:999px;padding:5px 13px;font-size:12px;font-weight:700;cursor:pointer;">${s}</button>`).join('')}
         </div>
       </div>
 
@@ -21816,6 +21825,18 @@ function validateBlendSum(blends, label) {
       attachPrintModalHandlers();
     });
     document.getElementById('np-save').addEventListener('click', savePrintOrder);
+    document.querySelectorAll('#np-stamps .np-stamp').forEach(chip => {
+      chip.addEventListener('click', () => {
+        const s = chip.dataset.stamp;
+        __printDraft.stamps = __printDraft.stamps || [];
+        const on = !__printDraft.stamps.includes(s);
+        if (on) __printDraft.stamps.push(s); else __printDraft.stamps = __printDraft.stamps.filter(x => x !== s);
+        chip.classList.toggle('active', on);
+        chip.style.background = on ? '#2563eb' : '#fff';
+        chip.style.color = on ? '#fff' : '#475569';
+        chip.style.borderColor = on ? '#2563eb' : '#d0d5dd';
+      });
+    });
   }
 
   function resizePrintImage(file, maxW, cb) {
@@ -21849,6 +21870,7 @@ function validateBlendSum(blends, label) {
         await updateDoc(doc(db, 'workorders', d.id), {
           print_type: d.print_type, design_name: d.design_name.trim(), design_image: d.design_image || '',
           dest: d.dest, print_rows: validRows, proc_memo: d.proc_memo, post_memo: d.post_memo,
+          stamps: d.stamps || [],
           print_total_qty: totalQty, subject: `[${printTypeLabel(d.print_type)}] ${d.design_name.trim()}`,
           updated_at: serverTimestamp(), updated_by: state.user.email
         });
@@ -21866,7 +21888,7 @@ function validateBlendSum(blends, label) {
           print_type: d.print_type, design_name: d.design_name.trim(), design_image: d.design_image || '',
           dest: d.dest, print_rows: validRows, proc_memo: d.proc_memo, post_memo: d.post_memo,
           print_total_qty: totalQty, subject: `[${printTypeLabel(d.print_type)}] ${d.design_name.trim()}`,
-          stamps: [], memo: '', completed: false, deleted: false,
+          stamps: d.stamps || [], memo: '', completed: false, deleted: false,
           created_at: serverTimestamp(), updated_at: serverTimestamp(),
           created_by: state.user.email, updated_by: state.user.email
         });
@@ -21890,10 +21912,12 @@ function validateBlendSum(blends, label) {
     const rows = list.map(w => {
       const rowCount = (w.print_rows || []).length;
       const admin = isAdminUser();
+      const stampBadges = (w.stamps || []).filter(s => PRINT_STAMPS.includes(s))
+        .map(s => `<span style="display:inline-block;background:#eef2ff;border:1px solid #c7d2fe;color:#3730a3;border-radius:5px;padding:1px 6px;font-size:10px;font-weight:700;margin:1px 2px;">${escapeHtml(s)}</span>`).join('');
       return `<tr>
         <td style="font-weight:700;color:#1d4ed8;">${escapeHtml(w.wo_number || '')}</td>
         <td style="text-align:center;"><span style="background:#1e293b;color:#fff;border-radius:5px;padding:2px 8px;font-size:11px;font-weight:700;">${escapeHtml(printTypeLabel(w.print_type))}</span></td>
-        <td>${escapeHtml(w.design_name || '')}</td>
+        <td>${escapeHtml(w.design_name || '')}${stampBadges ? '<br>' + stampBadges : ''}</td>
         <td style="text-align:center;">${escapeHtml(w.dest || '')}</td>
         <td style="text-align:center;">${rowCount}줄</td>
         <td style="text-align:center;">${w.print_total_qty || 0} 절</td>
@@ -21936,6 +21960,7 @@ function validateBlendSum(blends, label) {
         <span style="border:1px solid #cddcf5;background:#eef4fd;color:#1d4ed8;border-radius:999px;padding:5px 12px;font-size:12.5px;font-weight:700;">나염종류 ${escapeHtml(printTypeLabel(wo.print_type))}</span>
         <span style="border:1px solid #cddcf5;background:#eef4fd;color:#1d4ed8;border-radius:999px;padding:5px 12px;font-size:12.5px;font-weight:700;">디자인 ${escapeHtml(wo.design_name || '')}</span>
         <span style="border:1px solid #cddcf5;background:#eef4fd;color:#1d4ed8;border-radius:999px;padding:5px 12px;font-size:12.5px;font-weight:700;">출고처 ${escapeHtml(wo.dest || '')}</span>
+        ${(wo.stamps || []).filter(s => PRINT_STAMPS.includes(s)).map(s => `<span style="border:1px solid #c7d2fe;background:#eef2ff;color:#3730a3;border-radius:999px;padding:5px 12px;font-size:12.5px;font-weight:700;">${escapeHtml(s)}</span>`).join('')}
       </div>
       <div style="display:grid;grid-template-columns:220px 1fr;gap:14px;margin-top:14px;">
         <div style="border:1px solid #111;">
@@ -27095,7 +27120,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix195';
+  const VERSION = 'v2.53 hotfix196';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
