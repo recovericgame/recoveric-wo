@@ -16991,35 +16991,21 @@ function validateBlendSum(blends, label) {
   function isReportableColor(c) {
     if (!c) return false;
     if (c.completed === true) return false;               // 완료 → 제외
-    // 수정 중인 컬러는 "🔧 수정 작업" 구역에서 별도 노출(중복 방지) — 그래도 일일보고엔 남아있음
-    if (c.fix_active === true) return false;
+    if (c.fix_active === true) return false;               // 수정 색은 "🔧 수정 작업" 구역에서 별도 노출
     const hasLack = (getUnresolvedShortageBody(c) > 0) || (getUnresolvedShortageRib(c) > 0);
-    // 재염으로 완전히 이관된 색(남은 부족분 없음) → 실질 종료 → 제외
+    // 재염으로 완전 이관된 색(남은 부족분 없음) → 실질 종료 → 제외
     if (c.redye_transferred_to && !hasLack) return false;
-    // 전체 땡처리로 종결(남은 부족분도 없음) → 종료 → 제외
-    if (c.qc_status === 'discard' && !hasLack) return false;
-    // 대표 확정(hotfix208): 위 종료 케이스가 아니면, 완료되지 않은 모든 색은 거래처 일일보고에 전량 노출.
-    //   진행중/입고대기/QC대기/QC통과(미완료)/부족/재검수/불량협의 등 — 원단이 아직 안 끝났으면 무조건 보고.
-    return true;
+    // 대표 확정(hotfix210): 거래처 일일보고에는 "거래처가 아직 할 일"만 노출한다.
+    //   = 아직 안 들어온 부족분(입고 대기 / 부족). QC 대기·불량·통과 등 우리 쪽에 입고(송장 도착)된 건은 제외.
+    return hasLack && c.qc_status !== 'discard';
   }
 
-  // hotfix208: 거래처 일일보고용 상태 라벨 (미완료 색이 지금 어느 단계인지 한눈에)
+  // hotfix210: 일일보고 상태 라벨 — 노출 대상은 부족/입고대기뿐. 첫 입고 전이면 '입고 대기', 부족은 수량이 이미 보이므로 라벨 생략.
   function getColorReportLabel(c) {
     if (!c) return '';
-    const lackB = getUnresolvedShortageBody(c) || 0, lackR = getUnresolvedShortageRib(c) || 0;
-    const hasLack = lackB > 0 || lackR > 0;
     const receipts = Array.isArray(c.receipts) ? c.receipts : [];
     const anyReceipt = receipts.length > 0 || (num(c.received_body) || 0) > 0 || (num(c.received_rib) || 0) > 0;
-    if (c.fix_active === true) return c.fix_returned ? '재검수 대기' : '수정 중';
-    if (hasLack && !anyReceipt) return `입고 대기${lackB || lackR ? ` (부족 ${lackB}/${lackR})` : ''}`;
-    if (hasLack) return `부족 ${lackB}/${lackR}`;
-    // 부족분 없음 — receipts 상태로 판정
-    const statuses = receipts.map(r => r.qc_status || 'none');
-    if (statuses.some(s => s === 'defect')) return '불량 협의';
-    if (statuses.some(s => s === 'none' || s === 'pending')) return anyReceipt ? 'QC 대기' : '입고 대기';
-    if (!anyReceipt) return '입고 대기';
-    if (statuses.every(s => s === 'accept' || s === 'done')) return 'QC 완료(마감 전)';
-    return '진행 중';
+    return anyReceipt ? '' : '입고 대기';
   }
 
   
@@ -27297,7 +27283,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix209';
+  const VERSION = 'v2.53 hotfix210';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
