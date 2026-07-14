@@ -16995,12 +16995,27 @@ function validateBlendSum(blends, label) {
     const hasLack = (getUnresolvedShortageBody(c) > 0) || (getUnresolvedShortageRib(c) > 0);
     // 재염으로 완전 이관된 색(남은 부족분 없음) → 실질 종료 → 제외
     if (c.redye_transferred_to && !hasLack) return false;
-    // 대표 확정(hotfix210): 거래처 일일보고에는 "거래처가 아직 할 일"만 노출한다.
-    //   = 아직 안 들어온 부족분(입고 대기 / 부족). QC 대기·불량·통과 등 우리 쪽에 입고(송장 도착)된 건은 제외.
-    return hasLack && c.qc_status !== 'discard';
+    // 부족분(대흥이 아직 보낼 것) → 노출
+    if (hasLack && c.qc_status !== 'discard') return true;
+    // 부족분 없음 → 실제 입고(우리 쪽 도착) 여부로 판정 (receipts 우선, 없으면 qc_status 역호환)
+    const receipts = Array.isArray(c.receipts) ? c.receipts : [];
+    let st;
+    if (receipts.length > 0) {
+      const ss = receipts.map(r => r.qc_status || 'none');
+      st = ss.includes('discard') ? 'discard'
+         : ss.includes('defect') ? 'defect'
+         : ss.some(s => s === 'none' || s === 'pending') ? 'pending'
+         : 'done';
+    } else {
+      st = c.qc_status || 'none';
+    }
+    // 대표 확정(hotfix211): QC 대기·QC 통과·땡처리 = 이미 우리 쪽에 도착/종료 → 거래처 보고 제외.
+    //   none(아직 대흥에서 작업 중 = 입고 대기)·defect(불량 협의)·accept → 거래처가 아직 관여 → 노출.
+    if (st === 'pending' || st === 'done' || st === 'discard') return false;
+    return true;
   }
 
-  // hotfix210: 일일보고 상태 라벨 — 노출 대상은 부족/입고대기뿐. 첫 입고 전이면 '입고 대기', 부족은 수량이 이미 보이므로 라벨 생략.
+  // hotfix211: 일일보고 상태 라벨 — 아직 안 들어온(대흥 작업 중) 색은 '입고 대기'. 부족은 수량으로 이미 보이므로 라벨 생략.
   function getColorReportLabel(c) {
     if (!c) return '';
     const receipts = Array.isArray(c.receipts) ? c.receipts : [];
@@ -27283,7 +27298,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix210';
+  const VERSION = 'v2.53 hotfix211';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
