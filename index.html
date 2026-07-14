@@ -18418,7 +18418,7 @@ function validateBlendSum(blends, label) {
         const mine = sh.filter(x => itemOfSh(x) === idx);
         const outJ = mine.reduce((s, x) => s + (x.dir === 'in' ? 0 : (parseFloat(x.jul) || 0)), 0);
         const inboundJ = mine.reduce((s, x) => s + (x.dir === 'in' ? (parseFloat(x.jul) || 0) : 0), 0);
-        const remJ = (inboundJ > 0 ? inboundJ : jul) - outJ;   // 입고 기록되면 입고가 실제 재고 기준(의뢰에 더하지 않음)
+        const remJ = (jul + inboundJ) - outJ;   // 예상 재고 = 의뢰(받은 기준) + 입고(추가분) − 출고
         const jc = remJ < 0 ? '#c00' : remJ === 0 ? '#047857' : '#c0271f';
         const btn = mine.length === 0
           ? `<button class="dash-action-btn dash-shipment-btn qa-ship-add" data-id="${wo.id}" data-item-idx="${idx}" title="입·출고 입력">+ 입·출고</button>`
@@ -18435,7 +18435,7 @@ function validateBlendSum(blends, label) {
         <td class="col-date">${formatYMD(wo.date)}</td>
         <td>${itemLines}</td>
         <td>${colorLines}</td>
-        <td class="col-num" style="text-align:right;" title="예상 재고 절 = ${inJ > 0 ? '입고 ' + inJ + '절(실제)' : '의뢰 ' + totalJul + '절'} − 출고 ${shJul}절">${qtyCol}</td>
+        <td class="col-num" style="text-align:right;" title="예상 재고 절 = 의뢰 ${totalJul}절${inJ > 0 ? ' + 입고 ' + inJ + '절' : ''} − 출고 ${shJul}절">${qtyCol}</td>
         <td class="col-action ov-knit-ship-cell">${shipCol}</td>
         <td>${escapeHtml(wo.recipient || '-')}</td>
         ${renderEditableCell(wo, 'internal_memo', wo.internal_memo, 'text')}
@@ -18633,8 +18633,8 @@ function validateBlendSum(blends, label) {
         const oK = mine2.reduce((s,sh) => s + (sh.dir === 'in' ? 0 : (parseFloat(sh.kg)  || 0)), 0);
         const iJ = mine2.reduce((s,sh) => s + (sh.dir === 'in' ? (parseFloat(sh.jul) || 0) : 0), 0);
         const iK = mine2.reduce((s,sh) => s + (sh.dir === 'in' ? (parseFloat(sh.kg)  || 0) : 0), 0);
-        sumRemainJul += (iJ > 0 ? iJ : iJul) - oJ;
-        sumRemainKg  += (iK > 0 ? iK : iKg)  - oK;
+        sumRemainJul += (iJul + iJ) - oJ;
+        sumRemainKg  += (iKg  + iK) - oK;
       });
     });
     const julColor = sumRemainJul < 0 ? '#c00' : sumRemainJul === 0 ? '#047857' : '#c0271f';
@@ -18772,8 +18772,8 @@ function validateBlendSum(blends, label) {
         const inboundJul = mine.reduce((s,x) => s + (x.dir === 'in' ? (parseFloat(x.jul) || 0) : 0), 0);
         const inboundKg = mine.reduce((s,x) => s + (x.dir === 'in' ? (parseFloat(x.kg) || 0) : 0), 0);
         const shippedKg = mine.reduce((s,x) => s + (x.dir === 'in' ? 0 : (parseFloat(x.kg) || 0)), 0);
-        const remainJul = (inboundJul > 0 ? inboundJul : jul) - shippedJul;
-        const remainKg = (inboundKg > 0 ? inboundKg : itemKg) - shippedKg;
+        const remainJul = (jul + inboundJul) - shippedJul;
+        const remainKg = (itemKg + inboundKg) - shippedKg;
         const g = gubunOfItem(it.item), o = orgOfItem(it.item);
         const shipBtn = mine.length === 0
           ? `<button class="dash-action-btn dash-shipment-btn" data-id="${wo.id}" data-item-idx="${idx}">+ 입력</button>`
@@ -26250,8 +26250,8 @@ function validateBlendSum(blends, label) {
     const inJul  = shipments.reduce((s,sh) => s + ((mine(sh) && isIn(sh)) ? (parseFloat(sh.jul) || 0) : 0), 0);
     const inKg   = shipments.reduce((s,sh) => s + ((mine(sh) && isIn(sh)) ? (parseFloat(sh.kg)  || 0) : 0), 0);
     const movedJul = outJul + inJul, movedKg = outKg + inKg;          // 총 이동량(참고용)
-    const remainJul = (inJul > 0 ? inJul : totalJul) - outJul, remainKg = (inKg > 0 ? inKg : totalKg) - outKg;   // 예상 재고 = (입고 있으면 입고, 없으면 의뢰) − 출고
-    const baseJul = inJul > 0 ? inJul : totalJul, baseKg = inKg > 0 ? inKg : totalKg;
+    const remainJul = totalJul + inJul - outJul, remainKg = totalKg + inKg - outKg;   // 예상 재고 = 의뢰 + 입고 − 출고
+    const combinedJul = totalJul + inJul, combinedKg = totalKg + inKg;
     const avgKgPerJul = totalJul > 0 ? totalKg / totalJul : (parseFloat(_item.kg_per_jul) || 21);
     let addDir = 'out';   // 새 추가 시 구분
     
@@ -26275,7 +26275,7 @@ function validateBlendSum(blends, label) {
           <div style="font-size:12px;line-height:1.6;">
             품목: ${escapeHtml(_item.item || '-')} / 컬러: ${escapeHtml(_item.color || '-')}<br>
             편직 공장: ${escapeHtml(wo.recipient || '-')}<br>
-            <strong>${inJul > 0 ? `📥 입고 ${inJul}절 / ${inKg.toFixed(1)}kg (실제)  ·  의뢰 ${totalJul}절 / ${totalKg.toFixed(1)}kg` : `의뢰 ${totalJul}절 / ${totalKg.toFixed(1)}kg`}</strong><br>
+            <strong>의뢰 ${totalJul}절 / ${totalKg.toFixed(1)}kg${inJul > 0 ? ` &nbsp;+&nbsp; 📥 입고 ${inJul}절 / ${inKg.toFixed(1)}kg &nbsp;=&nbsp; 합계 ${combinedJul}절 / ${combinedKg.toFixed(1)}kg` : ''}</strong><br>
             <strong style="color:${remainJul < 0 ? '#c00' : '#047857'};">🚚 출고 ${outJul}절 / ${outKg.toFixed(1)}kg &nbsp;→&nbsp; 📦 예상 재고 ${remainJul}절 / ${remainKg.toFixed(1)}kg</strong>
           </div>
         </div>`;
@@ -27297,7 +27297,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix208';
+  const VERSION = 'v2.53 hotfix209';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
