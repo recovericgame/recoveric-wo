@@ -17120,7 +17120,19 @@ function validateBlendSum(blends, label) {
         });
       });
     });
-    
+
+    // 나염작지: 원단이 현재 머무는 공장(나염/가공/후가공/재가공)의 일일보고에 "작업 중"으로 노출.
+    //   우리 쪽 도착(입고/QC 대기/완료)이면 어느 보고에도 안 뜸.
+    (state.allWorkOrders || []).forEach(wo => {
+      if (wo.type !== '나염' || wo.deleted || wo.completed) return;
+      const factory = printCurrentFactory(wo);   // null이면 우리 쪽 → 제외
+      if (!factory) return;
+      const r = normalizeVendorName ? normalizeVendorName(factory) : factory;
+      if (!r) return;
+      if (!acc[r]) acc[r] = [];
+      acc[r].push({ wo, isPrint: true, colorIdx: -1, processTag: '나염', isFix: false, statusLabel: printStageLabel(wo) });
+    });
+
     // 거래처별 카운트 (정렬용)
     const recipients = Object.keys(acc).sort((a, b) => acc[b].length - acc[a].length);
     return { recipients, acc };
@@ -17167,6 +17179,27 @@ function validateBlendSum(blends, label) {
   }
   function renderReportRow(item) {
     const { wo, colorIdx, processTag, isFix, statusLabel } = item;
+    // 나염작지 — colors가 없으므로 전용 렌더 (디자인명 + 수량 + 공정 상태)
+    if (item.isPrint) {
+      const urgentP = !!wo.urgent;
+      const elapsedP = (() => {
+        if (!wo.date) return '';
+        const d0 = new Date(wo.date + 'T00:00:00'); const now = new Date(); now.setHours(0, 0, 0, 0);
+        const diff = Math.floor((now.getTime() - d0.getTime()) / 86400000); return diff >= 0 ? diff + '일' : '';
+      })();
+      const tagP = `<span class="dr-process-tag">나염</span>`;
+      const designP = `[${escapeHtml(printTypeLabel(wo.print_type))}] ${escapeHtml(wo.design_name || '')}`;
+      const badgeP = statusLabel ? `<span class="dr-status-badge">${escapeHtml(statusLabel)}</span>` : '';
+      return `<tr class="dr-row${urgentP ? ' dr-urgent' : ''}">
+        <td class="dr-urgent-col">${urgentP ? '!' : ''}</td>
+        <td class="dr-date">${escapeHtml(shortOrderDate(wo.date))}</td>
+        <td class="dr-elapsed">${elapsedP}</td>
+        <td class="dr-item">${tagP}${designP}</td>
+        <td class="dr-color">${escapeHtml(wo.wo_number || '')}</td>
+        <td class="dr-qty">${wo.print_total_qty || 0}절</td>
+        <td class="dr-lack">${badgeP}</td>
+      </tr>`;
+    }
     const c = (wo.colors || [])[colorIdx] || {};
     const _colorStamp = drColorStamp(wo, isFix);
     
@@ -21721,12 +21754,17 @@ function validateBlendSum(blends, label) {
       dest_cat: wo.dest_cat || (PRINT_SUPPLY.includes(wo.dest) ? wo.dest : '가공공장'),
       dest_vendor: wo.dest_vendor || (PRINT_SUPPLY.includes(wo.dest) ? '' : (wo.dest || '')),
       print_factory: wo.print_factory || '',
+      chain: {
+        gagong:   { use: !!(wo.print_chain && wo.print_chain.gagong && wo.print_chain.gagong.use),     vendor: (wo.print_chain && wo.print_chain.gagong && wo.print_chain.gagong.vendor) || '' },
+        hugagong: { use: !!(wo.print_chain && wo.print_chain.hugagong && wo.print_chain.hugagong.use), vendor: (wo.print_chain && wo.print_chain.hugagong && wo.print_chain.hugagong.vendor) || '' },
+      },
       stamps: Array.isArray(wo.stamps) ? wo.stamps.filter(s => PRINT_STAMPS.includes(s)) : [],
       rows: Array.isArray(wo.print_rows) && wo.print_rows.length ? JSON.parse(JSON.stringify(wo.print_rows)) : [blankPrintRow()],
       proc_memo: wo.proc_memo || '',
       post_memo: wo.post_memo || '',
     } : {
       id: null, print_type: 'AP', design_name: '', design_image: '', dest_cat: '가공공장', dest_vendor: '', print_factory: '',
+      chain: { gagong: { use: false, vendor: '' }, hugagong: { use: false, vendor: '' } },
       stamps: [], rows: [blankPrintRow()], proc_memo: '', post_memo: '',
     };
     // 인라인 작성 화면(가운데 폼 + 오른쪽 실시간 미리보기)
@@ -21801,6 +21839,10 @@ function validateBlendSum(blends, label) {
     const destVendorOpts = ['<option value="">— 업체 선택 —</option>', ...nayeomVendorOptions(d.dest_cat).map(n => `<option value="${escapeHtml(n)}"${d.dest_vendor === n ? ' selected' : ''}>${escapeHtml(n)}</option>`)].join('');
     const factoryNames = Array.from(new Set((state.vendors || []).filter(v => v && v.name).map(v => String(v.name).trim()))).sort((a, b) => a.localeCompare(b, 'ko'));
     const factoryOpts = ['<option value="">— 선택 —</option>', ...factoryNames.map(n => `<option value="${escapeHtml(n)}"${d.print_factory === n ? ' selected' : ''}>${escapeHtml(n)}</option>`)].join('');
+    const _cg = (d.chain && d.chain.gagong) || { use: false, vendor: '' };
+    const _ch = (d.chain && d.chain.hugagong) || { use: false, vendor: '' };
+    const gagongOpts = ['<option value="">— 가공업체 —</option>', ...nayeomVendorOptions('가공공장').map(n => `<option value="${escapeHtml(n)}"${_cg.vendor === n ? ' selected' : ''}>${escapeHtml(n)}</option>`)].join('');
+    const hugagongOpts = ['<option value="">— 후가공업체 —</option>', ...nayeomVendorOptions('후가공공장').map(n => `<option value="${escapeHtml(n)}"${_ch.vendor === n ? ' selected' : ''}>${escapeHtml(n)}</option>`)].join('');
     const rowsHtml = d.rows.map((r, i) => renderPrintRow(r, i)).join('');
     const imgHtml = d.design_image
       ? `<img src="${d.design_image}" style="max-width:100%;max-height:180px;object-fit:contain;">`
@@ -21839,6 +21881,17 @@ function validateBlendSum(blends, label) {
         <label style="font-size:12px;font-weight:700;color:#334;">스탬프</label>
         <div id="np-stamps" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:5px;">
           ${PRINT_STAMPS.map(s => `<button type="button" class="np-stamp${(d.stamps || []).includes(s) ? ' active' : ''}" data-stamp="${s}" style="border:1px solid ${(d.stamps || []).includes(s) ? '#2563eb' : '#d0d5dd'};background:${(d.stamps || []).includes(s) ? '#2563eb' : '#fff'};color:${(d.stamps || []).includes(s) ? '#fff' : '#475569'};border-radius:999px;padding:5px 13px;font-size:12px;font-weight:700;cursor:pointer;">${s}</button>`).join('')}
+        </div>
+      </div>
+
+      <div>
+        <label style="font-size:12.5px;font-weight:700;color:#334;">공정 경로 <span style="color:#64748b;font-weight:500;">· 나염공장 → (가공) → (후가공) → 최종 입고 · 필요한 공장만 체크</span></label>
+        <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:6px;align-items:center;">
+          <label style="display:inline-flex;align-items:center;gap:6px;font-size:12.5px;font-weight:700;color:#334;white-space:nowrap;"><input type="checkbox" id="np-chain-gagong-use"${_cg.use ? ' checked' : ''}> 가공공장</label>
+          <select id="np-chain-gagong-vendor" style="flex:0 0 200px;padding:8px;border:1px solid #d0d5dd;border-radius:7px;font-size:13px;">${gagongOpts}</select>
+          <span style="width:1px;height:22px;background:#e2e8f0;"></span>
+          <label style="display:inline-flex;align-items:center;gap:6px;font-size:12.5px;font-weight:700;color:#334;white-space:nowrap;"><input type="checkbox" id="np-chain-hugagong-use"${_ch.use ? ' checked' : ''}> 후가공공장</label>
+          <select id="np-chain-hugagong-vendor" style="flex:0 0 200px;padding:8px;border:1px solid #d0d5dd;border-radius:7px;font-size:13px;">${hugagongOpts}</select>
         </div>
       </div>
 
@@ -21884,6 +21937,11 @@ function validateBlendSum(blends, label) {
     if (g('np-dest-cat')) d.dest_cat = g('np-dest-cat').value;
     if (g('np-dest-vendor')) d.dest_vendor = g('np-dest-vendor').value;
     if (g('np-factory')) d.print_factory = g('np-factory').value;
+    if (!d.chain) d.chain = { gagong: { use: false, vendor: '' }, hugagong: { use: false, vendor: '' } };
+    if (g('np-chain-gagong-use')) d.chain.gagong.use = g('np-chain-gagong-use').checked;
+    if (g('np-chain-gagong-vendor')) d.chain.gagong.vendor = g('np-chain-gagong-vendor').value;
+    if (g('np-chain-hugagong-use')) d.chain.hugagong.use = g('np-chain-hugagong-use').checked;
+    if (g('np-chain-hugagong-vendor')) d.chain.hugagong.vendor = g('np-chain-hugagong-vendor').value;
     if (g('np-design-name')) d.design_name = g('np-design-name').value;
     if (g('np-proc-memo')) d.proc_memo = g('np-proc-memo').value;
     if (g('np-post-memo')) d.post_memo = g('np-post-memo').value;
@@ -22022,7 +22080,7 @@ function validateBlendSum(blends, label) {
       if (d.id) {
         await updateDoc(doc(db, 'workorders', d.id), {
           print_type: d.print_type, design_name: d.design_name.trim(), design_image: d.design_image || '',
-          dest: d.dest_vendor || d.dest_cat || "", dest_cat: d.dest_cat, dest_vendor: d.dest_vendor, print_factory: d.print_factory, print_rows: validRows, proc_memo: d.proc_memo, post_memo: d.post_memo,
+          dest: d.dest_vendor || d.dest_cat || "", dest_cat: d.dest_cat, dest_vendor: d.dest_vendor, print_factory: d.print_factory, print_chain: { gagong: { use: !!(d.chain && d.chain.gagong && d.chain.gagong.use), vendor: (d.chain && d.chain.gagong && d.chain.gagong.vendor) || "" }, hugagong: { use: !!(d.chain && d.chain.hugagong && d.chain.hugagong.use), vendor: (d.chain && d.chain.hugagong && d.chain.hugagong.vendor) || "" } }, print_rows: validRows, proc_memo: d.proc_memo, post_memo: d.post_memo,
           stamps: d.stamps || [],
           print_total_qty: totalQty, subject: `[${printTypeLabel(d.print_type)}] ${d.design_name.trim()}`,
           updated_at: serverTimestamp(), updated_by: state.user.email
@@ -22039,7 +22097,7 @@ function validateBlendSum(blends, label) {
         const ref = await addDoc(collection(db, 'workorders'), {
           type: '나염', wo_number, date: todayYMD(), title: '나염 작업 지시서',
           print_type: d.print_type, design_name: d.design_name.trim(), design_image: d.design_image || '',
-          dest: d.dest_vendor || d.dest_cat || "", dest_cat: d.dest_cat, dest_vendor: d.dest_vendor, print_factory: d.print_factory, print_rows: validRows, proc_memo: d.proc_memo, post_memo: d.post_memo,
+          dest: d.dest_vendor || d.dest_cat || "", dest_cat: d.dest_cat, dest_vendor: d.dest_vendor, print_factory: d.print_factory, print_chain: { gagong: { use: !!(d.chain && d.chain.gagong && d.chain.gagong.use), vendor: (d.chain && d.chain.gagong && d.chain.gagong.vendor) || "" }, hugagong: { use: !!(d.chain && d.chain.hugagong && d.chain.hugagong.use), vendor: (d.chain && d.chain.hugagong && d.chain.hugagong.vendor) || "" } }, print_rows: validRows, proc_memo: d.proc_memo, post_memo: d.post_memo,
           print_total_qty: totalQty, subject: `[${printTypeLabel(d.print_type)}] ${d.design_name.trim()}`,
           stamps: d.stamps || [], memo: '', completed: false, deleted: false,
           created_at: serverTimestamp(), updated_at: serverTimestamp(),
@@ -22060,6 +22118,128 @@ function validateBlendSum(blends, label) {
     }
   }
 
+  // ===== 나염 공정 상태머신 (작지 단위) =====
+  // 경로: 나염공장(print_factory) → [가공공장] → [후가공공장] → 최종입고 → final QC → 완료/부족/재가공
+  // wo.print_chain = { gagong:{use,vendor,sent,done}, hugagong:{use,vendor,sent,done} }
+  // wo.print_recv_qty(최종 입고 절수) · wo.qc_status('none'|'done') · wo.shortage_status · wo.rework{active,vendor,sent}
+  function printChainOf(wo) {
+    const c = wo.print_chain || {};
+    return {
+      gagong:   { use: !!(c.gagong   && c.gagong.use),   vendor: (c.gagong   && c.gagong.vendor)   || '', sent: (c.gagong   && c.gagong.sent)   || null, done: (c.gagong   && c.gagong.done)   || null },
+      hugagong: { use: !!(c.hugagong && c.hugagong.use), vendor: (c.hugagong && c.hugagong.vendor) || '', sent: (c.hugagong && c.hugagong.sent) || null, done: (c.hugagong && c.hugagong.done) || null },
+    };
+  }
+  function printOrderedQty(wo) { return (wo.print_rows || []).reduce((s, r) => s + (Number(r.qty) || 0), 0); }
+  function printReceivedQty(wo) { const q = wo.print_recv_qty; return (q === '' || q == null) ? null : (Number(q) || 0); }
+  function printShortageQty(wo) {
+    const recv = printReceivedQty(wo); if (recv == null) return 0;
+    const settled = Number(wo.shortage_rework || 0) + Number(wo.shortage_discard || 0) + Number(wo.shortage_closed || 0);
+    return Math.max(0, printOrderedQty(wo) - recv - settled);
+  }
+  // 현재 공정 단계 판정
+  function printStageState(wo) {
+    if (wo.completed) return { stage: 'completed' };
+    const ch = printChainOf(wo);
+    if (wo.rework && wo.rework.active) return { stage: 'rework', vendor: wo.rework.vendor };
+    if (wo.qc_status === 'done') {
+      const sh = printShortageQty(wo);
+      if (sh > 0) return { stage: 'shortage', short: sh };
+      return { stage: 'qc_done' };
+    }
+    if (printReceivedQty(wo) != null) return { stage: 'received' };           // 입고됨 → final QC 대기
+    // 공장 체인 진행 중
+    if (ch.gagong.use && !ch.gagong.sent) return { stage: 'nayeom', next: 'gagong' };   // 나염중 → 가공 넘김 차례
+    if (ch.gagong.use && ch.gagong.sent && !ch.gagong.done) return { stage: 'gagong', vendor: ch.gagong.vendor };
+    if (ch.hugagong.use && !ch.hugagong.sent) return { stage: (ch.gagong.use ? 'gagong_done' : 'nayeom'), next: 'hugagong' };
+    if (ch.hugagong.use && ch.hugagong.sent && !ch.hugagong.done) return { stage: 'hugagong', vendor: ch.hugagong.vendor };
+    return { stage: 'await_receive' };   // 모든 공장 완료(또는 공장 없음) → 최종 입고 대기
+  }
+  // 원단이 현재 물리적으로 머무는 공장(일일보고 노출용). 우리 쪽(입고/QC 대기)이면 null.
+  function printCurrentFactory(wo) {
+    const st = printStageState(wo);
+    const ch = printChainOf(wo);
+    switch (st.stage) {
+      case 'rework': return wo.rework.vendor || '';
+      case 'nayeom': return wo.print_factory || '';
+      case 'gagong': return ch.gagong.vendor || '';
+      case 'gagong_done': return ch.gagong.vendor || wo.print_factory || '';
+      case 'hugagong': return ch.hugagong.vendor || '';
+      case 'await_receive': case 'received': case 'qc_done': case 'shortage': case 'completed': return null;
+      default: return wo.print_factory || '';
+    }
+  }
+  function printStageLabel(wo) {
+    const st = printStageState(wo);
+    const ch = printChainOf(wo);
+    switch (st.stage) {
+      case 'completed': return '완료';
+      case 'rework': return `재가공중·${st.vendor || ''}`;
+      case 'shortage': return `부족 ${st.short}절`;
+      case 'qc_done': return 'QC 통과';
+      case 'received': return 'final QC 대기';
+      case 'nayeom': return `나염중·${wo.print_factory || ''}`;
+      case 'gagong': return `가공중·${st.vendor || ''}`;
+      case 'gagong_done': return `가공완료·${(ch.gagong.vendor) || ''}`;
+      case 'hugagong': return `후가공중·${st.vendor || ''}`;
+      case 'await_receive': return '입고 대기';
+      default: return '진행 중';
+    }
+  }
+
+  // 나염 공정 상태 전이 (모든 단계 처리). 저장 후 대시보드 갱신은 호출부에서.
+  async function setPrintStage(woId, action, payload) {
+    const wo = state.allWorkOrders.find(w => w.id === woId);
+    if (!wo) throw new Error('작지를 찾을 수 없음');
+    const now = new Date().toISOString();
+    const ch = JSON.parse(JSON.stringify(printChainOf(wo)));
+    const upd = {};
+    payload = payload || {};
+    switch (action) {
+      case 'gagong-send':   ch.gagong.sent = now; upd.print_chain = ch; break;
+      case 'gagong-done':   ch.gagong.done = now; upd.print_chain = ch; break;
+      case 'gagong-revert-send': ch.gagong.sent = null; ch.gagong.done = null; upd.print_chain = ch; break;
+      case 'gagong-revert-done': ch.gagong.done = null; upd.print_chain = ch; break;
+      case 'hugagong-send': ch.hugagong.sent = now; upd.print_chain = ch; break;
+      case 'hugagong-done': ch.hugagong.done = now; upd.print_chain = ch; break;
+      case 'hugagong-revert-send': ch.hugagong.sent = null; ch.hugagong.done = null; upd.print_chain = ch; break;
+      case 'hugagong-revert-done': ch.hugagong.done = null; upd.print_chain = ch; break;
+      case 'receive':       upd.print_recv_qty = Number(payload.qty) || 0; upd.print_recv_at = now; break;
+      case 'receive-revert': upd.print_recv_qty = null; upd.qc_status = 'none'; break;
+      case 'qc-done':       upd.qc_status = 'done'; upd.qc_done_at = now; break;
+      case 'qc-revert':     upd.qc_status = 'none'; break;
+      case 'rework': {      // 재가공 보냄 (가공/후가공 업체 선택)
+        upd.rework = { active: true, vendor: payload.vendor || '', sent: now };
+        upd.qc_status = 'none'; upd.print_recv_qty = null;  // 다시 받아 재QC
+        upd.rework_count = (Number(wo.rework_count) || 0) + 1;
+        break;
+      }
+      case 'rework-done':   upd.rework = { active: false }; break;   // 재가공 완료 → 다시 입고 대기
+      case 'shortage-rework': upd.rework = { active: true, vendor: payload.vendor || '', sent: now }; upd.qc_status = 'none'; upd.print_recv_qty = null; break;
+      case 'shortage-discard': upd.shortage_discard = (Number(wo.shortage_discard) || 0) + (Number(payload.qty) || 0); break;
+      case 'shortage-close':   upd.shortage_closed = (Number(wo.shortage_closed) || 0) + (Number(payload.qty) || 0); break;
+      case 'complete':      upd.completed = true; upd.completed_at = now; break;
+      case 'uncomplete':    upd.completed = false; break;
+      default: throw new Error('알 수 없는 동작: ' + action);
+    }
+    upd.updated_at = serverTimestamp(); upd.updated_by = state.user.email;
+    await updateDoc(doc(db, 'workorders', woId), upd);
+    Object.keys(upd).forEach(k => { if (k !== 'updated_at') wo[k] = upd[k]; });
+    return wo;
+  }
+
+  // 재가공 보낼 공장 선택 (가공/후가공 업체 중, 중복 제거, 나염공장 제외)
+  function pickReworkVendor(wo) {
+    const ch = printChainOf(wo);
+    const vendors = [...new Set([ch.gagong.vendor, ch.hugagong.vendor].filter(Boolean))];
+    if (vendors.length === 0) { toast('재가공 보낼 가공/후가공 업체가 없습니다. 작지 수정에서 업체를 지정해 주세요', 'info'); return null; }
+    if (vendors.length === 1) { return confirm(`${vendors[0]}(으)로 재가공을 보낼까요?`) ? vendors[0] : null; }
+    const c = prompt(`재가공 보낼 공장 선택:\n1 = ${vendors[0]}\n2 = ${vendors[1]}\n\n번호 입력`, '1');
+    if (c == null) return null;
+    if (c.trim() === '1') return vendors[0];
+    if (c.trim() === '2') return vendors[1];
+    return null;
+  }
+
   function renderPrintDash() {
     const list = (state.allWorkOrders || [])
       .filter(w => w.type === '나염' && !w.deleted && !w.completed)
@@ -22072,26 +22252,56 @@ function validateBlendSum(blends, label) {
       const admin = isAdminUser();
       const stampBadges = (w.stamps || []).filter(s => PRINT_STAMPS.includes(s))
         .map(s => `<span style="display:inline-block;background:#eef2ff;border:1px solid #c7d2fe;color:#3730a3;border-radius:5px;padding:1px 6px;font-size:10px;font-weight:700;margin:1px 2px;">${escapeHtml(s)}</span>`).join('');
+      const stLabel = printStageLabel(w);
+      const stActions = printActionButtons(w, admin);
       return `<tr>
         <td style="font-weight:700;color:#1d4ed8;">${escapeHtml(w.wo_number || '')}</td>
         <td style="text-align:center;"><span style="background:#1e293b;color:#fff;border-radius:5px;padding:2px 8px;font-size:11px;font-weight:700;">${escapeHtml(printTypeLabel(w.print_type))}</span></td>
         <td>${escapeHtml(w.design_name || '')}${stampBadges ? '<br>' + stampBadges : ''}</td>
-        <td style="text-align:center;">${escapeHtml(w.dest || '')}</td>
-        <td style="text-align:center;">${rowCount}줄</td>
-        <td style="text-align:center;">${w.print_total_qty || 0} 절</td>
+        <td style="text-align:center;">${rowCount}줄 / ${w.print_total_qty || 0}절</td>
+        <td style="min-width:200px;">
+          <div style="font-size:11px;font-weight:800;color:#1d4ed8;margin-bottom:4px;">${escapeHtml(stLabel)}</div>
+          <div style="display:flex;flex-direction:column;gap:4px;align-items:stretch;">${stActions}</div>
+        </td>
         <td style="text-align:center;white-space:nowrap;">
           <button class="dash-action-btn np-view" data-id="${w.id}" style="background:#eef4fd;color:#1d4ed8;">보기</button>
           ${admin ? `<button class="dash-action-btn np-edit" data-id="${w.id}">수정</button>` : ''}
           ${admin ? `<button class="dash-action-btn np-copy" data-id="${w.id}">복사</button>` : ''}
-          ${admin ? `<button class="dash-action-btn np-complete" data-id="${w.id}" style="background:#f0fdf4;border-color:#86efac;color:#15803d;font-weight:700;">완료</button>` : ''}
           ${admin ? `<button class="dash-action-btn np-del" data-id="${w.id}" style="background:#fff;border-color:#fca5a5;color:#dc2626;">삭제</button>` : ''}
         </td>
       </tr>`;
     }).join('');
     return `<table class="dash-table"><thead><tr>
       <th>작지번호</th><th style="text-align:center;">나염종류</th><th>디자인명</th>
-      <th style="text-align:center;">출고처</th><th style="text-align:center;">조합</th><th style="text-align:center;">수량</th><th style="text-align:center;">관리</th>
+      <th style="text-align:center;">조합/수량</th><th>공정 진행</th><th style="text-align:center;">관리</th>
     </tr></thead><tbody>${rows}</tbody></table>`;
+  }
+
+  // 나염 공정 단계별 액션 버튼 (관리자)
+  function printActionButtons(w, admin) {
+    if (!admin) return '';
+    const st = printStageState(w);
+    const ch = printChainOf(w);
+    const b = (action, label, style) => `<button class="dash-action-btn np-stage" data-id="${w.id}" data-action="${action}" style="font-size:11px;padding:4px 8px;${style || ''}">${escapeHtml(label)}</button>`;
+    const primary = 'background:#eff6ff;color:#1d4ed8;border-color:#bfdbfe;font-weight:700;';
+    const blue = 'background:#2563eb;color:#fff;border-color:#1d4ed8;font-weight:700;';
+    const green = 'background:#f0fdf4;color:#15803d;border-color:#86efac;font-weight:700;';
+    const revert = 'background:#fff;color:#64748b;border-color:#e2e8f0;font-size:10px;padding:3px 7px;';
+    switch (st.stage) {
+      case 'nayeom':
+        if (st.next === 'gagong')   return b('gagong-send', `가공 넘김·${ch.gagong.vendor || '가공'}`, primary);
+        if (st.next === 'hugagong') return b('hugagong-send', `후가공 넘김·${ch.hugagong.vendor || '후가공'}`, primary);
+        return b('receive-open', '입고', blue);
+      case 'gagong':      return b('gagong-done', '가공 완료', primary) + b('gagong-revert-send', '넘김 취소', revert);
+      case 'gagong_done': return b('hugagong-send', `후가공 넘김·${ch.hugagong.vendor || '후가공'}`, primary) + b('gagong-revert-done', '가공완료 취소', revert);
+      case 'hugagong':    return b('hugagong-done', '후가공 완료·입고 대기', blue) + b('hugagong-revert-send', '넘김 취소', revert);
+      case 'await_receive': return b('receive-open', '입고', blue);
+      case 'received':    return b('qc-done', 'final QC 통과', green) + b('rework-open', '재가공', primary) + b('receive-revert', '입고 취소', revert);
+      case 'qc_done':     return b('complete', '완료', green);
+      case 'shortage':    return b('shortage-open', `부족 처리 (${st.short}절)`, primary) + b('complete', '완료(종결)', green);
+      case 'rework':      return b('rework-done', '재가공 완료·입고 대기', blue);
+      default: return '';
+    }
   }
 
   function printPreviewHTML(wo) {
@@ -23730,8 +23940,45 @@ function validateBlendSum(blends, label) {
         e.stopPropagation();
         const wo = state.allWorkOrders.find(w => w.id === btn.dataset.id); if (!wo) return;
         const clonedN = JSON.parse(JSON.stringify(wo));
-        delete clonedN.id; delete clonedN.wo_number; delete clonedN.created_at; delete clonedN.updated_at; delete clonedN.completed; delete clonedN.completed_at;
+        delete clonedN.id; delete clonedN.wo_number; delete clonedN.created_at; delete clonedN.updated_at;
+        delete clonedN.completed; delete clonedN.completed_at; delete clonedN.print_chain; delete clonedN.print_recv_qty;
+        delete clonedN.qc_status; delete clonedN.rework; delete clonedN.shortage_discard; delete clonedN.shortage_closed; delete clonedN.shortage_rework;
         if (window.__showNayeomForm) window.__showNayeomForm(clonedN);
+      });
+    });
+    // 나염 공정 단계 버튼 (넘김·입고·QC·재가공·부족·완료)
+    document.querySelectorAll('#dash-body .np-stage').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (!isAdminUser()) { toast('공정 처리는 대표만 가능합니다', 'info'); return; }
+        const id = btn.dataset.id; const action = btn.dataset.action;
+        const wo = state.allWorkOrders.find(w => w.id === id); if (!wo) return;
+        try {
+          let real = action; const payload = {};
+          if (action === 'receive-open') {
+            const q = prompt(`최종 입고 절수를 입력하세요 (의뢰 ${printOrderedQty(wo)}절)`, String(printOrderedQty(wo)));
+            if (q == null) return; real = 'receive'; payload.qty = Number(q) || 0;
+          } else if (action === 'rework-open') {
+            const v = pickReworkVendor(wo); if (v == null) return; real = 'rework'; payload.vendor = v;
+          } else if (action === 'shortage-open') {
+            const sh = printShortageQty(wo);
+            const choice = prompt(`부족 ${sh}절 처리 방법:\n1 = 재가공\n2 = 땡처리\n3 = 종결\n\n번호 입력`, '1');
+            if (choice == null) return;
+            const c = choice.trim();
+            if (c === '1') { const v = pickReworkVendor(wo); if (v == null) return; real = 'shortage-rework'; payload.vendor = v; }
+            else if (c === '2') { real = 'shortage-discard'; payload.qty = sh; }
+            else if (c === '3') { real = 'shortage-close'; payload.qty = sh; }
+            else return;
+          } else if (action === 'complete') {
+            if (!confirm('이 나염작지를 완료 처리할까요?\n완료하면 나염 진행에서 사라지고 "완료된 의뢰서"에서 볼 수 있습니다.')) return;
+          } else if (action.indexOf('revert') >= 0) {
+            if (!confirm('이 단계를 되돌릴까요?')) return;
+          }
+          btn.disabled = true;
+          await setPrintStage(id, real, payload);
+          toast('처리되었습니다', 'success');
+          renderDashboard();
+        } catch (err) { btn.disabled = false; toast('처리 실패: ' + (err.message || err), 'error'); }
       });
     });
     document.querySelectorAll('#dash-body .np-complete').forEach(btn => {
@@ -27292,7 +27539,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix214';
+  const VERSION = 'v2.53 hotfix215';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
