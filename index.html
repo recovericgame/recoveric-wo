@@ -22319,8 +22319,8 @@ function validateBlendSum(blends, label) {
       case 'completed': return '완료';
       case 'rework': return `재가공중 ${st.vendor || ''}`;
       case 'shortage': return `부족 ${st.short}절`;
-      case 'qc_pending': return st.nth > 1 ? `${st.nth}차 QC 대기` : 'QC 대기';
-      case 'qc_defect': return 'QC 불량';
+      case 'qc_pending': { const _sh = printRowShortage(r); return (st.nth > 1 ? `${st.nth}차 QC 대기` : 'QC 대기') + (_sh > 0 ? ` · 부족 ${_sh}절` : ''); }
+      case 'qc_defect': { const _sh = printRowShortage(r); return 'QC 불량' + (_sh > 0 ? ` · 부족 ${_sh}절` : ''); }
       case 'await_complete': return st.qc === 'accept' ? 'QC 수용 · 완료 대기' : (st.qc === 'done' ? 'QC 통과 · 완료 대기' : '완료 대기');
       case 'nayeom': return `나염중 ${wo.print_factory || ''}`;
       case 'gagong': return `가공중 ${st.vendor || ''}`;
@@ -22338,7 +22338,13 @@ function validateBlendSum(blends, label) {
       case 'nayeom': return wo.print_factory || '';
       case 'gagong': case 'gagong_done': return ch.gagong.vendor || '';
       case 'hugagong': return ch.hugagong.vendor || '';
-      default: return null;
+      default: {
+        // hotfix225: 부족 미해결이면 마지막 공정 공장에 일일보고 노출 (확정 규칙: 부족 = 노출)
+        if (!r.completed && printRowRecv(r) != null && printRowShortage(r) > 0) {
+          return (ch.hugagong.use && ch.hugagong.vendor) || (ch.gagong.use && ch.gagong.vendor) || wo.print_factory || '';
+        }
+        return null;
+      }
     }
   }
   // 구역 분류: 공장 진행 + QC 검수(직원) vs 최종 판정(담당자)
@@ -22374,6 +22380,8 @@ function validateBlendSum(blends, label) {
         if (!Array.isArray(r.receipts)) r.receipts = [];
         r.receipts.push({ receipt_no: r.receipts.length + 1, qty: r.recv_qty, received_at: now, qc_status: 'pending', qc: {} });
         r.qc_status = 'pending';
+        // hotfix225: 부족 사유 저장 (QC 담당자 전달용 — 염색가공과 동일)
+        if (payload.reason !== undefined) r.shortage_reason = String(payload.reason || '');
         break;
       }
       case 'receive-revert': {
@@ -22472,7 +22480,7 @@ function validateBlendSum(blends, label) {
       if (qs === 'defect') return `<span style="background:#fef2f2;border:1px solid #fca5a5;color:#b91c1c;border-radius:5px;padding:2px 8px;font-size:11px;font-weight:800;">✗ 불량</span>`;
       return `<span style="background:#fff7ed;border:1px solid #fdba74;color:#c2410c;border-radius:5px;padding:2px 8px;font-size:11px;font-weight:800;">⏳ QC 대기</span>`;
     })();
-    const lackLine = lack > 0 ? `<div style="margin-top:5px;font-weight:700;color:#ea580c;font-size:12px;">⏳ 이 시점 부족분: <span style="color:#dc2626;">${lack}절</span> — QC 후 담당자가 부족 처리(재가공·땡처리·종결)합니다</div>` : '';
+    const lackLine = lack > 0 ? `<div style="margin-top:5px;font-weight:700;color:#ea580c;font-size:12px;">⏳ 이 시점 부족분: <span style="color:#dc2626;">${lack}절</span> — QC 후 담당자가 부족 처리(재가공·땡처리·종결)합니다</div>${r.shortage_reason ? `<div style="margin-top:5px;padding:6px 10px;background:#fefce8;border:1px solid #fde047;border-radius:6px;color:#854d0e;font-size:12px;"><strong>⚠ 부족 사유</strong> — ${escapeHtml(r.shortage_reason)}</div>` : ''}` : '';
     const fmtV = v => (v === null || v === undefined || v === '') ? '' : String(v);
     const flags = qc.defect_flags || {};
     let checksHtml = '';
@@ -22735,7 +22743,7 @@ function validateBlendSum(blends, label) {
       worker: entries.filter(e => e.sec === 'worker').length,
       manager: entries.filter(e => e.sec === 'manager').length,
       qc_pending: entries.filter(e => e.stage === 'qc_pending').length,
-      shortage: entries.filter(e => e.stage === 'shortage').length,
+      shortage: entries.filter(e => printRowShortage(e.r) > 0).length,
       rework: entries.filter(e => e.stage === 'rework').length,
     };
     const vendorSet = new Set();
@@ -22759,6 +22767,7 @@ function validateBlendSum(blends, label) {
       if (__printVendor !== 'all' && !printRowVendors(e.wo, e.r).includes(__printVendor)) return false;
       return __printFilter === 'all' ? true
         : (__printFilter === 'worker' || __printFilter === 'manager') ? e.sec === __printFilter
+        : __printFilter === 'shortage' ? printRowShortage(e.r) > 0
         : e.stage === __printFilter;
     };
 
@@ -22778,7 +22787,8 @@ function validateBlendSum(blends, label) {
         const stampBadges = (w.stamps || []).filter(s => PRINT_STAMPS.includes(s))
           .map(s => `<span style="display:inline-block;background:#eef2ff;border:1px solid #c7d2fe;color:#3730a3;border-radius:5px;padding:1px 6px;font-size:10px;font-weight:700;margin:1px 2px;">${escapeHtml(s)}</span>`).join('') || '-';
         const ch = printChainOf(w);
-        const vChip = (label, name) => name ? `<div style="margin:1px 0;"><span style="display:inline-block;background:#f1f5f9;border:1px solid #e2e8f0;color:#475569;border-radius:4px;padding:1px 6px;font-size:10px;font-weight:700;margin-right:4px;">${label}</span><span style="font-size:11px;">${escapeHtml(name)}</span></div>` : '';
+        // hotfix225: 염색가공과 동일한 업체별 컬러 칩(vendorChip) + 정식 업체명(별칭 정규화) 표시
+        const vChip = (label, name) => name ? `<div class="vendor-line"><span class="vendor-tag">${label}</span>${vendorChip(name)}</div>` : '';
         const vendorCell = (vChip('나염', w.print_factory) + (ch.gagong.use ? vChip('가공', ch.gagong.vendor) : '') + (ch.hugagong.use ? vChip('후가공', ch.hugagong.vendor) : '')) || '-';
         const manageCell = `<td class="col-action" rowspan="${n}" style="text-align:center;white-space:nowrap;">
             <button class="dash-action-btn np-view" data-id="${w.id}" style="background:#eef4fd;color:#1d4ed8;">보기</button>
@@ -24507,10 +24517,21 @@ function validateBlendSum(blends, label) {
         const wo = state.allWorkOrders.find(w => w.id === id); if (!wo) return;
         const r = (wo.print_rows || [])[ri]; if (!r) return;
         try {
-          let real = action; const payload = {};
+          let real = action; const payload = {}; let doneMsg = '처리되었습니다';
           if (action === 'receive-open' || action === 'short-open') {
-            const q = prompt(`실제 입고된 절수를 입력하세요 (의뢰 ${printRowOrdered(r)}절)\n\n의뢰보다 적게 왔으면 그 수량을 입력하세요.\n저장 시 QC 대기로 자동 전환됩니다.`, String(printRowOrdered(r)));
+            const ordered = printRowOrdered(r);
+            const q = prompt(`실제 입고된 절수를 입력하세요 (의뢰 ${ordered}절)\n\n의뢰보다 적게 왔으면 그 수량을 입력하세요.\n저장 시 QC 대기로 자동 전환됩니다.`, String(ordered));
             if (q == null) return; real = 'receive'; payload.qty = Number(q) || 0;
+            const lack = Math.max(0, ordered - payload.qty);
+            if (lack > 0) {
+              // hotfix225: 염색가공과 동일 — 부족 발생 시 사유 입력 + 부족 상태 즉시 반영
+              const reason = prompt(`⚠ 부족 ${lack}절 발생 (의뢰 ${ordered}절 중 ${payload.qty}절 입고)\n\n부족 사유를 입력하세요 (QC 담당자에게 전달됩니다)`, '');
+              if (reason == null) return;
+              payload.reason = reason.trim();
+              doneMsg = `입고 ${payload.qty}절 · 부족 ${lack}절 — QC 대기로 전환되었습니다. 부족분은 QC 후 재가공·땡처리·종결로 정리합니다`;
+            } else {
+              doneMsg = `${payload.qty}절 입고 — QC 대기로 전환되었습니다`;
+            }
           } else if (action === 'rework-open') {
             const v = pickPrintReworkVendor(wo); if (v == null) return; real = 'rework'; payload.vendor = v;
           } else if (action === 'shortage-open') {
@@ -24535,7 +24556,7 @@ function validateBlendSum(blends, label) {
           }
           btn.disabled = true;
           await setPrintRowStage(id, ri, real, payload);
-          toast('처리되었습니다', 'success');
+          toast(doneMsg, 'success');
           renderDashboard();
         } catch (err) { btn.disabled = false; toast('처리 실패: ' + (err.message || err), 'error'); }
       });
@@ -28198,7 +28219,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix224';
+  const VERSION = 'v2.53 hotfix225';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
