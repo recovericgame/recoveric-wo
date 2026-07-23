@@ -10964,6 +10964,16 @@ function validateBlendSum(blends, label) {
       const r = wo.recipients || {};
       raw = [r.dyeing, r.processing, r.post].filter(Boolean);
     }
+    else if (wo.type === '나염') {
+      // hotfix232: 염색가공과 동일 — 나염공장·가공·후가공을 모두 별도 필터 옵션으로 노출
+      const pc = wo.print_chain || {};
+      raw = [
+        wo.print_factory,
+        (pc.gagong && pc.gagong.use && pc.gagong.vendor) || '',
+        (pc.hugagong && pc.hugagong.use && pc.hugagong.vendor) || '',
+        wo.dest_vendor || ''
+      ].filter(Boolean);
+    }
     else if (wo.type === 'BT') raw = wo.recipient ? [wo.recipient] : [];
     else if (wo.type === '공문') raw = wo.recipient ? [wo.recipient] : [];
     else if (wo.type === '생지출고') raw = wo.recipient ? [wo.recipient] : [];
@@ -22932,11 +22942,11 @@ function validateBlendSum(blends, label) {
     if (!has) return '';
     return `<div style="margin-top:30px;padding-top:22px;border-top:2px solid #e2e8f0;">
       <div style="font-size:15px;font-weight:800;color:#1e293b;margin-bottom:12px;">ㄴ 나염가공 진행</div>
-      ${renderPrintDash()}
+      ${renderPrintDash(state.ovKnitVendor || 'all')}
     </div>`;
   }
 
-  function renderPrintDash() {
+  function renderPrintDash(embedVendor) {
     const admin = isAdminUser();
     const list = (state.allWorkOrders || [])
       .filter(w => w.type === '나염' && !w.deleted && !w.completed)
@@ -22976,6 +22986,8 @@ function validateBlendSum(blends, label) {
       return tabs + `<div class="dash-empty" style="text-align:center;padding:40px;color:#7a8699;">진행 중인 나염작업지시서가 없습니다.<br><br>우측 상단 <strong>[+ 새 나염작지]</strong> 버튼으로 만들어 보세요.</div>`;
     }
     const pass = (e) => {
+      // hotfix232: 염색가공 진행 화면에 임베드된 경우, 상단 거래처 선택도 함께 적용
+      if (embedVendor && embedVendor !== 'all' && !printRowVendors(e.wo, e.r).includes(embedVendor)) return false;
       if (__printVendor !== 'all' && !printRowVendors(e.wo, e.r).includes(__printVendor)) return false;
       return __printFilter === 'all' ? true
         : (__printFilter === 'worker' || __printFilter === 'manager') ? e.sec === __printFilter
@@ -23050,12 +23062,12 @@ function validateBlendSum(blends, label) {
           if (r.rework && r.rework.active) lines.push(procLine(rowKey, '재가공', r.rework.vendor, 'cur'));
           return lines.filter(Boolean).join('') || '-';
         };
-        const manageCell = `<td class="col-action" rowspan="${n}" style="text-align:center;white-space:nowrap;">
+        const viewCell = `<td class="col-action" rowspan="${n}" style="text-align:center;white-space:nowrap;">
             <button class="dash-action-btn np-view" data-id="${w.id}" style="background:#eef4fd;color:#1d4ed8;">보기</button>
-            ${admin ? `<button class="dash-action-btn np-edit" data-id="${w.id}">수정</button>` : ''}
-            ${admin ? `<button class="dash-action-btn np-copy" data-id="${w.id}">복사</button>` : ''}
-            ${admin ? `<button class="dash-action-btn np-del" data-id="${w.id}" style="background:#fff;border-color:#fca5a5;color:#dc2626;">삭제</button>` : ''}
           </td>`;
+        const editCell = `<td class="col-action" rowspan="${n}" style="text-align:center;">${admin ? `<button class="dash-action-btn np-edit" data-id="${w.id}">수정</button>` : ''}</td>`;
+        const copyCell = `<td class="col-action" rowspan="${n}" style="text-align:center;">${admin ? `<button class="dash-action-btn np-copy" data-id="${w.id}">복사</button>` : ''}</td>`;
+        const delCell = `<td class="col-action" rowspan="${n}" style="text-align:center;">${admin ? `<button class="dash-action-btn np-del" data-id="${w.id}" style="background:#dc2626;border-color:#b91c1c;color:#fff;font-weight:800;">삭제</button>` : ''}</td>`;
         return g.list.map((e, k) => {
           const r = e.r; const i = e.i;
           const legacy = Array.isArray(r.memos) ? r.memos : [];
@@ -23083,11 +23095,14 @@ function validateBlendSum(blends, label) {
             })()}</td>
             <td style="min-width:120px;">${rowVendorCell(r, w.id + '-' + i)}</td>
             ${memoCell}
-            ${first ? manageCell : ''}
+            ${first ? viewCell : ''}
+            ${first ? editCell : ''}
+            ${first ? copyCell : ''}
             <td class="col-action" style="min-width:150px;">
               <div style="font-size:11px;font-weight:800;color:#1d4ed8;margin-bottom:4px;">${escapeHtml(printRowLabel(w, r))}</div>
               <div style="display:flex;flex-direction:column;gap:4px;align-items:stretch;">${printRowButtons(w, i, r, admin)}</div>
             </td>
+            ${first ? delCell : ''}
           </tr>`;
         }).join('');
       }).join('');
@@ -23096,7 +23111,7 @@ function validateBlendSum(blends, label) {
         <table class="dash-table"><thead><tr>
           <th style="text-align:center;">스탬프</th><th style="text-align:center;">발주일</th><th style="text-align:center;">경과</th>
           <th>나염용원단명</th><th>디자인명</th><th>원단컬러</th><th>나염컬러</th><th style="text-align:center;">수량</th>
-          <th>거래처(공정)</th><th>메모</th><th style="text-align:center;">작지</th><th style="text-align:center;">공정 진행</th>
+          <th>거래처(공정)</th><th>메모</th><th style="text-align:center;">작지</th><th style="text-align:center;">수정</th><th style="text-align:center;">복사</th><th style="text-align:center;">완료</th><th style="text-align:center;">삭제</th>
         </tr></thead><tbody>${body}</tbody></table>
       </div>`;
     };
@@ -28471,7 +28486,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix231';
+  const VERSION = 'v2.53 hotfix233';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
