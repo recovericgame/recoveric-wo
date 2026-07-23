@@ -22129,10 +22129,19 @@ function validateBlendSum(blends, label) {
   // wo.print_recv_qty(최종 입고 절수) · wo.qc_status('none'|'done') · wo.shortage_status · wo.rework{active,vendor,sent}
   function printChainOf(wo) {
     const c = wo.print_chain || {};
-    return {
+    const out = {
       gagong:   { use: !!(c.gagong   && c.gagong.use),   vendor: (c.gagong   && c.gagong.vendor)   || '', sent: (c.gagong   && c.gagong.sent)   || null, done: (c.gagong   && c.gagong.done)   || null },
       hugagong: { use: !!(c.hugagong && c.hugagong.use), vendor: (c.hugagong && c.hugagong.vendor) || '', sent: (c.hugagong && c.hugagong.sent) || null, done: (c.hugagong && c.hugagong.done) || null },
     };
+    // 출고처 자동 반영: 공정 경로를 따로 지정하지 않았어도 출고처가 가공/후가공공장이면 그 공정을 사용
+    const dv = wo.dest_vendor || (PRINT_SUPPLY.includes(wo.dest) ? '' : (wo.dest || ''));
+    if (dv) {
+      if (wo.dest_cat === '가공공장' && !out.gagong.use && !out.hugagong.use) { out.gagong.use = true; out.gagong.vendor = out.gagong.vendor || dv; }
+      else if (wo.dest_cat === '후가공공장' && !out.hugagong.use) { out.hugagong.use = true; out.hugagong.vendor = out.hugagong.vendor || dv; }
+      if (out.gagong.use && !out.gagong.vendor && wo.dest_cat === '가공공장') out.gagong.vendor = dv;
+      if (out.hugagong.use && !out.hugagong.vendor && wo.dest_cat === '후가공공장') out.hugagong.vendor = dv;
+    }
+    return out;
   }
   function printOrderedQty(wo) { return (wo.print_rows || []).reduce((s, r) => s + (Number(r.qty) || 0), 0); }
   function printReceivedQty(wo) { const q = wo.print_recv_qty; return (q === '' || q == null) ? null : (Number(q) || 0); }
@@ -22345,6 +22354,7 @@ function validateBlendSum(blends, label) {
       case 'shortage-close': r.shortage_closed = (Number(r.shortage_closed) || 0) + (Number(payload.qty) || 0); break;
       case 'complete': if (printRowRecv(r) == null) r.recv_qty = printRowOrdered(r); r.completed = true; r.completed_at = now; break;
       case 'uncomplete': r.completed = false; break;
+      case 'memo-set': r.memo = String(payload.text == null ? '' : payload.text); break;
       case 'memo-add': {
         if (!Array.isArray(r.memos)) r.memos = [];
         r.memos.push({ at: todayYMD(), text: String(payload.text || '').trim(), by: state.user.email });
@@ -22460,9 +22470,10 @@ function validateBlendSum(blends, label) {
           </td>`;
         return g.list.map((e, k) => {
           const r = e.r; const i = e.i;
-          const memos = Array.isArray(r.memos) ? r.memos : [];
-          const memoHTML = memos.slice(-3).map(m => `<div style="font-size:10.5px;color:#475569;line-height:1.5;">[${escapeHtml(m.at || '')}] ${escapeHtml(m.text || '')}</div>`).join('');
-          const memoBtn = `<button class="dash-action-btn np-rmemo" data-id="${w.id}" data-ri="${i}" style="background:#fff;color:#64748b;border-color:#e2e8f0;font-size:10px;padding:2px 7px;margin-top:3px;">메모 추가</button>`;
+          const legacy = Array.isArray(r.memos) ? r.memos : [];
+          const legacyHTML = legacy.slice(-3).map(m => `<div style="font-size:10.5px;color:#94a3b8;line-height:1.5;">[${escapeHtml(m.at || '')}] ${escapeHtml(m.text || '')}</div>`).join('');
+          const memoTxt = (r.memo != null && String(r.memo).trim()) ? String(r.memo) : '';
+          const memoCell = `<td class="editable np-memo-cell${memoTxt ? ' has-value' : ''}" data-id="${w.id}" data-ri="${i}" style="min-width:170px;">${legacyHTML}<div class="memo-text">${memoTxt ? escapeHtml(memoTxt) : '+ 메모'}</div></td>`;
           const first = k === 0;
           return `<tr>
             ${first ? `<td rowspan="${n}" style="text-align:center;">${stampBadges}</td>
@@ -22474,7 +22485,7 @@ function validateBlendSum(blends, label) {
             <td style="white-space:nowrap;">${chip(r.print_color, r.print_hex)}</td>
             <td style="text-align:center;white-space:nowrap;">${printRowOrdered(r)}절</td>
             ${first ? `<td rowspan="${n}" style="min-width:110px;">${vendorCell}</td>` : ''}
-            <td style="min-width:150px;">${memoHTML}${admin ? memoBtn : ''}</td>
+            ${memoCell}
             ${first ? manageCell : ''}
             <td class="col-action" style="min-width:150px;">
               <div style="font-size:11px;font-weight:800;color:#1d4ed8;margin-bottom:4px;">${escapeHtml(printRowLabel(w, r))}</div>
@@ -24203,6 +24214,38 @@ function validateBlendSum(blends, label) {
           toast('처리되었습니다', 'success');
           renderDashboard();
         } catch (err) { btn.disabled = false; toast('처리 실패: ' + (err.message || err), 'error'); }
+      });
+    });
+    // 나염 줄 메모 — 인라인 편집 (염색가공 메모와 동일한 방식)
+    document.querySelectorAll('#dash-body .np-memo-cell').forEach(td => {
+      td.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (td.querySelector('textarea')) return;
+        const id = td.dataset.id; const ri = parseInt(td.dataset.ri, 10);
+        const wo = state.allWorkOrders.find(w => w.id === id); if (!wo) return;
+        const row = (wo.print_rows || [])[ri]; if (!row) return;
+        const cur = row.memo == null ? '' : String(row.memo);
+        const ta = document.createElement('textarea');
+        ta.value = cur;
+        ta.style.cssText = 'width:100%;min-height:56px;font-size:11.5px;padding:5px;border:1px solid #2563eb;border-radius:4px;resize:vertical;font-family:inherit;line-height:1.5;';
+        td.innerHTML = '';
+        td.appendChild(ta);
+        ta.focus();
+        let done = false;
+        const save = async () => {
+          if (done) return; done = true;
+          const v = ta.value;
+          if (v === cur) { renderDashboard(); return; }
+          try {
+            await setPrintRowStage(id, ri, 'memo-set', { text: v });
+            toast('메모가 저장되었습니다', 'success');
+          } catch (err) { toast('메모 저장 실패: ' + (err.message || err), 'error'); }
+          renderDashboard();
+        };
+        ta.addEventListener('blur', save);
+        ta.addEventListener('keydown', (ev) => {
+          if (ev.key === 'Escape') { done = true; renderDashboard(); }
+        });
       });
     });
     // 나염 줄 진행 메모
@@ -27816,7 +27859,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix217';
+  const VERSION = 'v2.53 hotfix218';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
