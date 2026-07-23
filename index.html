@@ -5981,9 +5981,9 @@
         <div class="dash-menu-section-label">진행 상황</div>
         <button class="dash-menu-btn" data-view="yarn">원사 진행</button>
         <button class="dash-menu-btn" data-view="knit">편직 진행</button>
-        <button class="dash-menu-btn active" data-view="finish">염색나염가공 진행</button>
+        <button class="dash-menu-btn active" data-view="finish">염색가공 진행</button>
         <button class="dash-menu-btn" data-view="bt">B/T 진행</button>
-        <button class="dash-menu-btn" data-view="print">나염 진행</button>
+        <button class="dash-menu-btn" data-view="print">나염가공 진행</button>
         <button class="dash-menu-btn" data-view="kpiboard">현황판</button>
         <button class="dash-menu-btn admin-only" data-view="completeReports" style="background:#f0fdf4;border:1px solid #bbf7d0;color:#15803d;font-weight:800;">완료 보고<span class="ceo-report-badge" id="complete-report-badge" style="display:none;background:#16a34a;">0</span></button>
         <button class="dash-menu-btn admin-only" data-view="ceoReports" style="background:#fef2f2;border:1px solid #fecaca;color:#b91c1c;font-weight:800;">불량 보고<span class="ceo-report-badge" id="ceo-report-badge" style="display:none;">0</span></button>
@@ -21764,7 +21764,14 @@ function validateBlendSum(blends, label) {
         hugagong: { use: !!(wo.print_chain && wo.print_chain.hugagong && wo.print_chain.hugagong.use), vendor: (wo.print_chain && wo.print_chain.hugagong && wo.print_chain.hugagong.vendor) || '' },
       },
       stamps: Array.isArray(wo.stamps) ? wo.stamps.filter(s => PRINT_STAMPS.includes(s)) : [],
-      rows: Array.isArray(wo.print_rows) && wo.print_rows.length ? JSON.parse(JSON.stringify(wo.print_rows)) : [blankPrintRow()],
+      rows: Array.isArray(wo.print_rows) && wo.print_rows.length ? JSON.parse(JSON.stringify(wo.print_rows)).map(r => {
+        if (!isCopy) return r;
+        // hotfix224: 복사본은 공정·QC 이력 초기화 (새 작지는 처음부터 시작)
+        delete r.chain; delete r.recv_qty; delete r.recv_at; delete r.receipts; delete r.qc_status;
+        delete r.shortage_discard; delete r.shortage_closed; delete r.rework; delete r.rework_count;
+        delete r.completed; delete r.completed_at; delete r.memo; delete r.memos;
+        return r;
+      }) : [blankPrintRow()],
       proc_memo: wo.proc_memo || '',
       post_memo: wo.post_memo || '',
     } : {
@@ -22275,6 +22282,16 @@ function validateBlendSum(blends, label) {
     return Math.max(0, printRowOrdered(r) - recv - settled);
   }
   // 줄 단계 판정 (염색가공과 동일: 넘김 게이트 → [완료]/[부족]/[재가공])
+  // hotfix224: 나염 줄 입고 차수(receipts) 헬퍼 — 염색가공 receipts 구조의 줄 단위 미니 버전
+  function printRowReceipts(r) { return (r && Array.isArray(r.receipts)) ? r.receipts : []; }
+  function printRowActiveReceipt(r) { const a = printRowReceipts(r); return a.length ? a[a.length - 1] : null; }
+  function printRowReceiptNo(r) { const a = printRowActiveReceipt(r); return a ? (a.receipt_no || 1) : 1; }
+  // QC 상태: 'none'(QC 개념 이전 옛 데이터) / 'pending' / 'done' / 'accept' / 'defect'
+  function printRowQcStatus(r) {
+    const a = printRowActiveReceipt(r);
+    if (a) return a.qc_status || 'none';
+    return (r && r.qc_status) ? r.qc_status : 'none';
+  }
   function printRowStage(wo, r) {
     if (!r) return { stage: 'nayeom' };
     if (r.completed) return { stage: 'completed' };
@@ -22282,9 +22299,13 @@ function validateBlendSum(blends, label) {
     if (r.rework && r.rework.active) return { stage: 'rework', vendor: r.rework.vendor };
     const recv = printRowRecv(r);
     if (recv != null) {
+      // hotfix224: 최종 입고 후 QC 단계 삽입 (옛 데이터 qc 'none'은 QC 없이 기존 흐름 유지)
+      const qs = printRowQcStatus(r);
+      if (qs === 'pending') return { stage: 'qc_pending', nth: printRowReceiptNo(r) };
+      if (qs === 'defect') return { stage: 'qc_defect', nth: printRowReceiptNo(r) };
       const sh = printRowShortage(r);
       if (sh > 0) return { stage: 'shortage', short: sh };
-      return { stage: 'await_complete' };
+      return { stage: 'await_complete', qc: qs };
     }
     if (ch.gagong.use && !ch.gagong.sent) return { stage: 'nayeom', next: 'gagong' };
     if (ch.gagong.use && ch.gagong.sent && !ch.gagong.done) return { stage: 'gagong', vendor: ch.gagong.vendor };
@@ -22298,7 +22319,9 @@ function validateBlendSum(blends, label) {
       case 'completed': return '완료';
       case 'rework': return `재가공중 ${st.vendor || ''}`;
       case 'shortage': return `부족 ${st.short}절`;
-      case 'await_complete': return '완료 대기';
+      case 'qc_pending': return st.nth > 1 ? `${st.nth}차 QC 대기` : 'QC 대기';
+      case 'qc_defect': return 'QC 불량';
+      case 'await_complete': return st.qc === 'accept' ? 'QC 수용 · 완료 대기' : (st.qc === 'done' ? 'QC 통과 · 완료 대기' : '완료 대기');
       case 'nayeom': return `나염중 ${wo.print_factory || ''}`;
       case 'gagong': return `가공중 ${st.vendor || ''}`;
       case 'gagong_done': return `가공완료 ${ch.gagong.vendor || ''}`;
@@ -22318,10 +22341,10 @@ function validateBlendSum(blends, label) {
       default: return null;
     }
   }
-  // 구역 분류: 공장 진행(직원) vs 최종 판정(담당자)
+  // 구역 분류: 공장 진행 + QC 검수(직원) vs 최종 판정(담당자)
   function printRowSection(wo, r) {
     const s = printRowStage(wo, r).stage;
-    if (s === 'nayeom' || s === 'gagong' || s === 'gagong_done' || s === 'hugagong') return 'worker';
+    if (s === 'nayeom' || s === 'gagong' || s === 'gagong_done' || s === 'hugagong' || s === 'qc_pending') return 'worker';
     return 'manager';
   }
   // 줄 상태 전이
@@ -22345,11 +22368,42 @@ function validateBlendSum(blends, label) {
       case 'hugagong-done': r.chain.hugagong.done = now; break;
       case 'hugagong-revert-send': r.chain.hugagong.sent = null; r.chain.hugagong.done = null; break;
       case 'hugagong-revert-done': r.chain.hugagong.done = null; break;
-      case 'receive': r.recv_qty = Number(payload.qty) || 0; r.recv_at = now; break;
-      case 'receive-revert': r.recv_qty = null; break;
-      case 'rework': r.rework = { active: true, vendor: payload.vendor || '', sent: now }; r.recv_qty = null; r.rework_count = (Number(r.rework_count) || 0) + 1; break;
+      case 'receive': {
+        // hotfix224: 입고 = 차수 기록 생성 + QC 대기 자동 전환 (염색가공과 동일 흐름)
+        r.recv_qty = Number(payload.qty) || 0; r.recv_at = now;
+        if (!Array.isArray(r.receipts)) r.receipts = [];
+        r.receipts.push({ receipt_no: r.receipts.length + 1, qty: r.recv_qty, received_at: now, qc_status: 'pending', qc: {} });
+        r.qc_status = 'pending';
+        break;
+      }
+      case 'receive-revert': {
+        r.recv_qty = null;
+        if (Array.isArray(r.receipts) && r.receipts.length) r.receipts.pop();
+        const _ar0 = printRowActiveReceipt(r);
+        r.qc_status = _ar0 ? (_ar0.qc_status || null) : null;
+        break;
+      }
+      case 'qc-save': {
+        // 직원 QC 검수 저장 — 활성(마지막) 차수에 기록
+        if (!Array.isArray(r.receipts) || !r.receipts.length) {
+          r.receipts = [{ receipt_no: 1, qty: printRowRecv(r) || 0, received_at: r.recv_at || now, qc_status: 'pending', qc: {} }];
+        }
+        const _ar = r.receipts[r.receipts.length - 1];
+        _ar.qc = payload.qc || _ar.qc || {};
+        if (payload.status) { _ar.qc_status = payload.status; _ar.qc_at = now; _ar.qc_by = state.user.email; }
+        r.qc_status = _ar.qc_status || 'pending';
+        break;
+      }
+      case 'qc-revert': {
+        // 담당자: QC 판정 취소 → 다시 QC 대기 (검수값 보존)
+        const _ar2 = printRowActiveReceipt(r);
+        if (_ar2) _ar2.qc_status = 'pending';
+        r.qc_status = 'pending';
+        break;
+      }
+      case 'rework': r.rework = { active: true, vendor: payload.vendor || '', sent: now }; r.recv_qty = null; r.qc_status = null; r.rework_count = (Number(r.rework_count) || 0) + 1; break;
       case 'rework-done': r.rework = { active: false }; break;
-      case 'shortage-rework': r.rework = { active: true, vendor: payload.vendor || '', sent: now }; r.recv_qty = null; break;
+      case 'shortage-rework': r.rework = { active: true, vendor: payload.vendor || '', sent: now }; r.recv_qty = null; r.qc_status = null; break;
       case 'shortage-discard': r.shortage_discard = (Number(r.shortage_discard) || 0) + (Number(payload.qty) || 0); break;
       case 'shortage-close': r.shortage_closed = (Number(r.shortage_closed) || 0) + (Number(payload.qty) || 0); break;
       case 'complete': if (printRowRecv(r) == null) r.recv_qty = printRowOrdered(r); r.completed = true; r.completed_at = now; break;
@@ -22383,26 +22437,200 @@ function validateBlendSum(blends, label) {
     if (c.trim() === '2') return vendors[1];
     return null;
   }
+  // hotfix224: 나염 불량 카탈로그 (나염 부분 + 가공 부분)
+  const PRINT_DEFECT_CATALOG = {
+    print: { label: '나염 부분', items: ['핀홀', '미스프린트(빠짐)', '컬러 차이', '위치·피치 틀어짐', '번짐', '프린트 벗겨짐', '끈적임(경화불량)', '오염'] },
+    proc: { label: '가공 부분', items: ['개폭선 불량', '선바이오먼지', '건조불량', '오염', '포장불량', '수지과다', 'QC구멍'] }
+  };
+  // hotfix224: 나염 줄 QC 검수 모달 — 염색가공 QC와 동일 검수 항목(폭·더블·야드중량 자동계산·축률) + 나염 불량 체크
+  function openPrintQcModal(woId, ri) {
+    const wo = state.allWorkOrders.find(w => w.id === woId); if (!wo) return;
+    const r = (wo.print_rows || [])[ri]; if (!r) return;
+    const ar = printRowActiveReceipt(r);
+    const nth = printRowReceiptNo(r);
+    const qs = printRowQcStatus(r);
+    const qc = (ar && ar.qc) ? JSON.parse(JSON.stringify(ar.qc)) : {};
+    const recvQty = printRowRecv(r);
+    const ordered = printRowOrdered(r);
+    const lack = Math.max(0, ordered - (recvQty || 0));
+    const T = getSpecTol();
+    const shrinkLimit = (T.shrink != null && T.shrink !== '' ? parseFloat(T.shrink) : null) || 2.5;
+    // 원단 기본 스펙 기준 (나염용원단명으로 조회)
+    const spec = (state.fabricSpecs || []).find(s => s && s.name && r.fabric && String(s.name).trim() === String(r.fabric).trim());
+    let specLine = '';
+    if (spec) {
+      const bits = [];
+      if (spec.width) bits.push(`폭 ${escapeHtml(String(spec.width))}″${spec.tube ? ' 튜브' : ''}`);
+      if (spec.gy) bits.push(`${escapeHtml(String(spec.gy))}g/y`);
+      specLine = bits.length ? `<div style="padding:6px 10px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;color:#1d4ed8;font-weight:700;font-size:12px;margin-top:7px;">원단 기준 ${bits.join(' · ')} <span style="font-weight:500;color:#64748b;">(원단 기본 스펙)</span></div>` : '';
+    } else {
+      specLine = `<div style="padding:6px 10px;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;color:#92400e;font-size:12px;margin-top:7px;">원단 기본 스펙에 "${escapeHtml(r.fabric || '-')}" 기준이 없어 수치는 기록만 됩니다. 축률은 ${shrinkLimit}% 기준으로 경고합니다.</div>`;
+    }
+    const statusBadge = (() => {
+      if (qs === 'done') return `<span style="background:#f0fdf4;border:1px solid #86efac;color:#15803d;border-radius:5px;padding:2px 8px;font-size:11px;font-weight:800;">✓ QC 통과</span>`;
+      if (qs === 'accept') return `<span style="background:#fffbeb;border:1px solid #fcd34d;color:#92400e;border-radius:5px;padding:2px 8px;font-size:11px;font-weight:800;">⚠ 수용(그대로 사용)</span>`;
+      if (qs === 'defect') return `<span style="background:#fef2f2;border:1px solid #fca5a5;color:#b91c1c;border-radius:5px;padding:2px 8px;font-size:11px;font-weight:800;">✗ 불량</span>`;
+      return `<span style="background:#fff7ed;border:1px solid #fdba74;color:#c2410c;border-radius:5px;padding:2px 8px;font-size:11px;font-weight:800;">⏳ QC 대기</span>`;
+    })();
+    const lackLine = lack > 0 ? `<div style="margin-top:5px;font-weight:700;color:#ea580c;font-size:12px;">⏳ 이 시점 부족분: <span style="color:#dc2626;">${lack}절</span> — QC 후 담당자가 부족 처리(재가공·땡처리·종결)합니다</div>` : '';
+    const fmtV = v => (v === null || v === undefined || v === '') ? '' : String(v);
+    const flags = qc.defect_flags || {};
+    let checksHtml = '';
+    Object.keys(PRINT_DEFECT_CATALOG).forEach(g => {
+      const grp = PRINT_DEFECT_CATALOG[g];
+      const items = grp.items.map(it => {
+        const checked = !!(flags[g] && flags[g][it]);
+        return `<label class="qc-defect-check ${checked ? 'checked' : ''}" data-group="${g}" data-item="${escapeHtml(it)}" style="cursor:pointer;">
+          <input type="checkbox" ${checked ? 'checked' : ''}> <span class="qc-defect-label">${escapeHtml(it)}</span></label>`;
+      }).join('');
+      checksHtml += `<div class="qc-defect-group"><div class="qc-defect-group-title">${grp.label}</div><div class="qc-defect-checks">${items}</div></div>`;
+    });
+    const initDouble = !!qc.width_double;
+    const iaw = calcActualWidth(qc.width_inch, initDouble);
+    const bg = document.createElement('div');
+    bg.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.5);z-index:99999;display:flex;align-items:flex-start;justify-content:center;padding:24px;overflow:auto;';
+    bg.innerHTML = `<div style="background:#fff;border-radius:11px;max-width:860px;width:100%;box-shadow:0 22px 55px rgba(0,0,0,.3);overflow:hidden;font-family:var(--font-gothic);margin:auto 0;">
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 20px;border-bottom:1px solid #e5e7eb;background:#f8fafc;">
+        <div style="font-size:14.5px;font-weight:800;color:#0f172a;">나염 QC 검수 【${nth}차】 — ${escapeHtml(printRowNo(wo, ri))} ${statusBadge}</div>
+        <button type="button" id="pq-close" style="background:#fff;border:1px solid #d0d5dd;color:#475569;border-radius:6px;padding:5px 13px;font-size:12.5px;font-weight:700;cursor:pointer;">닫기</button>
+      </div>
+      <div style="padding:16px 20px;">
+        <div class="qc-modal-header-info" style="margin-bottom:4px;">
+          작지 <strong>${escapeHtml(wo.wo_number || '-')}</strong> · ${escapeHtml(wo.design_name || '-')}${(Number(r.rework_count) || 0) > 0 ? ` <span class="qc-rework-badge">재가공 ${r.rework_count}회</span>` : ''}<br>
+          <span class="qc-color-name">${escapeHtml(r.fabric || '-')}</span> · 원단컬러 ${escapeHtml(r.fabric_color || '-')} · 나염컬러 ${escapeHtml(r.print_color || '-')}<br>
+          <div style="margin-top:5px;font-weight:700;color:#1e40af;">의뢰 ${ordered}절 · 이번 ${nth}차 입고 <span style="color:#7c3aed;">${recvQty != null ? recvQty : '-'}절</span>${ar && ar.received_at ? ' · ' + new Date(ar.received_at).toLocaleDateString('ko-KR', { month: 'long', day: 'numeric' }) + ' 입고' : ''}</div>
+          ${lackLine}${specLine}
+        </div>
+        <div class="qc-modal-form">
+          <div class="qc-field qc-field-full">
+            <label>폭<span class="qc-unit">(인치)</span></label>
+            <div class="qc-double-row">
+              <input type="number" step="0.1" min="0" id="pq-width" value="${escapeHtml(fmtV(qc.width_inch))}" placeholder="예: 76.5" style="flex:0 0 130px;">
+              <label class="qc-double-label ${initDouble ? 'checked' : ''}" id="pq-double-label"><input type="checkbox" id="pq-double" ${initDouble ? 'checked' : ''}> 더블</label>
+              <span class="qc-actual-width" id="pq-actual-width">${iaw != null ? `→ <strong>${iaw}</strong>인치 ${initDouble ? '(더블)' : ''}` : ''}</span>
+            </div>
+          </div>
+          <div class="qc-field"><label>스퀘어중량<span class="qc-unit">(g/㎡)</span></label>
+            <input type="number" step="1" min="0" id="pq-sqm" value="${escapeHtml(fmtV(qc.weight_g_per_sqm))}" placeholder="예: 195"></div>
+          <div class="qc-field"><label>야드중량<span class="qc-unit">(g/y · 자동계산)</span></label>
+            <input type="number" id="pq-gy" value="${escapeHtml(fmtV(qc.weight_g_per_y))}" readonly tabindex="-1" placeholder="자동 계산됨"></div>
+          <div class="qc-field"><label>폭축률<span class="qc-unit">(%, 소수1)</span></label>
+            <input type="number" step="0.1" id="pq-sw" value="${escapeHtml(fmtV(qc.shrink_width_pct))}" placeholder="예: 1.5"></div>
+          <div class="qc-field"><label>장축률<span class="qc-unit">(%, 소수1)</span></label>
+            <input type="number" step="0.1" id="pq-sl" value="${escapeHtml(fmtV(qc.shrink_length_pct))}" placeholder="예: 2.0"></div>
+          <div class="qc-field qc-field-full"><label>불량 항목 (해당 시 체크)</label>${checksHtml}</div>
+          <div class="qc-field qc-field-full"><label>특이사항 메모</label>
+            <textarea id="pq-note" rows="3" placeholder="예: 좌측 변 핀홀 산발 / 축률 재확인 필요">${escapeHtml(fmtV(qc.note))}</textarea></div>
+        </div>
+        <div style="display:flex;justify-content:space-between;gap:8px;margin-top:14px;flex-wrap:wrap;">
+          <div style="display:flex;gap:8px;">
+            <button type="button" id="pq-save-only" class="qc-modal-btn">저장만 (QC 대기 유지)</button>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <button type="button" id="pq-defect" class="qc-modal-btn" style="background:#fef2f2;border-color:#fca5a5;color:#b91c1c;font-weight:800;">불량 처리</button>
+            <button type="button" id="pq-accept" class="qc-modal-btn" style="background:#fffbeb;border-color:#fcd34d;color:#92400e;font-weight:800;">수용 (그대로 사용)</button>
+            <button type="button" id="pq-pass" class="qc-modal-btn primary" style="font-weight:800;">정상 → QC 통과</button>
+          </div>
+        </div>
+        <div style="margin-top:9px;font-size:11.5px;color:#64748b;line-height:1.6;">
+          QC 통과·수용 → <strong>담당자 확인 대기</strong>에서 대표가 [완료] 확정 · 불량 → 담당자가 <strong>재가공</strong> 판정 · 축률 ${shrinkLimit}% 초과 시 경고와 함께 기록됩니다.
+        </div>
+      </div></div>`;
+    document.body.appendChild(bg);
+    const close = () => { if (bg.parentNode) bg.parentNode.removeChild(bg); };
+    bg.addEventListener('click', ev => { if (ev.target === bg) close(); });
+    bg.querySelector('#pq-close').addEventListener('click', close);
+    const $ = id => bg.querySelector(id);
+    const recalc = () => {
+      const dbl = $('#pq-double').checked;
+      const aw = calcActualWidth($('#pq-width').value, dbl);
+      $('#pq-actual-width').innerHTML = aw != null ? `→ <strong>${aw}</strong>인치 ${dbl ? '(더블)' : ''}` : '';
+      $('#pq-double-label').classList.toggle('checked', dbl);
+      const gy = calcYardWeight($('#pq-sqm').value, aw);
+      $('#pq-gy').value = gy != null ? gy : '';
+    };
+    $('#pq-width').addEventListener('input', recalc);
+    $('#pq-sqm').addEventListener('input', recalc);
+    $('#pq-double').addEventListener('change', recalc);
+    bg.querySelectorAll('.qc-defect-check').forEach(lb => {
+      const cb = lb.querySelector('input[type="checkbox"]');
+      cb.addEventListener('change', () => lb.classList.toggle('checked', cb.checked));
+    });
+    const collect = () => {
+      const dbl = $('#pq-double').checked;
+      const aw = calcActualWidth($('#pq-width').value, dbl);
+      const df = {};
+      bg.querySelectorAll('.qc-defect-check input:checked').forEach(cb => {
+        const lb = cb.closest('.qc-defect-check');
+        const g = lb.dataset.group, it = lb.dataset.item;
+        if (!df[g]) df[g] = {};
+        df[g][it] = true;
+      });
+      const sw = $('#pq-sw').value === '' ? null : parseFloat($('#pq-sw').value);
+      const sl = $('#pq-sl').value === '' ? null : parseFloat($('#pq-sl').value);
+      const shrinkOver = (sw != null && isFinite(sw) && sw > shrinkLimit) || (sl != null && isFinite(sl) && sl > shrinkLimit);
+      return {
+        width_inch: $('#pq-width').value === '' ? null : parseFloat($('#pq-width').value),
+        width_double: dbl,
+        width_actual: aw,
+        weight_g_per_sqm: $('#pq-sqm').value === '' ? null : parseFloat($('#pq-sqm').value),
+        weight_g_per_y: $('#pq-gy').value === '' ? null : parseFloat($('#pq-gy').value),
+        shrink_width_pct: sw, shrink_length_pct: sl,
+        shrink_over: shrinkOver,
+        defect_flags: df,
+        note: $('#pq-note').value.trim()
+      };
+    };
+    const doSave = async (status, confirmText) => {
+      const data = collect();
+      if (status === 'defect') {
+        const anyFlag = Object.keys(data.defect_flags).length > 0;
+        if (!anyFlag && !data.note) { alert('불량 처리에는 불량 항목 체크 또는 특이사항 메모가 최소 1개 필요합니다.'); return; }
+      }
+      if (status === 'done' && data.shrink_over) {
+        if (!confirm(`⚠ 축률이 기준(${shrinkLimit}%)을 초과했습니다.\n그래도 QC 통과로 저장할까요?\n(담당자 완료 확정 시 경고가 다시 표시됩니다)`)) return;
+      } else if (confirmText && !confirm(confirmText)) return;
+      try {
+        await setPrintRowStage(woId, ri, 'qc-save', { qc: data, status: status || null });
+        toast(status ? 'QC 판정이 저장되었습니다' : 'QC 검수값이 저장되었습니다 (QC 대기 유지)', 'success');
+        close(); renderDashboard();
+      } catch (err) { toast('QC 저장 실패: ' + (err.message || err), 'error'); }
+    };
+    $('#pq-save-only').addEventListener('click', () => doSave(null));
+    $('#pq-pass').addEventListener('click', () => doSave('done', `${nth}차 입고분을 QC 통과 처리할까요?\n담당자 확인 대기로 넘어갑니다.`));
+    $('#pq-accept').addEventListener('click', () => doSave('accept', '규격에서 벗어나지만 그대로 사용(수용) 처리할까요?\n담당자 확인 대기로 넘어갑니다.'));
+    $('#pq-defect').addEventListener('click', () => doSave('defect', '불량 처리할까요?\n담당자 확인 대기에서 재가공 여부를 판정합니다.'));
+  }
   // 줄 단계별 액션 버튼
   function printRowButtons(wo, i, r, admin) {
-    if (!admin) return '';
     const st = printRowStage(wo, r); const ch = printRowChain(wo, r);
     const b = (action, label, style) => `<button class="dash-action-btn np-rstage" data-id="${wo.id}" data-ri="${i}" data-action="${action}" style="${style || ''}">${escapeHtml(label)}</button>`;
     const primary = 'background:#eff6ff;color:#1d4ed8;border-color:#bfdbfe;font-weight:700;';
     const blue = 'background:#2563eb;color:#fff;border-color:#1d4ed8;font-weight:700;';
     const green = 'background:#f0fdf4;color:#15803d;border-color:#86efac;font-weight:700;';
+    const orange = 'background:#f97316;color:#fff;border-color:#ea580c;font-weight:700;';
     const revert = 'background:#fff;color:#64748b;border-color:#e2e8f0;font-size:10px;padding:2px 6px;';
+    // hotfix224: QC 검수 버튼은 직원도 사용 가능 (np-rqc — 관리자 게이트 없음)
+    const qcBtn = (label, style) => `<button class="dash-action-btn np-rqc" data-id="${wo.id}" data-ri="${i}" style="${style || ''}">${escapeHtml(label)}</button>`;
+    if (!admin) {
+      if (st.stage === 'qc_pending') return qcBtn(st.nth > 1 ? `${st.nth}차 QC 검수` : 'QC 검수', orange);
+      return '';
+    }
     switch (st.stage) {
       case 'nayeom':
         if (st.next === 'gagong') return b('gagong-send', `가공 넘김·${ch.gagong.vendor || '가공'}`, primary);
         if (st.next === 'hugagong') return b('hugagong-send', `후가공 넘김·${ch.hugagong.vendor || '후가공'}`, primary);
-        return b('complete', '완료', green) + b('short-open', '부족', primary);
+        return b('receive-open', '입고 처리 → QC 대기', blue);
       case 'gagong': return b('gagong-done', '가공 완료', primary) + b('gagong-revert-send', '넘김 취소', revert);
       case 'gagong_done': return b('hugagong-send', `후가공 넘김·${ch.hugagong.vendor || '후가공'}`, primary) + b('gagong-revert-done', '가공완료 취소', revert);
       case 'hugagong': return b('hugagong-done', '후가공 완료·입고 대기', blue) + b('hugagong-revert-send', '넘김 취소', revert);
-      case 'await_receive': return b('complete', '완료', green) + b('short-open', '부족', primary) + b('rework-open', '재가공', primary);
-      case 'await_complete': return b('complete', '완료', green) + b('rework-open', '재가공', primary) + b('receive-revert', '입고 취소', revert);
-      case 'shortage': return b('shortage-open', `부족 처리 ${st.short}절`, primary) + b('complete', '완료(종결)', green) + b('receive-revert', '입고 취소', revert);
+      case 'await_receive': return b('receive-open', '입고 처리 → QC 대기', blue) + b('rework-open', '재가공', primary);
+      case 'qc_pending': return qcBtn(st.nth > 1 ? `${st.nth}차 QC 검수` : 'QC 검수', orange) + b('receive-revert', '입고 취소', revert);
+      case 'qc_defect': return b('rework-open', '재가공', primary) + qcBtn('QC 보기', revert) + b('complete', '완료(종결)', green);
+      case 'await_complete':
+        if (st.qc === 'none') return b('complete', '완료', green) + b('rework-open', '재가공', primary) + b('receive-revert', '입고 취소', revert);
+        return b('complete', '완료', green) + qcBtn('QC', revert) + b('qc-revert', 'QC 대기로', revert) + b('rework-open', '재가공', primary);
+      case 'shortage': return b('shortage-open', `부족 처리 ${st.short}절`, primary) + b('complete', '완료(종결)', green) + (printRowReceipts(r).length ? qcBtn('QC', revert) : '') + b('receive-revert', '입고 취소', revert);
       case 'rework': return b('rework-done', '재가공 완료·입고 대기', blue);
       case 'completed': return b('uncomplete', '완료 해제', revert);
       default: return '';
@@ -22484,7 +22712,7 @@ function validateBlendSum(blends, label) {
       && (w.print_rows || []).some(r => r && !r.completed));
     if (!has) return '';
     return `<div style="margin-top:30px;padding-top:22px;border-top:2px solid #e2e8f0;">
-      <div style="font-size:15px;font-weight:800;color:#1e293b;margin-bottom:12px;">ㄴ 나염 진행</div>
+      <div style="font-size:15px;font-weight:800;color:#1e293b;margin-bottom:12px;">ㄴ 나염가공 진행</div>
       ${renderPrintDash()}
     </div>`;
   }
@@ -22506,6 +22734,7 @@ function validateBlendSum(blends, label) {
       all: entries.length,
       worker: entries.filter(e => e.sec === 'worker').length,
       manager: entries.filter(e => e.sec === 'manager').length,
+      qc_pending: entries.filter(e => e.stage === 'qc_pending').length,
       shortage: entries.filter(e => e.stage === 'shortage').length,
       rework: entries.filter(e => e.stage === 'rework').length,
     };
@@ -22521,7 +22750,7 @@ function validateBlendSum(blends, label) {
       </select></span>`;
     const tab = (key, label) => `<button type="button" onclick="window.__setPrintFilter('${key}')" style="border:1px solid ${__printFilter === key ? '#1d4ed8' : '#d0d5dd'};background:${__printFilter === key ? '#1d4ed8' : '#fff'};color:${__printFilter === key ? '#fff' : '#475569'};border-radius:7px;padding:6px 13px;font-size:12.5px;font-weight:700;cursor:pointer;">${label} ${cnt[key]}</button>`;
     const tabs = `<div style="display:flex;gap:7px;flex-wrap:wrap;margin-bottom:14px;align-items:center;">
-      ${tab('all', '전체')}${tab('worker', '공장 진행')}${tab('manager', '판정 대기')}${tab('shortage', '부족')}${tab('rework', '재가공')}${vendorBar}
+      ${tab('all', '전체')}${tab('worker', '공장 진행')}${tab('qc_pending', 'QC 대기')}${tab('manager', '판정 대기')}${tab('shortage', '부족')}${tab('rework', '재가공')}${vendorBar}
     </div>`;
     if (!entries.length) {
       return tabs + `<div class="dash-empty" style="text-align:center;padding:40px;color:#7a8699;">진행 중인 나염작업지시서가 없습니다.<br><br>우측 상단 <strong>[+ 새 나염작지]</strong> 버튼으로 만들어 보세요.</div>`;
@@ -22593,8 +22822,8 @@ function validateBlendSum(blends, label) {
       </div>`;
     };
 
-    const secW = sectionHTML('worker', '직원 확인 대기', '공장 넘김 · 진행 기록 — 직원이 처리할 일', '#f97316');
-    const secM = sectionHTML('manager', '담당자 확인 대기', '완료 · 부족 · 재가공 — 대표/담당 확인', '#dc2626');
+    const secW = sectionHTML('worker', '직원 확인 대기', '공장 넘김 · QC 검수 — 직원이 처리할 일', '#f97316');
+    const secM = sectionHTML('manager', '담당자 확인 대기', 'QC 통과 완료 확정 · 부족 · 재가공 — 대표/담당 확인', '#dc2626');
     if (!secW && !secM) {
       return tabs + `<div class="dash-empty" style="text-align:center;padding:40px;color:#7a8699;">해당 조건의 항목이 없습니다.</div>`;
     }
@@ -22767,7 +22996,7 @@ function validateBlendSum(blends, label) {
       body = renderKnitDash();
       addBtn.style.display = 'inline-block';
     } else if (state.dashView === 'finish') {
-      title = 'ㄴ 염색나염가공 진행';
+      title = 'ㄴ 염색가공 진행';
       body = renderFinishDash() + renderPrintDashSection();
       addBtn.style.display = 'inline-block';
     } else if (state.dashView === 'bt') {
@@ -22783,7 +23012,7 @@ function validateBlendSum(blends, label) {
       body = renderGSDash();
       addBtn.style.display = 'none';   // 생지출고는 염색작지 [보기]에서 자동 생성
     } else if (state.dashView === 'print') {
-      title = 'ㄴ 나염 진행';
+      title = 'ㄴ 나염가공 진행';
       body = renderPrintDash();
       addBtn.textContent = '+ 새 나염작지';
       addBtn.style.display = 'inline-block';
@@ -24279,8 +24508,8 @@ function validateBlendSum(blends, label) {
         const r = (wo.print_rows || [])[ri]; if (!r) return;
         try {
           let real = action; const payload = {};
-          if (action === 'short-open') {
-            const q = prompt(`실제 입고된 절수를 입력하세요 (의뢰 ${printRowOrdered(r)}절)\n\n의뢰보다 적게 왔으면 그 수량을 입력하세요.`, String(printRowOrdered(r)));
+          if (action === 'receive-open' || action === 'short-open') {
+            const q = prompt(`실제 입고된 절수를 입력하세요 (의뢰 ${printRowOrdered(r)}절)\n\n의뢰보다 적게 왔으면 그 수량을 입력하세요.\n저장 시 QC 대기로 자동 전환됩니다.`, String(printRowOrdered(r)));
             if (q == null) return; real = 'receive'; payload.qty = Number(q) || 0;
           } else if (action === 'rework-open') {
             const v = pickPrintReworkVendor(wo); if (v == null) return; real = 'rework'; payload.vendor = v;
@@ -24293,8 +24522,14 @@ function validateBlendSum(blends, label) {
             else if (c === '2') { real = 'shortage-discard'; payload.qty = sh; }
             else if (c === '3') { real = 'shortage-close'; payload.qty = sh; }
             else return;
+          } else if (action === 'qc-revert') {
+            if (!confirm('QC 판정을 취소하고 다시 QC 대기로 되돌릴까요?\n(검수값은 보존됩니다)')) return;
           } else if (action === 'complete') {
-            if (!confirm(`${printRowNo(wo, ri)} 이 건을 완료 처리할까요?`)) return;
+            const _ar = printRowActiveReceipt(r);
+            const _shrinkWarn = (_ar && _ar.qc && _ar.qc.shrink_over) ? '\n\n⚠ 이 건은 QC에서 축률 기준 초과가 기록되어 있습니다.' : '';
+            const _qs = printRowQcStatus(r);
+            const _qcWarn = (_qs === 'defect') ? '\n\n⚠ QC 불량 상태입니다. 재가공 없이 그대로 종결합니다.' : (_qs === 'accept' ? '\n\n⚠ QC 수용(그대로 사용) 건입니다.' : '');
+            if (!confirm(`${printRowNo(wo, ri)} 이 건을 완료 처리할까요?${_qcWarn}${_shrinkWarn}`)) return;
           } else if (action.indexOf('revert') >= 0 || action === 'uncomplete') {
             if (!confirm('이 단계를 되돌릴까요?')) return;
           }
@@ -24303,6 +24538,13 @@ function validateBlendSum(blends, label) {
           toast('처리되었습니다', 'success');
           renderDashboard();
         } catch (err) { btn.disabled = false; toast('처리 실패: ' + (err.message || err), 'error'); }
+      });
+    });
+    // 나염 줄 QC 검수 버튼 — 직원도 사용 가능 (hotfix224)
+    document.querySelectorAll('#dash-body .np-rqc').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openPrintQcModal(btn.dataset.id, parseInt(btn.dataset.ri, 10));
       });
     });
     // 나염 줄 메모 — 팝업 열기
@@ -24387,7 +24629,7 @@ function validateBlendSum(blends, label) {
             else if (c === '3') { real = 'shortage-close'; payload.qty = sh; }
             else return;
           } else if (action === 'complete') {
-            if (!confirm('이 나염작지를 완료 처리할까요?\n완료하면 나염 진행에서 사라지고 "완료된 의뢰서"에서 볼 수 있습니다.')) return;
+            if (!confirm('이 나염작지를 완료 처리할까요?\n완료하면 나염가공 진행에서 사라지고 "완료된 의뢰서"에서 볼 수 있습니다.')) return;
           } else if (action.indexOf('revert') >= 0) {
             if (!confirm('이 단계를 되돌릴까요?')) return;
           }
@@ -24404,7 +24646,7 @@ function validateBlendSum(blends, label) {
         if (!isAdminUser()) { toast('완료 처리는 대표만 가능합니다', 'info'); return; }
         const id = btn.dataset.id;
         const wo = state.allWorkOrders.find(w => w.id === id); if (!wo) return;
-        if (!confirm(`이 나염작지를 완료 처리할까요?\n\n[${wo.wo_number || ''}] ${wo.design_name || ''}\n\n완료하면 나염 진행에서 사라지고 "완료된 의뢰서"에서 볼 수 있습니다.`)) return;
+        if (!confirm(`이 나염작지를 완료 처리할까요?\n\n[${wo.wo_number || ''}] ${wo.design_name || ''}\n\n완료하면 나염가공 진행에서 사라지고 "완료된 의뢰서"에서 볼 수 있습니다.`)) return;
         btn.disabled = true;
         try {
           await updateDoc(doc(db, 'workorders', id), { completed: true, completed_at: serverTimestamp(), updated_at: serverTimestamp(), updated_by: state.user.email });
@@ -27956,7 +28198,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix222';
+  const VERSION = 'v2.53 hotfix224';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
