@@ -17137,9 +17137,15 @@ function validateBlendSum(blends, label) {
         if (_st === 'gagong' || _st === 'gagong_done') procTag = '가공';
         else if (_st === 'hugagong') procTag = '후가공';
         else if (_st === 'rework') procTag = '재가공';
-        else if (printRowShortage(row) > 0) procTag = '부족';
+        else if (_st === 'await_receive') {
+          const _ch2 = printRowChain(wo, row);
+          procTag = (_ch2.hugagong.use && _ch2.hugagong.done) ? '후가공' : ((_ch2.gagong.use && _ch2.gagong.done) ? '가공' : '나염');
+        } else if (printRowShortage(row) > 0) procTag = '부족';
+        // hotfix230: 공장용 라벨 — 우리 내부 QC 문구는 빼고, 부족 건은 "부족 N절"만 표기
+        const _shR = printRowShortage(row);
+        const vendorLabel = (printRowRecv(row) != null && _shR > 0) ? `부족 ${_shR}절` : printRowLabel(wo, row);
         if (!acc[r]) acc[r] = [];
-        acc[r].push({ wo, isPrint: true, printRow: row, printRowIdx: ri, colorIdx: -1, processTag: procTag, isFix: false, statusLabel: printRowLabel(wo, row) });
+        acc[r].push({ wo, isPrint: true, printRow: row, printRowIdx: ri, colorIdx: -1, processTag: procTag, isFix: false, statusLabel: vendorLabel });
       });
     });
 
@@ -17198,17 +17204,24 @@ function validateBlendSum(blends, label) {
         const diff = Math.floor((now.getTime() - d0.getTime()) / 86400000); return diff >= 0 ? diff + '일' : '';
       })();
       const pr = item.printRow || {};
-      const tagP = `<span class="dr-process-tag">나염</span>`;
+      const tagP = `<span class="dr-process-tag">${escapeHtml(processTag || '나염')}</span>`;
       const itemP = `${tagP}${escapeHtml(pr.fabric || wo.design_name || '')}<div style="font-size:10px;color:#94a3b8;">${escapeHtml(printRowNo(wo, item.printRowIdx || 0))} · ${escapeHtml(wo.design_name || '')}</div>`;
       const colorP = `${escapeHtml(pr.fabric_color || '')}${pr.print_color ? ' / ' + escapeHtml(pr.print_color) : ''}`;
       const badgeP = statusLabel ? `<span class="dr-status-badge">${escapeHtml(statusLabel)}</span>` : '';
+      // hotfix230: 부족 발생 시 의뢰 칸에 의뢰→입고→부족 3줄 표기 (염색가공과 동일 방식)
+      const _ordP = Number(pr.qty) || 0;
+      const _rvP = printRowRecv(pr);
+      const _shP = printRowShortage(pr);
+      const qtyCellP = (_rvP != null && _shP > 0)
+        ? `<div class="size-shortage"><div class="sz-row sz-ordered">${_ordP}절</div><div class="sz-row sz-received">→ 입고 ${_rvP}</div><div class="sz-row sz-lack">부족 ${_shP}절</div></div>`
+        : `${_ordP}절`;
       return `<tr class="dr-row${urgentP ? ' dr-urgent' : ''}">
         <td class="dr-urgent-col">${urgentP ? '!' : ''}</td>
         <td class="dr-date">${escapeHtml(shortOrderDate(wo.date))}</td>
         <td class="dr-elapsed">${elapsedP}</td>
         <td class="dr-item">${itemP}</td>
         <td class="dr-color">${colorP}</td>
-        <td class="dr-qty">${Number(pr.qty) || 0}절</td>
+        <td class="dr-qty">${qtyCellP}</td>
         <td class="dr-lack">${badgeP}</td>
       </tr>`;
     }
@@ -22360,6 +22373,12 @@ function validateBlendSum(blends, label) {
       case 'nayeom': return wo.print_factory || '';
       case 'gagong': case 'gagong_done': return ch.gagong.vendor || '';
       case 'hugagong': return ch.hugagong.vendor || '';
+      case 'await_receive': {
+        // hotfix230 (대표 확정): 입고 대기 = 아직 공장에서 작업/발송 전 → 그 공장 일일보고에 노출
+        return (ch.hugagong.use && ch.hugagong.done && ch.hugagong.vendor)
+            || (ch.gagong.use && ch.gagong.done && ch.gagong.vendor)
+            || wo.print_factory || '';
+      }
       default: {
         // hotfix229: 입고 대기(공장이 완료 처리한 뒤)는 공장 보고에서 제외 — 공장이 "작업 중"인 단계만 노출.
         // hotfix225: 부족 미해결이면 마지막 공정 공장에 일일보고 노출 (확정 규칙: 부족 = 노출)
@@ -22842,6 +22861,12 @@ function validateBlendSum(blends, label) {
     const arr = [wo.print_factory, ch.gagong.use ? ch.gagong.vendor : '', ch.hugagong.use ? ch.hugagong.vendor : '', (r && r.rework && r.rework.vendor) || ''];
     return [...new Set(arr.map(v => normalizeVendorName ? normalizeVendorName(v) : v).filter(Boolean))];
   }
+  // hotfix230: 이 줄을 "현재 책임지는" 공장 (원단이 있는 곳 / 부족 책임) — 필터 기준
+  function printRowCurrentVendor(wo, r) {
+    const f = printRowFactory(wo, r);
+    if (!f) return null;
+    return (normalizeVendorName ? normalizeVendorName(f) : f) || f;
+  }
 
   // 나염 줄 메모 — 팝업(크게 보기/편집). 타임스탬프 · Ctrl+Enter 저장 · Esc 취소
   function openPrintRowMemoModal(woId, ri) {
@@ -22933,7 +22958,7 @@ function validateBlendSum(blends, label) {
       rework: entries.filter(e => e.stage === 'rework').length,
     };
     const vendorSet = new Set();
-    entries.forEach(e => printRowVendors(e.wo, e.r).forEach(v => vendorSet.add(v)));
+    entries.forEach(e => { const cv = printRowCurrentVendor(e.wo, e.r); if (cv) vendorSet.add(cv); });
     const vendorList = Array.from(vendorSet).sort((a, b) => a.localeCompare(b, 'ko'));
     if (__printVendor !== 'all' && !vendorList.includes(__printVendor)) __printVendor = 'all';
     const vendorBar = `<span class="dash-vendor-filter" style="margin-left:auto;">
@@ -22950,7 +22975,7 @@ function validateBlendSum(blends, label) {
       return tabs + `<div class="dash-empty" style="text-align:center;padding:40px;color:#7a8699;">진행 중인 나염작업지시서가 없습니다.<br><br>우측 상단 <strong>[+ 새 나염작지]</strong> 버튼으로 만들어 보세요.</div>`;
     }
     const pass = (e) => {
-      if (__printVendor !== 'all' && !printRowVendors(e.wo, e.r).includes(__printVendor)) return false;
+      if (__printVendor !== 'all' && printRowCurrentVendor(e.wo, e.r) !== __printVendor) return false;
       return __printFilter === 'all' ? true
         : (__printFilter === 'worker' || __printFilter === 'manager') ? e.sec === __printFilter
         : __printFilter === 'shortage' ? printRowShortage(e.r) > 0
@@ -28445,7 +28470,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix229';
+  const VERSION = 'v2.53 hotfix230';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
