@@ -17138,7 +17138,7 @@ function validateBlendSum(blends, label) {
     (state.allWorkOrders || []).forEach(wo => {
       if (wo.type !== '나염' || wo.deleted || wo.completed) return;
       (wo.print_rows || []).forEach((row, ri) => {
-        if (!row || row.completed) return;
+        if (!row || row.completed || row.deleted) return;
         const factory = printRowFactory(wo, row);   // null이면 우리 쪽 → 제외
         if (!factory) return;
         const r = normalizeVendorName ? normalizeVendorName(factory) : factory;
@@ -22455,6 +22455,9 @@ function validateBlendSum(blends, label) {
         r.qc_status = _ar0 ? (_ar0.qc_status || null) : null;
         break;
       }
+      // hotfix237: 줄 단위 삭제(soft) — 진행·일일보고에서 제외, 그룹 하단 "삭제된 줄"에서 복구 가능
+      case 'row-delete': r.deleted = true; r.deleted_at = now; r.deleted_by = (state.user && state.user.email) || ''; break;
+      case 'row-restore': r.deleted = false; delete r.deleted_at; delete r.deleted_by; break;
       case 'qc-save': {
         // 직원 QC 검수 저장 — 활성(마지막) 차수에 기록
         if (!Array.isArray(r.receipts) || !r.receipts.length) {
@@ -22831,9 +22834,14 @@ function validateBlendSum(blends, label) {
     $('#pq-defect').addEventListener('click', () => doSave('defect', '불량 처리할까요?\n담당자 확인 대기에서 재가공 여부를 판정합니다.'));
   }
   // 줄 단계별 액션 버튼
-  function printRowButtons(wo, i, r, admin) {
+  function printRowButtons(wo, i, r, admin, viewVendor) {
     const st = printRowStage(wo, r); const ch = printRowChain(wo, r);
     const b = (action, label, style) => `<button class="dash-action-btn np-rstage" data-id="${wo.id}" data-ri="${i}" data-action="${action}" style="${style || ''}">${escapeHtml(label)}</button>`;
+    // hotfix237: 염색가공(hotfix169)과 동일 — 각 공장의 "작업 완료" 처리는 그 거래처 화면에서만.
+    //   넘김 기록·본사(나염만) 입고는 모든 화면 가능. 그 외 화면엔 안내문만.
+    const inView = (name) => viewVendor && viewVendor !== 'all' && name
+      && (normalizeVendorName ? normalizeVendorName(viewVendor) : viewVendor) === (normalizeVendorName ? normalizeVendorName(name) : name);
+    const gateNote = (name) => `<span style="font-size:10px;color:#6b7280;text-align:center;">거래처 ${escapeHtml(name || '')} 화면에서 처리</span>`;
     const primary = 'background:#eff6ff;color:#1d4ed8;border-color:#bfdbfe;font-weight:700;';
     const blue = 'background:#2563eb;color:#fff;border-color:#1d4ed8;font-weight:700;';
     const green = 'background:#f0fdf4;color:#15803d;border-color:#86efac;font-weight:700;';
@@ -22855,10 +22863,19 @@ function validateBlendSum(blends, label) {
         if (st.next === 'gagong') return b('gagong-send', `가공 넘김·${ch.gagong.vendor || '가공'}`, primary);
         if (st.next === 'hugagong') return b('hugagong-send', `후가공 넘김·${ch.hugagong.vendor || '후가공'}`, primary);
         return pair(b('receive-open', '완료', doneJudge), b('short-open', '부족', shortJudge));
-      case 'gagong': return b('gagong-done', '가공 완료', primary) + b('gagong-revert-send', '넘김 취소', revert);
-      case 'gagong_done': return b('hugagong-send', `후가공 넘김·${ch.hugagong.vendor || '후가공'}`, primary) + b('gagong-revert-done', '가공완료 취소', revert);
-      case 'hugagong': return b('hugagong-done', '후가공 완료·입고 대기', blue) + b('hugagong-revert-send', '넘김 취소', revert);
-      case 'await_receive': return pair(b('receive-open', '완료', doneJudge), b('short-open', '부족', shortJudge)) + b('rework-open', '재가공', primary);
+      case 'gagong': return inView(ch.gagong.vendor)
+        ? b('gagong-done', '가공 완료', primary) + b('gagong-revert-send', '넘김 취소', revert)
+        : gateNote(ch.gagong.vendor);
+      case 'gagong_done': return b('hugagong-send', `후가공 넘김·${ch.hugagong.vendor || '후가공'}`, primary) + (inView(ch.gagong.vendor) ? b('gagong-revert-done', '가공완료 취소', revert) : '');
+      case 'hugagong': return inView(ch.hugagong.vendor)
+        ? b('hugagong-done', '후가공 완료·입고 대기', blue) + b('hugagong-revert-send', '넘김 취소', revert)
+        : gateNote(ch.hugagong.vendor);
+      case 'await_receive': {
+        // 마지막 공정 공장 화면에서만 입고 판정 (체인 없이 나염만이면 모든 화면)
+        const lastV = (ch.hugagong.use && ch.hugagong.vendor) || (ch.gagong.use && ch.gagong.vendor) || '';
+        if (lastV && !inView(lastV)) return gateNote(lastV);
+        return pair(b('receive-open', '완료', doneJudge), b('short-open', '부족', shortJudge)) + b('rework-open', '재가공', primary);
+      }
       case 'qc_pending': return qcBtn(st.nth > 1 ? `${st.nth}차 QC 대기` : 'QC 대기', qcPend) + b('receive-revert', '입고 취소', revert);
       case 'qc_defect': return b('rework-open', '재가공', primary) + b('complete', '완료(종결)', green) + qcBtn('QC 보기', revert);
       case 'await_complete':
@@ -22949,7 +22966,7 @@ function validateBlendSum(blends, label) {
   // 염색나염가공 진행 화면 하단에 붙는 나염 섹션 (진행 중 나염 작지가 있을 때만)
   function renderPrintDashSection() {
     const has = (state.allWorkOrders || []).some(w => w.type === '나염' && !w.deleted && !w.completed
-      && (w.print_rows || []).some(r => r && !r.completed));
+      && (w.print_rows || []).some(r => r && !r.completed && !r.deleted));
     if (!has) return '';
     return `<div style="margin-top:30px;padding-top:22px;border-top:2px solid #e2e8f0;">
       <div style="font-size:15px;font-weight:800;color:#1e293b;margin-bottom:12px;">ㄴ 나염가공 진행</div>
@@ -22966,7 +22983,7 @@ function validateBlendSum(blends, label) {
     const entries = [];
     list.forEach(w => {
       (w.print_rows || []).forEach((r, i) => {
-        if (r && r.completed) return;
+        if (!r || r.completed || r.deleted) return;
         entries.push({ wo: w, r, i, sec: printRowSection(w, r), stage: printRowStage(w, r).stage });
       });
     });
@@ -23005,6 +23022,8 @@ function validateBlendSum(blends, label) {
         : __printFilter === 'shortage' ? printRowShortage(e.r) > 0
         : e.stage === __printFilter;
     };
+    // hotfix237: 지금 보고 있는 거래처 화면 — 염색가공(hotfix169)처럼 공정 처리 버튼을 해당 공장 화면에서만 노출
+    const viewVendor = (embedVendor && embedVendor !== 'all') ? embedVendor : __printVendor;
 
     const chip = (name, hex) => name ? `<span style="display:inline-block;width:11px;height:11px;border-radius:3px;border:1px solid rgba(0,0,0,.22);vertical-align:-1px;margin-right:5px;background:${hex || '#fff'};"></span>${escapeHtml(name)}` : '-';
 
@@ -23078,7 +23097,8 @@ function validateBlendSum(blends, label) {
           </td>`;
         const editCell = `<td class="col-action" rowspan="${n}" style="text-align:center;">${admin ? `<button class="dash-action-btn np-edit" data-id="${w.id}">수정</button>` : ''}</td>`;
         const copyCell = `<td class="col-action" rowspan="${n}" style="text-align:center;">${admin ? `<button class="dash-action-btn np-copy" data-id="${w.id}">복사</button>` : ''}</td>`;
-        const delCell = `<td class="col-action" rowspan="${n}" style="text-align:center;">${admin ? `<button class="dash-action-btn np-del" data-id="${w.id}" style="background:#dc2626;border-color:#b91c1c;color:#fff;font-weight:800;">삭제</button>` : ''}</td>`;
+        // hotfix237: 삭제는 줄(나염용원단) 단위 — 각 행마다 버튼 (soft delete, 그룹 하단에서 복구)
+        const rowDelCell = (i) => `<td class="col-action" style="text-align:center;">${admin ? `<button class="dash-action-btn np-rdel" data-id="${w.id}" data-ri="${i}" style="background:#dc2626;border-color:#b91c1c;color:#fff;font-weight:800;">삭제</button>` : ''}</td>`;
         return g.list.map((e, k) => {
           const r = e.r; const i = e.i;
           const legacy = Array.isArray(r.memos) ? r.memos : [];
@@ -23116,11 +23136,20 @@ function validateBlendSum(blends, label) {
                 if (_stg === 'qc_pending' && !(printRowShortage(r) > 0)) return '';
                 return `<div style="font-size:11px;font-weight:800;color:#1d4ed8;margin-bottom:4px;">${escapeHtml(printRowLabel(w, r))}</div>`;
               })()}
-              <div style="display:flex;flex-direction:column;gap:4px;align-items:stretch;">${printRowButtons(w, i, r, admin)}</div>
+              <div style="display:flex;flex-direction:column;gap:4px;align-items:stretch;">${printRowButtons(w, i, r, admin, viewVendor)}</div>
             </td>
-            ${first ? delCell : ''}
+            ${rowDelCell(i)}
           </tr>`;
-        }).join('');
+        }).join('') + (() => {
+          // hotfix237: 그룹 하단 — 삭제된 줄 목록 + [↩ 복구] (관리자만)
+          if (!admin) return '';
+          const delRows = (w.print_rows || []).map((rr, ii) => ({ rr, ii })).filter(x => x.rr && x.rr.deleted && !x.rr.completed);
+          if (!delRows.length) return '';
+          return `<tr><td colspan="15" style="background:#fafafa;border-top:1px dashed #e2e8f0;padding:5px 14px;font-size:11px;color:#94a3b8;">
+            삭제된 줄 ${delRows.length}개 — ${delRows.map(x => `<span style="margin-right:12px;">${escapeHtml(x.rr.fabric || '-')} / 나염 ${escapeHtml(x.rr.print_color || '-')} (${printRowOrdered(x.rr)}절)
+              <button class="dash-action-btn np-rrestore" data-id="${w.id}" data-ri="${x.ii}" style="background:#fff;color:#1d4ed8;border-color:#93c5fd;font-size:10px;padding:1px 7px;font-weight:700;">↩ 복구</button></span>`).join('')}
+          </td></tr>`;
+        })();
       }).join('');
       return `<div style="margin-bottom:22px;">
         <div style="border-left:4px solid ${accent};background:#fff7ed;padding:7px 12px;font-size:13px;font-weight:800;color:#1e293b;">${title} <span style="color:${accent};">${items.length}</span> <span style="font-weight:500;color:#64748b;font-size:11.5px;margin-left:8px;">${desc}</span></div>
@@ -24971,6 +25000,43 @@ function validateBlendSum(blends, label) {
           await updateDoc(doc(db, 'workorders', id), { deleted: true, deleted_at: serverTimestamp(), deleted_by: state.user.email, updated_at: serverTimestamp(), updated_by: state.user.email });
           toast('휴지통으로 이동했습니다', 'success');
         } catch (err) { btn.disabled = false; toast('삭제 실패: ' + (err.message || err), 'error'); }
+      });
+    });
+
+    // hotfix237: 줄(나염용원단) 단위 삭제 — soft delete, 그룹 하단에서 복구. 마지막 줄이면 작지 휴지통 제안
+    document.querySelectorAll('#dash-body .np-rdel').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (!isAdminUser()) { toast('삭제는 대표만 가능합니다', 'info'); return; }
+        const id = btn.dataset.id; const ri = parseInt(btn.dataset.ri, 10);
+        const wo = state.allWorkOrders.find(w => w.id === id); if (!wo) return;
+        const r = (wo.print_rows || [])[ri]; if (!r) return;
+        if (!confirm(`이 줄만 삭제할까요?\n\n${printRowNo(wo, ri)} · ${r.fabric || '-'} / 나염 ${r.print_color || '-'} (${printRowOrdered(r)}절)\n\n(작지 전체 삭제가 아닙니다. 작지 하단 "삭제된 줄"에서 복구할 수 있습니다.)`)) return;
+        btn.disabled = true;
+        try {
+          await setPrintRowStage(id, ri, 'row-delete', {});
+          toast('줄이 삭제되었습니다 (복구 가능)', 'success');
+          const wo2 = state.allWorkOrders.find(w => w.id === id);
+          const remain = (wo2 && wo2.print_rows || []).filter(x => x && !x.deleted && !x.completed).length;
+          if (remain === 0 && wo2 && confirm('진행 중인 줄이 더 없습니다.\n작지 전체를 휴지통으로 보낼까요?\n\n(취소하면 작지는 남고, 삭제한 줄은 나중에 복구할 수 있습니다)')) {
+            await updateDoc(doc(db, 'workorders', id), { deleted: true, deleted_at: serverTimestamp(), deleted_by: state.user.email, updated_at: serverTimestamp(), updated_by: state.user.email });
+            toast('작지를 휴지통으로 이동했습니다', 'success');
+          }
+          renderDashboard();
+        } catch (err) { btn.disabled = false; toast('삭제 실패: ' + (err.message || err), 'error'); }
+      });
+    });
+    document.querySelectorAll('#dash-body .np-rrestore').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (!isAdminUser()) { toast('복구는 대표만 가능합니다', 'info'); return; }
+        const id = btn.dataset.id; const ri = parseInt(btn.dataset.ri, 10);
+        btn.disabled = true;
+        try {
+          await setPrintRowStage(id, ri, 'row-restore', {});
+          toast('줄이 복구되었습니다', 'success');
+          renderDashboard();
+        } catch (err) { btn.disabled = false; toast('복구 실패: ' + (err.message || err), 'error'); }
       });
     });
 
@@ -28502,7 +28568,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix236';
+  const VERSION = 'v2.53 hotfix237';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
