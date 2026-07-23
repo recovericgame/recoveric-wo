@@ -5981,7 +5981,7 @@
         <div class="dash-menu-section-label">진행 상황</div>
         <button class="dash-menu-btn" data-view="yarn">원사 진행</button>
         <button class="dash-menu-btn" data-view="knit">편직 진행</button>
-        <button class="dash-menu-btn active" data-view="finish">염색가공 진행</button>
+        <button class="dash-menu-btn active" data-view="finish">염색나염가공 진행</button>
         <button class="dash-menu-btn" data-view="bt">B/T 진행</button>
         <button class="dash-menu-btn" data-view="print">나염 진행</button>
         <button class="dash-menu-btn" data-view="kpiboard">현황판</button>
@@ -22409,9 +22409,17 @@ function validateBlendSum(blends, label) {
     }
   }
 
-  // 나염 진행 필터 (상단 요약 탭)
+  // 나염 진행 필터 (상단 요약 탭 + 거래처)
   let __printFilter = 'all';
+  let __printVendor = 'all';
   window.__setPrintFilter = (v) => { __printFilter = v; renderDashboard(); };
+  window.__setPrintVendor = (v) => { __printVendor = v; renderDashboard(); };
+  // 그 줄에 관여하는 공장 전부 (나염공장 + 가공 + 후가공 + 재가공)
+  function printRowVendors(wo, r) {
+    const ch = printRowChain(wo, r);
+    const arr = [wo.print_factory, ch.gagong.use ? ch.gagong.vendor : '', ch.hugagong.use ? ch.hugagong.vendor : '', (r && r.rework && r.rework.vendor) || ''];
+    return [...new Set(arr.map(v => normalizeVendorName ? normalizeVendorName(v) : v).filter(Boolean))];
+  }
 
   function renderPrintDash() {
     const admin = isAdminUser();
@@ -22433,16 +22441,29 @@ function validateBlendSum(blends, label) {
       shortage: entries.filter(e => e.stage === 'shortage').length,
       rework: entries.filter(e => e.stage === 'rework').length,
     };
+    const vendorSet = new Set();
+    entries.forEach(e => printRowVendors(e.wo, e.r).forEach(v => vendorSet.add(v)));
+    const vendorList = Array.from(vendorSet).sort((a, b) => a.localeCompare(b, 'ko'));
+    if (__printVendor !== 'all' && !vendorList.includes(__printVendor)) __printVendor = 'all';
+    const vendorBar = `<span class="dash-vendor-filter" style="margin-left:auto;">
+      <span class="dash-vendor-label">거래처:</span>
+      <select class="dash-vendor-select" onchange="window.__setPrintVendor(this.value)">
+        <option value="all"${__printVendor === 'all' ? ' selected' : ''}>전체 (${vendorList.length})</option>
+        ${vendorList.map(v => `<option value="${escapeHtml(v)}"${__printVendor === v ? ' selected' : ''}>${escapeHtml(v)}</option>`).join('')}
+      </select></span>`;
     const tab = (key, label) => `<button type="button" onclick="window.__setPrintFilter('${key}')" style="border:1px solid ${__printFilter === key ? '#1d4ed8' : '#d0d5dd'};background:${__printFilter === key ? '#1d4ed8' : '#fff'};color:${__printFilter === key ? '#fff' : '#475569'};border-radius:7px;padding:6px 13px;font-size:12.5px;font-weight:700;cursor:pointer;">${label} ${cnt[key]}</button>`;
-    const tabs = `<div style="display:flex;gap:7px;flex-wrap:wrap;margin-bottom:14px;">
-      ${tab('all', '전체')}${tab('worker', '공장 진행')}${tab('manager', '판정 대기')}${tab('shortage', '부족')}${tab('rework', '재가공')}
+    const tabs = `<div style="display:flex;gap:7px;flex-wrap:wrap;margin-bottom:14px;align-items:center;">
+      ${tab('all', '전체')}${tab('worker', '공장 진행')}${tab('manager', '판정 대기')}${tab('shortage', '부족')}${tab('rework', '재가공')}${vendorBar}
     </div>`;
     if (!entries.length) {
       return tabs + `<div class="dash-empty" style="text-align:center;padding:40px;color:#7a8699;">진행 중인 나염작업지시서가 없습니다.<br><br>우측 상단 <strong>[+ 새 나염작지]</strong> 버튼으로 만들어 보세요.</div>`;
     }
-    const pass = (e) => __printFilter === 'all' ? true
-      : (__printFilter === 'worker' || __printFilter === 'manager') ? e.sec === __printFilter
-      : e.stage === __printFilter;
+    const pass = (e) => {
+      if (__printVendor !== 'all' && !printRowVendors(e.wo, e.r).includes(__printVendor)) return false;
+      return __printFilter === 'all' ? true
+        : (__printFilter === 'worker' || __printFilter === 'manager') ? e.sec === __printFilter
+        : e.stage === __printFilter;
+    };
 
     const chip = (name, hex) => name ? `<span style="display:inline-block;width:11px;height:11px;border-radius:3px;border:1px solid rgba(0,0,0,.22);vertical-align:-1px;margin-right:5px;background:${hex || '#fff'};"></span>${escapeHtml(name)}` : '-';
 
@@ -22473,7 +22494,7 @@ function validateBlendSum(blends, label) {
           const legacy = Array.isArray(r.memos) ? r.memos : [];
           const legacyHTML = legacy.slice(-3).map(m => `<div style="font-size:10.5px;color:#94a3b8;line-height:1.5;">[${escapeHtml(m.at || '')}] ${escapeHtml(m.text || '')}</div>`).join('');
           const memoTxt = (r.memo != null && String(r.memo).trim()) ? String(r.memo) : '';
-          const memoCell = `<td class="editable np-memo-cell${memoTxt ? ' has-value' : ''}" data-id="${w.id}" data-ri="${i}" style="min-width:170px;">${legacyHTML}<div class="memo-text">${memoTxt ? escapeHtml(memoTxt) : '+ 메모'}</div></td>`;
+          const memoCell = `<td class="np-memo-cell" data-id="${w.id}" data-ri="${i}" style="min-width:170px;cursor:text;vertical-align:top;">${legacyHTML}<div class="np-memo-text" style="font-size:11.5px;line-height:1.55;white-space:pre-wrap;${memoTxt ? 'color:#1e293b;' : 'color:#94a3b8;'}">${memoTxt ? escapeHtml(memoTxt) : '+ 메모'}</div></td>`;
           const first = k === 0;
           return `<tr>
             ${first ? `<td rowspan="${n}" style="text-align:center;">${stampBadges}</td>
@@ -22678,7 +22699,7 @@ function validateBlendSum(blends, label) {
       body = renderKnitDash();
       addBtn.style.display = 'inline-block';
     } else if (state.dashView === 'finish') {
-      title = 'ㄴ 염색가공 진행';
+      title = 'ㄴ 염색나염가공 진행';
       body = renderFinishDash();
       addBtn.style.display = 'inline-block';
     } else if (state.dashView === 'bt') {
@@ -27859,7 +27880,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix218';
+  const VERSION = 'v2.53 hotfix220';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
