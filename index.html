@@ -22421,6 +22421,74 @@ function validateBlendSum(blends, label) {
     return [...new Set(arr.map(v => normalizeVendorName ? normalizeVendorName(v) : v).filter(Boolean))];
   }
 
+  // 나염 줄 메모 — 팝업(크게 보기/편집). 타임스탬프 · Ctrl+Enter 저장 · Esc 취소
+  function openPrintRowMemoModal(woId, ri) {
+    const wo = state.allWorkOrders.find(w => w.id === woId); if (!wo) return;
+    const r = (wo.print_rows || [])[ri]; if (!r) return;
+    const cur = r.memo == null ? '' : String(r.memo);
+    const d = new Date();
+    const p2 = (x) => String(x).padStart(2, '0');
+    const stamp = `[${p2(d.getMonth() + 1)}/${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}]`;
+    const bg = document.createElement('div');
+    bg.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:99999;display:flex;align-items:center;justify-content:center;padding:20px;';
+    bg.innerHTML = `<div style="background:#fff;border-radius:10px;max-width:760px;width:100%;box-shadow:0 20px 50px rgba(0,0,0,.28);overflow:hidden;font-family:var(--font-gothic);">
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:13px 18px;border-bottom:1px solid #e5e7eb;">
+        <div style="font-size:14px;font-weight:800;color:#1e293b;">나염 메모 — ${escapeHtml(printRowNo(wo, ri))} / ${escapeHtml(r.fabric || '')}</div>
+        <button type="button" id="npm-close" style="background:#fff;border:1px solid #d0d5dd;color:#475569;border-radius:6px;padding:5px 13px;font-size:12.5px;font-weight:700;cursor:pointer;">닫기</button>
+      </div>
+      <div style="padding:16px 18px;">
+        <div style="font-size:11.5px;color:#64748b;line-height:1.8;margin-bottom:11px;">
+          작지: ${escapeHtml(wo.wo_number || '')} · ${escapeHtml(wo.design_name || '')}<br>
+          원단: ${escapeHtml(r.fabric || '-')} / 원단컬러 ${escapeHtml(r.fabric_color || '-')} / 나염컬러 ${escapeHtml(r.print_color || '-')} / ${printRowOrdered(r)}절<br>
+          단축키: <strong>Ctrl+Enter</strong> 저장 / <strong>Esc</strong> 취소<br>
+          타임스탬프: [+ 타임스탬프] 클릭 시 맨 위에 추가됩니다 (최신순 위)
+        </div>
+        <button type="button" id="npm-ts" style="background:#fff;border:1px solid #d0d5dd;color:#334155;border-radius:7px;padding:7px 13px;font-size:12px;font-weight:700;cursor:pointer;margin-bottom:10px;">+ 타임스탬프 ${escapeHtml(stamp)} 맨 위에 추가</button>
+        <textarea id="npm-text" placeholder="이 건에 대한 메모를 입력하세요." style="width:100%;min-height:190px;border:2px solid #1e293b;border-radius:8px;padding:11px 13px;font-size:13px;line-height:1.7;font-family:inherit;resize:vertical;"></textarea>
+        <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px;">
+          <button type="button" id="npm-cancel" style="background:#fff;border:1px solid #d0d5dd;color:#475569;border-radius:7px;padding:8px 16px;font-size:12.5px;font-weight:700;cursor:pointer;">취소</button>
+          <button type="button" id="npm-save" style="background:#1e293b;border:1px solid #0f172a;color:#fff;border-radius:7px;padding:8px 18px;font-size:12.5px;font-weight:800;cursor:pointer;">저장 (Ctrl+Enter)</button>
+        </div>
+      </div></div>`;
+    document.body.appendChild(bg);
+    const ta = bg.querySelector('#npm-text');
+    ta.value = cur;
+    ta.focus();
+    const close = () => { if (bg.parentNode) bg.parentNode.removeChild(bg); document.removeEventListener('keydown', onKey); };
+    const save = async () => {
+      const v = ta.value;
+      close();
+      if (v === cur) return;
+      try { await setPrintRowStage(woId, ri, 'memo-set', { text: v }); toast('메모가 저장되었습니다', 'success'); }
+      catch (err) { toast('메모 저장 실패: ' + (err.message || err), 'error'); }
+      renderDashboard();
+    };
+    const onKey = (ev) => {
+      if (ev.key === 'Escape') { ev.preventDefault(); close(); }
+      else if (ev.key === 'Enter' && (ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); save(); }
+    };
+    document.addEventListener('keydown', onKey);
+    bg.querySelector('#npm-close').addEventListener('click', close);
+    bg.querySelector('#npm-cancel').addEventListener('click', close);
+    bg.querySelector('#npm-save').addEventListener('click', save);
+    bg.querySelector('#npm-ts').addEventListener('click', () => {
+      ta.value = stamp + ' ' + (ta.value ? '\n' + ta.value : '');
+      ta.focus(); ta.setSelectionRange(stamp.length + 1, stamp.length + 1);
+    });
+    bg.addEventListener('click', (ev) => { if (ev.target === bg) close(); });
+  }
+
+  // 염색나염가공 진행 화면 하단에 붙는 나염 섹션 (진행 중 나염 작지가 있을 때만)
+  function renderPrintDashSection() {
+    const has = (state.allWorkOrders || []).some(w => w.type === '나염' && !w.deleted && !w.completed
+      && (w.print_rows || []).some(r => r && !r.completed));
+    if (!has) return '';
+    return `<div style="margin-top:30px;padding-top:22px;border-top:2px solid #e2e8f0;">
+      <div style="font-size:15px;font-weight:800;color:#1e293b;margin-bottom:12px;">ㄴ 나염 진행</div>
+      ${renderPrintDash()}
+    </div>`;
+  }
+
   function renderPrintDash() {
     const admin = isAdminUser();
     const list = (state.allWorkOrders || [])
@@ -22494,7 +22562,7 @@ function validateBlendSum(blends, label) {
           const legacy = Array.isArray(r.memos) ? r.memos : [];
           const legacyHTML = legacy.slice(-3).map(m => `<div style="font-size:10.5px;color:#94a3b8;line-height:1.5;">[${escapeHtml(m.at || '')}] ${escapeHtml(m.text || '')}</div>`).join('');
           const memoTxt = (r.memo != null && String(r.memo).trim()) ? String(r.memo) : '';
-          const memoCell = `<td class="np-memo-cell" data-id="${w.id}" data-ri="${i}" style="min-width:170px;cursor:text;vertical-align:top;">${legacyHTML}<div class="np-memo-text" style="font-size:11.5px;line-height:1.55;white-space:pre-wrap;${memoTxt ? 'color:#1e293b;' : 'color:#94a3b8;'}">${memoTxt ? escapeHtml(memoTxt) : '+ 메모'}</div></td>`;
+          const memoCell = `<td class="np-memo-cell" data-id="${w.id}" data-ri="${i}" style="min-width:170px;cursor:text;vertical-align:top;position:relative;">${legacyHTML}<div class="np-memo-text" style="font-size:11.5px;line-height:1.55;white-space:pre-wrap;${memoTxt ? 'color:#1e293b;' : 'color:#94a3b8;'}">${memoTxt ? escapeHtml(memoTxt) : '+ 메모'}</div><button type="button" class="np-memo-expand" data-id="${w.id}" data-ri="${i}" title="크게 보기 / 편집" style="position:absolute;top:3px;right:3px;background:#fff;border:1px solid #e2e8f0;color:#64748b;border-radius:4px;font-size:10px;line-height:1;padding:2px 5px;cursor:pointer;">⤢</button></td>`;
           const first = k === 0;
           return `<tr>
             ${first ? `<td rowspan="${n}" style="text-align:center;">${stampBadges}</td>
@@ -22700,7 +22768,7 @@ function validateBlendSum(blends, label) {
       addBtn.style.display = 'inline-block';
     } else if (state.dashView === 'finish') {
       title = 'ㄴ 염색나염가공 진행';
-      body = renderFinishDash();
+      body = renderFinishDash() + renderPrintDashSection();
       addBtn.style.display = 'inline-block';
     } else if (state.dashView === 'bt') {
       title = 'ㄴ B/T 진행';
@@ -24237,10 +24305,18 @@ function validateBlendSum(blends, label) {
         } catch (err) { btn.disabled = false; toast('처리 실패: ' + (err.message || err), 'error'); }
       });
     });
+    // 나염 줄 메모 — 팝업 열기
+    document.querySelectorAll('#dash-body .np-memo-expand').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openPrintRowMemoModal(btn.dataset.id, parseInt(btn.dataset.ri, 10));
+      });
+    });
     // 나염 줄 메모 — 인라인 편집 (염색가공 메모와 동일한 방식)
     document.querySelectorAll('#dash-body .np-memo-cell').forEach(td => {
       td.addEventListener('click', (e) => {
         e.stopPropagation();
+        if (e.target && e.target.classList && e.target.classList.contains('np-memo-expand')) return;
         if (td.querySelector('textarea')) return;
         const id = td.dataset.id; const ri = parseInt(td.dataset.ri, 10);
         const wo = state.allWorkOrders.find(w => w.id === id); if (!wo) return;
@@ -27880,7 +27956,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix220';
+  const VERSION = 'v2.53 hotfix222';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
