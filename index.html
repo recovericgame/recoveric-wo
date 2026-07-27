@@ -5350,26 +5350,30 @@
   
   /* ==================== v2.51 step3: 거래처별 일일 보고 ==================== */
   
-  /* 메모 셀 긴급 토글 버튼 */
+  /* 메모 셀 긴급 토글 버튼 — hotfix239: "긴급" 글자 표기 (빈 사각형 → 알아볼 수 있는 버튼) */
   .dash-table .editable[data-field="internal_memo"] .memo-urgent-btn {
     position: absolute;
     top: 2px;
     right: 26px;   /* 확장 버튼(⤢) 옆 */
-    width: 22px;
-    height: 22px;
-    padding: 0;
-    border: 1px solid transparent;
-    background: transparent;
+    width: auto;
+    height: 20px;
+    padding: 0 7px;
+    border: 1px solid #fca5a5;
+    background: #fff;
+    color: #dc2626;
     border-radius: 3px;
-    font-size: 12px;
+    font-size: 10px;
+    font-weight: 800;
+    font-family: inherit;
     cursor: pointer;
-    opacity: 0.35;
+    opacity: 0.55;
     transition: opacity 0.15s, background 0.15s;
     z-index: 2;
-    line-height: 1;
+    line-height: 18px;
+    white-space: nowrap;
   }
   .dash-table .editable[data-field="internal_memo"]:hover .memo-urgent-btn {
-    opacity: 0.7;
+    opacity: 0.9;
   }
   .dash-table .editable[data-field="internal_memo"] .memo-urgent-btn:hover {
     background: #fee2e2;
@@ -5380,6 +5384,7 @@
     opacity: 1;
     background: #dc2626;
     border-color: #991b1b;
+    color: #fff;
     filter: grayscale(0%);
     box-shadow: 0 0 0 2px rgba(220,38,38,0.25);
   }
@@ -11410,7 +11415,7 @@ function validateBlendSum(blends, label) {
         ? `<div class="memo-text">${escapeHtml(value)}</div>`
         : `<div class="memo-text">+ 메모</div>`;
       const urgentBtn = showUrgentBtn 
-        ? `<button type="button" class="memo-urgent-btn ${urgent ? 'on' : ''}" data-id="${wo.id}" data-action="toggle-urgent" title="${urgent ? '긴급 해제' : '긴급으로 표시'}"></button>`
+        ? `<button type="button" class="memo-urgent-btn ${urgent ? 'on' : ''}" data-id="${wo.id}" data-action="toggle-urgent" title="${urgent ? '긴급 해제' : '긴급으로 표시'}">긴급</button>`
         : '';
       const expandBtn = `<button type="button" class="memo-expand-btn" data-id="${wo.id}" data-action="expand-memo" title="크게 보기 / 편집">⤢</button>`;
       return `<td class="${cls}" data-id="${wo.id}" data-field="${field}" data-type="textarea">${inner}${urgentBtn}${expandBtn}</td>`;
@@ -12430,6 +12435,7 @@ function validateBlendSum(blends, label) {
         receiptNo: h.receipt.receipt_no,
         item: h.wo.body?.item || '',
         dev: dev,
+        qc: h.receipt.qc || null,
         width: h.receipt.shrink_hold_w,
         length: h.receipt.shrink_hold_l,
         notes: (h.receipt.qc && h.receipt.qc.notes) || '',
@@ -17644,7 +17650,7 @@ function validateBlendSum(blends, label) {
       const inner = hasValue 
         ? `<div class="memo-text">${escapeHtml(value)}</div>`
         : `<div class="memo-text">+ 메모</div>`;
-      const urgentBtn = `<button type="button" class="memo-urgent-btn ${urgent ? 'on' : ''}" data-id="${wo.id}" data-color-idx="${colorIdx}" data-action="toggle-urgent-color" title="${urgent ? '긴급 해제' : '긴급으로 표시'}"></button>`;
+      const urgentBtn = `<button type="button" class="memo-urgent-btn ${urgent ? 'on' : ''}" data-id="${wo.id}" data-color-idx="${colorIdx}" data-action="toggle-urgent-color" title="${urgent ? '긴급 해제' : '긴급으로 표시'}">긴급</button>`;
       const expandBtn = `<button type="button" class="memo-expand-btn" data-id="${wo.id}" data-color-idx="${colorIdx}" data-action="expand-memo-color" title="크게 보기 / 편집">⤢</button>`;
       return `<td class="${cls}" data-id="${wo.id}" data-color-idx="${colorIdx}" data-field="${field}" data-type="textarea" data-color-cell="1">${inner}${urgentBtn}${expandBtn}</td>`;
     }
@@ -20219,6 +20225,10 @@ function validateBlendSum(blends, label) {
         if (dev && dev.weight) {
           const c = dev.weight.fail ? '#dc2626' : '#6b7280';
           rows.push(`<div class="ceo-report-line"><span class="ceo-report-k">중량</span> 실측 <strong style="color:${c};">${dev.weight.actual}g/y</strong> / 허용 ${dev.weight.lo}~${dev.weight.hi} (기준 ${dev.weight.target}) ${dev.weight.fail ? '<strong style="color:#dc2626;">이상</strong>' : '<span style="color:#16a34a;">정상</span>'}</div>`);
+        } else {
+          // hotfix239: 기준 중량 미설정 품목도 실측 중량은 항상 표시
+          const mgy = (rep.qc && rep.qc.weight_g_per_y !== '' && rep.qc.weight_g_per_y != null) ? parseFloat(rep.qc.weight_g_per_y) : null;
+          if (mgy != null && isFinite(mgy)) rows.push(`<div class="ceo-report-line"><span class="ceo-report-k">중량</span> 실측 <strong style="color:#6b7280;">${mgy}g/y</strong> <span style="color:#9ca3af;">(기준 중량 미설정 — 원단 기본 스펙에 등록하면 자동 판정)</span></div>`);
         }
         if (dev && dev.shrink) {
           const c = dev.shrink.fail ? '#dc2626' : '#6b7280';
@@ -22492,6 +22502,14 @@ function validateBlendSum(blends, label) {
         if (Array.isArray(r.hop_shorts)) r.hop_shorts = r.hop_shorts.filter(h => h && h.proc !== p2);
         break;
       }
+      // hotfix239: 완료 취소 — 그 공장의 "작업 완료"만 되돌려 다시 작업중 상태로 (출고 부족 기록도 함께 취소)
+      case 'hop-undone': {
+        const p3 = payload.proc;
+        if (p3 === 'gagong') r.chain.gagong.done = null;
+        else if (p3 === 'hugagong') r.chain.hugagong.done = null;
+        if (Array.isArray(r.hop_shorts)) r.hop_shorts = r.hop_shorts.filter(h => h && h.proc !== p3);
+        break;
+      }
       case 'qc-save': {
         // 직원 QC 검수 저장 — 활성(마지막) 차수에 기록
         if (!Array.isArray(r.receipts) || !r.receipts.length) {
@@ -22972,6 +22990,8 @@ function validateBlendSum(blends, label) {
         const doneMark = (nm) => `<span style="display:block;padding:3px 8px;border-radius:6px;background:#ecfdf5;color:#047857;border:1px solid #a7f3d0;font-size:11px;font-weight:700;text-align:center;">✓ ${nm} 완료</span>`;
         const waitMark = (nm) => `<span style="font-size:10px;color:#94a3b8;text-align:center;">앞 공정(${nm}) 진행중 — 대기</span>`;
         const destLine = (txt) => `<span style="font-size:10px;color:#475569;text-align:center;font-weight:700;">출고처: ${escapeHtml(txt)}</span>`;
+        // hotfix239: 완료 취소는 뒤 공정부터 — 이후 공정이 진행된 상태에선 안내만
+        const lockNote = (nm) => `<span style="font-size:10px;color:#94a3b8;text-align:center;">취소는 ${escapeHtml(nm || '')} 화면에서 뒤 공정부터</span>`;
         const hopUI = (proc, destTxt) => pair(b('hop-complete-' + proc, '완료', doneJudge), b('hop-short-open-' + proc, '부족', shortJudge)) + destLine(destTxt);
         const s = st.stage;
         if (s === 'nayeom') {
@@ -22985,17 +23005,20 @@ function validateBlendSum(blends, label) {
           if (myProc === 'nayeom') return doneMark('나염') + b('hop-revert-nayeom', '출고 취소', revert);
           return waitMark('가공');
         } else if (s === 'gagong_done') {
-          if (myProc === 'gagong') return doneMark('가공') + b('hugagong-send', `후가공 넘김·${ch.hugagong.vendor || '후가공'}`, primary);
-          if (myProc === 'nayeom') return doneMark('나염');
+          if (myProc === 'gagong') return doneMark('가공') + b('hugagong-send', `후가공 넘김·${ch.hugagong.vendor || '후가공'}`, primary) + b('hop-undone-gagong', '완료 취소', revert);
+          if (myProc === 'nayeom') return doneMark('나염') + lockNote(ch.gagong.vendor);
           return waitMark('가공');
         } else if (s === 'hugagong') {
           if (myProc === 'hugagong') return hopUI('hugagong', '본사 (입고)');
           if (myProc === 'gagong') return doneMark('가공') + b('hop-revert-gagong', '출고 취소', revert);
-          return doneMark('나염');
+          return doneMark('나염') + lockNote(ch.hugagong.vendor);
         } else if (s === 'await_receive') {
           const lastV0 = (ch.hugagong.use && ch.hugagong.vendor) || (ch.gagong.use && ch.gagong.vendor) || wo.print_factory || '';
-          if (!inView(lastV0)) return doneMark(myProc === 'nayeom' ? '나염' : (myProc === 'gagong' ? '가공' : '후가공')) + `<span style="font-size:10px;color:#94a3b8;text-align:center;">본사 입고 대기</span>`;
-          // 마지막 공정 공장 화면 → 아래 기본 흐름([완료][부족] 입고 판정)
+          const lastProc0 = ch.hugagong.use ? 'hugagong' : (ch.gagong.use ? 'gagong' : null);
+          if (!inView(lastV0)) return doneMark(myProc === 'nayeom' ? '나염' : (myProc === 'gagong' ? '가공' : '후가공')) + `<span style="font-size:10px;color:#94a3b8;text-align:center;">본사 입고 대기</span>` + lockNote(lastV0);
+          // 마지막 공정 공장 화면 → 입고 판정 + 자기 작업 완료 취소
+          if (lastProc0) return pair(b('receive-open', '완료', doneJudge), b('short-open', '부족', shortJudge)) + b('rework-open', '재가공', primary) + b('hop-undone-' + lastProc0, '완료 취소', revert);
+          // 체인 없음(나염만) → 아래 기본 흐름
         }
       }
     }
@@ -25015,6 +25038,9 @@ function validateBlendSum(blends, label) {
           } else if (action.indexOf('hop-revert-') === 0) {
             if (!confirm('출고를 취소하고 이전 상태로 되돌릴까요?\n(출고 부족 기록도 함께 지워집니다)')) return;
             real = 'hop-revert'; payload.proc = action.replace('hop-revert-', '');
+          } else if (action.indexOf('hop-undone-') === 0) {
+            if (!confirm('작업 완료를 취소하고 다시 작업중 상태로 되돌릴까요?\n(그 공정의 출고 부족 기록도 함께 지워집니다)')) return;
+            real = 'hop-undone'; payload.proc = action.replace('hop-undone-', '');
           } else if (action === 'shortage-open') {
             openPrintShortageModal(id, ri); return;
           } else if (action === 'rework-open') {
@@ -28732,7 +28758,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix238';
+  const VERSION = 'v2.53 hotfix239';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
