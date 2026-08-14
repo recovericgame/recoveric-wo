@@ -6977,7 +6977,7 @@ function addYarnRow(data={}) {
     </select>
     <input type="number" class="y-kgbox" placeholder="30.5" value="${data.kg_per_box ?? ''}" step="0.01">
     <input type="text" class="y-totalkg" readonly value="${data.total_kg ? data.total_kg.toFixed(2)+'kg' : ''}" style="background:#f5f5f5;font-size:11px;text-align:right;">
-    <select class="y-dest" data-vtype="출고처" title="등록된 출고처에서 선택" style="font-family:inherit;">${vendorOptionsHTML('출고처', data.dest || '')}</select>
+    <select class="y-dest" data-vtype="출고처,편직처" title="등록된 출고처·편직공장에서 선택" style="font-family:inherit;">${vendorOptionsHTML('출고처,편직처', data.dest || '')}</select>
     <button class="btn-del">X</button>
   `;
   const updateKg = () => {
@@ -7100,12 +7100,18 @@ function updateColorEmptyWarning() {
 
 // ===== 수신처 =====
 // hotfix172: 거래처 옵션 HTML 생성(행 단위 셀렉트 등에서 재사용) — 구분(vtype) 필터 + 현재값 대표명 정규화 + 미등록 보존
+// hotfix241: 업체칸 유형을 쉼표로 여러 개 지정 가능 (예: '출고처,편직처')
+//   원사는 편직공장으로 바로 출고되는 경우가 많아, 출고처로 따로 등록하지 않은 편직공장도 목록에 나와야 함
+function vendorTypeMatch(v, vtype) {
+  const want = String(vtype || '').split(',').map(s => s.trim()).filter(Boolean);
+  const types = Array.isArray(v && v.types) ? v.types : (v && v.type ? [v.type] : []);
+  if (types.length === 0 || types.includes('기타')) return true;
+  if (want.length === 0) return true;
+  return want.some(w => types.includes(w));
+}
 function vendorOptionsHTML(vtype, currentVal) {
   const vendors = (typeof state !== 'undefined' && state.vendors) ? state.vendors : [];
-  const matched = vendors.filter(v => {
-    const types = Array.isArray(v && v.types) ? v.types : (v && v.type ? [v.type] : []);
-    return types.length === 0 || types.includes(vtype) || types.includes('기타');
-  });
+  const matched = vendors.filter(v => vendorTypeMatch(v, vtype));
   const names = Array.from(new Set(matched.map(v => (v && v.name ? String(v.name).trim() : '')).filter(Boolean)))
     .sort((a, b) => a.localeCompare(b, 'ko'));
   const norm = currentVal ? (typeof normalizeVendorName === 'function' ? normalizeVendorName(currentVal) : currentVal) : '';
@@ -7129,10 +7135,7 @@ function refreshVendorSelects() {
     const targetId = sel.dataset.target;
     const hidden = targetId ? document.getElementById(targetId) : null;
     const vtype = sel.dataset.vtype || '';
-    const matched = vendors.filter(v => {
-      const types = Array.isArray(v && v.types) ? v.types : (v && v.type ? [v.type] : []);
-      return types.length === 0 || types.includes(vtype) || types.includes('기타');
-    });
+    const matched = vendors.filter(v => vendorTypeMatch(v, vtype));
     const names = Array.from(new Set(matched.map(v => (v && v.name ? String(v.name).trim() : '')).filter(Boolean)))
       .sort((a, b) => a.localeCompare(b, 'ko'));
     // 숨은 값칸의 현재값(저장된 표기) → 대표명으로 정규화
@@ -28778,7 +28781,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix241';
+  const VERSION = 'v2.53 hotfix242';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
