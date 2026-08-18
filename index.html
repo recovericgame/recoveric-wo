@@ -7141,7 +7141,8 @@ function refreshVendorSelects() {
     // 숨은 값칸의 현재값(저장된 표기) → 대표명으로 정규화
     const raw = hidden ? String(hidden.value || '').trim() : '';
     const norm = raw ? (typeof normalizeVendorName === 'function' ? normalizeVendorName(raw) : raw) : '';
-    let opts = `<option value="">— 선택 —</option>` +
+    const isRibRecv = (targetId === 'f_rib_receiving');
+    let opts = `<option value="">${isRibRecv ? '— 선택 (몸판과 다른 공장일 때) —' : '— 선택 —'}</option>` +
       names.map(n => `<option value="${escapeHtml(n)}"${n === norm ? ' selected' : ''}>${escapeHtml(n)}</option>`).join('');
     // 목록에 없는 값(미등록)은 데이터 보존을 위해 옵션으로 추가 후 선택
     if (norm && !names.includes(norm)) {
@@ -9359,6 +9360,8 @@ document.getElementById('form-panel').addEventListener('input', () => { render()
 document.getElementById('form-panel').addEventListener('change', () => { render(); markDirty(); });
 
 // hotfix171: 업체칸 선택 전용 — 셀렉트 선택값을 숨은 값칸(data-target)에 반영. 저장/복사는 값칸을 그대로 읽는다.
+// hotfix243: 캡처 단계로 변경 — 미리보기 갱신(render)이 먼저 돌면서 방금 고른 값이 지워지던 문제.
+//   업체를 선택해도 작업의뢰서에 반영되지 않던 원인. 값칸 반영을 항상 render보다 먼저 처리한다.
 document.getElementById('form-panel').addEventListener('change', (e) => {
   const sel = e.target.closest && e.target.closest('.vendor-select');
   if (!sel) return;
@@ -9368,7 +9371,7 @@ document.getElementById('form-panel').addEventListener('change', (e) => {
     target.dispatchEvent(new Event('input', { bubbles: true }));
     render(); markDirty();
   }
-});
+}, true);
 
 // hotfix73: 품목 자동채움/기준 불러오기 로직은 findFabricSpec가 있는 firebase-ready 스코프로 이동함
 
@@ -17043,9 +17046,24 @@ function validateBlendSum(blends, label) {
     } else {
       st = c.qc_status || 'none';
     }
+    // hotfix243: 부분 입고 보정 — 이번에 들어온 분의 QC가 끝났다는 이유로 색 전체가 보고에서 빠지던 문제.
+    //   의뢰 수량보다 누적 입고가 적으면 나머지는 아직 거래처에 있는 것이므로 계속 노출한다.
+    //   (땡처리로 종결된 색은 제외 — 더 받을 것이 없음)
+    const _ordTot = (num(c.body) || 0) + (num(c.rib) || 0);
+    let _rcvTot = 0;
+    if (receipts.length > 0) {
+      receipts.forEach(r => { _rcvTot += (num(r && r.received_body) || 0) + (num(r && r.received_rib) || 0); });
+    } else {
+      if (c.received_body !== undefined && c.received_body !== null && c.received_body !== '') _rcvTot += num(c.received_body) || 0;
+      if (c.received_rib !== undefined && c.received_rib !== null && c.received_rib !== '') _rcvTot += num(c.received_rib) || 0;
+    }
+    const _remain = _ordTot - _rcvTot;
     // 대표 확정(hotfix211): QC 대기·QC 통과·땡처리 = 이미 우리 쪽에 도착/종료 → 거래처 보고 제외.
     //   none(아직 대흥에서 작업 중 = 입고 대기)·defect(불량 협의)·accept → 거래처가 아직 관여 → 노출.
-    if (st === 'pending' || st === 'done' || st === 'discard') return false;
+    if (st === 'pending' || st === 'done' || st === 'discard') {
+      if (st !== 'discard' && _rcvTot > 0 && _remain > 0.0001) return true;
+      return false;
+    }
     return true;
   }
 
@@ -17054,7 +17072,18 @@ function validateBlendSum(blends, label) {
     if (!c) return '';
     const receipts = Array.isArray(c.receipts) ? c.receipts : [];
     const anyReceipt = receipts.length > 0 || (num(c.received_body) || 0) > 0 || (num(c.received_rib) || 0) > 0;
-    return anyReceipt ? '' : '입고 대기';
+    if (!anyReceipt) return '입고 대기';
+    // hotfix243: 일부만 들어온 색은 남은 수량을 알려준다 (거래처가 무엇을 더 보내야 하는지 바로 보이도록)
+    const _ob = num(c.body) || 0, _or = num(c.rib) || 0;
+    let _rb = 0, _rr = 0;
+    if (receipts.length > 0) {
+      receipts.forEach(r => { _rb += num(r && r.received_body) || 0; _rr += num(r && r.received_rib) || 0; });
+    } else {
+      _rb = num(c.received_body) || 0; _rr = num(c.received_rib) || 0;
+    }
+    const _lb = Math.max(0, _ob - _rb), _lr = Math.max(0, _or - _rr);
+    if (_lb > 0 || _lr > 0) return `잔여 ${fmtDrNum(_lb)} / ${fmtDrNum(_lr)}`;
+    return '';
   }
 
   
@@ -28781,7 +28810,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix242';
+  const VERSION = 'v2.53 hotfix243';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
