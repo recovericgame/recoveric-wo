@@ -6165,7 +6165,7 @@
       
       <div class="section">
         <div class="section-title">리프 (RIB)</div>
-        <div class="field"><label>리프 품목</label><div style="display:flex;gap:6px;align-items:center;"><input type="text" lang="ko" id="f_rib_item" list="rib-spec-datalist" autocomplete="off" autocorrect="off" spellcheck="false" placeholder="프리미엄싱글 1x1 RIB (선택 시 기준 폭·중량 자동 채움)" style="flex:1;"><datalist id="rib-spec-datalist"></datalist><button type="button" id="f_rib_addspec" class="btn-add" data-part="rib" style="white-space:nowrap;background:#047857;color:#fff;" title="지금 입력한 리프 품목명·폭·중량·혼용율로 품목 사전에 새로 등록합니다">＋ 사전 등록</button></div></div>
+        <div class="field"><label>리프 품목</label><div style="display:flex;gap:6px;align-items:center;"><input type="text" lang="ko" id="f_rib_item" list="rib-spec-datalist" autocomplete="off" autocorrect="off" spellcheck="false" placeholder="프리미엄싱글 1x1 RIB (선택 시 기준 폭·중량 자동 채움)" style="flex:1;"><datalist id="rib-spec-datalist"></datalist><button type="button" id="f_rib_loadspec" class="btn-add" style="white-space:nowrap;background:#1e3a8a;color:#fff;" title="이 리프의 기준 폭·중량·튜브·혼용율을 한 번에 덮어씁니다">기준 불러오기</button><button type="button" id="f_rib_addspec" class="btn-add" data-part="rib" style="white-space:nowrap;background:#047857;color:#fff;" title="지금 입력한 리프 품목명·폭·중량·혼용율로 품목 사전에 새로 등록합니다">＋ 사전 등록</button></div></div>
         <div class="field"><label>리프 입고처 (편직 공장)</label><select class="vendor-select" data-target="f_rib_receiving" data-vtype="편직처" title="등록된 거래처에서 선택" style="width:100%;padding:9px 10px;border:1px solid #d1d5db;border-radius:6px;font-family:inherit;font-size:13px;background:#fff;color:#374151;cursor:pointer;"><option value="">— 선택 (몸판과 다른 공장일 때) —</option></select><input type="hidden" id="f_rib_receiving"></div>
         <div class="field">
           <label>리프 혼용율 (자유 추가/삭제)</label>
@@ -10068,6 +10068,12 @@ window.addEventListener('firebase-ready', () => {
   // hotfix246: 판매 종료 품목은 작지 품목칸 목록에서 빠진다. 기존 의뢰서·자동채움은 그대로 동작.
   function specIsOnSale(s) { return !s || s.active !== false; }
   function getRibSpecs() { return getFabricSpecs().filter(s => s && s.gubun === GUBUN_RIB); }
+  // hotfix249: 이 리프를 짝으로 지정한 몸판 목록 (리프 1개 → 몸판 여러 개)
+  function bodiesUsingRib(ribName) {
+    const key = String(ribName || '').trim().toLowerCase();
+    if (!key) return [];
+    return getFabricSpecs().filter(s => s && s.gubun !== GUBUN_RIB && String(s.pair_rib || '').trim().toLowerCase() === key);
+  }
   // 몸판 품목에 지정된 짝 리프 스펙 (없으면 null)
   function findPairRibSpec(bodySpec) {
     if (!bodySpec || !bodySpec.pair_rib) return null;
@@ -10211,6 +10217,21 @@ window.addEventListener('firebase-ready', () => {
         const pairMsg = findPairRibSpec(spec) ? `\n짝 리프 "${findPairRibSpec(spec).name}" 도 함께 채워집니다.` : '';
         if (hasExisting && !confirm(`"${spec.name}" 기준으로\n폭·중량·튜브·혼용율·주의사항을 덮어쓸까요?${pairMsg}\n(현재 입력값이 바뀝니다)`)) return;
         applyFabricSpecToForm(spec, true);
+        try { toast(`"${spec.name}" 기준 불러옴`, 'success'); } catch (_) {}
+      });
+      // hotfix250: 리프 [기준 불러오기] — 리프칸에 값이 이미 있어도 덮어쓴다 (복사해서 만든 의뢰서 대응)
+      fp.addEventListener('click', (e) => {
+        const btn = e.target && (e.target.id === 'f_rib_loadspec' ? e.target : (e.target.closest ? e.target.closest('#f_rib_loadspec') : null));
+        if (!btn) return;
+        const el = document.getElementById('f_rib_item');
+        const spec = el ? findFabricSpec(el.value) : null;
+        if (!spec) { try { toast('등록된 리프가 아닙니다. 목록에서 고르거나 [＋ 사전 등록]으로 먼저 등록하세요.', 'warning'); } catch (_) {} return; }
+        const wEl = document.getElementById('f_rib_spec_width');
+        const gEl = document.getElementById('f_rib_spec_gy');
+        const hasExisting = (wEl && wEl.value.trim()) || (gEl && gEl.value.trim()) || getBlendData('rib_blends').some(b => b.value);
+        if (hasExisting && !confirm(`"${spec.name}" 기준으로\n리프 폭·중량·튜브·혼용율을 덮어쓸까요?\n(현재 입력값이 바뀝니다)`)) return;
+        applyRibSpecToForm(spec, true, false);
+        render(); markDirty();
         try { toast(`"${spec.name}" 기준 불러옴`, 'success'); } catch (_) {}
       });
       // hotfix246: [＋ 사전 등록] — 지금 작지에 입력한 값 그대로 품목 사전에 넣는다 (몸판·리프 각각)
@@ -21251,7 +21272,7 @@ function validateBlendSum(blends, label) {
         : fsGubunFilter === '__off__' ? !specIsOnSale(o.s)
           : (o.s.gubun === fsGubunFilter && specIsOnSale(o.s)));
     h += `<div class="dash-table-wrap"><table class="dash-table"><thead><tr>
-      <th style="text-align:left;">품목명</th><th>구분</th><th>짝 리프</th><th>조직</th><th>기준 폭</th><th>튜브</th><th>중량 g/y</th><th style="text-align:left;">혼용률</th><th>마지막 수정일</th><th>판매</th><th>수정</th><th>삭제</th>
+      <th style="text-align:left;">품목명</th><th>구분</th><th>${fsGubunFilter === GUBUN_RIB ? '짝 몸판' : (fsGubunFilter === GUBUN_BODY ? '짝 리프' : '짝 연결')}</th><th>조직</th><th>기준 폭</th><th>튜브</th><th>중량 g/y</th><th style="text-align:left;">혼용률</th><th>마지막 수정일</th><th>판매</th><th>수정</th><th>삭제</th>
     </tr></thead><tbody>`;
     if (shown.length === 0) {
       h += `<tr><td colspan="12" style="text-align:center;color:#9ca3af;padding:18px;">${specs.length === 0 ? '등록된 품목이 없습니다. [＋ 새 품목 추가] 또는 [기본 품목 채우기]' : '이 구분에 등록된 품목이 없습니다.'}</td></tr>`;
@@ -21259,19 +21280,26 @@ function validateBlendSum(blends, label) {
     shown.forEach(({ s, i }) => {
       const pairOk = s.pair_rib ? !!findPairRibSpec(s) : true;
       const onSale = specIsOnSale(s);
+      const _brs = parseBlendString(s.blend || '');
+      const _bsum = _brs.reduce((a, b) => a + (parseFloat(b.value) || 0), 0);
+      const blendBad = _brs.length > 0 && Math.abs(_bsum - 100) > 0.01;
       h += `<tr style="${onSale ? '' : 'background:#fafafa;'}">
         <td style="font-weight:700;text-align:left;color:${onSale ? '' : '#9ca3af'};">${escapeHtml(s.name)}${onSale ? '' : ` <span style="font-size:11px;font-weight:700;color:#b45309;background:#fef3c7;border-radius:9px;padding:1px 8px;">판매 종료</span>`}</td>
         <td style="text-align:center;">${s.gubun === GUBUN_RIB
           ? `<span style="display:inline-block;padding:2px 10px;border-radius:10px;background:#f3e8ff;color:#6b21a8;font-size:11px;font-weight:800;">${escapeHtml(GUBUN_RIB)}</span>`
           : `<span style="display:inline-block;padding:2px 10px;border-radius:10px;background:#eef2ff;color:#1e3a8a;font-size:11px;font-weight:700;">${escapeHtml(s.gubun || '-')}</span>`}</td>
-        <td style="text-align:center;font-size:12px;">${s.pair_rib
-          ? `<span style="display:inline-block;padding:2px 9px;border-radius:10px;background:${pairOk ? '#faf5ff' : '#fef2f2'};border:1px solid ${pairOk ? '#e9d5ff' : '#fecaca'};color:${pairOk ? '#7c3aed' : '#b91c1c'};font-weight:700;">${escapeHtml(s.pair_rib)}${pairOk ? '' : ' (없음)'}</span>`
-          : `<span style="color:#c7cbd1;">-</span>`}</td>
+        <td style="text-align:center;font-size:12px;">${s.gubun === GUBUN_RIB
+          ? (bodiesUsingRib(s.name).length
+            ? `<span style="display:inline-block;padding:2px 9px;border-radius:10px;background:#faf5ff;border:1px solid #e9d5ff;color:#7c3aed;font-weight:700;" title="${escapeHtml(bodiesUsingRib(s.name).map(b => b.name).join(', '))}">몸판 ${bodiesUsingRib(s.name).length}</span>`
+            : `<span style="color:#c7cbd1;">몸판 0</span>`)
+          : (s.pair_rib
+            ? `<span style="display:inline-block;padding:2px 9px;border-radius:10px;background:${pairOk ? '#faf5ff' : '#fef2f2'};border:1px solid ${pairOk ? '#e9d5ff' : '#fecaca'};color:${pairOk ? '#7c3aed' : '#b91c1c'};font-weight:700;">${escapeHtml(s.pair_rib)}${pairOk ? '' : ' (없음)'}</span>`
+            : `<span style="color:#c7cbd1;">-</span>`)}</td>
         <td style="text-align:center;">${escapeHtml(s.cat || '-')}</td>
         <td style="text-align:center;">${s.width ? escapeHtml(s.width) + '″' : '-'}</td>
         <td style="text-align:center;">${s.tube ? '✔' : '-'}</td>
         <td style="text-align:center;">${(s.gy != null && s.gy !== '') ? escapeHtml(String(s.gy)) : '-'}</td>
-        <td style="text-align:left;color:#6b7280;font-size:12px;">${escapeHtml(s.blend || '-')}</td>
+        <td style="text-align:left;color:${blendBad ? '#b91c1c' : '#6b7280'};font-size:12px;">${escapeHtml(s.blend || '-')}${blendBad ? ` <span style="font-weight:800;" title="혼용률 합계가 100%가 아닙니다">합 ${Math.round(_bsum * 100) / 100}%</span>` : ''}</td>
         <td style="text-align:center;color:#6b7280;font-size:12px;">${escapeHtml(s.updated_at || '-')}</td>
         <td class="col-action" style="text-align:center;"><button class="dash-action-btn fs-sale-btn" data-idx="${i}" style="font-size:11px;${onSale ? '' : 'color:#b45309;border-color:#fcd34d;'}" title="${onSale ? '작지 품목칸 목록에서 숨깁니다 (기존 의뢰서는 그대로)' : '다시 품목칸 목록에 보이게 합니다'}">${onSale ? '판매 종료' : '판매 재개'}</button></td>
         <td class="col-action col-act-edit"><button class="dash-action-btn fs-edit-btn" data-idx="${i}">수정</button></td>
@@ -21301,7 +21329,16 @@ function validateBlendSum(blends, label) {
             <div id="fs-pair-info" style="font-size:11.5px;color:#7c3aed;margin-top:6px;min-height:15px;"></div>
             ${getRibSpecs().length === 0 ? `<div style="font-size:11px;color:#b45309;margin-top:5px;">아직 구분이 [리프]인 품목이 없습니다. 리프 품목을 먼저 등록하면 여기서 고를 수 있습니다.</div>` : ''}
           </div>
-          <div style="border-top:1px solid #e5e7eb;padding-top:10px;margin-top:2px;">
+          <div id="fs-bodies-wrap" style="background:#faf5ff;border:1px solid #e9d5ff;border-radius:8px;padding:11px 12px;display:none;">
+            <label style="font-size:12px;font-weight:800;color:#6b21a8;display:block;margin-bottom:5px;">이 리프를 쓰는 몸판 <span style="font-weight:400;color:#a78bc4;font-size:11px;">— 체크한 몸판은 작업의뢰서에서 이 리프가 자동으로 채워집니다. 여기서 한 번에 붙이고 뗄 수 있습니다</span></label>
+            <div style="display:flex;gap:6px;margin-bottom:7px;">
+              <input type="text" id="fs-bodies-search" placeholder="몸판 품목 검색" style="${inputStyle}border-color:#d8b4fe;">
+              <button type="button" id="fs-bodies-none" class="dash-action-btn" style="white-space:nowrap;font-size:11px;padding:6px 11px;">전체 해제</button>
+            </div>
+            <div id="fs-bodies-list" style="max-height:230px;overflow-y:auto;background:#fff;border:1px solid #e9d5ff;border-radius:6px;padding:6px 8px;"></div>
+            <div id="fs-bodies-info" style="font-size:11.5px;color:#7c3aed;margin-top:6px;font-weight:700;"></div>
+          </div>
+          <div id="fs-cautions-wrap" style="border-top:1px solid #e5e7eb;padding-top:10px;margin-top:2px;">
             <div style="font-size:12px;font-weight:700;color:#1e3a8a;margin-bottom:6px;">주의사항 기본값 <span style="font-weight:400;color:#9ca3af;font-size:11px;">— ★/※ 선택 + 항목 + 값 입력. [＋ 항목 추가]로 줄을 늘립니다 (작업의뢰서 [기준 불러오기] 시 채워짐)</span></div>
             <div style="display:flex;flex-direction:column;gap:9px;">
               <div>
@@ -25980,6 +26017,13 @@ function validateBlendSum(blends, label) {
         if (!gSel.value) gSel.value = GUBUN_BODY;
         const pSel = document.getElementById('fs-f-pair');
         if (pSel) pSel.value = (idx >= 0 && s.pair_rib) ? s.pair_rib : '';
+        // hotfix249: 이 리프를 이미 쓰고 있는 몸판을 미리 체크해 둔다
+        fsBodyPick = {};
+        const myRibName = (idx >= 0) ? String(s.name || '').trim() : '';
+        getFabricSpecs().filter(x => x && x.gubun !== GUBUN_RIB).forEach(x => {
+          fsBodyPick[x.name] = !!(myRibName && String(x.pair_rib || '').trim() === myRibName);
+        });
+        const sbEl = document.getElementById('fs-bodies-search'); if (sbEl) sbEl.value = '';
         syncPairVisibility();
         document.getElementById('fs-f-cat').value = s.cat || '';
         document.getElementById('fs-f-width').value = s.width || '';
@@ -25993,6 +26037,50 @@ function validateBlendSum(blends, label) {
         modal.classList.add('show');
         setTimeout(() => document.getElementById('fs-f-name').focus(), 50);
       };
+      // hotfix249: 리프 카드에서 몸판을 한 번에 붙였다 뗀다 (몸판 1개 = 리프 1개 전제)
+      let fsBodyPick = null;   // { 몸판이름: true/false } — 이 리프를 쓸지 여부
+      function paintBodiesList() {
+        const box = document.getElementById('fs-bodies-list');
+        const info = document.getElementById('fs-bodies-info');
+        if (!box || !fsBodyPick) return;
+        const kw = (document.getElementById('fs-bodies-search')?.value || '').trim().toLowerCase();
+        const myName = (document.getElementById('fs-f-name')?.value || '').trim();
+        const bodies = getFabricSpecs().filter(s => s && s.gubun !== GUBUN_RIB);
+        const shown = kw ? bodies.filter(s => String(s.name || '').toLowerCase().includes(kw)) : bodies;
+        box.innerHTML = shown.length ? shown.map(s => {
+          const nm = s.name;
+          const on = !!fsBodyPick[nm];
+          const other = String(s.pair_rib || '').trim();
+          const conflict = on && other && other !== myName;
+          return `<label style="display:flex;align-items:center;gap:8px;padding:4px 3px;font-size:12.5px;cursor:pointer;border-bottom:1px solid #f5f3ff;">
+            <input type="checkbox" class="fs-body-chk" data-name="${escapeHtml(nm)}" ${on ? 'checked' : ''}>
+            <span style="flex:1;font-weight:${on ? '700' : '400'};color:${on ? '#6b21a8' : '#374151'};">${escapeHtml(nm)}</span>
+            ${conflict ? `<span style="font-size:10.5px;color:#b45309;">현재 ${escapeHtml(other)}</span>` : (other && other === myName ? `<span style="font-size:10.5px;color:#a78bc4;">연결됨</span>` : '')}
+          </label>`;
+        }).join('') : `<div style="padding:10px;text-align:center;color:#9ca3af;font-size:12px;">검색 결과가 없습니다</div>`;
+        box.querySelectorAll('.fs-body-chk').forEach(c => c.addEventListener('change', () => {
+          fsBodyPick[c.dataset.name] = c.checked;
+          paintBodiesList();
+        }));
+        const picked = Object.keys(fsBodyPick).filter(k => fsBodyPick[k]);
+        const steal = picked.filter(nm => {
+          const b = bodies.find(x => x.name === nm);
+          const other = String(b?.pair_rib || '').trim();
+          return other && other !== myName;
+        });
+        if (info) {
+          info.innerHTML = `${picked.length}개 몸판 선택됨`
+            + (steal.length ? ` <span style="color:#b45309;">— 이 중 ${steal.length}개는 지금 다른 리프가 걸려 있습니다 (저장 시 다시 확인합니다)</span>` : '');
+        }
+      }
+      function syncBodiesVisibility() {
+        const gSel = document.getElementById('fs-f-gubun');
+        const wrap = document.getElementById('fs-bodies-wrap');
+        if (!gSel || !wrap) return;
+        const isRib = gSel.value === GUBUN_RIB;
+        wrap.style.display = isRib ? '' : 'none';
+        if (isRib) paintBodiesList();
+      }
       // hotfix248: 짝 리프를 고르면 그 리프의 폭·중량·혼용률을 바로 아래에 보여준다 (값 자체는 리프 품목에서 관리)
       function syncPairInfo() {
         const box = document.getElementById('fs-pair-info');
@@ -26017,14 +26105,25 @@ function validateBlendSum(blends, label) {
         if (!gSel || !wrap) return;
         const isRib = gSel.value === GUBUN_RIB;
         wrap.style.display = isRib ? 'none' : '';
+        // hotfix250: 리프 주의사항은 작지에 나오지 않으므로 아예 숨긴다
+        const cw = document.getElementById('fs-cautions-wrap');
+        if (cw) cw.style.display = isRib ? 'none' : '';
         if (isRib) { const p = document.getElementById('fs-f-pair'); if (p) p.value = ''; }
         syncPairInfo();
+        syncBodiesVisibility();
       }
       (function bindPairSync() {
         const gSel = document.getElementById('fs-f-gubun');
         if (gSel && !gSel.dataset.pairBound) { gSel.dataset.pairBound = '1'; gSel.addEventListener('change', syncPairVisibility); }
         const pSel = document.getElementById('fs-f-pair');
         if (pSel && !pSel.dataset.pairBound) { pSel.dataset.pairBound = '1'; pSel.addEventListener('change', syncPairInfo); }
+        const sEl = document.getElementById('fs-bodies-search');
+        if (sEl && !sEl.dataset.pairBound) { sEl.dataset.pairBound = '1'; sEl.addEventListener('input', paintBodiesList); }
+        const nEl = document.getElementById('fs-bodies-none');
+        if (nEl && !nEl.dataset.pairBound) {
+          nEl.dataset.pairBound = '1';
+          nEl.addEventListener('click', () => { if (fsBodyPick) { Object.keys(fsBodyPick).forEach(k => fsBodyPick[k] = false); paintBodiesList(); } });
+        }
       })();
       // (가) 주의사항 행 빌더 — 작지 폼과 동일 구조 {mark,label,value}
       function fsCautionRowHTML(row) {
@@ -26095,16 +26194,45 @@ function validateBlendSum(blends, label) {
           updated_at: todayYMD()
         };
         if (entry.gubun === GUBUN_RIB) entry.pair_rib = '';
+        // hotfix250: 혼용률 합계가 100이 아니면 먼저 알려준다 (오타로 110% 같은 값이 들어가는 것 방지)
+        const brs = parseBlendString(entry.blend);
+        if (brs.length) {
+          const sum = brs.reduce((a, b) => a + (parseFloat(b.value) || 0), 0);
+          if (Math.abs(sum - 100) > 0.01) {
+            if (!confirm(`혼용률 합계가 ${Math.round(sum * 100) / 100}% 입니다. (100%가 아닙니다)\n\n${brs.map(b => `${b.name} ${b.value}%`).join(' / ')}\n\n이대로 저장할까요?`)) return;
+          }
+        }
         // hotfix69/122: 주의사항 기본값 — 행 빌더에서 수집 (비어있는 공정은 저장 안 함)
         const cz = {
           dyeing: collectFsCautions('dyeing'),
           processing: collectFsCautions('processing'),
           post: collectFsCautions('post')
         };
-        if (cz.dyeing.length || cz.processing.length || cz.post.length) entry.cautions = cz;
+        if (entry.gubun !== GUBUN_RIB && (cz.dyeing.length || cz.processing.length || cz.post.length)) entry.cautions = cz;
         const list = getFabricSpecs().map(x => ({ ...x }));
-        if (editingSpecIdx >= 0) list[editingSpecIdx] = entry;
+        const prevName = (editingSpecIdx >= 0) ? String(list[editingSpecIdx]?.name || '').trim() : '';
+        if (editingSpecIdx >= 0) { entry.active = list[editingSpecIdx]?.active !== false; list[editingSpecIdx] = entry; }
         else list.push(entry);
+        // hotfix249: 리프 카드에서 체크한 몸판들의 짝 리프를 한 번에 맞춘다 (몸판 1개 = 리프 1개)
+        if (entry.gubun === GUBUN_RIB && fsBodyPick) {
+          const steal = [];
+          Object.keys(fsBodyPick).forEach(nm => {
+            if (!fsBodyPick[nm]) return;
+            const b = list.find(x => x.gubun !== GUBUN_RIB && x.name === nm);
+            const other = String(b?.pair_rib || '').trim();
+            if (b && other && other !== name && other !== prevName) steal.push(`${nm} (현재 ${other})`);
+          });
+          if (steal.length && !confirm(`아래 몸판은 지금 다른 리프가 걸려 있습니다.\n\n${steal.slice(0, 8).join('\n')}${steal.length > 8 ? `\n외 ${steal.length - 8}개` : ''}\n\n"${name}"(으)로 바꿀까요?\n(몸판 하나에 리프는 하나만 걸립니다)`)) return;
+          list.forEach(x => {
+            if (x.gubun === GUBUN_RIB) return;
+            const wasMine = String(x.pair_rib || '').trim() === (prevName || name);
+            if (fsBodyPick[x.name]) x.pair_rib = name;
+            else if (wasMine) x.pair_rib = '';
+          });
+        } else if (prevName && prevName !== name) {
+          // 몸판 품목명을 바꾸면 이 품목을 짝으로 걸어둔 쪽도 따라간다
+          list.forEach(x => { if (String(x.pair_rib || '').trim() === prevName) x.pair_rib = name; });
+        }
         const ok = await saveFabricSpecs(list);
         if (ok) { toast(`"${name}" 저장됨`, 'success'); closeModal(); renderDashboard(); }
       });
@@ -26113,8 +26241,12 @@ function validateBlendSum(blends, label) {
         const idx = parseInt(b.dataset.idx, 10);
         const specs = getFabricSpecs();
         const s = specs[idx]; if (!s) return;
+        // hotfix249: 이 리프를 쓰는 몸판이 있으면 먼저 알려준다
+        const users = (s.gubun === GUBUN_RIB) ? bodiesUsingRib(s.name) : [];
+        if (users.length && !confirm(`"${s.name}"을(를) 쓰는 몸판이 ${users.length}개 있습니다.\n\n${users.slice(0, 8).map(b2 => b2.name).join(', ')}${users.length > 8 ? ` 외 ${users.length - 8}개` : ''}\n\n삭제하면 이 몸판들의 짝 리프가 비워집니다. 계속할까요?`)) return;
         if (!confirm(`"${s.name}" 품목을 삭제할까요?`)) return;
         const list = specs.filter((_, i) => i !== idx).map(x => ({ ...x }));
+        if (users.length) list.forEach(x => { if (String(x.pair_rib || '').trim() === String(s.name).trim()) x.pair_rib = ''; });
         const ok = await saveFabricSpecs(list);
         if (ok) { toast(`"${s.name}" 삭제됨`, 'success'); renderDashboard(); }
       }));
@@ -26144,6 +26276,8 @@ function validateBlendSum(blends, label) {
         const specs = getFabricSpecs();
         const s = specs[idx]; if (!s) return;
         const stopping = specIsOnSale(s);
+        const ribUsers = (stopping && s.gubun === GUBUN_RIB) ? bodiesUsingRib(s.name) : [];
+        if (ribUsers.length && !confirm(`"${s.name}"을(를) 쓰는 몸판이 ${ribUsers.length}개 있습니다.\n\n${ribUsers.slice(0, 8).map(b2 => b2.name).join(', ')}${ribUsers.length > 8 ? ` 외 ${ribUsers.length - 8}개` : ''}\n\n판매 종료해도 짝 연결은 그대로 두지만, 리프 품목칸 목록에서는 사라집니다. 계속할까요?`)) return;
         if (stopping && !confirm(`"${s.name}"을(를) 판매 종료할까요?\n\n· 앞으로 작업의뢰서 품목칸 목록에 안 나옵니다\n· 이미 만든 의뢰서와 기록은 그대로 남습니다\n· 언제든 [판매 재개]로 되돌릴 수 있습니다`)) return;
         const list = specs.map(x => ({ ...x }));
         list[idx].active = !stopping;
@@ -29175,7 +29309,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix248';
+  const VERSION = 'v2.53 hotfix250';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
