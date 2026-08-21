@@ -213,6 +213,10 @@
     border-color: #000;
   }
   .history-search-input::placeholder { color: #aaa; }
+  /* hotfix252: 컬러 2차 검색 */
+  .history-color-input { border-color: #c4b5fd; background: #fdfcff; }
+  .history-color-input:focus { border-color: #7c3aed; }
+  .history-color-hint { font-size: 10.5px; color: #7c3aed; margin: -3px 0 7px 2px; line-height: 1.4; min-height: 13px; }
   
   .form-panel h2 { font-size: 15px; margin-bottom: 16px; padding-bottom: 8px; border-bottom: 2px solid #222; display: flex; justify-content: space-between; align-items: center; font-weight: 700; gap: 8px; }
   .form-panel h2 #form-title { flex: 1; }
@@ -564,6 +568,10 @@
   .item-row input, .item-row select { padding: 4px 6px; font-size: 12px; font-family: inherit; min-width: 0; box-sizing: border-box; width: 100%; }
   .color-row { grid-template-columns: 1fr 70px 70px 30px; }
   .yarn-row { grid-template-columns: 1fr 55px 55px 60px 90px 1fr 30px; }
+  /* hotfix252: 원사 출고처 2단 선택 (구분 → 출고처) */
+  .y-dest-wrap { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+  .y-dest-wrap select { width: 100%; font-family: inherit; min-width: 0; }
+  .y-dest-wrap .y-dest-cat { font-size: 11px; background: #f8fafc; color: #334155; font-weight: 700; }
   .knit-row { grid-template-columns: 150px 1.5fr 1fr 55px 60px 1.5fr 28px; }
   /* number input spinner 제거 */
   .item-row input[type="number"]::-webkit-outer-spin-button,
@@ -6000,6 +6008,9 @@
         <option value="생지출고">생지출고</option>
       </select>
       <input type="text" id="history-search" class="history-search-input" placeholder="품목/컬러/거래처 검색..." lang="ko">
+      <input type="text" id="history-color-search" class="history-search-input history-color-input" list="history-color-datalist" autocomplete="off" autocorrect="off" spellcheck="false" placeholder="↳ 컬러로 2차 검색 (목록 선택 · 직접 입력)" lang="ko">
+      <datalist id="history-color-datalist"></datalist>
+      <div id="history-color-hint" class="history-color-hint"></div>
       <div id="history-list"><div class="history-empty">불러오는 중...</div></div>
     </div>
     
@@ -6076,7 +6087,7 @@
       <div class="section">
         <div class="section-title">원사 내역 (박스는 박스수×kg/박스로 자동계산)</div>
         <div class="item-row yarn-row" style="font-size:10px; color:#666;">
-          <div>사종</div><div>수량</div><div>단위</div><div>kg/박스</div><div>총 kg</div><div>출고처</div><div></div>
+          <div>사종</div><div>수량</div><div>단위</div><div>kg/박스</div><div>총 kg</div><div>출고처 (구분 → 선택)</div><div></div>
         </div>
         <div id="yarn-items"></div>
         <button class="btn-add" id="add-yarn">+ 사종 추가</button>
@@ -6829,6 +6840,7 @@ const state = {
   // v2.7 이력 검색
   historyTypeFilter: 'all',
   historySearch: '',
+  historyColorSearch: '',   // hotfix252: 이력 2차(컬러) 검색어
   // v2.31 완료 탭 필터
   completedFilter: {
     search: '',         // 통합 검색
@@ -7004,9 +7016,19 @@ function addYarnRow(data={}) {
     </select>
     <input type="number" class="y-kgbox" placeholder="30.5" value="${data.kg_per_box ?? ''}" step="0.01">
     <input type="text" class="y-totalkg" readonly value="${data.total_kg ? data.total_kg.toFixed(2)+'kg' : ''}" style="background:#f5f5f5;font-size:11px;text-align:right;">
-    <select class="y-dest" data-vtype="출고처,편직처" title="등록된 출고처·편직공장에서 선택" style="font-family:inherit;">${vendorOptionsHTML('출고처,편직처', data.dest || '')}</select>
+    <div class="y-dest-wrap">
+      <select class="y-dest-cat" title="출고처 구분 — 먼저 고르세요">${yarnDestCatOptionsHTML(yarnDestCatOf(data.dest || ''))}</select>
+      <select class="y-dest" title="구분에 맞는 출고처에서 선택">${yarnDestOptionsHTML(yarnDestCatOf(data.dest || ''), data.dest || '')}</select>
+    </div>
     <button class="btn-del">X</button>
   `;
+  const catSel = row.querySelector('.y-dest-cat');
+  catSel.addEventListener('change', () => {
+    const destSel = row.querySelector('.y-dest');
+    destSel.innerHTML = yarnDestOptionsHTML(catSel.value, '');
+    destSel.value = '';
+    render(); markDirty();
+  });
   const updateKg = () => {
     const qty = parseFloat(row.querySelector('.y-qty').value) || 0;
     const unit = row.querySelector('.y-unit').value;
@@ -7157,6 +7179,65 @@ function vendorOptionsHTML(vtype, currentVal) {
   if (norm && !names.includes(norm)) opts += `<option value="${escapeHtml(norm)}" selected>${escapeHtml(norm)} ${vendorMissingTag(norm)}</option>`;
   return opts;
 }
+// hotfix252: 원사 출고처 2단 선택 — 1차 구분(편직공장/본사) → 2차 실제 출고처
+//   기존 저장 형식은 그대로(출고처 이름 문자열 하나). 구분은 이름으로 되짚어 자동 판정한다.
+const YARN_DEST_CATS = ['편직공장', '본사'];
+const VTYPE_HQ = '본사·창고';
+function yarnDestNames(cat) {
+  const vendors = (typeof state !== 'undefined' && state.vendors) ? state.vendors : [];
+  let matched;
+  if (cat === '본사') {
+    matched = vendors.filter(v => {
+      if (!vendorIsActive(v)) return false;
+      const types = Array.isArray(v && v.types) ? v.types : (v && v.type ? [v.type] : []);
+      if (types.includes(VTYPE_HQ)) return true;
+      if (types.length === 0 || types.includes('기타')) return true;
+      return /본사|창고/.test(String(v.name || ''));
+    });
+  } else if (cat === '편직공장') {
+    matched = vendors.filter(v => vendorTypeMatch(v, '편직처'));
+  } else {
+    return [];
+  }
+  return Array.from(new Set(matched.map(v => String((v && v.name) || '').trim()).filter(Boolean)))
+    .sort((a, b) => a.localeCompare(b, 'ko'));
+}
+function yarnDestCatOf(name) {
+  const nm = String(name || '').trim();
+  if (!nm) return '';
+  const norm = (typeof normalizeVendorName === 'function' ? normalizeVendorName(nm) : nm);
+  if (yarnDestNames('편직공장').includes(norm)) return '편직공장';
+  if (yarnDestNames('본사').includes(norm)) return '본사';
+  return '';
+}
+function yarnDestCatOptionsHTML(cur) {
+  return `<option value="">— 구분 —</option>` +
+    YARN_DEST_CATS.map(c => `<option value="${c}"${c === cur ? ' selected' : ''}>${c}</option>`).join('');
+}
+function yarnDestOptionsHTML(cat, currentVal) {
+  const names = yarnDestNames(cat);
+  const norm = currentVal ? (typeof normalizeVendorName === 'function' ? normalizeVendorName(currentVal) : currentVal) : '';
+  const ph = cat ? (names.length ? '— 출고처 —' : `— ${cat} 등록 없음 —`) : '— 구분 먼저 —';
+  let opts = `<option value="">${ph}</option>` +
+    names.map(n => `<option value="${escapeHtml(n)}"${n === norm ? ' selected' : ''}>${escapeHtml(n)}</option>`).join('');
+  if (norm && !names.includes(norm)) opts += `<option value="${escapeHtml(norm)}" selected>${escapeHtml(norm)} ${vendorMissingTag(norm)}</option>`;
+  return opts;
+}
+// 거래처 목록이 늦게 도착해도(로그인 직후) 원사 출고처 칸이 빈 채로 남지 않도록 다시 채운다
+function refreshYarnDestSelects() {
+  document.querySelectorAll('#yarn-items .yarn-row').forEach(row => {
+    const catSel = row.querySelector('.y-dest-cat');
+    const destSel = row.querySelector('.y-dest');
+    if (!catSel || !destSel) return;
+    const cur = String(destSel.value || '').trim();
+    const cat = catSel.value || yarnDestCatOf(cur);
+    catSel.innerHTML = yarnDestCatOptionsHTML(cat);
+    catSel.value = cat;
+    destSel.innerHTML = yarnDestOptionsHTML(cat, cur);
+    const norm = cur ? (typeof normalizeVendorName === 'function' ? normalizeVendorName(cur) : cur) : '';
+    destSel.value = norm || '';
+  });
+}
 // hotfix171: 업체칸 선택 전용 — 등록 거래처(대표명)에서만 선택. 저장/복사 로직이 읽는 값은 숨은 input(id=targetId)에 보관.
 //   복사·수정 시 저장된 표기(별칭 포함)는 대표명으로 정규화해 자동 선택되고, 목록에 없는 미등록 표기는 옵션으로 보존.
 function vendorSelectHTML(targetId, vtype, currentVal) {
@@ -7189,6 +7270,7 @@ function refreshVendorSelects() {
     sel.value = norm || '';
     if (hidden) hidden.value = sel.value;  // 저장 시 대표명으로 저장
   });
+  if (typeof refreshYarnDestSelects === 'function') refreshYarnDestSelects();  // hotfix252
 }
 function renderFinishRecipients() {
   const dye = document.getElementById('p_dyeing').checked;
@@ -10490,6 +10572,18 @@ window.addEventListener('firebase-ready', () => {
     return baseItem ? `${baseItem} / ${summary}` : summary;
   }
 
+  // hotfix252: 의뢰서에서 컬러명만 모아 준다 (이력 2차 검색용)
+  function woColorNames(wo) {
+    const out = [];
+    const push = v => { const s = String(v || '').trim(); if (s) out.push(s); };
+    if (!wo) return out;
+    if (wo.type === '편직') (wo.items || []).forEach(it => push(it.color));
+    else if (wo.type === '염색가공' || wo.type === 'BT') (wo.colors || []).forEach(c => push(c.name));
+    else if (wo.type === '나염') (wo.print_rows || []).forEach(r => { push(r.fabric_color); push(r.print_color); });
+    else if (wo.type === '생지출고') push(wo.gs_color);
+    return Array.from(new Set(out));
+  }
+
   function renderHistory() {
     const list = document.getElementById('history-list');
     // deleted 항목 제외
@@ -10558,8 +10652,26 @@ window.addEventListener('firebase-ready', () => {
       });
     }
     
+    // hotfix252: 2차(컬러) 검색 — 1차 결과 안에 실제로 있는 컬러만 목록에 올린다
+    const colorNames = new Set();
+    visible.forEach(wo => woColorNames(wo).forEach(n => colorNames.add(n)));
+    const colorList = Array.from(colorNames).sort((a, b) => a.localeCompare(b, 'ko'));
+    const dl = document.getElementById('history-color-datalist');
+    if (dl) dl.innerHTML = colorList.map(n => `<option value="${escapeHtml(n)}"></option>`).join('');
+    const cq = String(state.historyColorSearch || '').toLowerCase();
+    if (cq) {
+      visible = visible.filter(wo => woColorNames(wo).some(n => n.toLowerCase().includes(cq)));
+    }
+    const hint = document.getElementById('history-color-hint');
+    if (hint) {
+      hint.textContent = cq
+        ? `컬러 "${state.historyColorSearch}" 로 좁힘 — ${visible.length}건`
+        : (colorList.length ? `선택 가능한 컬러 ${colorList.length}개 (가나다·ABC 오름차순)` : '');
+    }
+    
     if (visible.length === 0) {
-      const reason = state.historySearch ? `"${state.historySearch}" 검색 결과 없음` 
+      const reason = cq ? `컬러 "${state.historyColorSearch}" 검색 결과 없음`
+                   : state.historySearch ? `"${state.historySearch}" 검색 결과 없음` 
                    : state.historyTypeFilter !== 'all' ? `${state.historyTypeFilter} 의뢰서 없음`
                    : '의뢰서 없음';
       list.innerHTML = `<div class="history-empty">${escapeHtml(reason)}</div>`;
@@ -20985,7 +21097,7 @@ function validateBlendSum(blends, label) {
 
   // hotfix158: 거래처(업체) 관리 화면 (관리자 전용) — 작지 업체 선택용 사전 등록 CRUD
   let editingVendorIdx = -1;
-  const VENDOR_TYPES = ['염색처', '가공처', '후가공처', '편직처', '원사 구매처', '출고처', '기타'];
+  const VENDOR_TYPES = ['염색처', '가공처', '후가공처', '편직처', '원사 구매처', '출고처', '본사·창고', '기타'];
   // hotfix161: 한 업체가 여러 공정(예: 대흥섬유=염색+가공)을 겸할 수 있음 → 구분을 복수 저장(types[]).
   //   구형 단일 type(string) 저장분은 [type] 배열로 자동 승격해 읽는다.
   function getVendorTypes(v) {
@@ -28710,6 +28822,10 @@ document.getElementById('history-type-filter').addEventListener('change', (e) =>
 });
 document.getElementById('history-search').addEventListener('input', (e) => {
   state.historySearch = e.target.value.trim();
+  document.dispatchEvent(new CustomEvent('hiwos-rerender-history'));
+});
+document.getElementById('history-color-search').addEventListener('input', (e) => {
+  state.historyColorSearch = e.target.value.trim();
   document.dispatchEvent(new CustomEvent('hiwos-rerender-history'));
 });
 
