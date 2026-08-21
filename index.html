@@ -440,6 +440,27 @@
   .section { margin-bottom: 18px; }
   .section-title { font-size: 11px; font-weight: 700; color: #444; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; padding-bottom: 4px; border-bottom: 1px solid #eee; }
   
+  /* hotfix252: 작성 화면 몸판/리프 시각 분리 — 몸판=파랑, 리프=보라 (목록 배지 색과 동일) */
+  .section-part { border-radius: 6px; padding: 12px 14px 10px; margin-bottom: 18px; }
+  .section-part-body { background: #f6faff; border: 1px solid #dbeafe; border-left: 5px solid #2563eb; }
+  .section-part-rib  { background: #fcfaff; border: 1px solid #ede9fe; border-left: 5px solid #7c3aed; }
+  .section-title.section-title-part {
+    font-size: 14px; font-weight: 800; text-transform: none; letter-spacing: 0;
+    display: flex; align-items: center; gap: 8px;
+    padding-bottom: 6px; margin-bottom: 10px;
+  }
+  .section-title.section-title-body { color: #1d4ed8; border-bottom: 2px solid #bfdbfe; }
+  .section-title.section-title-rib  { color: #6b21a8; border-bottom: 2px solid #e9d5ff; }
+  .part-badge { font-size: 10px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 9px; border-radius: 10px; color: #fff; }
+  .part-badge-body { background: #2563eb; }
+  .part-badge-rib  { background: #7c3aed; }
+  .part-note { margin-left: auto; font-size: 11px; font-weight: 600; letter-spacing: 0; }
+  .part-note-body { color: #2563eb; }
+  .part-note-rib  { color: #7c3aed; }
+  .section-part .field > label { color: #374151; }
+  .section-part-body .field > label { color: #1e40af; }
+  .section-part-rib .field > label { color: #6d28d9; }
+
   /* v2.27: 필수 강조 섹션 (염색가공 컬러&수량) — 시각적으로 절대 놓치지 않도록 */
   .section-color-emphasis {
     background: #fffceb;
@@ -6137,8 +6158,8 @@
         <div id="f_recipients"></div>
       </div>
       
-      <div class="section">
-        <div class="section-title">몸판 (BODY)</div>
+      <div class="section section-part section-part-body">
+        <div class="section-title section-title-part section-title-body"><span class="part-badge part-badge-body">몸판</span><span>BODY</span><span class="part-note part-note-body">여기부터 몸판 입력</span></div>
         <div class="field"><label>몸판 품목</label>
           <div style="display:flex;gap:6px;align-items:center;">
             <input type="text" lang="ko" id="f_body_item" list="fabric-spec-datalist" autocomplete="off" autocorrect="off" spellcheck="false" placeholder="프리미엄싱글 (선택 시 기준 폭·중량 자동 채움)" style="flex:1;"><datalist id="fabric-spec-datalist"></datalist>
@@ -6163,8 +6184,8 @@
         </div>
       </div>
       
-      <div class="section">
-        <div class="section-title">리프 (RIB)</div>
+      <div class="section section-part section-part-rib">
+        <div class="section-title section-title-part section-title-rib"><span class="part-badge part-badge-rib">리프</span><span>RIB</span><span class="part-note part-note-rib">여기부터 리프 입력 (리프 없으면 비워 두세요)</span></div>
         <div class="field"><label>리프 품목</label><div style="display:flex;gap:6px;align-items:center;"><input type="text" lang="ko" id="f_rib_item" list="rib-spec-datalist" autocomplete="off" autocorrect="off" spellcheck="false" placeholder="프리미엄싱글 1x1 RIB (선택 시 기준 폭·중량 자동 채움)" style="flex:1;"><datalist id="rib-spec-datalist"></datalist><button type="button" id="f_rib_loadspec" class="btn-add" style="white-space:nowrap;background:#1e3a8a;color:#fff;" title="이 리프의 기준 폭·중량·튜브·혼용율을 한 번에 덮어씁니다">기준 불러오기</button><button type="button" id="f_rib_addspec" class="btn-add" data-part="rib" style="white-space:nowrap;background:#047857;color:#fff;" title="지금 입력한 리프 품목명·폭·중량·혼용율로 품목 사전에 새로 등록합니다">＋ 사전 등록</button></div></div>
         <div class="field"><label>리프 입고처 (편직 공장)</label><select class="vendor-select" data-target="f_rib_receiving" data-vtype="편직처" title="등록된 거래처에서 선택" style="width:100%;padding:9px 10px;border:1px solid #d1d5db;border-radius:6px;font-family:inherit;font-size:13px;background:#fff;color:#374151;cursor:pointer;"><option value="">— 선택 (몸판과 다른 공장일 때) —</option></select><input type="hidden" id="f_rib_receiving"></div>
         <div class="field">
@@ -8736,7 +8757,12 @@ function renderFinishOrder(d) {
   const dateStr = d.date ? new Date(d.date).toLocaleDateString('ko-KR') : '-';
   const totalBody = d.colors.reduce((s, c) => s + (c.body || 0), 0);
   const totalRib = d.colors.reduce((s, c) => s + (c.rib || 0), 0);
-  const grandTotal = totalBody + totalRib;
+  // hotfix252: 리프 0절이면 출력물에서 리프 칸을 통째로 뺀다(반대도 동일).
+  //   컬러가 아직 한 줄도 없으면 판단 근거가 없으므로 둘 다 표시. 둘 다 0이면 둘 다 표시.
+  const hasColorRows = d.colors.length > 0;
+  let showBody = !hasColorRows || totalBody > 0;
+  let showRib = !hasColorRows || totalRib > 0;
+  if (!showBody && !showRib) { showBody = true; showRib = true; }
   const processLabel = [];
   if (d.processes.dyeing) processLabel.push('염색');
   if (d.processes.processing) processLabel.push('가공');
@@ -8768,31 +8794,45 @@ function renderFinishOrder(d) {
     html += `</div>`;
   }
   
-  // BODY / RIB
-  html += `<div class="wo-section-header">■ BODY / RIB</div>`;
+  // BODY / RIB — hotfix252: 수량이 0인 쪽은 제목·표·입고처까지 통째로 뺀다
   const bBlend = blendsToText(d.body.blends);
   const rBlend = blendsToText(d.rib?.blends);
-  
-  html += `<table class="wo-table">
+  const stdSpecLine = (o) => {
+    if (!o) return '';
+    const a = [];
+    if (o.spec_width) {
+      let t = '폭 ' + escapeHtml(o.spec_width) + '″';
+      if (o.spec_width_tube) { const ws = parseWidthSpec(o.spec_width); t += ws ? ` 튜브(실폭 ${ws.min * 2}/${ws.max * 2})` : ' 튜브'; }
+      a.push(t);
+    }
+    if (o.spec_gy != null && o.spec_gy !== '') a.push(escapeHtml(String(o.spec_gy)) + 'g/y');
+    return a.length ? `<div style="color:#1e3a8a;font-weight:700;font-size:11px;margin-top:3px;">기준 ${a.join(' · ')}</div>` : '';
+  };
+  html += `<div class="wo-section-header">${(showBody && showRib) ? '■ BODY / RIB' : (showBody ? '■ BODY (몸판)' : '■ RIB (리프)')}</div>`;
+  const bodyCells = [
+    ['몸판 품목', escapeHtml(d.body.item) || '-'],
+    ['몸판 혼용율', bBlend],
+    ['몸판 가공', (escapeHtml(d.body.spec) || '-') + stdSpecLine(d.body)]
+  ];
+  const ribCells = [
+    ['리프 품목', escapeHtml(d.rib?.item) || '-'],
+    ['리프 혼용율', rBlend],
+    ['리프 가공', (escapeHtml(d.rib?.spec) || '-') + stdSpecLine(d.rib)]
+  ];
+  if (showBody && showRib) {
+    html += `<table class="wo-table">
     <colgroup><col style="width:14%"><col style="width:36%"><col style="width:14%"><col style="width:36%"></colgroup>
-    <tr>
-      <td class="label">몸판 품목</td><td>${escapeHtml(d.body.item) || '-'}</td>
-      <td class="label">리프 품목</td><td>${escapeHtml(d.rib?.item) || '-'}</td>
-    </tr>
-    <tr>
-      <td class="label">몸판 혼용율</td><td>${bBlend}</td>
-      <td class="label">리프 혼용율</td><td>${rBlend}</td>
-    </tr>
-    <tr>
-      <td class="label">몸판 가공</td><td>${escapeHtml(d.body.spec) || '-'}${(function(){const a=[];if(d.body.spec_width){let t='폭 '+escapeHtml(d.body.spec_width)+'″';if(d.body.spec_width_tube){const ws=parseWidthSpec(d.body.spec_width);t+=ws?` 튜브(실폭 ${ws.min*2}/${ws.max*2})`:' 튜브';}a.push(t);}if(d.body.spec_gy!=null&&d.body.spec_gy!=='')a.push(escapeHtml(String(d.body.spec_gy))+'g/y');return a.length?`<div style="color:#1e3a8a;font-weight:700;font-size:11px;margin-top:3px;">기준 ${a.join(' · ')}</div>`:'';})()}</td>
-      <td class="label">리프 가공</td><td>${escapeHtml(d.rib?.spec) || '-'}${(function(){if(!d.rib)return '';const a=[];if(d.rib.spec_width){let t='폭 '+escapeHtml(d.rib.spec_width)+'″';if(d.rib.spec_width_tube){const ws=parseWidthSpec(d.rib.spec_width);t+=ws?` 튜브(실폭 ${ws.min*2}/${ws.max*2})`:' 튜브';}a.push(t);}if(d.rib.spec_gy!=null&&d.rib.spec_gy!=='')a.push(escapeHtml(String(d.rib.spec_gy))+'g/y');return a.length?`<div style="color:#1e3a8a;font-weight:700;font-size:11px;margin-top:3px;">기준 ${a.join(' · ')}</div>`:'';})()}</td>
-    </tr>
-  </table>
-  <div class="wo-shipping-bar">
-    <span class="ship-label">몸판 입고</span><span class="ship-value">${escapeHtml(d.body.receiving) || '-'}</span>
-    <span class="ship-gap"></span>
-    <span class="ship-label">리프 입고</span><span class="ship-value">${escapeHtml(d.rib?.receiving) || '-'}</span>
-    <span class="ship-gap"></span>
+    ${bodyCells.map((b, i) => `<tr><td class="label">${b[0]}</td><td>${b[1]}</td><td class="label">${ribCells[i][0]}</td><td>${ribCells[i][1]}</td></tr>`).join('')}
+  </table>`;
+  } else {
+    html += `<table class="wo-table">
+    <colgroup><col style="width:16%"><col style="width:84%"></colgroup>
+    ${(showBody ? bodyCells : ribCells).map(c => `<tr><td class="label">${c[0]}</td><td>${c[1]}</td></tr>`).join('')}
+  </table>`;
+  }
+  html += `<div class="wo-shipping-bar">
+    ${showBody ? `<span class="ship-label">몸판 입고</span><span class="ship-value">${escapeHtml(d.body.receiving) || '-'}</span><span class="ship-gap"></span>` : ''}
+    ${showRib ? `<span class="ship-label">리프 입고</span><span class="ship-value">${escapeHtml(d.rib?.receiving) || '-'}</span><span class="ship-gap"></span>` : ''}
     <span class="ship-label">최종 납품</span><span class="ship-value">${escapeHtml(d.final_destination) || '-'}</span>
   </div>`;
   
@@ -8828,57 +8868,44 @@ function renderFinishOrder(d) {
   
   if (colorCount === 0) {
     html += `<table class="wo-table"><tr><td class="center" style="color:#888;padding:14px;">컬러를 추가하세요</td></tr></table>`;
-  } else if (colorCount <= 5) {
-    // 1열 (5개 이하)
-    html += `<div class="wo-color-1col"><table>
-      <colgroup><col style="width:60%"><col style="width:20%"><col style="width:20%"></colgroup>
-      <thead><tr><th>컬 러</th><th>몸판 (절)</th><th>리프 (절)</th></tr></thead>
-      <tbody>`;
-    d.colors.forEach((c, i) => {
-      html += `<tr>
-        <td>${i+1}. ${escapeHtml(c.name) || '-'}</td>
-        <td class="center">${c.body || 0}</td>
-        <td class="center">${c.rib || 0}</td>
-      </tr>`;
-    });
-    html += `<tr class="sub"><td class="center">소 계</td><td class="center">${totalBody}</td><td class="center">${totalRib}</td></tr>`;
-    html += `</tbody></table></div>`;
   } else {
-    // 2열 (6개 이상)
-    const half = Math.ceil(colorCount / 2);
-    const left = d.colors.slice(0, half);
-    const right = d.colors.slice(half);
-    const lBody = left.reduce((s,c)=>s+(c.body||0),0);
-    const lRib = left.reduce((s,c)=>s+(c.rib||0),0);
-    const rBody = right.reduce((s,c)=>s+(c.body||0),0);
-    const rRib = right.reduce((s,c)=>s+(c.rib||0),0);
-    
-    html += `<div class="wo-color-2col">`;
-    // 좌측
-    html += `<div><table>
-      <colgroup><col style="width:50%"><col style="width:25%"><col style="width:25%"></colgroup>
-      <thead><tr><th>컬 러</th><th>몸판</th><th>리프</th></tr></thead>
+    // hotfix252: 수량이 0인 쪽(몸판 또는 리프) 열을 통째로 뺀다
+    const qCols = [];
+    if (showBody) qCols.push({ key: 'body', th: '몸판 (절)', short: '몸판' });
+    if (showRib) qCols.push({ key: 'rib', th: '리프 (절)', short: '리프' });
+    const cellOf = (c, q) => (q.key === 'body' ? (c.body || 0) : (c.rib || 0));
+    const sumOf = (arr, q) => arr.reduce((s, c) => s + cellOf(c, q), 0);
+    const buildTable = (arr, offset, nameW, useShort) => {
+      const qW = ((100 - nameW) / qCols.length).toFixed(1);
+      let s = `<table>
+      <colgroup><col style="width:${nameW}%">${qCols.map(() => `<col style="width:${qW}%">`).join('')}</colgroup>
+      <thead><tr><th>컬 러</th>${qCols.map(q => `<th>${useShort ? q.short : q.th}</th>`).join('')}</tr></thead>
       <tbody>`;
-    left.forEach((c, i) => {
-      html += `<tr><td>${i+1}. ${escapeHtml(c.name) || '-'}</td><td class="center">${c.body || 0}</td><td class="center">${c.rib || 0}</td></tr>`;
-    });
-    html += `<tr class="sub"><td class="center">소 계</td><td class="center">${lBody}</td><td class="center">${lRib}</td></tr>`;
-    html += `</tbody></table></div>`;
-    // 우측
-    html += `<div><table>
-      <colgroup><col style="width:50%"><col style="width:25%"><col style="width:25%"></colgroup>
-      <thead><tr><th>컬 러</th><th>몸판</th><th>리프</th></tr></thead>
-      <tbody>`;
-    right.forEach((c, i) => {
-      html += `<tr><td>${half+i+1}. ${escapeHtml(c.name) || '-'}</td><td class="center">${c.body || 0}</td><td class="center">${c.rib || 0}</td></tr>`;
-    });
-    html += `<tr class="sub"><td class="center">소 계</td><td class="center">${rBody}</td><td class="center">${rRib}</td></tr>`;
-    html += `</tbody></table></div>`;
-    html += `</div>`;
+      arr.forEach((c, i) => {
+        s += `<tr><td>${offset + i + 1}. ${escapeHtml(c.name) || '-'}</td>${qCols.map(q => `<td class="center">${cellOf(c, q)}</td>`).join('')}</tr>`;
+      });
+      s += `<tr class="sub"><td class="center">소 계</td>${qCols.map(q => `<td class="center">${sumOf(arr, q)}</td>`).join('')}</tr>`;
+      s += `</tbody></table>`;
+      return s;
+    };
+    if (colorCount <= 5) {
+      html += `<div class="wo-color-1col">${buildTable(d.colors, 0, qCols.length === 2 ? 60 : 70, false)}</div>`;
+    } else {
+      const half = Math.ceil(colorCount / 2);
+      const nameW = qCols.length === 2 ? 50 : 66;
+      html += `<div class="wo-color-2col">`;
+      html += `<div>${buildTable(d.colors.slice(0, half), 0, nameW, true)}</div>`;
+      html += `<div>${buildTable(d.colors.slice(half), half, nameW, true)}</div>`;
+      html += `</div>`;
+    }
   }
   
   if (colorCount > 0) {
-    html += `<div class="wo-grand-total"><span>♣ TOTAL</span><span>총 ${grandTotal}절 (몸판 ${totalBody} + 리프 ${totalRib})</span></div>`;
+    const tParts = [];
+    if (showBody) tParts.push(`몸판 ${totalBody}`);
+    if (showRib) tParts.push(`리프 ${totalRib}`);
+    const gTotal = (showBody ? totalBody : 0) + (showRib ? totalRib : 0);
+    html += `<div class="wo-grand-total"><span>♣ TOTAL</span><span>총 ${gTotal}절${tParts.length > 1 ? ` (${tParts.join(' + ')})` : ''}</span></div>`;
   }
   
   if (d.notes) html += `<div class="wo-notes">${escapeHtml(d.notes)}</div>`;
@@ -10181,13 +10208,42 @@ window.addEventListener('firebase-ready', () => {
       try { toast(`"${spec.name}" 기준 자동 채움 (필요 시 수정 가능)`, 'info'); } catch (_) {}
     }
   }
-  function autoFillBodySpec() {
+  // hotfix252: 몸판을 고르면 짝 리프가 그대로 따라오게 한다.
+  //   ask=true(목록에서 확정 선택)일 때만 다른 리프를 confirm 후 교체. 타이핑 중(input)에는 빈칸만 채움.
+  function syncPairRibFromBody(spec, ask) {
+    if (!spec || spec.gubun === GUBUN_RIB) return false;
+    const nEl = document.getElementById('f_rib_item');
+    if (!nEl) return false;
+    const pair = findPairRibSpec(spec);
+    const curName = (nEl.value || '').trim();
+    if (!pair) {
+      if (ask) {
+        const declared = String(spec.pair_rib || '').trim();
+        if (declared) { try { toast(`"${spec.name}"의 짝 리프 "${declared}"를 품목 사전에서 찾지 못했습니다`, 'warning'); } catch (_) {} }
+        else if (!curName) { try { toast(`"${spec.name}"에 짝 리프가 지정되어 있지 않습니다 ([원단 기본 스펙]에서 지정)`, 'info'); } catch (_) {} }
+      }
+      return false;
+    }
+    const same = !!curName && curName.toLowerCase() === String(pair.name).trim().toLowerCase();
+    if (!same && curName) {
+      if (!ask) return false;
+      if (!confirm(`몸판 "${spec.name}"의 짝 리프는 "${pair.name}" 입니다.\n지금 리프칸의 "${curName}" 을(를) 바꿀까요?\n(리프 폭·중량·튜브·혼용율도 함께 바뀝니다)`)) return false;
+    }
+    const changed = applyRibSpecToForm(pair, !same, true);
+    if (changed) {
+      render(); markDirty();
+      try { toast(`짝 리프 "${pair.name}" 자동 채움`, 'success'); } catch (_) {}
+    }
+    return changed;
+  }
+  function autoFillBodySpec(ask) {
     const el = document.getElementById('f_body_item');
     if (!el) return;
     const spec = findFabricSpec(el.value);
     if (!spec) return;
     const changed = applyFabricSpecToForm(spec, false);
     if (changed) { try { toast(`"${spec.name}" 기준 자동 채움 (필요 시 수정 가능)`, 'info'); } catch (_) {} }
+    syncPairRibFromBody(spec, !!ask);
   }
   (function bindFabricSpecAutoFill() {
     const fp = document.getElementById('form-panel');
@@ -10196,7 +10252,7 @@ window.addEventListener('firebase-ready', () => {
       // change(확정) + input(목록 선택·정확 일치) 둘 다 — datalist 누락 방지
       fp.addEventListener('change', (e) => {
         if (!e.target) return;
-        if (e.target.id === 'f_body_item') autoFillBodySpec();
+        if (e.target.id === 'f_body_item') autoFillBodySpec(true);
         else if (e.target.id === 'f_rib_item') autoFillRibSpec();
       });
       fp.addEventListener('input', (e) => {
@@ -10218,6 +10274,15 @@ window.addEventListener('firebase-ready', () => {
         if (hasExisting && !confirm(`"${spec.name}" 기준으로\n폭·중량·튜브·혼용율·주의사항을 덮어쓸까요?${pairMsg}\n(현재 입력값이 바뀝니다)`)) return;
         applyFabricSpecToForm(spec, true);
         try { toast(`"${spec.name}" 기준 불러옴`, 'success'); } catch (_) {}
+        // hotfix252: 짝 리프가 없거나 사전에서 못 찾으면 조용히 넘어가지 말고 알려준다
+        if (!findPairRibSpec(spec)) {
+          const declared = String(spec.pair_rib || '').trim();
+          try {
+            toast(declared
+              ? `짝 리프 "${declared}"를 품목 사전에서 찾지 못했습니다`
+              : `"${spec.name}"에 짝 리프가 지정되어 있지 않습니다 ([원단 기본 스펙]에서 지정)`, declared ? 'warning' : 'info');
+          } catch (_) {}
+        }
       });
       // hotfix250: 리프 [기준 불러오기] — 리프칸에 값이 이미 있어도 덮어쓴다 (복사해서 만든 의뢰서 대응)
       fp.addEventListener('click', (e) => {
@@ -29309,7 +29374,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix251';
+  const VERSION = 'v2.53 hotfix252';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
