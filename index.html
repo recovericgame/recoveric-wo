@@ -21259,6 +21259,11 @@ function validateBlendSum(blends, label) {
     });
   }
 
+  // hotfix253: 거래처 검색 / 정렬 / 사용 안 함 포함 여부
+  let vdSearch = '';
+  let vdSortKey = 'name';
+  let vdSortDir = 'asc';
+  let vdShowOff = false;
   function renderVendors() {
     if (!isAdminUser()) return `<div class="dash-empty">대표 전용 화면입니다.</div>`;
     const vs = state.vendors || [];
@@ -21268,8 +21273,23 @@ function validateBlendSum(blends, label) {
     const typeChip = (t) => t
       ? `<span style="display:inline-block;padding:2px 9px;border-radius:10px;background:var(--brand-soft);color:var(--brand-deep);font-size:11px;font-weight:700;">${escapeHtml(t)}</span>`
       : `<span style="color:#9ca3af;">-</span>`;
-    const rows = vs.length
-      ? vs.map((v, i) => {
+    // 원래 순번(i)을 유지한 채 거르고 정렬한다 — 수정·삭제 버튼이 이 순번을 쓴다
+    let list = vs.map((v, i) => ({ v, i })).filter(o => vendorIsActive(o.v) || vdShowOff);
+    const vq = vdSearch.trim().toLowerCase();
+    if (vq) {
+      list = list.filter(o => [o.v.name, o.v.contact, o.v.phone, o.v.memo, getVendorTypes(o.v).join(' '), (Array.isArray(o.v.aliases) ? o.v.aliases.join(' ') : '')]
+        .some(t => String(t || '').toLowerCase().includes(vq)));
+    }
+    const cmpV = (a, b) => String(a || '').localeCompare(String(b || ''), 'ko');
+    list.sort((x, y) => {
+      let r = 0;
+      if (vdSortKey === 'type') r = cmpV(getVendorTypes(x.v)[0], getVendorTypes(y.v)[0]) || cmpV(x.v.name, y.v.name);
+      else r = cmpV(x.v.name, y.v.name);
+      return vdSortDir === 'desc' ? -r : r;
+    });
+    const vdArrow = (k) => vdSortKey === k ? (vdSortDir === 'asc' ? ' ▲' : ' ▼') : ' <span style="color:#cbd5e1;">↕</span>';
+    const rows = list.length
+      ? list.map(({ v, i }) => {
         const on = vendorIsActive(v);
         return `
         <tr style="${on ? '' : 'background:#fafafa;'}">
@@ -21286,7 +21306,7 @@ function validateBlendSum(blends, label) {
             <button class="dash-action-btn vendor-del-btn" data-idx="${i}" style="color:#b91c1c;border-color:#fecaca;">삭제</button>
           </td>
         </tr>`; }).join('')
-      : `<tr><td colspan="7" style="text-align:center;color:#9ca3af;padding:26px;">등록된 거래처가 없습니다. 아래 양식에서 추가해 주세요.</td></tr>`;
+      : `<tr><td colspan="7" style="text-align:center;color:#9ca3af;padding:26px;">${vs.length === 0 ? '등록된 거래처가 없습니다. 아래 양식에서 추가해 주세요.' : (vq ? `"${escapeHtml(vdSearch)}" 검색 결과가 없습니다.` : '보여줄 거래처가 없습니다.')}</td></tr>`;
     return `
       <div style="max-width:980px;margin:0 auto;">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:12px;">
@@ -21319,10 +21339,16 @@ function validateBlendSum(blends, label) {
             <button id="vendor-save-btn" class="dash-action-btn" style="background:var(--brand);color:#fff;border-color:var(--brand-deep);font-weight:700;padding:10px 22px;">추가</button>
           </div>
         </div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:0 0 10px;">
+          <input type="text" id="vendor-search" lang="ko" autocomplete="off" placeholder="업체명 · 구분 · 담당자 · 연락처 · 다른 표기 검색" value="${escapeHtml(vdSearch)}" style="flex:1;min-width:220px;max-width:380px;padding:8px 10px;border:1px solid var(--ui-line);border-radius:8px;font-size:13px;font-family:inherit;">
+          ${vdSearch ? `<button class="dash-action-btn" id="vendor-search-clear" style="font-size:11px;padding:5px 10px;">지우기</button>` : ''}
+          <label style="display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:700;color:${vdShowOff ? '#b45309' : '#6b7280'};cursor:pointer;white-space:nowrap;"><input type="checkbox" id="vendor-show-off" ${vdShowOff ? 'checked' : ''} style="width:15px;height:15px;"> 사용 안 함도 보기${offCnt ? ` (${offCnt})` : ''}</label>
+          <span style="font-size:12px;color:#6b7280;font-weight:700;margin-left:auto;">${list.length}곳 표시</span>
+        </div>
         <table class="dash-table" style="width:100%;">
           <thead><tr>
-            <th style="text-align:left;">업체명</th>
-            <th style="text-align:left;">구분</th>
+            <th class="vendor-sort-th" data-key="name" style="text-align:left;cursor:pointer;" title="업체명으로 정렬">업체명${vdArrow('name')}</th>
+            <th class="vendor-sort-th" data-key="type" style="text-align:left;cursor:pointer;" title="구분으로 정렬">구분${vdArrow('type')}</th>
             <th style="text-align:left;">담당자</th>
             <th style="text-align:left;">연락처</th>
             <th style="text-align:left;">다른 표기</th>
@@ -21417,6 +21443,11 @@ function validateBlendSum(blends, label) {
   // hotfix66: 원단 기본 스펙 편집 상태 (-1=신규)
   let editingSpecIdx = null;
   let fsGubunFilter = '__all__'; // hotfix244: 구분 탭 필터
+  // hotfix253: 검색 / 정렬 / 판매 종료 포함 여부
+  let fsSearch = '';
+  let fsSortKey = 'name';
+  let fsSortDir = 'asc';
+  let fsShowOff = false;
   function renderFabricSpecs() {
     if (!isAdminUser()) return `<div class="dash-empty">대표 전용 화면입니다.</div>`;
     const specs = getFabricSpecs();
@@ -21440,19 +21471,40 @@ function validateBlendSum(blends, label) {
     const offCnt = specs.filter(s => !specIsOnSale(s)).length;
     const cntOf = (g) => specs.filter(s => s.gubun === g && specIsOnSale(s)).length;
     h += `<div style="display:flex;gap:7px;flex-wrap:wrap;margin:0 0 10px;">
-      <button class="fs-gubun-tab" data-g="__all__" style="${fsGubunFilter === '__all__' ? tabOn : tabBase}">전체 ${specs.length}</button>
+      <button class="fs-gubun-tab" data-g="__all__" style="${fsGubunFilter === '__all__' ? tabOn : tabBase}">전체 ${fsShowOff ? specs.length : specs.filter(s => specIsOnSale(s)).length}</button>
       ${gubuns.map(g => `<button class="fs-gubun-tab" data-g="${escapeHtml(g)}" style="${fsGubunFilter === g ? tabOn : tabBase}">${escapeHtml(g)} ${cntOf(g)}</button>`).join('')}
       ${offCnt ? `<button class="fs-gubun-tab" data-g="__off__" style="${fsGubunFilter === '__off__' ? 'padding:6px 15px;border:1px solid #b45309;border-radius:16px;font-size:12px;font-weight:700;cursor:pointer;background:#b45309;color:#fff;' : 'padding:6px 15px;border:1px solid #fcd34d;border-radius:16px;font-size:12px;font-weight:700;cursor:pointer;background:#fffbeb;color:#b45309;'}">판매 종료 ${offCnt}</button>` : ''}
     </div>`;
-    const shown = specs.map((s, i) => ({ s, i })).filter(o =>
-      fsGubunFilter === '__all__' ? true
+    // hotfix253: 검색 + 판매 종료 포함 토글
+    h += `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:0 0 10px;">
+      <input type="text" id="fs-search" lang="ko" autocomplete="off" placeholder="품목명 · 구분 · 조직 · 혼용률 검색" value="${escapeHtml(fsSearch)}" style="flex:1;min-width:200px;max-width:340px;padding:7px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;font-family:inherit;">
+      ${fsSearch ? `<button class="dash-action-btn" id="fs-search-clear" style="font-size:11px;padding:5px 10px;">지우기</button>` : ''}
+      <label style="display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:700;color:${fsShowOff ? '#b45309' : '#6b7280'};cursor:pointer;white-space:nowrap;"><input type="checkbox" id="fs-show-off" ${fsShowOff ? 'checked' : ''} style="width:15px;height:15px;"> 판매 종료 품목도 보기${offCnt ? ` (${offCnt})` : ''}</label>
+    </div>`;
+    let shown = specs.map((s, i) => ({ s, i })).filter(o =>
+      fsGubunFilter === '__all__' ? (specIsOnSale(o.s) || fsShowOff)
         : fsGubunFilter === '__off__' ? !specIsOnSale(o.s)
-          : (o.s.gubun === fsGubunFilter && specIsOnSale(o.s)));
+          : (o.s.gubun === fsGubunFilter && (specIsOnSale(o.s) || fsShowOff)));
+    // 검색어 필터
+    const fsq = fsSearch.trim().toLowerCase();
+    if (fsq) {
+      shown = shown.filter(o => [o.s.name, o.s.gubun, o.s.cat, o.s.blend, o.s.pair_rib, o.s.width]
+        .some(v => String(v || '').toLowerCase().includes(fsq)));
+    }
+    // 정렬 (품목명 / 구분) — 구분이 같으면 품목명순
+    const cmpTxt = (a, b) => String(a || '').localeCompare(String(b || ''), 'ko');
+    shown.sort((x, y) => {
+      let r = 0;
+      if (fsSortKey === 'gubun') r = cmpTxt(x.s.gubun, y.s.gubun) || cmpTxt(x.s.name, y.s.name);
+      else r = cmpTxt(x.s.name, y.s.name);
+      return fsSortDir === 'desc' ? -r : r;
+    });
+    const fsArrow = (k) => fsSortKey === k ? (fsSortDir === 'asc' ? ' ▲' : ' ▼') : ' <span style="color:#cbd5e1;">↕</span>';
     h += `<div class="dash-table-wrap"><table class="dash-table"><thead><tr>
-      <th style="text-align:left;">품목명</th><th>구분</th><th>${fsGubunFilter === GUBUN_RIB ? '짝 몸판' : (fsGubunFilter === GUBUN_BODY ? '짝 리프' : '짝 연결')}</th><th>조직</th><th>기준 폭</th><th>튜브</th><th>중량 g/y</th><th style="text-align:left;">혼용률</th><th>마지막 수정일</th><th>판매</th><th>수정</th><th>삭제</th>
+      <th class="fs-sort-th" data-key="name" style="text-align:left;cursor:pointer;" title="품목명으로 정렬">품목명${fsArrow('name')}</th><th class="fs-sort-th" data-key="gubun" style="cursor:pointer;" title="구분으로 정렬">구분${fsArrow('gubun')}</th><th>${fsGubunFilter === GUBUN_RIB ? '짝 몸판' : (fsGubunFilter === GUBUN_BODY ? '짝 리프' : '짝 연결')}</th><th>조직</th><th>기준 폭</th><th>튜브</th><th>중량 g/y</th><th style="text-align:left;">혼용률</th><th>마지막 수정일</th><th>판매</th><th>수정</th><th>삭제</th>
     </tr></thead><tbody>`;
     if (shown.length === 0) {
-      h += `<tr><td colspan="12" style="text-align:center;color:#9ca3af;padding:18px;">${specs.length === 0 ? '등록된 품목이 없습니다. [＋ 새 품목 추가] 또는 [기본 품목 채우기]' : '이 구분에 등록된 품목이 없습니다.'}</td></tr>`;
+      h += `<tr><td colspan="12" style="text-align:center;color:#9ca3af;padding:18px;">${specs.length === 0 ? '등록된 품목이 없습니다. [＋ 새 품목 추가] 또는 [기본 품목 채우기]' : (fsq ? `"${escapeHtml(fsSearch)}" 검색 결과가 없습니다.` : '이 구분에 등록된 품목이 없습니다.')}</td></tr>`;
     }
     shown.forEach(({ s, i }) => {
       const pairOk = s.pair_rib ? !!findPairRibSpec(s) : true;
@@ -26133,6 +26185,25 @@ function validateBlendSum(blends, label) {
       if (cancelBtn) cancelBtn.addEventListener('click', () => { resetForm(); });
       const aliasHelperBtn = document.getElementById('vendor-alias-helper-btn');
       if (aliasHelperBtn) aliasHelperBtn.addEventListener('click', () => openVendorAliasHelper());
+      // hotfix253: 거래처 검색 (다시 그린 뒤 커서 자리 복원)
+      const vdSearchEl = document.getElementById('vendor-search');
+      if (vdSearchEl) vdSearchEl.addEventListener('input', () => {
+        vdSearch = vdSearchEl.value;
+        const pos = vdSearchEl.selectionStart;
+        renderDashboard();
+        const again = document.getElementById('vendor-search');
+        if (again) { again.focus(); try { again.setSelectionRange(pos, pos); } catch (_) {} }
+      });
+      const vdClearEl = document.getElementById('vendor-search-clear');
+      if (vdClearEl) vdClearEl.addEventListener('click', () => { vdSearch = ''; renderDashboard(); });
+      const vdOffEl = document.getElementById('vendor-show-off');
+      if (vdOffEl) vdOffEl.addEventListener('change', () => { vdShowOff = vdOffEl.checked; renderDashboard(); });
+      document.querySelectorAll('#dash-body .vendor-sort-th').forEach(th => th.addEventListener('click', () => {
+        const k = th.dataset.key || 'name';
+        if (vdSortKey === k) vdSortDir = (vdSortDir === 'asc' ? 'desc' : 'asc');
+        else { vdSortKey = k; vdSortDir = 'asc'; }
+        renderDashboard();
+      }));
       document.querySelectorAll('#dash-body .vendor-merge-btn').forEach(btn => {
         btn.addEventListener('click', () => openVendorMergeModal(btn.dataset.name));
       });
@@ -26193,7 +26264,17 @@ function validateBlendSum(blends, label) {
         gSel.value = (idx >= 0) ? (s.gubun || GUBUN_BODY) : (fsGubunFilter !== '__all__' ? fsGubunFilter : GUBUN_BODY);
         if (!gSel.value) gSel.value = GUBUN_BODY;
         const pSel = document.getElementById('fs-f-pair');
-        if (pSel) pSel.value = (idx >= 0 && s.pair_rib) ? s.pair_rib : '';
+        if (pSel) {
+          // hotfix253: 판매 종료된 리프는 목록에서 제외. 단 이미 걸어둔 리프는 남긴다
+          const cur = (idx >= 0 && s.pair_rib) ? String(s.pair_rib).trim() : '';
+          const ribs = getRibSpecs().filter(r => specIsOnSale(r) || String(r.name || '').trim() === cur);
+          pSel.innerHTML = `<option value="">— 지정 안 함 —</option>` + ribs.map(r =>
+            `<option value="${escapeHtml(r.name)}">${escapeHtml(r.name)}${specIsOnSale(r) ? '' : ' (판매 종료)'}</option>`).join('');
+          if (cur && !ribs.some(r => String(r.name || '').trim() === cur)) {
+            pSel.innerHTML += `<option value="${escapeHtml(cur)}">${escapeHtml(cur)} (목록에 없음)</option>`;
+          }
+          pSel.value = cur;
+        }
         // hotfix249: 이 리프를 이미 쓰고 있는 몸판을 미리 체크해 둔다
         fsBodyPick = {};
         const myRibName = (idx >= 0) ? String(s.name || '').trim() : '';
@@ -26223,7 +26304,9 @@ function validateBlendSum(blends, label) {
         const kw = (document.getElementById('fs-bodies-search')?.value || '').trim().toLowerCase();
         const myName = (document.getElementById('fs-f-name')?.value || '').trim();
         const bodies = getFabricSpecs().filter(s => s && s.gubun !== GUBUN_RIB);
-        const shown = kw ? bodies.filter(s => String(s.name || '').toLowerCase().includes(kw)) : bodies;
+        // hotfix253: 판매 종료된 몸판은 목록에서 제외. 단 이미 이 리프가 걸려 있으면 남긴다
+        const listable = bodies.filter(s => specIsOnSale(s) || !!fsBodyPick[s.name]);
+        const shown = kw ? listable.filter(s => String(s.name || '').toLowerCase().includes(kw)) : listable;
         box.innerHTML = shown.length ? shown.map(s => {
           const nm = s.name;
           const on = !!fsBodyPick[nm];
@@ -26231,7 +26314,7 @@ function validateBlendSum(blends, label) {
           const conflict = on && other && other !== myName;
           return `<label style="display:flex;align-items:center;gap:8px;padding:4px 3px;font-size:12.5px;cursor:pointer;border-bottom:1px solid #f5f3ff;">
             <input type="checkbox" class="fs-body-chk" data-name="${escapeHtml(nm)}" ${on ? 'checked' : ''}>
-            <span style="flex:1;font-weight:${on ? '700' : '400'};color:${on ? '#6b21a8' : '#374151'};">${escapeHtml(nm)}</span>
+            <span style="flex:1;font-weight:${on ? '700' : '400'};color:${on ? '#6b21a8' : '#374151'};">${escapeHtml(nm)}${specIsOnSale(s) ? '' : ' <span style="font-size:10.5px;color:#b45309;">(판매 종료)</span>'}</span>
             ${conflict ? `<span style="font-size:10.5px;color:#b45309;">현재 ${escapeHtml(other)}</span>` : (other && other === myName ? `<span style="font-size:10.5px;color:#a78bc4;">연결됨</span>` : '')}
           </label>`;
         }).join('') : `<div style="padding:10px;text-align:center;color:#9ca3af;font-size:12px;">검색 결과가 없습니다</div>`;
@@ -26465,6 +26548,28 @@ function validateBlendSum(blends, label) {
       // hotfix244: 구분 탭 전환
       document.querySelectorAll('.fs-gubun-tab').forEach(b => b.addEventListener('click', () => {
         fsGubunFilter = b.dataset.g || '__all__';
+        renderDashboard();
+      }));
+
+      // hotfix253: 품목 검색 (다시 그린 뒤 커서 자리 복원)
+      const fsSearchEl = document.getElementById('fs-search');
+      if (fsSearchEl) fsSearchEl.addEventListener('input', () => {
+        fsSearch = fsSearchEl.value;
+        const pos = fsSearchEl.selectionStart;
+        renderDashboard();
+        const again = document.getElementById('fs-search');
+        if (again) { again.focus(); try { again.setSelectionRange(pos, pos); } catch (_) {} }
+      });
+      const fsClearEl = document.getElementById('fs-search-clear');
+      if (fsClearEl) fsClearEl.addEventListener('click', () => { fsSearch = ''; renderDashboard(); });
+      // hotfix253: 판매 종료 품목 보기
+      const fsOffEl = document.getElementById('fs-show-off');
+      if (fsOffEl) fsOffEl.addEventListener('change', () => { fsShowOff = fsOffEl.checked; renderDashboard(); });
+      // hotfix253: 품목명 / 구분 정렬
+      document.querySelectorAll('.fs-sort-th').forEach(th => th.addEventListener('click', () => {
+        const k = th.dataset.key || 'name';
+        if (fsSortKey === k) fsSortDir = (fsSortDir === 'asc' ? 'desc' : 'asc');
+        else { fsSortKey = k; fsSortDir = 'asc'; }
         renderDashboard();
       }));
 
@@ -29490,7 +29595,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix252';
+  const VERSION = 'v2.53 hotfix253';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
