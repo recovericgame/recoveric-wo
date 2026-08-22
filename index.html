@@ -6899,6 +6899,9 @@ const state = {
   samplesSortDir: 'desc',
   samplesShrinkOnly: false,
   sampleMemos: {},          // settings/sample_memos — 샘플 표 전용 메모 (원본 작지 미변경)
+  // hotfix257: 생지출고 목록 검색
+  gsSearch: '',
+  gsPart: 'all',            // 'all' | '몸판' | '리프'
   // v2.31 완료 탭 필터
   completedFilter: {
     search: '',         // 통합 검색
@@ -19931,7 +19934,19 @@ function validateBlendSum(blends, label) {
   // ===== hotfix48: 생지출고 목록 뷰 =====
   // 염색작지 [보기]에서 자동 생성된 생지출고의뢰를 모아 보는 단순 목록 (보기·완료·삭제)
   function renderGSDash() {
-    const list = getDashWorkOrders('생지출고');
+    let list = getDashWorkOrders('생지출고');
+    // hotfix257: 품목 · 수신처 · 출고처 · 구분 · 송장No · 출처작지 통합 텍스트 검색 (일부만 적어도 걸림)
+    const gsPartOf = (wo) => wo.gs_part === 'rib' ? '리프' : (wo.gs_part === 'body' ? '몸판' : '');
+    if (state.gsPart && state.gsPart !== 'all') {
+      list = list.filter(wo => gsPartOf(wo) === state.gsPart);
+    }
+    const gq = String(state.gsSearch || '').trim().toLowerCase();
+    if (gq) {
+      list = list.filter(wo => [
+        wo.gs_item, wo.recipient, wo.gs_dest, gsPartOf(wo),
+        wo.gs_invoice_no, wo.source_fn_number, wo.wo_number, wo.gs_color, wo.internal_memo
+      ].some(s => String(s || '').toLowerCase().includes(gq)));
+    }
     const totalCount = state.allWorkOrders.filter(wo =>
       wo.type === '생지출고' && !wo.deleted && (state.showCompleted || !wo.completed)
     ).length;
@@ -19941,9 +19956,28 @@ function validateBlendSum(blends, label) {
         wo.type === '생지출고' && !wo.deleted && (state.showCompleted || !wo.completed)
       )
     );
+    // hotfix257: 검색칸 추천 목록 — 실제로 있는 품목 · 수신처 · 출고처만
+    const gsSuggestSet = new Set();
+    state.allWorkOrders.forEach(wo => {
+      if (!wo || wo.type !== '생지출고' || wo.deleted) return;
+      [wo.gs_item, wo.recipient, wo.gs_dest].forEach(v => {
+        const s = String(v || '').trim();
+        if (s) gsSuggestSet.add(s);
+      });
+    });
+    const gsSuggestList = Array.from(gsSuggestSet).sort((a, b) => a.localeCompare(b, 'ko'));
 
     let html = '';
     html += renderDateFilterBar('gs');
+    html += `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0 6px 4px;">
+      <input type="text" id="gs-search" lang="ko" list="gs-search-datalist" autocomplete="off" autocorrect="off" spellcheck="false" placeholder="품목 · 수신처 · 출고처 · 송장No 검색 (일부만 적어도 됩니다)" value="${escapeHtml(state.gsSearch || '')}" style="flex:1;min-width:220px;max-width:380px;padding:7px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;font-family:inherit;">
+      <datalist id="gs-search-datalist">${gsSuggestList.map(n => `<option value="${escapeHtml(n)}"></option>`).join('')}</datalist>
+      ${state.gsSearch ? `<button class="dash-action-btn" id="gs-search-clear" style="font-size:11px;padding:5px 10px;">지우기</button>` : ''}
+      <span style="font-size:12px;color:#6b7280;margin-left:4px;">구분</span>
+      <button class="sp-tab-btn gs-part-btn${(state.gsPart || 'all') === 'all' ? ' active' : ''}" data-gs-part="all" style="padding:5px 12px;font-size:12px;">전체</button>
+      <button class="sp-tab-btn gs-part-btn${state.gsPart === '몸판' ? ' active' : ''}" data-gs-part="몸판" style="padding:5px 12px;font-size:12px;">몸판</button>
+      <button class="sp-tab-btn gs-part-btn${state.gsPart === '리프' ? ' active' : ''}" data-gs-part="리프" style="padding:5px 12px;font-size:12px;">리프</button>
+    </div>`;
     html += `<div style="font-size:11px;color:#555;margin:0 0 6px 4px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
       <span style="color:#888;">염색작지 [보기] → [생지출고의뢰 만들기]에서 자동 생성됩니다</span>
       ${renderFilterSummary('gs', totalCount, list.length)}
@@ -19951,7 +19985,9 @@ function validateBlendSum(blends, label) {
     </div>`;
 
     if (list.length === 0) {
-      const emptyMsg = isFiltered
+      const emptyMsg = (gq || (state.gsPart && state.gsPart !== 'all'))
+        ? `검색 조건에 맞는 생지출고의뢰가 없습니다.<br><br>검색어를 지우거나 구분을 <strong>[전체]</strong>로 바꿔 보세요.`
+        : isFiltered
         ? `필터 조건에 맞는 생지출고의뢰가 없습니다.<br><br>상단 <strong>"전체"</strong> 버튼을 눌러 필터를 해제할 수 있습니다.`
         : `${state.showCompleted ? '' : '진행 중인 '}생지출고의뢰서가 없습니다.<br><br>대시보드 <strong>ㄴ 염색가공 진행</strong> 또는 이력에서 염색작지를 <strong>[보기]</strong> 한 뒤 <strong>[생지출고의뢰서 만들기]</strong>를 누르세요.`;
       html += `<div class="dash-empty">${emptyMsg}</div>`;
@@ -27451,6 +27487,22 @@ function validateBlendSum(blends, label) {
       });
     });
     
+    // ===== hotfix257: 생지출고 목록 검색 =====
+    const gsSearchEl = document.getElementById('gs-search');
+    if (gsSearchEl) gsSearchEl.addEventListener('input', () => {
+      state.gsSearch = gsSearchEl.value;
+      const pos = gsSearchEl.selectionStart;
+      renderDashboard();
+      const again = document.getElementById('gs-search');
+      if (again) { again.focus(); try { again.setSelectionRange(pos, pos); } catch (_) {} }
+    });
+    const gsClearEl = document.getElementById('gs-search-clear');
+    if (gsClearEl) gsClearEl.addEventListener('click', () => { state.gsSearch = ''; renderDashboard(); });
+    document.querySelectorAll('#dash-body .gs-part-btn').forEach(b => b.addEventListener('click', () => {
+      state.gsPart = b.dataset.gsPart || 'all';
+      renderDashboard();
+    }));
+
     // ===== hotfix254: 샘플 보관함 핸들러 =====
     document.querySelectorAll('#dash-body .sp-tab-btn').forEach(b => b.addEventListener('click', () => {
       state.samplesTab = b.dataset.spTab || '염색가공';
@@ -30077,7 +30129,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix256';
+  const VERSION = 'v2.53 hotfix257';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
