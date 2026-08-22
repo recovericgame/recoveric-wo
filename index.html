@@ -6088,6 +6088,7 @@
         <button class="dash-menu-btn admin-only" data-view="vendors">거래처 관리</button>
         <button class="dash-menu-btn admin-only" data-view="specTol">규격 허용치</button>
         <div class="dash-menu-section-label owner-only" style="margin-top:10px;">경영 전용 (최고관리자)</div>
+        <div id="owner-lock-bar" class="owner-only" style="display:none;"></div>
         <button class="dash-menu-btn owner-only" data-view="costCalc" style="background:#fffbeb;border:1px solid #fde68a;color:#92400e;font-weight:800;">원가 계산기</button>
         <button class="dash-menu-btn owner-only" data-view="permissions" style="background:#f5f3ff;border:1px solid #ddd6fe;color:#5b21b6;font-weight:800;">권한 관리</button>
       </div>
@@ -6908,6 +6909,10 @@ const state = {
   gsPart: 'all',            // 'all' | '몸판' | '리프'
   ovKnitSearch: '',         // hotfix259: 전체 대시보드 편직 품목 검색
   viewPerms: {},            // hotfix260: settings/permissions — 화면별 최소 등급
+  // hotfix262: 최고관리자 잠금
+  ownerPinHash: null,
+  ownerUnlocked: false,
+  ownerLastActive: 0,
   // v2.31 완료 탭 필터
   completedFilter: {
     search: '',         // 통합 검색
@@ -9917,6 +9922,11 @@ window.addEventListener('firebase-ready', () => {
       if (stampUnsubBt) { stampUnsubBt(); stampUnsubBt = null; }
       // v2.22: 로그아웃 시 권한 클래스 정리
       document.body.classList.remove('is-not-admin');
+      // hotfix262: 로그아웃하면 경영 자료는 다시 잠긴다
+      state.ownerUnlocked = false;
+      state.ownerPinHash = null;
+      state.ownerLastActive = 0;
+      document.body.classList.remove('is-not-owner');
     }
   });
   
@@ -9981,6 +9991,75 @@ window.addEventListener('firebase-ready', () => {
   };
   // 등급을 낮출 수 없는 화면 — 경영 자료
   const OWNER_LOCKED_VIEWS = ['costCalc', 'permissions'];
+
+  // ============================================================
+  // hotfix262: 최고관리자 잠금
+  // ------------------------------------------------------------
+  //   컴퓨터를 켜둔 채 자리를 비웠을 때 경영 자료를 보호한다.
+  //   · 잠긴 상태에서 경영 화면을 열면 비밀번호를 묻는다
+  //   · 한 번 풀면 계속 열려 있다 (매번 묻지 않는다)
+  //   · [잠금] 버튼을 누르면 즉시 다시 잠긴다
+  //   · 30분 동안 아무 동작이 없으면 저절로 잠긴다
+  //   · 새로고침·로그아웃하면 다시 잠긴다
+  //   비밀번호 자체는 저장하지 않고 되돌릴 수 없는 값(해시)만 저장한다.
+  // ============================================================
+  const OWNER_AUTOLOCK_MIN = 30;
+  async function sha256Hex(s) {
+    const buf = new TextEncoder().encode('HIWOS-OWNER:' + String(s));
+    const d = await crypto.subtle.digest('SHA-256', buf);
+    return Array.from(new Uint8Array(d)).map(b => b.toString(16).padStart(2, '0')).join('');
+  }
+  function ownerPinIsSet() { return !!(state.ownerPinHash); }
+  function ownerIsLocked() {
+    if (!isOwnerUser()) return false;
+    if (!ownerPinIsSet()) return false;      // 아직 비밀번호를 안 만들었으면 잠그지 않는다
+    return !state.ownerUnlocked;
+  }
+  function ownerTouch() {
+    if (state.ownerUnlocked) state.ownerLastActive = Date.now();
+  }
+  function ownerLockNow(silent) {
+    state.ownerUnlocked = false;
+    state.ownerLastActive = 0;
+    if (!silent) toast('경영 자료를 잠갔습니다', 'success');
+    if (state.uiMode === 'dashboard') renderDashboard();
+    updateOwnerLockBar();
+  }
+  function ownerCheckAutoLock() {
+    if (!state.ownerUnlocked || !ownerPinIsSet()) return;
+    if (Date.now() - state.ownerLastActive > OWNER_AUTOLOCK_MIN * 60 * 1000) {
+      ownerLockNow(true);
+      toast(`${OWNER_AUTOLOCK_MIN}분 동안 사용이 없어 경영 자료를 다시 잠갔습니다`, 'success');
+    }
+  }
+  async function ownerSavePinHash(hash) {
+    await setDoc(doc(db, 'cost_data', 'security'), {
+      pin_hash: hash,
+      updated_at: serverTimestamp(),
+      updated_by: state.user?.email || 'unknown'
+    });
+    state.ownerPinHash = hash;
+  }
+  // 사이드바 잠금 표시줄
+  function updateOwnerLockBar() {
+    const bar = document.getElementById('owner-lock-bar');
+    if (!bar) return;
+    if (!isOwnerUser()) { bar.style.display = 'none'; return; }
+    bar.style.display = '';
+    if (!ownerPinIsSet()) {
+      bar.innerHTML = `<button class="dash-menu-btn" id="owner-pin-setup" style="background:#fff7ed;border:1px solid #fed7aa;color:#9a3412;font-weight:800;">경영 자료 비밀번호 만들기</button>`;
+    } else if (state.ownerUnlocked) {
+      bar.innerHTML = `<button class="dash-menu-btn" id="owner-lock-btn" title="원가 계산기 · 권한 관리에만 걸립니다. 다른 화면은 그대로 열려 있습니다." style="background:#ecfdf5;border:1px solid #a7f3d0;color:#065f46;font-weight:800;">위 두 화면 열림 — 누르면 잠금</button>`;
+    } else {
+      bar.innerHTML = `<button class="dash-menu-btn" id="owner-unlock-btn" title="원가 계산기 · 권한 관리에만 걸립니다. 다른 화면은 그대로 열려 있습니다." style="background:#f5f3ff;border:1px solid #ddd6fe;color:#5b21b6;font-weight:800;">위 두 화면 잠김 — 누르면 열기</button>`;
+    }
+    const setupEl = document.getElementById('owner-pin-setup');
+    if (setupEl) setupEl.addEventListener('click', openOwnerPinModal);
+    const lockEl = document.getElementById('owner-lock-btn');
+    if (lockEl) lockEl.addEventListener('click', () => ownerLockNow());
+    const unlockEl = document.getElementById('owner-unlock-btn');
+    if (unlockEl) unlockEl.addEventListener('click', openOwnerUnlockModal);
+  }
 
   function viewMinRole(view) {
     if (OWNER_LOCKED_VIEWS.includes(view)) return 'owner';
@@ -10236,6 +10315,14 @@ window.addEventListener('firebase-ready', () => {
         renderDashboard();
       }
     }, err => console.warn('[permissions sub]', err.message));
+    // hotfix262: 경영 자료 잠금 비밀번호 (최고관리자만 읽을 수 있음)
+    if (isOwnerUser()) {
+      onSnapshot(doc(db, 'cost_data', 'security'), snap => {
+        state.ownerPinHash = (snap.exists() && snap.data().pin_hash) ? snap.data().pin_hash : null;
+        updateOwnerLockBar();
+        if (state.uiMode === 'dashboard' && OWNER_LOCKED_VIEWS.includes(state.dashView)) renderDashboard();
+      }, err => console.warn('[owner security sub]', err.message));
+    }
   }
   
   // 마스터 변경 시 화면 동적 갱신
@@ -22384,9 +22471,10 @@ function validateBlendSum(blends, label) {
       });
       h += `</tbody></table></div>`;
     });
-    h += `<div style="margin-top:18px;display:flex;gap:8px;">
+    h += `<div style="margin-top:18px;display:flex;gap:8px;flex-wrap:wrap;">
       <button class="dash-action-btn" id="perm-save" style="background:#2563eb;color:#fff;font-weight:800;padding:9px 22px;">저장</button>
       <button class="dash-action-btn" id="perm-reset" style="padding:9px 18px;">기본값으로</button>
+      <button class="dash-action-btn" id="perm-pin" style="margin-left:auto;padding:9px 18px;">경영 자료 비밀번호 ${ownerPinIsSet() ? '바꾸기' : '만들기'}</button>
     </div>`;
     return h;
   }
@@ -22404,6 +22492,107 @@ function validateBlendSum(blends, label) {
   }
 
   // ===== hotfix260: 원가 계산기 (최고관리자 전용) — 뼈대 =====
+  // hotfix262: 잠긴 상태에서 경영 화면을 열었을 때
+  function renderOwnerLockScreen(label) {
+    return `<div style="max-width:420px;margin:40px auto;text-align:center;">
+      <div style="font-size:15px;font-weight:800;color:#5b21b6;margin-bottom:8px;">${escapeHtml(label)} — 잠김</div>
+      <div style="font-size:13px;color:#6b7280;line-height:1.8;margin-bottom:18px;">
+        비밀번호를 넣으면 열립니다.<br>
+        <span style="font-size:12px;color:#9ca3af;">잠금은 원가 계산기와 권한 관리에만 걸립니다. 다른 화면은 그대로 쓰실 수 있습니다.</span>
+      </div>
+      <input type="password" id="owner-lock-pin" inputmode="numeric" autocomplete="off" placeholder="비밀번호"
+        style="width:100%;box-sizing:border-box;padding:11px 14px;border:1px solid #d1d5db;border-radius:7px;font-size:16px;font-family:inherit;text-align:center;letter-spacing:3px;">
+      <div id="owner-lock-msg" style="min-height:20px;margin-top:8px;font-size:12.5px;color:#c0271f;"></div>
+      <button class="dash-action-btn" id="owner-lock-go" style="margin-top:6px;background:#5b21b6;color:#fff;font-weight:800;padding:10px 30px;">열기</button>
+      <div style="margin-top:20px;font-size:11.5px;color:#9ca3af;line-height:1.7;">
+        한 번 열면 계속 열려 있습니다. 자리를 비우실 때는 왼쪽 [열림] 버튼을 눌러 잠그십시오.<br>
+        ${OWNER_AUTOLOCK_MIN}분 동안 사용이 없으면 저절로 잠깁니다.
+      </div>
+    </div>`;
+  }
+  // 비밀번호 만들기 / 바꾸기
+  function openOwnerPinModal() {
+    if (!isOwnerUser()) return;
+    const modal = document.getElementById('dash-modal-bg');
+    if (!modal) return;
+    document.getElementById('dash-modal-title').textContent = ownerPinIsSet() ? '경영 자료 비밀번호 바꾸기' : '경영 자료 비밀번호 만들기';
+    ['dash-modal-image', 'dash-modal-copy', 'dash-modal-print', 'dash-modal-kakao'].forEach(id => {
+      const b = document.getElementById(id); if (b) b.style.display = 'none';
+    });
+    const actionsBox = document.getElementById('dash-modal-actions');
+    if (actionsBox) actionsBox.style.display = 'none';
+    const inp = (id, ph) => `<input type="password" id="${id}" inputmode="numeric" autocomplete="off" placeholder="${ph}"
+      style="width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:15px;font-family:inherit;margin-bottom:9px;text-align:center;letter-spacing:3px;">`;
+    document.getElementById('dash-modal-body').innerHTML = `
+      <div style="max-width:400px;margin:0 auto;padding:6px 2px;">
+        <div style="background:#f5f3ff;border:1px solid #ddd6fe;border-radius:7px;padding:11px 13px;margin-bottom:14px;font-size:12.5px;color:#5b21b6;line-height:1.7;">
+          원가 계산기와 권한 관리를 열 때 물어볼 비밀번호입니다.<br>
+          숫자 4자리 이상으로 만드십시오.
+        </div>
+        ${ownerPinIsSet() ? inp('opin-old', '지금 쓰는 비밀번호') : ''}
+        ${inp('opin-new', '새 비밀번호')}
+        ${inp('opin-new2', '새 비밀번호 다시')}
+        <div id="opin-msg" style="min-height:20px;font-size:12.5px;color:#c0271f;"></div>
+        <div style="display:flex;gap:8px;margin-top:6px;">
+          <button class="dash-action-btn" id="opin-save" style="flex:1;background:#2563eb;color:#fff;font-weight:800;padding:9px 0;">저장</button>
+          <button class="dash-action-btn" id="opin-cancel" style="padding:9px 18px;">취소</button>
+        </div>
+        <div style="margin-top:14px;font-size:11.5px;color:#9ca3af;line-height:1.7;">
+          비밀번호 자체는 저장하지 않습니다. 되돌릴 수 없는 값만 남기므로 잊어버리면 찾을 수 없습니다.
+        </div>
+      </div>`;
+    modal.classList.add('show');
+    const msg = document.getElementById('opin-msg');
+    document.getElementById('opin-cancel').addEventListener('click', () => modal.classList.remove('show'));
+    document.getElementById('opin-save').addEventListener('click', async () => {
+      const nv = document.getElementById('opin-new').value.trim();
+      const n2 = document.getElementById('opin-new2').value.trim();
+      if (nv.length < 4) { msg.textContent = '4자리 이상으로 만들어 주세요'; return; }
+      if (nv !== n2) { msg.textContent = '새 비밀번호 두 칸이 다릅니다'; return; }
+      if (ownerPinIsSet()) {
+        const oldV = document.getElementById('opin-old').value.trim();
+        const oldH = await sha256Hex(oldV);
+        if (oldH !== state.ownerPinHash) { msg.textContent = '지금 쓰는 비밀번호가 맞지 않습니다'; return; }
+      }
+      const btn = document.getElementById('opin-save');
+      btn.disabled = true; btn.textContent = '저장 중...';
+      try {
+        await ownerSavePinHash(await sha256Hex(nv));
+        state.ownerUnlocked = true;
+        state.ownerLastActive = Date.now();
+        modal.classList.remove('show');
+        toast('비밀번호를 저장했습니다', 'success');
+        updateOwnerLockBar();
+        if (state.uiMode === 'dashboard') renderDashboard();
+      } catch (e) {
+        btn.disabled = false; btn.textContent = '저장';
+        msg.textContent = '저장 실패: ' + e.message;
+      }
+    });
+  }
+  // 잠금 해제 (사이드바 버튼)
+  function openOwnerUnlockModal() {
+    if (!isOwnerUser()) return;
+    if (!ownerPinIsSet()) { openOwnerPinModal(); return; }
+    state.dashView = 'costCalc';
+    state.uiMode = 'dashboard';
+    switchUiMode('dashboard');
+    renderDashboard();
+    setTimeout(() => { const el = document.getElementById('owner-lock-pin'); if (el) el.focus(); }, 60);
+  }
+  async function ownerTryUnlock(pin, msgEl) {
+    const h = await sha256Hex(String(pin || '').trim());
+    if (h !== state.ownerPinHash) {
+      if (msgEl) msgEl.textContent = '비밀번호가 맞지 않습니다';
+      return false;
+    }
+    state.ownerUnlocked = true;
+    state.ownerLastActive = Date.now();
+    updateOwnerLockBar();
+    renderDashboard();
+    return true;
+  }
+
   function renderCostCalcDash() {
     if (!isOwnerUser()) return `<div class="dash-empty">최고관리자만 볼 수 있는 화면입니다.</div>`;
     return `<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:14px 16px;font-size:13px;color:#92400e;line-height:1.8;">
@@ -24833,11 +25022,11 @@ function validateBlendSum(blends, label) {
       addBtn.style.display = 'none';
     } else if (state.dashView === 'permissions') {
       title = '권한 관리 (최고관리자 전용)';
-      body = renderPermissionsDash();
+      body = ownerIsLocked() ? renderOwnerLockScreen('권한 관리') : renderPermissionsDash();
       addBtn.style.display = 'none';
     } else if (state.dashView === 'costCalc') {
       title = '원가 계산기 (최고관리자 전용)';
-      body = renderCostCalcDash();
+      body = ownerIsLocked() ? renderOwnerLockScreen('원가 계산기') : renderCostCalcDash();
       addBtn.style.display = 'none';
     } else if (state.dashView === 'samples') {
       title = '샘플 보관함';
@@ -27803,6 +27992,22 @@ function validateBlendSum(blends, label) {
       });
     });
     
+    // ===== hotfix262: 경영 자료 잠금 화면 =====
+    const olPin = document.getElementById('owner-lock-pin');
+    const olGo = document.getElementById('owner-lock-go');
+    if (olPin && olGo) {
+      const msgEl = document.getElementById('owner-lock-msg');
+      const tryIt = async () => {
+        olGo.disabled = true;
+        const ok = await ownerTryUnlock(olPin.value, msgEl);
+        if (!ok) { olGo.disabled = false; olPin.value = ''; olPin.focus(); }
+      };
+      olGo.addEventListener('click', tryIt);
+      olPin.addEventListener('keydown', e => { if (e.key === 'Enter') tryIt(); });
+      olPin.focus();
+    }
+    updateOwnerLockBar();
+
     // ===== hotfix260/261: 권한 관리 =====
     // 관리자 체크를 풀면 직원 체크는 자동으로 꺼진다 (관리자가 못 보는데 직원이 볼 수는 없음)
     document.querySelectorAll('#dash-body .perm-adm').forEach(adm => {
@@ -27833,6 +28038,8 @@ function validateBlendSum(blends, label) {
       permSaveEl.disabled = false; permSaveEl.textContent = '저장';
       if (ok) { toast('권한을 저장했습니다', 'success'); renderDashboard(); }
     });
+    const permPinEl = document.getElementById('perm-pin');
+    if (permPinEl) permPinEl.addEventListener('click', openOwnerPinModal);
     const permResetEl = document.getElementById('perm-reset');
     if (permResetEl) permResetEl.addEventListener('click', async () => {
       if (!confirm('모든 화면의 권한을 기본값으로 되돌립니다. 계속할까요?')) return;
@@ -29788,6 +29995,11 @@ document.querySelectorAll('.hist-scope-btn').forEach(b => b.addEventListener('cl
   document.dispatchEvent(new CustomEvent('hiwos-rerender-history'));
 }));
 
+// hotfix262: 경영 자료 무동작 자동 잠금 — 마우스·키보드 움직임을 보고 시간을 잰다
+['mousedown', 'keydown', 'touchstart', 'wheel'].forEach(ev =>
+  document.addEventListener(ev, () => { try { ownerTouch(); } catch (_) {} }, true));
+setInterval(() => { try { ownerCheckAutoLock(); } catch (_) {} }, 30000);
+
 render();
 
 window.addEventListener('beforeunload', e => {
@@ -30449,7 +30661,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix261';
+  const VERSION = 'v2.53 hotfix263';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
