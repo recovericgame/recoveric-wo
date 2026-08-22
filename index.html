@@ -23196,6 +23196,7 @@ function validateBlendSum(blends, label) {
       <button class="cp-sub-btn" data-cp-sub="knit" style="${sub === 'knit' ? sOn : sOff}">편직료 ${P.knit.length}</button>
       <button class="cp-sub-btn" data-cp-sub="proc" style="${sub === 'proc' ? sOn : sOff}">가공 단가 ${P.proc.length + P.bundles.length}</button>
       <button class="cp-sub-btn" data-cp-sub="grade" style="${sub === 'grade' ? sOn : sOff}">판매 등급 ${getCostGrades().length}</button>
+      <button class="cp-sub-btn" data-cp-sub="import" style="${sub === 'import' ? sOn : sOff}">자료 가져오기</button>
       <input type="text" id="cp-search" lang="ko" autocomplete="off" placeholder="이름 · 공장 · 공정 검색" value="${escapeHtml(state.costSearch || '')}"
         style="margin-left:auto;min-width:200px;max-width:300px;padding:7px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;font-family:inherit;">
       ${state.costSearch ? `<button class="dash-action-btn" id="cp-search-clear" style="font-size:11px;padding:5px 10px;">지우기</button>` : ''}
@@ -23203,6 +23204,7 @@ function validateBlendSum(blends, label) {
     if (sub === 'yarn') h += renderYarnPriceTable(P);
     else if (sub === 'knit') h += renderKnitPriceTable(P);
     else if (sub === 'grade') return h + renderCostGradeTable();
+    else if (sub === 'import') return h + renderCostImportTab();
     else h += renderProcPriceTable(P);
     h += renderCostPriceModal();
     return h;
@@ -23447,6 +23449,168 @@ function validateBlendSum(blends, label) {
       </div>
     </div>`;
     return h;
+  }
+
+  // hotfix272: 자료 가져오기 — 엑셀에서 뽑아낸 파일을 단가표·원단 원가에 얹는다
+  //   옛 값은 절대 지우지 않는다. 이력은 날짜와 값이 똑같은 줄만 걸러내고 전부 살린다.
+  function renderCostImportTab() {
+    const inp = 'padding:7px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;font-family:inherit;box-sizing:border-box;';
+    return `<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px;margin-bottom:14px;font-size:12.5px;color:#475569;line-height:1.8;">
+      엑셀에서 뽑아낸 자료 파일(JSON)을 골라 단가표와 원단 원가에 한꺼번에 얹습니다.<br>
+      <strong>이미 들어 있는 자료는 지우지 않습니다.</strong> 없는 것만 새로 넣고, 값이 다른 것은 아래 선택에 따릅니다. 가격 이력은 언제나 합쳐서 전부 남깁니다.
+    </div>
+    <div style="background:#fff;border:1px solid #e2e8f0;border-radius:9px;padding:14px 16px;max-width:760px;">
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px;">
+        <input type="file" id="ci-file" accept=".json,application/json" style="${inp}max-width:400px;">
+        <button class="dash-action-btn" id="ci-clear" style="font-size:11.5px;padding:6px 12px;">비우기</button>
+      </div>
+      <label style="display:inline-flex;align-items:center;gap:7px;font-size:12.5px;color:#334155;cursor:pointer;margin-bottom:12px;">
+        <input type="checkbox" id="ci-overwrite" style="width:15px;height:15px;">
+        이미 있는 단가도 파일의 값으로 바꾸기 <span style="color:#94a3b8;">(바뀐 값은 이력에 쌓입니다)</span>
+      </label>
+      <div id="ci-preview" style="font-size:12.5px;color:#64748b;line-height:1.9;">파일을 고르면 무엇이 몇 건 들어오는지 여기에 먼저 보여 드립니다.</div>
+      <div style="margin-top:13px;">
+        <button class="dash-action-btn" id="ci-go" style="background:#16a34a;color:#fff;font-weight:800;padding:8px 22px;" disabled>가져오기</button>
+      </div>
+    </div>`;
+  }
+  // 파일 한 개를 읽어 지금 자료에 얹은 결과를 만든다 (화면에 보여줄 요약도 같이)
+  function buildCostImport(data, overwrite) {
+    const P = JSON.parse(JSON.stringify(getCostPrices()));
+    const sum = { yarnNew: 0, yarnChg: 0, yarnSame: 0, knitNew: 0, knitChg: 0, procNew: 0, procChg: 0,
+                  bundleNew: 0, histAdd: 0, fabHit: 0, fabMissN: 0, fabMiss: [], bad: [] };
+    const hist = {};
+    const pushHist = (key, d, p) => {
+      if (!d || p == null) return;
+      const cur = hist[key] || priceHistoryOf(key).slice();
+      if (cur.some(e => e && e.d === d && Number(e.p) === Number(p))) { hist[key] = cur; return; }
+      cur.push({ d: d, p: Number(p) });
+      cur.sort((a, b) => String(a.d).localeCompare(String(b.d)));
+      hist[key] = cur;
+      sum.histAdd += 1;
+    };
+    // 원사
+    (Array.isArray(data.yarns) ? data.yarns : []).forEach(y => {
+      const name = String(y && y.name || '').trim();
+      const price = parseFloat(y && y.price);
+      if (!name || isNaN(price)) { sum.bad.push('원사 ' + (name || '이름없음')); return; }
+      const kind = YARN_KINDS.includes(y.kind) ? y.kind : '기타';
+      const at = String(y.updated_at || '').trim() || todayYMD();
+      const i = P.yarns.findIndex(v => String(v.name || '').trim().toLowerCase() === name.toLowerCase());
+      if (i < 0) {
+        P.yarns.push({ name: name, kind: kind, price: price, updated_at: at });
+        sum.yarnNew += 1;
+        pushHist(priceKeyYarn(name), at, price);
+      } else if (Number(P.yarns[i].price) !== price) {
+        if (overwrite) {
+          P.yarns[i] = { name: P.yarns[i].name, kind: kind, price: price, updated_at: at };
+          sum.yarnChg += 1;
+          pushHist(priceKeyYarn(name), at, price);
+        } else sum.yarnSame += 1;
+      } else sum.yarnSame += 1;
+    });
+    // 가격 이력 (단가표에 없는 사종의 옛 값도 전부 남긴다)
+    const ph = (data.price_history && typeof data.price_history === 'object') ? data.price_history : {};
+    Object.keys(ph).forEach(k => {
+      (Array.isArray(ph[k]) ? ph[k] : []).forEach(e => pushHist(k, String(e && e.d || '').trim(), parseFloat(e && e.p)));
+    });
+    // 편직료
+    (Array.isArray(data.knit) ? data.knit : []).forEach(k => {
+      const v = String(k && k.vendor || '').trim();
+      const price = parseFloat(k && k.price);
+      if (!v || isNaN(price)) return;
+      const at = String(k.updated_at || '').trim() || todayYMD();
+      const i = P.knit.findIndex(x => String(x.vendor || '').trim().toLowerCase() === v.toLowerCase());
+      if (i < 0) { P.knit.push({ vendor: v, price: price, updated_at: at }); sum.knitNew += 1; pushHist(priceKeyKnit(v), at, price); }
+      else if (overwrite && Number(P.knit[i].price) !== price) { P.knit[i].price = price; P.knit[i].updated_at = at; sum.knitChg += 1; pushHist(priceKeyKnit(v), at, price); }
+    });
+    // 가공 단가
+    (Array.isArray(data.proc) ? data.proc : []).forEach(p => {
+      const v = String(p && p.vendor || '').trim();
+      const pr = String(p && p.proc || '').trim();
+      const price = parseFloat(p && p.price);
+      if (!v || !pr || isNaN(price)) return;
+      const at = String(p.updated_at || '').trim() || todayYMD();
+      const i = P.proc.findIndex(x => String(x.vendor || '').trim().toLowerCase() === v.toLowerCase() && String(x.proc || '').trim() === pr);
+      if (i < 0) { P.proc.push({ vendor: v, proc: pr, price: price, updated_at: at }); sum.procNew += 1; pushHist(priceKeyProc(v, pr), at, price); }
+      else if (overwrite && Number(P.proc[i].price) !== price) { P.proc[i].price = price; P.proc[i].updated_at = at; sum.procChg += 1; pushHist(priceKeyProc(v, pr), at, price); }
+    });
+    // 묶음 단가
+    (Array.isArray(data.bundles) ? data.bundles : []).forEach(b => {
+      const v = String(b && b.vendor || '').trim();
+      const procs = Array.isArray(b && b.procs) ? b.procs.map(x => String(x).trim()).filter(Boolean) : [];
+      const price = parseFloat(b && b.price);
+      if (!v || procs.length < 2 || isNaN(price)) return;
+      const at = String(b.updated_at || '').trim() || todayYMD();
+      const key = priceKeyBundle(v, procs);
+      const i = P.bundles.findIndex(x => priceKeyBundle(x.vendor, x.procs) === key);
+      if (i < 0) { P.bundles.push({ vendor: v, procs: procs, price: price, updated_at: at }); sum.bundleNew += 1; pushHist(key, at, price); }
+      else if (overwrite && Number(P.bundles[i].price) !== price) { P.bundles[i].price = price; P.bundles[i].updated_at = at; pushHist(key, at, price); }
+    });
+    // 원단별 원가 — 품목명이 [원단 기본 스펙]에 있는 것만 고정 코드로 이어 붙인다
+    const fab = {};
+    (Array.isArray(data.fabric_cost) ? data.fabric_cost : []).forEach(f => {
+      const name = String(f && f.name || '').trim();
+      if (!name) return;
+      const spec = findFabricSpec(name);
+      const fid = spec ? specFid(spec) : '';
+      if (!fid) { sum.fabMissN += 1; if (sum.fabMiss.length < 12) sum.fabMiss.push(name); return; }
+      const prev = getFabricCost(fid) || {};
+      const yarns = (Array.isArray(f.yarns) ? f.yarns : []).slice(0, 4).map(y => ({
+        name: String(y && y.name || '').trim(),
+        size: (y && y.size != null) ? y.size : ((y && y.count != null) ? y.count : null),
+        unit: (String(y && y.unit || '') === '수') ? '수' : 'D',
+        loop: (y && y.loop != null) ? y.loop : null
+      })).filter(y => y.name);
+      fab[fid] = {
+        code: String(f.code || prev.code || '').trim(),
+        machine: String(f.machine || prev.machine || '').trim(),
+        knitter: String(f.knitter || prev.knitter || '').trim(),
+        dyer: String(f.dyer || prev.dyer || '').trim(),
+        finisher: String(f.finisher || prev.finisher || '').trim(),
+        inch: (f.inch != null ? f.inch : (prev.inch != null ? prev.inch : null)),
+        needles: (f.needles != null ? f.needles : (prev.needles != null ? prev.needles : null)),
+        make_gy: (f.make_gy != null ? f.make_gy : (prev.make_gy != null ? prev.make_gy : null)),
+        knit_loss: (f.knit_loss != null ? f.knit_loss : (prev.knit_loss != null ? prev.knit_loss : null)),
+        fin_loss: (f.fin_loss != null ? f.fin_loss : (prev.fin_loss != null ? prev.fin_loss : null)),
+        yarns: yarns.length ? yarns : (Array.isArray(prev.yarns) ? prev.yarns : []),
+        procs: (Array.isArray(f.procs) && f.procs.length) ? f.procs.slice() : (Array.isArray(prev.procs) ? prev.procs : [])
+      };
+      sum.fabHit += 1;
+    });
+    return { prices: P, hist: hist, fab: fab, sum: sum };
+  }
+  async function runCostImport(built) {
+    if (!isOwnerUser()) { toast('최고관리자만 가져올 수 있습니다', 'error'); return false; }
+    if (!state.costPricesLoaded) { toast('단가표를 아직 다 읽지 못했습니다. 잠시 뒤 다시 해주십시오', 'warning'); return false; }
+    try {
+      const P = built.prices;
+      await setDoc(doc(db, 'cost_data', 'prices'), {
+        yarns: P.yarns, knit: P.knit, proc: P.proc, bundles: P.bundles,
+        updated_at: serverTimestamp(), updated_by: state.user?.email || 'unknown'
+      });
+      state.costPrices = JSON.parse(JSON.stringify(P));
+      const hk = Object.keys(built.hist);
+      if (hk.length) {
+        await setDoc(doc(db, 'cost_data', 'price_history'), {
+          items: built.hist, updated_at: serverTimestamp(), updated_by: state.user?.email || 'unknown'
+        }, { merge: true });
+        if (!state.costPriceHistory || typeof state.costPriceHistory !== 'object') state.costPriceHistory = {};
+        hk.forEach(k => { state.costPriceHistory[k] = built.hist[k]; });
+      }
+      const fk = Object.keys(built.fab);
+      if (fk.length) {
+        await setDoc(doc(db, 'cost_data', 'fabric_cost'), {
+          items: built.fab, updated_at: serverTimestamp(), updated_by: state.user?.email || 'unknown'
+        }, { merge: true });
+        if (!state.fabricCost || typeof state.fabricCost !== 'object') state.fabricCost = {};
+        fk.forEach(k => { state.fabricCost[k] = built.fab[k]; });
+      }
+      return true;
+    } catch (e) {
+      toast('가져오기 실패: ' + e.message, 'error');
+      return false;
+    }
   }
 
   function cpMatch(txt) {
@@ -29141,6 +29305,71 @@ function validateBlendSum(blends, label) {
       renderDashboard();
     }));
     bindRerenderSearch('cp-search', v => { state.costSearch = v; });
+    // ===== hotfix272: 자료 가져오기 =====
+    (function attachCostImportHandlers() {
+      const fileEl = document.getElementById('ci-file');
+      if (!fileEl) return;
+      const prevEl = document.getElementById('ci-preview');
+      const goEl = document.getElementById('ci-go');
+      const owEl = document.getElementById('ci-overwrite');
+      let raw = null, built = null;
+      const paint = () => {
+        if (!raw) {
+          prevEl.textContent = '파일을 고르면 무엇이 몇 건 들어오는지 여기에 먼저 보여 드립니다.';
+          goEl.disabled = true;
+          return;
+        }
+        built = buildCostImport(raw, !!(owEl && owEl.checked));
+        const s = built.sum;
+        let t = `<strong style="color:#0f172a;">이렇게 들어갑니다</strong><br>
+          · 원사 새로 ${s.yarnNew}건 / 값 바꿈 ${s.yarnChg}건 / 그대로 둠 ${s.yarnSame}건<br>
+          · 가격 이력 새로 ${s.histAdd}줄<br>`;
+        if (s.knitNew || s.knitChg) t += `· 편직료 새로 ${s.knitNew}건 / 값 바꿈 ${s.knitChg}건<br>`;
+        if (s.procNew || s.procChg) t += `· 가공 단가 새로 ${s.procNew}건 / 값 바꿈 ${s.procChg}건<br>`;
+        if (s.bundleNew) t += `· 묶음 단가 새로 ${s.bundleNew}건<br>`;
+        if (s.fabHit || s.fabMissN) {
+          t += `· 원단 원가 ${s.fabHit}개 품목에 연결`;
+          if (s.fabMissN) t += ` <span style="color:#b45309;font-weight:700;">/ 품목을 못 찾아 건너뜀 ${s.fabMissN}개</span>`;
+          t += '<br>';
+        }
+        if (s.fabMissN) t += `<span style="font-size:11.5px;color:#b45309;">못 찾은 품목: ${escapeHtml(s.fabMiss.join(', '))}${s.fabMissN > s.fabMiss.length ? ' 외 ' + (s.fabMissN - s.fabMiss.length) + '개' : ''} — [원단 기본 스펙]에 같은 이름으로 먼저 등록하시면 다음 가져오기 때 연결됩니다.</span><br>`;
+        if (s.bad.length) t += `<span style="font-size:11.5px;color:#c0271f;">읽지 못한 줄 ${s.bad.length}개</span>`;
+        prevEl.innerHTML = t;
+        goEl.disabled = false;
+      };
+      fileEl.addEventListener('change', () => {
+        const f = fileEl.files && fileEl.files[0];
+        raw = null; built = null;
+        if (!f) { paint(); return; }
+        const rd = new FileReader();
+        rd.onload = () => {
+          try {
+            const j = JSON.parse(rd.result);
+            if (!j || typeof j !== 'object') throw new Error('내용이 비어 있습니다');
+            raw = j;
+            paint();
+          } catch (e) {
+            prevEl.innerHTML = `<span style="color:#c0271f;font-weight:700;">파일을 읽지 못했습니다: ${escapeHtml(e.message)}</span>`;
+            goEl.disabled = true;
+          }
+        };
+        rd.onerror = () => { prevEl.textContent = '파일을 읽지 못했습니다.'; goEl.disabled = true; };
+        rd.readAsText(f, 'utf-8');
+      });
+      if (owEl) owEl.addEventListener('change', paint);
+      document.getElementById('ci-clear')?.addEventListener('click', () => {
+        fileEl.value = ''; raw = null; built = null; paint();
+      });
+      goEl.addEventListener('click', async () => {
+        if (!built) return;
+        const s = built.sum;
+        if (!confirm(`원사 ${s.yarnNew + s.yarnChg}건 · 이력 ${s.histAdd}줄 · 원단 ${s.fabHit}개를 넣습니다. 계속할까요?`)) return;
+        goEl.disabled = true;
+        const ok = await runCostImport(built);
+        goEl.disabled = false;
+        if (ok) { toast('자료를 가져왔습니다', 'success'); state.costPriceTab = 'yarn'; renderDashboard(); }
+      });
+    })();
     // ===== hotfix270: 판매 등급 =====
     (function attachCostGradeHandlers() {
       const saveEl = document.getElementById('cg-save');
@@ -32053,7 +32282,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix271';
+  const VERSION = 'v2.53 hotfix272';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
