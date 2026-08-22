@@ -1414,6 +1414,7 @@
   .sp-part-body { display:inline-block; padding:1px 7px; border-radius:8px; font-size:11px; font-weight:800; background:#dbeafe; border:1px solid #93c5fd; color:#1e3a8a; }
   .sp-part-rib  { display:inline-block; padding:1px 7px; border-radius:8px; font-size:11px; font-weight:800; background:#ede9fe; border:1px solid #c4b5fd; color:#5b21b6; }
   .sp-bad { color:#c0271f; font-weight:800; }
+  .sp-caution { color:#047857; font-weight:800; }
   .sp-warn { color:#b45309; font-weight:800; }
   .sp-round-1 { color:#9ca3af; font-weight:600; }
   .sp-round-n { color:#b45309; font-weight:800; background:#fff7ed; border:1px solid #fed7aa; border-radius:8px; padding:1px 7px; }
@@ -6048,7 +6049,9 @@
         <option value="공문">공문</option>
         <option value="생지출고">생지출고</option>
       </select>
-      <input type="text" id="history-search" class="history-search-input" placeholder="품목/컬러/거래처 검색..." lang="ko">
+      <input type="text" id="history-search" class="history-search-input" list="history-item-datalist" autocomplete="off" autocorrect="off" spellcheck="false" placeholder="품목 검색 (목록 선택 · 직접 입력)" lang="ko">
+      <datalist id="history-item-datalist"></datalist>
+      <div id="history-item-hint" class="history-color-hint"></div>
       <input type="text" id="history-color-search" class="history-search-input history-color-input" list="history-color-datalist" autocomplete="off" autocorrect="off" spellcheck="false" placeholder="↳ 컬러로 2차 검색 (목록 선택 · 직접 입력)" lang="ko">
       <datalist id="history-color-datalist"></datalist>
       <div id="history-color-hint" class="history-color-hint"></div>
@@ -10701,6 +10704,21 @@ window.addEventListener('firebase-ready', () => {
     return Array.from(new Set(out));
   }
 
+  // hotfix256: 이력 1차(품목) 목록용 — 유형별로 실제 품목명만 뽑는다
+  function woItemNames(wo) {
+    const out = [];
+    const push = v => { const s = String(v || '').trim(); if (s) out.push(s); };
+    if (!wo) return out;
+    if (wo.type === '원사') (wo.yarns || []).forEach(y => push(y.type));
+    else if (wo.type === '편직') (wo.items || []).forEach(it => push(it.item));
+    else if (wo.type === '염색가공') { push(wo.body && wo.body.item); push(wo.rib && wo.rib.item); }
+    else if (wo.type === 'BT') push(wo.item);
+    else if (wo.type === '나염') { push(wo.design_name); (wo.print_rows || []).forEach(r => push(r.fabric)); }
+    else if (wo.type === '생지출고') push(wo.gs_item);
+    else if (wo.type === '공문') push(wo.title);
+    return Array.from(new Set(out));
+  }
+
   function renderHistory() {
     const list = document.getElementById('history-list');
     // deleted 항목 제외
@@ -10716,6 +10734,20 @@ window.addEventListener('firebase-ready', () => {
       visible = visible.filter(wo => isSampleWorkOrder(wo));
     } else if (state.historySampleScope === 'order') {
       visible = visible.filter(wo => !isSampleWorkOrder(wo));
+    }
+    
+    // hotfix256: 1차(품목) 목록 — 검색어를 치기 전 상태의 목록에서 뽑는다.
+    //   타이핑해도 목록은 줄지 않고, 유형을 바꾸면 그 유형의 품목만 나온다.
+    const itemNames = new Set();
+    visible.forEach(wo => woItemNames(wo).forEach(n => itemNames.add(n)));
+    const itemList = Array.from(itemNames).sort((a, b) => a.localeCompare(b, 'ko'));
+    const idl = document.getElementById('history-item-datalist');
+    if (idl) idl.innerHTML = itemList.map(n => `<option value="${escapeHtml(n)}"></option>`).join('');
+    const ihint = document.getElementById('history-item-hint');
+    if (ihint) {
+      ihint.textContent = state.historySearch
+        ? `"${state.historySearch}" 로 좁힘`
+        : (itemList.length ? `선택 가능한 품목 ${itemList.length}개 (가나다·ABC 오름차순)` : '');
     }
     
     // 검색어 필터 (대소문자 무시, 다양한 필드 종합 검색)
@@ -21956,7 +21988,10 @@ function validateBlendSum(blends, label) {
      · QC 완료된 샘플은 [완료된 의뢰서]가 아니라 여기로 온다.
      · 표 한 줄 = 컬러 1 × 몸판/리프 1 × 최종 차수. 절수는 최종 차수 입고분(누적 아님).
      · 비고는 원본 작지를 건드리지 않는 샘플 표 전용 메모(settings/sample_memos).            */
-  const SAMPLE_SHRINK_LIMIT = 2;   // 기획서 확정: 건조기 후 2% 이내, 초과 시 빨강
+  // hotfix255: 축률 2단계 판정
+  //   2% 초과 ~ 3% 미만 = 주의(주황) / 3% 이상 = 빨강 굵은 글자
+  const SAMPLE_SHRINK_WARN = 2;   // 기준: 건조기 후 2% 이내
+  const SAMPLE_SHRINK_BAD  = 3;   // 대표 확정: 3% 이상은 빨간 굵은 글자
 
   // 최종(파이널) 차수 찾기 — QC 수치가 들어간 마지막 차수, 없으면 마지막 차수
   function sampleFinalReceipt(c) {
@@ -22059,7 +22094,7 @@ function validateBlendSum(blends, label) {
         .some(s => String(s || '').toLowerCase().includes(q)));
     }
     if (state.samplesShrinkOnly) {
-      rows = rows.filter(r => (r.sw != null && r.sw > SAMPLE_SHRINK_LIMIT) || (r.sl != null && r.sl > SAMPLE_SHRINK_LIMIT));
+      rows = rows.filter(r => (r.sw != null && r.sw > SAMPLE_SHRINK_WARN) || (r.sl != null && r.sl > SAMPLE_SHRINK_WARN));
     }
     const key = state.samplesSortKey || 'date';
     const dir = state.samplesSortDir === 'asc' ? 1 : -1;
@@ -22094,7 +22129,7 @@ function validateBlendSum(blends, label) {
       <input type="text" id="sp-search" lang="ko" autocomplete="off" placeholder="원단 · 컬러 · 염색처 · 가공처 검색" value="${escapeHtml(state.samplesSearch || '')}" style="flex:1;min-width:200px;max-width:340px;padding:7px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;font-family:inherit;">
       ${state.samplesSearch ? `<button class="dash-action-btn" id="sp-search-clear" style="font-size:11px;padding:5px 10px;">지우기</button>` : ''}
       <label style="display:inline-flex;align-items:center;gap:5px;font-size:12px;color:#374151;cursor:pointer;">
-        <input type="checkbox" id="sp-shrink-only" ${state.samplesShrinkOnly ? 'checked' : ''}> 축률 ${SAMPLE_SHRINK_LIMIT}% 초과만
+        <input type="checkbox" id="sp-shrink-only" ${state.samplesShrinkOnly ? 'checked' : ''}> 축률 ${SAMPLE_SHRINK_WARN}% 초과만
       </label>
       <span style="margin-left:auto;font-size:12px;color:#6b7280;">${rows.length}줄 표시${rows.length !== total ? ` (전체 ${total}줄)` : ''}</span>
     </div>`;
@@ -22127,8 +22162,12 @@ function validateBlendSum(blends, label) {
     rows.forEach(r => {
       const shrinkCell = (v) => {
         if (v == null) return `<td class="col-num">-</td>`;
-        const bad = v > SAMPLE_SHRINK_LIMIT;
-        return `<td class="col-num${bad ? ' sp-bad' : ''}"${bad ? ` title="기준 ${SAMPLE_SHRINK_LIMIT}% 이내 — ${v}%"` : ''}>${v}%</td>`;
+        const bad = v >= SAMPLE_SHRINK_BAD;
+        const warn = !bad && v > SAMPLE_SHRINK_WARN;
+        const cls = bad ? ' sp-bad' : (warn ? ' sp-caution' : '');
+        const tip = bad ? `기준 ${SAMPLE_SHRINK_WARN}% 이내 — ${v}% (${SAMPLE_SHRINK_BAD}% 이상 불량)`
+                  : (warn ? `기준 ${SAMPLE_SHRINK_WARN}% 이내 — ${v}% (주의)` : '');
+        return `<td class="col-num${cls}"${tip ? ` title="${escapeHtml(tip)}"` : ''}>${v}%</td>`;
       };
       const widthCell = r.width == null ? `<td class="col-num">-</td>`
         : `<td class="col-num${r.width_fail ? ' sp-warn' : ''}"${r.width_tip ? ` title="${escapeHtml(r.width_tip)}"` : ''}>${r.width}″${r.width_double ? ' (더블)' : ''}</td>`;
@@ -30038,7 +30077,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix254';
+  const VERSION = 'v2.53 hotfix256';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
