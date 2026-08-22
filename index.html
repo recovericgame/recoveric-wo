@@ -6902,6 +6902,7 @@ const state = {
   // hotfix257: 생지출고 목록 검색
   gsSearch: '',
   gsPart: 'all',            // 'all' | '몸판' | '리프'
+  ovKnitSearch: '',         // hotfix259: 전체 대시보드 편직 품목 검색
   // v2.31 완료 탭 필터
   completedFilter: {
     search: '',         // 통합 검색
@@ -18561,6 +18562,20 @@ function validateBlendSum(blends, label) {
         ${stockBox}
         <button id="ov-knit-capture-btn" class="dash-action-btn" style="margin-left:auto;background:#1e3a8a;color:#fff;font-weight:700;padding:5px 12px;" title="현재 화면(편직)을 이미지로 캡쳐 — 카카오톡 등에 붙여넣기">재고 이미지</button>
       </div>`;
+      // hotfix259: 편직 품목 · 컬러 · 공장 검색 (일부만 적어도 걸림)
+      const ovKnitPool = allIng.filter(w => w.type === '편직');
+      const ovKnitItems = new Set();
+      ovKnitPool.forEach(w => (w.items || []).forEach(it => {
+        const s = String((it && it.item) || '').trim();
+        if (s) ovKnitItems.add(s);
+      }));
+      const ovKnitItemList = Array.from(ovKnitItems).sort((a, b) => a.localeCompare(b, 'ko'));
+      html += `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 10px 2px;">
+        <span style="font-size:11.5px;color:#1f2937;font-weight:700;">품목 검색</span>
+        <input type="text" id="ov-knit-search" lang="ko" list="ov-knit-search-datalist" autocomplete="off" autocorrect="off" spellcheck="false" placeholder="품목 · 컬러 · 편직공장 (일부만 적어도 됩니다)" value="${escapeHtml(state.ovKnitSearch || '')}" style="flex:1;min-width:220px;max-width:340px;padding:5px 10px;border:1px solid #d1d5db;border-radius:5px;font-size:12px;font-family:inherit;">
+        <datalist id="ov-knit-search-datalist">${ovKnitItemList.map(n => `<option value="${escapeHtml(n)}"></option>`).join('')}</datalist>
+        ${state.ovKnitSearch ? `<button class="dash-action-btn" id="ov-knit-search-clear" style="font-size:11px;padding:4px 10px;">지우기</button>` : ''}
+      </div>`;
     }
     
     // v2.18: 통합 정렬 시스템 사용 (overview 키) + v2.34: 유형 필터 적용
@@ -18574,6 +18589,15 @@ function validateBlendSum(blends, label) {
       }
       const cv = state.ovKnitVendor || 'all';
       if (cv !== 'all') filteredIng = filteredIng.filter(w => getWoVendorNames(w).includes(cv));
+      // hotfix259: 품목 · 컬러 · 편직공장 검색
+      const kq = String(state.ovKnitSearch || '').trim().toLowerCase();
+      if (kq) {
+        filteredIng = filteredIng.filter(w => {
+          const bag = [w.recipient, w.wo_number];
+          (w.items || []).forEach(it => { bag.push(it.item); bag.push(it.color); bag.push(it.shared_code || it.wo_no); bag.push(it.gubun); bag.push(it.org); });
+          return bag.some(s => String(s || '').toLowerCase().includes(kq));
+        });
+      }
     }
     // hotfix43: 상태 빠른 필터 적용 (유형과 겹침)
     if (sf === 'fix') filteredIng = filteredIng.filter(woHasFix);
@@ -19934,6 +19958,7 @@ function validateBlendSum(blends, label) {
   // ===== hotfix48: 생지출고 목록 뷰 =====
   // 염색작지 [보기]에서 자동 생성된 생지출고의뢰를 모아 보는 단순 목록 (보기·완료·삭제)
   function renderGSDash() {
+    __gsKgPerJulCache = null;   // hotfix259: 절당 무게 계산표 새로 만들기
     let list = getDashWorkOrders('생지출고');
     // hotfix257: 품목 · 수신처 · 출고처 · 구분 · 송장No · 출처작지 통합 텍스트 검색 (일부만 적어도 걸림)
     const gsPartOf = (wo) => wo.gs_part === 'rib' ? '리프' : (wo.gs_part === 'body' ? '몸판' : '');
@@ -20003,18 +20028,25 @@ function validateBlendSum(blends, label) {
       <th>출고처</th>
       <th>품목</th>
       <th class="col-num">수량(절)</th>
+      <th class="col-num">중량(kg)</th>
       <th>송장No</th>
-      <th>출처 작지</th>
       <th>메모</th>
       <th class="col-action">문서</th>
       <th class="col-action">완료</th>
       <th class="col-action">삭제</th>
     </tr></thead><tbody>`;
 
+    let sumJul = 0, sumKg = 0, hasEstimate = false;
     list.forEach(wo => {
       const completedClass = wo.completed ? 'completed' : '';
       const qtyTxt = (wo.gs_qty || wo.gs_qty === 0) ? `${wo.gs_qty}` : '-';
       const partTxt = wo.gs_part === 'rib' ? '리프' : (wo.gs_part === 'body' ? '몸판' : '-');
+      const kgInfo = gsWeightOf(wo);
+      if (kgInfo.kg != null) { sumKg += kgInfo.kg; if (kgInfo.est) hasEstimate = true; }
+      sumJul += (parseFloat(wo.gs_qty) || 0);
+      const kgCell = (kgInfo.kg == null)
+        ? `<td class="col-num center">-</td>`
+        : `<td class="col-num center"${kgInfo.est ? ` style="color:#6b7280;" title="저장된 중량이 없어 절당 ${kgInfo.perJul.toFixed(1)}kg로 계산한 값입니다"` : ''}>${kgInfo.est ? '약 ' : ''}${kgInfo.kg.toFixed(1)}</td>`;
       html += `<tr class="${completedClass}" data-row-id="${wo.id}">
         <td class="col-select"><input type="checkbox" class="dash-row-cb" data-id="${wo.id}" data-list-type="생지출고"></td>
         <td class="col-no id-hover" title="${escapeHtml(wo.wo_number || '')}"><span class="id-text">${escapeHtml(wo.wo_number || '-')}</span></td>
@@ -20024,8 +20056,8 @@ function validateBlendSum(blends, label) {
         <td>${escapeHtml(wo.gs_dest || '-')}</td>
         <td>${escapeHtml(wo.gs_item || '-')}</td>
         <td class="col-num center">${escapeHtml(String(qtyTxt))}</td>
+        ${kgCell}
         <td>${escapeHtml(wo.gs_invoice_no || '-')}</td>
-        <td style="font-size:11px;color:#666;">${escapeHtml(wo.source_fn_number || '-')}</td>
         ${renderEditableCell(wo, 'internal_memo', wo.internal_memo, 'text')}
         <td class="col-action"><button class="dash-action-btn dash-view-btn" data-id="${wo.id}">보기</button> <button class="dash-action-btn dash-gs-edit-btn" data-id="${wo.id}">수정</button></td>
         <td class="col-action"><input type="checkbox" class="dash-complete-cb" data-id="${wo.id}" ${wo.completed ? 'checked' : ''}> ${wo.completed ? '완료' : ''}</td>
@@ -20033,8 +20065,79 @@ function validateBlendSum(blends, label) {
       </tr>`;
     });
 
+    html += `<tr style="background:#f1f5f9;font-weight:800;border-top:2px solid #cbd5e1;">
+      <td colspan="7" style="text-align:right;padding-right:10px;">화면에 보이는 ${list.length}건 합계</td>
+      <td class="col-num center" style="color:#c0271f;">${Math.round(sumJul * 10) / 10}절</td>
+      <td class="col-num center" style="color:#c0271f;">${hasEstimate ? '약 ' : ''}${sumKg.toFixed(1)}kg</td>
+      <td colspan="5"></td>
+    </tr>`;
     html += `</tbody></table></div>`;
+    html += gsVendorSummaryHtml(list);
     return html;
+  }
+
+  // hotfix259: 출고처(업체)별 출고 합계 — 절수와 중량
+  function gsVendorSummaryHtml(list) {
+    const map = new Map();
+    list.forEach(wo => {
+      const name = normalizeVendorName(wo.gs_dest || '') || (wo.gs_dest || '(미지정)');
+      if (!map.has(name)) map.set(name, { jul: 0, kg: 0, cnt: 0, est: false });
+      const row = map.get(name);
+      row.jul += (parseFloat(wo.gs_qty) || 0);
+      row.cnt += 1;
+      const w = gsWeightOf(wo);
+      if (w.kg != null) { row.kg += w.kg; if (w.est) row.est = true; }
+    });
+    if (map.size === 0) return '';
+    const rows = Array.from(map.entries()).sort((a, b) => b[1].jul - a[1].jul);
+    let h = `<div style="margin-top:16px;">
+      <div style="font-size:13px;font-weight:800;color:#1f2937;margin-bottom:6px;">출고처별 합계 (화면에 보이는 것 기준)</div>
+      <div class="dash-table-wrap" style="max-width:560px;"><table class="dash-table"><thead><tr>
+        <th>출고처</th><th class="col-num">건수</th><th class="col-num">절수</th><th class="col-num">중량(kg)</th>
+      </tr></thead><tbody>`;
+    rows.forEach(([name, v]) => {
+      h += `<tr>
+        <td style="font-weight:700;">${escapeHtml(name)}</td>
+        <td class="col-num center">${v.cnt}</td>
+        <td class="col-num center" style="color:#c0271f;font-weight:800;">${Math.round(v.jul * 10) / 10}</td>
+        <td class="col-num center" style="color:#c0271f;font-weight:800;">${v.est ? '약 ' : ''}${v.kg.toFixed(1)}</td>
+      </tr>`;
+    });
+    h += `</tbody></table></div>
+      <div style="margin-top:6px;font-size:11.5px;color:#6b7280;">"약"이 붙은 값은 저장된 중량이 없어 절당 무게로 계산한 값입니다.</div>
+    </div>`;
+    return h;
+  }
+
+  // hotfix259: 생지출고 한 건의 중량 — 저장된 값이 우선, 없으면 절당 무게로 계산
+  //   절당 무게는 같은 품목의 편직 작지 kg/절을 쓰고, 그것도 없으면 21kg/절
+  function gsWeightOf(wo) {
+    const jul = parseFloat(wo && wo.gs_qty);
+    const saved = parseFloat(wo && wo.gs_kg);
+    if (isFinite(saved) && saved > 0) return { kg: saved, est: false, perJul: (isFinite(jul) && jul > 0) ? saved / jul : 0 };
+    if (!isFinite(jul) || jul <= 0) return { kg: null, est: false, perJul: 0 };
+    const perJul = gsKgPerJulFor(wo.gs_item);
+    return { kg: jul * perJul, est: true, perJul };
+  }
+  let __gsKgPerJulCache = null;
+  function gsKgPerJulFor(itemName) {
+    const key = String(itemName || '').trim().toLowerCase();
+    if (!__gsKgPerJulCache) {
+      __gsKgPerJulCache = new Map();
+      (state.allWorkOrders || []).forEach(w => {
+        if (!w || w.type !== '편직' || w.deleted) return;
+        (w.items || []).forEach(it => {
+          const nm = String((it && it.item) || '').trim().toLowerCase();
+          const v = parseFloat(it && it.kg_per_jul);
+          if (!nm || !isFinite(v) || v <= 0) return;
+          const cur = __gsKgPerJulCache.get(nm) || { sum: 0, n: 0 };
+          cur.sum += v; cur.n += 1;
+          __gsKgPerJulCache.set(nm, cur);
+        });
+      });
+    }
+    const hit = __gsKgPerJulCache.get(key);
+    return (hit && hit.n > 0) ? (hit.sum / hit.n) : 21;
   }
 
   // ===== hotfix48: 생지출고의뢰서 — 첫 공정처(출고처) 자동 산정 =====
@@ -20350,6 +20453,7 @@ function validateBlendSum(blends, label) {
           ${fld('수신처 (편직공장)', 'gse-recv', wo.recipient, '')}
           ${fld('출고처 (염색·가공처)', 'gse-dest', wo.gs_dest, '')}
           ${fld('수량 (절)', 'gse-qty', (wo.gs_qty || wo.gs_qty === 0) ? String(wo.gs_qty) : '', '0')}
+          ${fld('중량 (kg · 선택)', 'gse-kg', (wo.gs_kg || wo.gs_kg === 0) ? String(wo.gs_kg) : '', '비워두면 절당 무게로 계산됩니다')}
           ${fld('송장 No (선택)', 'gse-inv', isCopy ? '' : wo.gs_invoice_no, '예: 001')}
           <div style="margin-bottom:4px;">
             <label style="display:block;font-size:11.5px;font-weight:700;color:#374151;margin-bottom:3px;">메모 (직접 작성)</label>
@@ -20367,12 +20471,16 @@ function validateBlendSum(blends, label) {
     document.getElementById('gse-save').addEventListener('click', async () => {
       let q = parseInt(document.getElementById('gse-qty').value, 10);
       if (isNaN(q)) q = 0;
+      // hotfix259: 중량(kg) — 비워두면 절당 무게로 계산해서 보여준다
+      let kgVal = parseFloat(document.getElementById('gse-kg').value);
+      if (!isFinite(kgVal) || kgVal < 0) kgVal = 0;
       const it = {
         gs_part: wo.gs_part,
         gs_item: document.getElementById('gse-item').value.trim(),
         recipient: document.getElementById('gse-recv').value.trim(),
         gs_dest: document.getElementById('gse-dest').value.trim(),
         gs_qty: q,
+        gs_kg: kgVal,
         gs_color: '',
         gs_invoice_no: document.getElementById('gse-inv').value.trim(),
         gs_note: document.getElementById('gse-note').value
@@ -20398,6 +20506,7 @@ function validateBlendSum(blends, label) {
           recipient: it.recipient,
           gs_dest: it.gs_dest,
           gs_qty: it.gs_qty,
+          gs_kg: it.gs_kg,
           gs_invoice_no: it.gs_invoice_no,
           gs_note: it.gs_note,
           subject: `[${gsPartLabel(it.gs_part)}] ${it.gs_item || ''}`.trim(),
@@ -25078,20 +25187,25 @@ function validateBlendSum(blends, label) {
     if (slot) { slot.innerHTML = ''; slot.dataset.open = ''; }
   }
   
-  // ===== hotfix258: 검색칸 공통 처리 =====
-  // 한글은 초성→중성→종성으로 조합되는 중간에 입력칸을 다시 그리면 자모가 흩어진다
-  // (예: "세원" → "ㅅㅔㅇㅜㅓㄴ"). 조합이 끝나기 전에는 다시 그리지 않는다.
+  // ===== hotfix258/259: 검색칸 공통 처리 =====
+  // 한글은 초성→중성→종성이 합쳐지는 중간 단계가 있다. 그 도중에 입력칸을 다시 그리면
+  // 자모가 흩어진다("세원" → "ㅅㅔㅇㅜㅓㄴ"). 빨리 칠수록 더 자주 깨진다.
+  //   1) 조합 상태는 화면 전체에서 하나로 본다 — 다시 그려도 상태가 살아 있어야 한다
+  //   2) 타이머도 검색칸마다 하나만 둔다 — 다시 그릴 때마다 타이머가 늘어나면 화면이 여러 번 그려진다
+  //   3) 타이머가 터지는 순간에도 조합 중이면 그리지 않고 뒤로 미룬다
+  let __imeComposing = false;
+  document.addEventListener('compositionstart', () => { __imeComposing = true; }, true);
+  document.addEventListener('compositionend', () => { __imeComposing = false; }, true);
+  const __searchTimers = {};
+
   function bindRerenderSearch(id, setValue, delay) {
     const el = document.getElementById(id);
     if (!el) return;
-    let composing = false;
-    let timer = null;
-    let last = el.value;
-    const doRender = () => {
+    const wait = (delay === undefined || delay === null) ? 180 : delay;
+    const run = () => {
       const cur = document.getElementById(id);
       if (!cur) return;
-      if (cur.value === last) return;
-      last = cur.value;
+      if (__imeComposing) { schedule(); return; }   // 아직 글자를 만드는 중 — 뒤로 미룬다
       const pos = cur.selectionStart;
       const wasFocused = (document.activeElement === cur);
       setValue(cur.value);
@@ -25103,17 +25217,18 @@ function validateBlendSum(blends, label) {
         try { again.setSelectionRange(p, p); } catch (_) {}
       }
     };
-    const fire = () => {
-      if (composing) return;               // 한글 조합 중 — 아직 건드리지 않는다
-      clearTimeout(timer);
-      if (delay) timer = setTimeout(doRender, delay);
-      else doRender();
+    const schedule = () => {
+      clearTimeout(__searchTimers[id]);
+      __searchTimers[id] = setTimeout(run, wait);
     };
-    el.addEventListener('compositionstart', () => { composing = true; });
-    el.addEventListener('compositionend', () => { composing = false; fire(); });
-    el.addEventListener('input', fire);
-    // 목록에서 고른 경우(change)는 조합과 무관하므로 즉시 반영
-    el.addEventListener('change', () => { composing = false; clearTimeout(timer); doRender(); });
+    el.addEventListener('input', schedule);
+    el.addEventListener('compositionend', schedule);
+    // 목록에서 고른 경우는 곧바로 반영
+    el.addEventListener('change', () => {
+      clearTimeout(__searchTimers[id]);
+      __imeComposing = false;
+      run();
+    });
   }
 
   function attachDashHandlers() {
@@ -25124,7 +25239,7 @@ function validateBlendSum(blends, label) {
       bindRerenderSearch('claims-search', v => {
         if (!state.claimsFilter) state.claimsFilter = { recipient: 'all', search: '', sort: 'date_desc' };
         state.claimsFilter.search = v;
-      }, 250);
+      });
       // 거래처 필터
       const recipSel = document.getElementById('claims-recipient-filter');
       if (recipSel) {
@@ -25784,8 +25899,13 @@ function validateBlendSum(blends, label) {
       });
     });
     
+    // hotfix259: 전체 대시보드 편직 품목 검색
+    bindRerenderSearch('ov-knit-search', v => { state.ovKnitSearch = v || ''; });
+    const ovKnitClearEl = document.getElementById('ov-knit-search-clear');
+    if (ovKnitClearEl) ovKnitClearEl.addEventListener('click', () => { state.ovKnitSearch = ''; renderDashboard(); });
+
     // hotfix37/38/258: 편직 품목 검색 — 한글 조합 보호 + 커서 자리 복원
-    bindRerenderSearch('knit-item-search', v => { state.knitItemSearch = v || ''; }, 200);
+    bindRerenderSearch('knit-item-search', v => { state.knitItemSearch = v || ''; });
     const knitSearchClearEl = document.getElementById('knit-item-search-clear');
     if (knitSearchClearEl) knitSearchClearEl.addEventListener('click', () => { state.knitItemSearch = ''; renderDashboard(); });
 
@@ -27525,7 +27645,7 @@ function validateBlendSum(blends, label) {
     });
 
     // ===== v2.31 / hotfix258: 완료된 의뢰서 — 검색·필터·전체삭제 핸들러 =====
-    bindRerenderSearch('cf-search', v => { state.completedFilter.search = v; }, 300);
+    bindRerenderSearch('cf-search', v => { state.completedFilter.search = v; });
     const cfType = document.getElementById('cf-type');
     if (cfType) cfType.addEventListener('change', () => {
       state.completedFilter.type = cfType.value;
@@ -30085,7 +30205,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix258';
+  const VERSION = 'v2.53 hotfix259';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
