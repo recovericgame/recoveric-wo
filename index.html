@@ -4838,6 +4838,23 @@
     color: #dc2626;
   }
   /* hotfix60: 대표 보고 배지 — 클레임 배지와 동일 스타일 */
+  /* hotfix266: 진행 메뉴 건수 표시 — 알림이 아니라 남은 건수이므로 차분한 회색 */
+  .menu-count-badge {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 1px 7px;
+    background: #eef2f7;
+    color: #475569;
+    border: 1px solid #dbe3ec;
+    border-radius: 10px;
+    font-size: 10px;
+    font-weight: 800;
+    line-height: 1.4;
+    vertical-align: middle;
+    min-width: 18px;
+    text-align: center;
+  }
+  .dash-menu-btn.active .menu-count-badge { background: #fff; color: #1d4ed8; border-color: #bfdbfe; }
   .ceo-report-badge {
     display: inline-block;
     margin-left: 6px;
@@ -6054,9 +6071,9 @@
         <div class="dash-menu-section-label">진행 상황</div>
         <button class="dash-menu-btn" data-view="yarn">원사 진행</button>
         <button class="dash-menu-btn" data-view="knit">편직 진행</button>
-        <button class="dash-menu-btn active" data-view="finish">염색가공 진행</button>
-        <button class="dash-menu-btn" data-view="bt">B/T 진행</button>
-        <button class="dash-menu-btn" data-view="print">나염가공 진행</button>
+        <button class="dash-menu-btn active" data-view="finish">염색가공 진행<span class="menu-count-badge" id="menu-count-finish" style="display:none;">0</span></button>
+        <button class="dash-menu-btn" data-view="print">나염가공 진행<span class="menu-count-badge" id="menu-count-print" style="display:none;">0</span></button>
+        <button class="dash-menu-btn" data-view="bt">B/T 진행<span class="menu-count-badge" id="menu-count-bt" style="display:none;">0</span></button>
         <button class="dash-menu-btn" data-view="kpiboard">현황판</button>
         <button class="dash-menu-btn admin-only" data-view="completeReports" style="background:#f0fdf4;border:1px solid #bbf7d0;color:#15803d;font-weight:800;">완료 보고<span class="ceo-report-badge" id="complete-report-badge" style="display:none;background:#16a34a;">0</span></button>
         <button class="dash-menu-btn admin-only" data-view="ceoReports" style="background:#fef2f2;border:1px solid #fecaca;color:#b91c1c;font-weight:800;">불량 보고<span class="ceo-report-badge" id="ceo-report-badge" style="display:none;">0</span></button>
@@ -9973,7 +9990,7 @@ window.addEventListener('firebase-ready', () => {
 
   // 화면별 최소 등급 (기본값). [권한 관리]에서 최고관리자가 바꾼다.
   const VIEW_PERMS_DEFAULT = {
-    yarn: 'staff', knit: 'staff', finish: 'staff', bt: 'staff', print: 'staff',
+    yarn: 'staff', knit: 'staff', finish: 'staff', print: 'staff', bt: 'staff',
     kpiboard: 'staff', overview: 'staff',
     completeReports: 'admin', ceoReports: 'admin',
     of: 'staff', gs: 'staff', claims: 'staff', 'daily-report': 'staff',
@@ -9982,7 +9999,7 @@ window.addEventListener('firebase-ready', () => {
     costCalc: 'owner', permissions: 'owner'
   };
   const VIEW_LABELS = {
-    yarn: '원사 진행', knit: '편직 진행', finish: '염색가공 진행', bt: 'B/T 진행', print: '나염가공 진행',
+    yarn: '원사 진행', knit: '편직 진행', finish: '염색가공 진행', print: '나염가공 진행', bt: 'B/T 진행',
     kpiboard: '현황판', completeReports: '완료 보고', ceoReports: '불량 보고',
     of: '공문 목록', gs: '생지출고 목록', claims: '클레임(땡처리)', 'daily-report': '거래처별 일일 보고',
     samples: '샘플 보관함', completed: '완료된 의뢰서', trash: '휴지통',
@@ -10992,6 +11009,8 @@ window.addEventListener('firebase-ready', () => {
       updateClaimsBadge();
       // hotfix60: 사이드바 대표 보고 배지 갱신
       updateCeoReportBadge();
+      // hotfix266: 염색가공·나염·B/T 남은 건수 갱신
+      updateProgressMenuBadges();
       // 대시보드 모드일 때 자동 갱신
       // v2.48: 메모 편집 중이면 재렌더 보류 (강제 blur 방지) — 편집 종료 후 대기 갱신 적용
       if (state.uiMode === 'dashboard') {
@@ -13425,6 +13444,25 @@ function validateBlendSum(blends, label) {
       }
     }
     if (typeof updateMobileDailyBadge === 'function') updateMobileDailyBadge();
+  }
+  // hotfix266: 진행 메뉴 옆 남은 건수 — 화면 안 [전체] 숫자와 같은 기준으로 센다
+  //   염색가공·B/T = 진행 중 의뢰서 건수 / 나염 = 진행 중 줄(나염용 원단) 건수
+  function updateProgressMenuBadges() {
+    const all = state.allWorkOrders || [];
+    const ing = all.filter(w => w && !w.deleted && !w.completed);
+    const counts = {
+      finish: ing.filter(w => w.type === '염색가공').length,
+      bt: ing.filter(w => w.type === 'BT').length,
+      print: ing.filter(w => w.type === '나염')
+        .reduce((n, w) => n + (w.print_rows || []).filter(r => r && !r.completed && !r.deleted).length, 0)
+    };
+    Object.keys(counts).forEach(k => {
+      const el = document.getElementById('menu-count-' + k);
+      if (!el) return;
+      const n = counts[k];
+      if (n > 0) { el.textContent = n > 999 ? '999+' : String(n); el.style.display = 'inline-block'; }
+      else el.style.display = 'none';
+    });
   }
   // ===== hotfix60 대표 보고 수집기 끝 =====
 
@@ -22622,7 +22660,7 @@ function validateBlendSum(blends, label) {
   function renderPermissionsDash() {
     if (!isOwnerUser()) return `<div class="dash-empty">최고관리자만 볼 수 있는 화면입니다.</div>`;
     const groups = [
-      ['진행 상황', ['yarn', 'knit', 'finish', 'bt', 'print', 'kpiboard']],
+      ['진행 상황', ['yarn', 'knit', 'finish', 'print', 'bt', 'kpiboard']],
       ['보고', ['completeReports', 'ceoReports', 'daily-report']],
       ['목록', ['of', 'gs', 'claims', 'samples', 'completed', 'trash']],
       ['설정', ['stampSettings', 'fabricSpecs', 'vendors', 'specTol']],
@@ -31004,7 +31042,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix265';
+  const VERSION = 'v2.53 hotfix266';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
