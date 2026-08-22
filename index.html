@@ -6924,8 +6924,19 @@ const state = {
   costPricesLoaded: false,
   costPriceHistory: {},     // { 'yarn:CM30': [{d,p}] }
   costTab: 'prices',        // 원가 계산기 안쪽 탭
-  costPriceTab: 'yarn',     // 단가표 안쪽 탭: yarn | knit | proc
+  costPriceTab: 'yarn',     // 단가표 안쪽 탭: yarn | knit | proc | grade
   costSearch: '',
+  // hotfix270: 원가 계산기 3단계 — 판매 등급 · 원가 계산 화면
+  costGrades: null,         // [{name, dc}] — null이면 아직 안 읽음(기본값 사용)
+  costGradesLoaded: false,
+  costCalc: {
+    fid: '',                // 고른 품목의 고정 코드
+    print: { bon: '', pig: '', ten: '' },   // 나염비(야드당) 본염·안료·텐타
+    target: '',             // 목표 마진율
+    cells: {},              // 손으로 고친 단가 칸  { 'g0:kg': 9700 }
+    sim: false,             // 원사값 바꿔 보기
+    simYarn: {}, simKnit: '', simProc: {}   // 바꿔 본 값
+  },
   // v2.31 완료 탭 필터
   completedFilter: {
     search: '',         // 통합 검색
@@ -10016,6 +10027,10 @@ window.addEventListener('firebase-ready', () => {
   };
   // 등급을 낮출 수 없는 화면 — 경영 자료
   const OWNER_LOCKED_VIEWS = ['costCalc', 'permissions'];
+  // hotfix270: 비밀번호 잠금이 걸리는 화면 — 사이드바 [경영 전용] 다섯 화면 전부
+  //   (등급 조정 가능 여부와는 별개다. 스탬프 설정·규격 허용치·휴지통은
+  //    [권한 관리]에서 관리자까지 열 수 있지만, 대표 화면에서는 잠금 대상이다)
+  const OWNER_LOCK_SCREENS = ['stampSettings', 'specTol', 'trash', 'costCalc', 'permissions'];
 
   // ============================================================
   // hotfix262: 최고관리자 잠금
@@ -10042,6 +10057,10 @@ window.addEventListener('firebase-ready', () => {
   }
   function ownerTouch() {
     if (state.ownerUnlocked) state.ownerLastActive = Date.now();
+  }
+  // hotfix270: 이 화면이 지금 잠겨 있는가
+  function viewIsLocked(view) {
+    return ownerIsLocked() && OWNER_LOCK_SCREENS.includes(view);
   }
   function ownerLockNow(silent) {
     state.ownerUnlocked = false;
@@ -10074,9 +10093,9 @@ window.addEventListener('firebase-ready', () => {
     if (!ownerPinIsSet()) {
       bar.innerHTML = `<button class="dash-menu-btn" id="owner-pin-setup" style="background:#fff7ed;border:1px solid #fed7aa;color:#9a3412;font-weight:800;">경영 자료 비밀번호 만들기</button>`;
     } else if (state.ownerUnlocked) {
-      bar.innerHTML = `<button class="dash-menu-btn" id="owner-lock-btn" title="원가 계산기 · 권한 관리에만 걸립니다. 다른 화면은 그대로 열려 있습니다." style="background:#ecfdf5;border:1px solid #a7f3d0;color:#065f46;font-weight:800;">위 두 화면 열림 — 누르면 잠금</button>`;
+      bar.innerHTML = `<button class="dash-menu-btn" id="owner-lock-btn" title="아래 경영 전용 화면 전부에 걸립니다. 위쪽 업무 화면은 그대로 열려 있습니다." style="background:#ecfdf5;border:1px solid #a7f3d0;color:#065f46;font-weight:800;">경영 전용 열림 — 누르면 잠금</button>`;
     } else {
-      bar.innerHTML = `<button class="dash-menu-btn" id="owner-unlock-btn" title="원가 계산기 · 권한 관리에만 걸립니다. 다른 화면은 그대로 열려 있습니다." style="background:#f5f3ff;border:1px solid #ddd6fe;color:#5b21b6;font-weight:800;">위 두 화면 잠김 — 누르면 열기</button>`;
+      bar.innerHTML = `<button class="dash-menu-btn" id="owner-unlock-btn" title="아래 경영 전용 화면 전부에 걸립니다. 위쪽 업무 화면은 그대로 열려 있습니다." style="background:#f5f3ff;border:1px solid #ddd6fe;color:#5b21b6;font-weight:800;">경영 전용 잠김 — 누르면 열기</button>`;
     }
     const setupEl = document.getElementById('owner-pin-setup');
     if (setupEl) setupEl.addEventListener('click', openOwnerPinModal);
@@ -10403,7 +10422,7 @@ window.addEventListener('firebase-ready', () => {
       onSnapshot(doc(db, 'cost_data', 'security'), snap => {
         state.ownerPinHash = (snap.exists() && snap.data().pin_hash) ? snap.data().pin_hash : null;
         updateOwnerLockBar();
-        if (state.uiMode === 'dashboard' && OWNER_LOCKED_VIEWS.includes(state.dashView)) renderDashboard();
+        if (state.uiMode === 'dashboard' && OWNER_LOCK_SCREENS.includes(state.dashView)) renderDashboard();
       }, err => console.warn('[owner security sub]', err.message));
       // hotfix264: 원단별 원가 항목 구독 (최고관리자만 읽을 수 있음)
       onSnapshot(doc(db, 'cost_data', 'fabric_cost'), snap => {
@@ -10430,6 +10449,13 @@ window.addEventListener('firebase-ready', () => {
         state.costPriceHistory = (d && d.items && typeof d.items === 'object') ? d.items : {};
         if (state.uiMode === 'dashboard' && state.dashView === 'costCalc') renderDashboard();
       }, err => console.warn('[priceHistory sub]', err.message));
+      // hotfix270: 판매 등급 구독 (표준 / 골드 / VIP … 대표가 늘리고 줄인다)
+      onSnapshot(doc(db, 'cost_data', 'grades'), snap => {
+        const d = snap.exists() ? snap.data() : null;
+        state.costGrades = (d && Array.isArray(d.list) && d.list.length) ? d.list : null;
+        state.costGradesLoaded = true;
+        if (state.uiMode === 'dashboard' && state.dashView === 'costCalc') renderDashboard();
+      }, err => console.warn('[costGrades sub]', err.message));
     }
   }
   
@@ -10773,6 +10799,162 @@ window.addEventListener('firebase-ready', () => {
       return false;
     }
   }
+  // ============================================================
+  // hotfix270: 원가 계산기 3단계 — 판매 등급 · 원가 계산
+  // ------------------------------------------------------------
+  //  · 등급은 cost_data/grades 한 곳에서만 관리한다. 표준은 기준선이라
+  //    지울 수 없고 할인율도 0% 고정이다. 나머지는 늘리고 줄일 수 있다.
+  //  · 계산식은 원가계산기 기획서 3번 그대로. 한 자도 바꾸지 않는다.
+  // ============================================================
+  const COST_GRADES_DEFAULT = [
+    { name: '표준', dc: 0 },
+    { name: '골드', dc: 5 },
+    { name: 'VIP', dc: 12 }
+  ];
+  const COST_GRADE_MAX = 6;
+  function getCostGrades() {
+    const list = Array.isArray(state.costGrades) && state.costGrades.length ? state.costGrades : COST_GRADES_DEFAULT;
+    return list.map((g, i) => ({
+      name: String((g && g.name) || '').trim() || (i === 0 ? '표준' : '등급' + (i + 1)),
+      dc: (i === 0) ? 0 : (Math.round((parseFloat(g && g.dc) || 0) * 10) / 10)
+    }));
+  }
+  async function saveCostGrades(list) {
+    if (!isOwnerUser()) { toast('최고관리자만 저장할 수 있습니다', 'error'); return false; }
+    try {
+      await setDoc(doc(db, 'cost_data', 'grades'), {
+        list: list,
+        updated_at: serverTimestamp(),
+        updated_by: state.user?.email || 'unknown'
+      });
+      state.costGrades = JSON.parse(JSON.stringify(list));
+      return true;
+    } catch (e) {
+      toast('판매 등급 저장 실패: ' + e.message, 'error');
+      return false;
+    }
+  }
+
+  // 사종 이름으로 단가표에서 kg 단가를 찾는다 (없으면 null — 화면에서 빨갛게 알린다)
+  function yarnPriceByName(name) {
+    const key = String(name || '').trim().toLowerCase();
+    if (!key) return null;
+    const hit = getCostPrices().yarns.find(y => String((y && y.name) || '').trim().toLowerCase() === key);
+    if (!hit) return null;
+    const kg = yarnKgPrice(hit);
+    return (kg == null) ? null : { kind: hit.kind || '기타', price: hit.price, kg: kg };
+  }
+  function knitPriceByVendor(v) {
+    const key = String(v || '').trim().toLowerCase();
+    if (!key) return null;
+    const hit = getCostPrices().knit.find(k => String((k && k.vendor) || '').trim().toLowerCase() === key);
+    return hit ? (parseFloat(hit.price) || 0) : null;
+  }
+  // 공정 단가 — 묶음이 걸리면 묶음 쪽을 쓴다 (묶어서 싸게 하는 경우가 있다)
+  function procPriceByVendor(v, proc) {
+    const vk = String(v || '').trim().toLowerCase();
+    const pk = String(proc || '').trim();
+    if (!vk || !pk) return null;
+    const hit = getCostPrices().proc.find(p =>
+      String((p && p.vendor) || '').trim().toLowerCase() === vk &&
+      String((p && p.proc) || '').trim() === pk);
+    return hit ? (parseFloat(hit.price) || 0) : null;
+  }
+  function bundleMatch(vendor, procs) {
+    const vk = String(vendor || '').trim().toLowerCase();
+    if (!vk) return null;
+    const have = new Set((procs || []).map(p => String(p).trim()));
+    const cands = getCostPrices().bundles.filter(b =>
+      String((b && b.vendor) || '').trim().toLowerCase() === vk &&
+      Array.isArray(b.procs) && b.procs.length > 1 &&
+      b.procs.every(p => have.has(String(p).trim())));
+    if (!cands.length) return null;
+    // 걸리는 묶음이 여럿이면 공정을 가장 많이 덮는 것 하나만 쓴다
+    cands.sort((a, b) => b.procs.length - a.procs.length);
+    return cands[0];
+  }
+
+  // ★계산식은 기획서 3번 그대로 — 절대 변경 금지★
+  function buildCostCalc(spec, sim) {
+    const fid = specFid(spec);
+    const c = getFabricCost(fid) || {};
+    const S = sim || {};
+    const out = {
+      ok: false, msgs: [],
+      yarns: [], yarnTotal: 0,
+      knitLoss: (c.knit_loss != null ? parseFloat(c.knit_loss) : COST_KNIT_LOSS_DEFAULT),
+      finLoss: (c.fin_loss != null ? parseFloat(c.fin_loss) : COST_FIN_LOSS_DEFAULT),
+      knitVendor: c.knitter || '', knitFee: 0, knitPrice: 0,
+      procVendor: c.finisher || c.dyer || '', procs: [], procTotal: 0, bundle: null,
+      kgCost: 0, gy: (spec && spec.gy != null) ? parseFloat(spec.gy) : null,
+      printFee: 0, ydCost: null, blendSum: 0
+    };
+    // 원사 — 혼용율은 굵기·루프장에서 자동으로 나온다
+    const blend = calcYarnBlend(Array.isArray(c.yarns) ? c.yarns : []);
+    blend.forEach(r => {
+      if (!r.name) return;
+      const found = yarnPriceByName(r.name);
+      const simKg = (S.yarn && S.yarn[r.name] !== undefined && S.yarn[r.name] !== '') ? parseFloat(S.yarn[r.name]) : null;
+      const kg = (simKg != null && !isNaN(simKg)) ? simKg : (found ? found.kg : null);
+      const applied = (kg == null) ? 0 : kg * (r.pct / 100);
+      out.yarns.push({
+        name: r.name, unit: r.unit, size: r.size, loop: r.loop, pct: r.pct,
+        kind: found ? found.kind : null, kg: kg, applied: applied,
+        missing: !found, simmed: (simKg != null && !isNaN(simKg))
+      });
+      out.yarnTotal += applied;
+      out.blendSum += r.pct;
+    });
+    if (!out.yarns.length) out.msgs.push('원단 기본 스펙에 원사가 등록되어 있지 않습니다');
+    if (out.yarns.some(y => y.missing && !y.simmed)) out.msgs.push('단가표에 없는 사종이 있습니다');
+    // 편직 — 편직까지 가격 = 총원사가 / ((100 - 편직로스) / 100) + 편직료
+    const knitFound = knitPriceByVendor(out.knitVendor);
+    const simKnit = (S.knit !== undefined && S.knit !== '') ? parseFloat(S.knit) : null;
+    out.knitFee = (simKnit != null && !isNaN(simKnit)) ? simKnit : (knitFound == null ? 0 : knitFound);
+    out.knitMissing = (knitFound == null && !(simKnit != null && !isNaN(simKnit)));
+    if (out.knitMissing) out.msgs.push('편직료가 단가표에 없습니다');
+    out.knitPrice = out.yarnTotal / ((100 - out.knitLoss) / 100) + out.knitFee;
+    // 가공 — kg당 원가 = 편직까지가격 / ((100 - 가공로스) / 100) + 가공비 합계
+    const wanted = Array.isArray(c.procs) ? c.procs.slice() : [];
+    const bd = bundleMatch(out.procVendor, wanted);
+    const covered = new Set();
+    if (bd) {
+      out.bundle = { procs: bd.procs.slice(), price: parseFloat(bd.price) || 0 };
+      bd.procs.forEach(p => covered.add(String(p).trim()));
+      out.procTotal += out.bundle.price;
+      out.procs.push({ name: bd.procs.join(' + '), price: out.bundle.price, isBundle: true, missing: false, simmed: false });
+    }
+    wanted.forEach(p => {
+      const nm = String(p).trim();
+      if (covered.has(nm)) return;
+      const found = procPriceByVendor(out.procVendor, nm);
+      const sp = (S.proc && S.proc[nm] !== undefined && S.proc[nm] !== '') ? parseFloat(S.proc[nm]) : null;
+      const price = (sp != null && !isNaN(sp)) ? sp : (found == null ? 0 : found);
+      out.procs.push({ name: nm, price: price, isBundle: false, missing: (found == null), simmed: (sp != null && !isNaN(sp)) });
+      out.procTotal += price;
+    });
+    if (out.procs.some(p => p.missing && !p.simmed)) out.msgs.push('단가표에 없는 공정이 있습니다');
+    if (!wanted.length) out.msgs.push('원단 기본 스펙에 가공법이 체크되어 있지 않습니다');
+    out.kgCost = out.knitPrice / ((100 - out.finLoss) / 100) + out.procTotal;
+    // 야드당 원가 = kg당 원가 x (안내중량 / 1000) + 나염비
+    out.printFee = ['bon', 'pig', 'ten'].reduce((a, k) => a + (parseFloat((S.print || {})[k]) || 0), 0);
+    out.ydCost = (out.gy ? (out.kgCost * (out.gy / 1000) + out.printFee) : null);
+    if (!out.gy) out.msgs.push('안내중량(g/y)이 없어 야드당 원가를 낼 수 없습니다');
+    out.ok = out.yarns.length > 0;
+    return out;
+  }
+  // 예상단가 = 원가 / ((100 - 마진율) / 100)   ·   역산 마진율 = (제시단가 - 원가) / 제시단가 x 100
+  function costExpectPrice(cost, marginPct) {
+    const m = parseFloat(marginPct);
+    if (cost == null || isNaN(cost) || isNaN(m) || m >= 100) return null;
+    return cost / ((100 - m) / 100);
+  }
+  function costBackMargin(price, cost) {
+    const p = parseFloat(price);
+    if (!p || cost == null || isNaN(cost)) return null;
+    return (p - cost) / p * 100;
+  }
+
   // 여러 거래처 유형을 한 목록으로 (가공 단가는 염색처·가공처·후가공처를 함께 고른다)
   function vendorOptionsMulti(types, cur) {
     const vendors = (state && state.vendors) ? state.vendors : [];
@@ -22885,7 +23067,7 @@ function validateBlendSum(blends, label) {
       <div style="font-size:15px;font-weight:800;color:#5b21b6;margin-bottom:8px;">${escapeHtml(label)} — 잠김</div>
       <div style="font-size:13px;color:#6b7280;line-height:1.8;margin-bottom:18px;">
         비밀번호를 넣으면 열립니다.<br>
-        <span style="font-size:12px;color:#9ca3af;">잠금은 원가 계산기와 권한 관리에만 걸립니다. 다른 화면은 그대로 쓰실 수 있습니다.</span>
+        <span style="font-size:12px;color:#9ca3af;">잠금은 [경영 전용] 화면에만 걸립니다. 업무 화면은 그대로 쓰실 수 있습니다.</span>
       </div>
       <input type="password" id="owner-lock-pin" inputmode="numeric" autocomplete="off" placeholder="비밀번호"
         style="width:100%;box-sizing:border-box;padding:11px 14px;border:1px solid #d1d5db;border-radius:7px;font-size:16px;font-family:inherit;text-align:center;letter-spacing:3px;">
@@ -22991,8 +23173,9 @@ function validateBlendSum(blends, label) {
       <button class="cc-tab-btn" data-cc-tab="history" style="${tab === 'history' ? tOn : tOff}">이력</button>
     </div>`;
     if (tab === 'prices') h += renderCostPriceTables();
+    else if (tab === 'calc') h += renderCostCalcTab();
     else h += `<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:14px 16px;font-size:13px;color:#92400e;line-height:1.8;">
-      <strong>${tab === 'calc' ? '원가 계산' : '이력'} 화면은 다음 단계입니다.</strong><br>
+      <strong>이력 화면은 다음 단계입니다.</strong><br>
       단가표를 먼저 채워 두시면, 품목만 고르면 원가가 이미 나와 있는 상태로 만들어집니다.
     </div>`;
     return h;
@@ -23012,16 +23195,260 @@ function validateBlendSum(blends, label) {
       <button class="cp-sub-btn" data-cp-sub="yarn" style="${sub === 'yarn' ? sOn : sOff}">원사 ${P.yarns.length}</button>
       <button class="cp-sub-btn" data-cp-sub="knit" style="${sub === 'knit' ? sOn : sOff}">편직료 ${P.knit.length}</button>
       <button class="cp-sub-btn" data-cp-sub="proc" style="${sub === 'proc' ? sOn : sOff}">가공 단가 ${P.proc.length + P.bundles.length}</button>
+      <button class="cp-sub-btn" data-cp-sub="grade" style="${sub === 'grade' ? sOn : sOff}">판매 등급 ${getCostGrades().length}</button>
       <input type="text" id="cp-search" lang="ko" autocomplete="off" placeholder="이름 · 공장 · 공정 검색" value="${escapeHtml(state.costSearch || '')}"
         style="margin-left:auto;min-width:200px;max-width:300px;padding:7px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;font-family:inherit;">
       ${state.costSearch ? `<button class="dash-action-btn" id="cp-search-clear" style="font-size:11px;padding:5px 10px;">지우기</button>` : ''}
     </div>`;
     if (sub === 'yarn') h += renderYarnPriceTable(P);
     else if (sub === 'knit') h += renderKnitPriceTable(P);
+    else if (sub === 'grade') return h + renderCostGradeTable();
     else h += renderProcPriceTable(P);
     h += renderCostPriceModal();
     return h;
   }
+  // hotfix270: 판매 등급 — 표준은 기준선이라 지울 수 없고 할인율 0% 고정
+  function renderCostGradeTable() {
+    const gs = getCostGrades();
+    const inp = 'padding:6px 9px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;font-family:inherit;box-sizing:border-box;';
+    let h = `<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px;margin-bottom:14px;font-size:12.5px;color:#475569;line-height:1.8;">
+      원가 계산 화면에서 <strong>표준단가 한 칸</strong>을 넣으면, 아래 할인율대로 등급별 단가와 마진이 한꺼번에 나옵니다.<br>
+      표준은 기준선이라 지울 수 없고 할인율도 0%로 고정입니다. 나머지 등급은 이름·할인율을 바꾸거나 늘리고 줄일 수 있습니다 (최대 ${COST_GRADE_MAX}개).
+    </div>
+    <div class="dash-table-wrap" style="max-width:620px;"><table class="dash-table"><thead><tr>
+      <th style="width:52px;">순서</th><th style="text-align:left;">등급 이름</th><th style="width:130px;">할인율 %</th><th style="width:150px;">순서 바꾸기</th><th style="width:60px;">삭제</th>
+    </tr></thead><tbody>`;
+    gs.forEach((g, i) => {
+      const first = (i === 0);
+      h += `<tr>
+        <td style="text-align:center;font-weight:800;color:#64748b;">${i + 1}</td>
+        <td style="text-align:left;"><input type="text" class="cg-name" data-idx="${i}" lang="ko" autocomplete="off" value="${escapeHtml(g.name)}" style="${inp}width:100%;max-width:220px;"></td>
+        <td style="text-align:right;">${first
+          ? `<span style="font-weight:800;color:#0f172a;">0 <span style="font-size:11px;font-weight:400;color:#94a3b8;">기준</span></span>`
+          : `<input type="number" step="0.1" min="0" max="50" class="cg-dc" data-idx="${i}" value="${g.dc}" style="${inp}width:92px;text-align:right;">`}</td>
+        <td style="text-align:center;">
+          ${first ? `<span style="color:#c7cbd1;font-size:12px;">기준</span>` : `
+          <button class="dash-action-btn cg-up" data-idx="${i}" style="font-size:11px;padding:4px 9px;"${i <= 1 ? ' disabled' : ''}>위로</button>
+          <button class="dash-action-btn cg-down" data-idx="${i}" style="font-size:11px;padding:4px 9px;"${i === gs.length - 1 ? ' disabled' : ''}>아래로</button>`}
+        </td>
+        <td class="col-action col-act-delete">${first ? `<span style="color:#c7cbd1;font-size:12px;">-</span>` : `<button class="dash-action-btn danger cg-del" data-idx="${i}">삭제</button>`}</td>
+      </tr>`;
+    });
+    h += `</tbody></table></div>
+    <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+      <button class="dash-action-btn" id="cg-add" style="background:#1e3a8a;color:#fff;font-weight:700;padding:7px 15px;"${gs.length >= COST_GRADE_MAX ? ' disabled' : ''}>＋ 등급 추가</button>
+      <button class="dash-action-btn" id="cg-save" style="background:#16a34a;color:#fff;font-weight:800;padding:7px 20px;">저장</button>
+      <span style="font-size:12px;color:#94a3b8;">저장을 눌러야 반영됩니다.</span>
+    </div>`;
+    return h;
+  }
+
+  // ===== hotfix270: 원가 계산 화면 =====
+  function ccState() {
+    if (!state.costCalc || typeof state.costCalc !== 'object') {
+      state.costCalc = { fid: '', print: { bon: '', pig: '', ten: '' }, target: '', cells: {}, sim: false, simYarn: {}, simKnit: '', simProc: {} };
+    }
+    const c = state.costCalc;
+    if (!c.print || typeof c.print !== 'object') c.print = { bon: '', pig: '', ten: '' };
+    if (!c.cells || typeof c.cells !== 'object') c.cells = {};
+    if (!c.simYarn || typeof c.simYarn !== 'object') c.simYarn = {};
+    if (!c.simProc || typeof c.simProc !== 'object') c.simProc = {};
+    return c;
+  }
+  function ccSpecList() {
+    return getFabricSpecs().filter(s => fabricCostFilled(specFid(s)));
+  }
+  function ccCurrentSpec() {
+    const fid = ccState().fid;
+    if (!fid) return null;
+    return getFabricSpecs().find(s => specFid(s) === fid) || null;
+  }
+  function ccBuild() {
+    const spec = ccCurrentSpec();
+    if (!spec) return null;
+    const C = ccState();
+    const sim = C.sim
+      ? { yarn: C.simYarn, knit: C.simKnit, proc: C.simProc, print: C.print }
+      : { print: C.print };
+    return buildCostCalc(spec, sim);
+  }
+  function renderCostCalcTab() {
+    const C = ccState();
+    const list = ccSpecList();
+    const all = getFabricSpecs();
+    const inp = 'padding:7px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;font-family:inherit;box-sizing:border-box;';
+    let h = `<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:14px;">
+      <div style="min-width:280px;">
+        <label style="font-size:11.5px;font-weight:700;color:#475569;display:block;margin-bottom:4px;">품목</label>
+        <select id="cc-item" style="${inp}min-width:280px;">
+          <option value="">— 품목을 고르세요 —</option>
+          ${list.map(s => `<option value="${escapeHtml(specFid(s))}"${specFid(s) === C.fid ? ' selected' : ''}>${escapeHtml(s.name)}</option>`).join('')}
+        </select>
+      </div>
+      <div style="font-size:12px;color:#94a3b8;padding-bottom:8px;">원가 자료가 등록된 품목 ${list.length}개 / 전체 ${all.length}개</div>
+    </div>`;
+    if (!list.length) {
+      return h + `<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:14px 16px;font-size:13px;color:#92400e;line-height:1.8;">
+        아직 원가 자료가 등록된 품목이 없습니다.<br>
+        [원단 기본 스펙]에서 품목을 열고 <strong>원가 자료</strong> 칸에 원사 구성·가공법·로스를 채워 주십시오. 한 번 채워 두면 이 화면에서는 고를 때마다 원가가 이미 나와 있습니다.
+      </div>`;
+    }
+    if (!C.fid) {
+      return h + `<div class="dash-empty">품목을 고르면 원가가 바로 나옵니다.</div>`;
+    }
+    const spec = ccCurrentSpec();
+    if (!spec) return h + `<div class="dash-empty">고른 품목을 찾지 못했습니다. 다시 골라 주십시오.</div>`;
+    const R = ccBuild();
+    const box = 'background:#fff;border:1px solid #e2e8f0;border-radius:9px;padding:14px 16px;margin-bottom:14px;';
+    const lbl = 'font-size:12.5px;font-weight:800;color:#0f172a;margin-bottom:9px;';
+    const simInp = (cls, key, val, ph) => `<input type="number" step="1" class="${cls}" data-k="${escapeHtml(key)}" value="${val === '' || val == null ? '' : val}" placeholder="${ph}"
+      style="width:104px;padding:4px 7px;border:1px solid ${C.sim ? '#f59e0b' : '#e2e8f0'};border-radius:5px;font-size:12px;font-family:inherit;text-align:right;background:${C.sim ? '#fffbeb' : '#f8fafc'};"${C.sim ? '' : ' disabled'}>`;
+
+    // ── 원가 내역
+    h += `<div style="${box}${C.sim ? 'border-color:#f59e0b;background:#fffdf5;' : ''}">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
+        <div style="${lbl}margin-bottom:0;">원가 내역</div>
+        <div style="font-size:11.5px;color:#94a3b8;">${escapeHtml(spec.name)} · 안내중량 ${R.gy ? R.gy + ' g/y' : '없음'} · 편직로스 ${R.knitLoss}% · 가공로스 ${R.finLoss}%</div>
+        <button class="dash-action-btn" id="cc-sim-toggle" style="margin-left:auto;font-size:11.5px;padding:5px 12px;${C.sim ? 'background:#f59e0b;color:#fff;font-weight:800;' : ''}">${C.sim ? '바꿔 보기 끄기' : '원사값 바꿔 보기'}</button>
+        ${C.sim ? `<button class="dash-action-btn" id="cc-sim-reset" style="font-size:11.5px;padding:5px 12px;">원래대로</button>` : ''}
+      </div>`;
+    if (C.sim) h += `<div style="background:#fef3c7;border:1px solid #fcd34d;border-radius:7px;padding:8px 11px;font-size:12px;color:#92400e;font-weight:700;margin-bottom:10px;">지금은 가상 계산입니다. 여기서 바꾼 값은 어디에도 저장되지 않습니다.</div>`;
+    h += `<div class="dash-table-wrap"><table class="dash-table" style="font-size:12.5px;"><tbody>`;
+    // 원사
+    R.yarns.forEach(y => {
+      h += `<tr>
+        <td style="text-align:left;width:200px;">원사 ${escapeHtml(y.name)} <span style="color:#94a3b8;font-size:11px;">${escapeHtml(String(y.size || ''))}${escapeHtml(y.unit || '')} · 루프 ${escapeHtml(String(y.loop || ''))}</span></td>
+        <td style="width:80px;text-align:right;font-weight:700;">${y.pct}%</td>
+        <td style="width:130px;text-align:right;">${simInp('cc-sim-yarn', y.name, (C.simYarn[y.name] != null ? C.simYarn[y.name] : (y.kg == null ? '' : Math.round(y.kg))), '단가 없음')}</td>
+        <td style="width:60px;color:#94a3b8;font-size:11px;">kg 단가</td>
+        <td style="text-align:right;font-weight:800;color:#0f172a;">${costMoney(y.applied, 0)}</td>
+        <td style="width:120px;font-size:11px;color:${y.missing && !y.simmed ? '#c0271f' : '#94a3b8'};font-weight:${y.missing && !y.simmed ? '800' : '400'};">${y.missing && !y.simmed ? '단가표에 없음' : (y.simmed ? '바꿔 본 값' : escapeHtml(y.kind || ''))}</td>
+      </tr>`;
+    });
+    h += `<tr style="background:#f8fafc;"><td style="text-align:left;font-weight:800;">총원사가</td><td style="text-align:right;font-weight:700;color:${Math.abs(R.blendSum - 100) > 0.5 ? '#c0271f' : '#64748b'};">${R.blendSum ? R.blendSum.toFixed(1) + '%' : '-'}</td><td colspan="2"></td><td style="text-align:right;font-weight:800;color:#0f172a;">${costMoney(R.yarnTotal, 0)}</td><td></td></tr>`;
+    // 편직
+    h += `<tr>
+      <td style="text-align:left;">편직료 <span style="color:#94a3b8;font-size:11px;">${escapeHtml(R.knitVendor || '편직처 미지정')}</span></td>
+      <td></td>
+      <td style="text-align:right;">${simInp('cc-sim-knit', 'knit', (C.simKnit !== '' && C.simKnit != null ? C.simKnit : (R.knitMissing ? '' : Math.round(R.knitFee))), '단가 없음')}</td>
+      <td style="color:#94a3b8;font-size:11px;">kg당</td>
+      <td style="text-align:right;font-weight:700;">${costMoney(R.knitFee, 0)}</td>
+      <td style="font-size:11px;color:${R.knitMissing ? '#c0271f' : '#94a3b8'};font-weight:${R.knitMissing ? '800' : '400'};">${R.knitMissing ? '단가표에 없음' : ''}</td>
+    </tr>
+    <tr style="background:#f8fafc;"><td style="text-align:left;font-weight:800;">편직까지 가격</td><td colspan="3" style="font-size:11px;color:#94a3b8;text-align:left;">총원사가 ÷ ${(100 - R.knitLoss)}% + 편직료</td><td style="text-align:right;font-weight:800;color:#0f172a;">${costMoney(R.knitPrice, 0)}</td><td></td></tr>`;
+    // 가공
+    R.procs.forEach(p => {
+      h += `<tr>
+        <td style="text-align:left;">${p.isBundle ? '묶음 ' : ''}${escapeHtml(p.name)} <span style="color:#94a3b8;font-size:11px;">${escapeHtml(R.procVendor || '가공처 미지정')}</span></td>
+        <td></td>
+        <td style="text-align:right;">${p.isBundle ? '' : simInp('cc-sim-proc', p.name, (C.simProc[p.name] != null ? C.simProc[p.name] : (p.missing ? '' : Math.round(p.price))), '단가 없음')}</td>
+        <td style="color:#94a3b8;font-size:11px;">kg당</td>
+        <td style="text-align:right;font-weight:700;">${costMoney(p.price, 0)}</td>
+        <td style="font-size:11px;color:${p.missing && !p.simmed ? '#c0271f' : '#94a3b8'};font-weight:${p.missing && !p.simmed ? '800' : '400'};">${p.missing && !p.simmed ? '단가표에 없음' : (p.isBundle ? '묶음 단가 적용' : (p.simmed ? '바꿔 본 값' : ''))}</td>
+      </tr>`;
+    });
+    h += `<tr style="background:#eef2ff;"><td style="text-align:left;font-weight:800;color:#3730a3;">kg당 원가</td><td colspan="3" style="font-size:11px;color:#6366f1;text-align:left;">편직까지 가격 ÷ ${(100 - R.finLoss)}% + 가공비 ${costMoney(R.procTotal, 0)}</td><td style="text-align:right;font-weight:800;font-size:14px;color:#3730a3;">${costMoney(R.kgCost, 0)}</td><td></td></tr>`;
+    h += `</tbody></table></div>`;
+    // 나염비
+    h += `<div style="margin-top:11px;display:flex;gap:9px;flex-wrap:wrap;align-items:flex-end;">
+      <div style="font-size:11.5px;font-weight:800;color:#475569;padding-bottom:8px;">나염비 (야드당)</div>
+      ${[['bon', '본염'], ['pig', '안료'], ['ten', '텐타']].map(([k, t]) => `<div><label style="font-size:11px;color:#64748b;display:block;margin-bottom:3px;">${t}</label>
+        <input type="number" step="1" class="cc-print" data-k="${k}" value="${escapeHtml(String(C.print[k] || ''))}" placeholder="0" style="width:96px;${inp}text-align:right;padding:5px 8px;font-size:12px;"></div>`).join('')}
+      <div style="font-size:12px;color:#64748b;padding-bottom:8px;">나염 없는 원단은 비워 두십시오.</div>
+    </div>`;
+    h += `<div style="margin-top:11px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:11px 14px;display:flex;gap:22px;flex-wrap:wrap;align-items:center;">
+      <div><span style="font-size:11.5px;color:#166534;font-weight:700;">kg당 원가</span> <span id="cc-kgcost" style="font-size:16px;font-weight:800;color:#14532d;margin-left:6px;">${costMoney(R.kgCost, 0)}</span></div>
+      <div><span style="font-size:11.5px;color:#166534;font-weight:700;">야드당 원가</span> <span id="cc-ydcost" style="font-size:16px;font-weight:800;color:#14532d;margin-left:6px;">${R.ydCost == null ? '-' : costMoney(R.ydCost, 0)}</span></div>
+      <div style="font-size:11.5px;color:#4d7c5f;">${R.gy ? `kg당 원가 × ${R.gy}g/y ÷ 1000${R.printFee ? ' + 나염비 ' + costMoney(R.printFee, 0) : ''}` : ''}</div>
+    </div>`;
+    if (R.msgs.length) h += `<div style="margin-top:10px;background:#fef2f2;border:1px solid #fecaca;border-radius:7px;padding:9px 12px;font-size:12px;color:#991b1b;line-height:1.8;">${R.msgs.map(m => '· ' + escapeHtml(m)).join('<br>')}</div>`;
+    h += `</div>`;
+    // ── 마진표
+    h += renderCostGradeMargin(R);
+    return h;
+  }
+
+  // 등급별 단가·마진 — kg당과 야드당을 나란히 본다 (대표 엑셀과 같은 모양)
+  function ccCellKey(i, u) { return 'g' + i + ':' + u; }
+  function ccAutoPrice(base, dc) {
+    if (base == null || isNaN(base)) return null;
+    return Math.round(base * (1 - (dc || 0) / 100));
+  }
+  function ccGradeValues(R) {
+    const C = ccState();
+    const gs = getCostGrades();
+    const gy = R.gy ? (R.gy / 1000) : null;
+    const stdKg = C.cells[ccCellKey(0, 'kg')];
+    const stdYd = C.cells[ccCellKey(0, 'yd')];
+    // 표준 한쪽만 넣어도 반대쪽은 안내중량으로 환산해 채운다 (직접 고치면 그 값이 이긴다)
+    let baseKg = (stdKg === '' || stdKg == null) ? null : parseFloat(stdKg);
+    let baseYd = (stdYd === '' || stdYd == null) ? null : parseFloat(stdYd);
+    if (baseKg == null && baseYd != null && gy) baseKg = Math.round(baseYd / gy);
+    if (baseYd == null && baseKg != null && gy) baseYd = Math.round(baseKg * gy);
+    return gs.map((g, i) => {
+      const mk = C.cells[ccCellKey(i, 'kg')], my = C.cells[ccCellKey(i, 'yd')];
+      const kg = (mk !== '' && mk != null) ? parseFloat(mk) : (i === 0 ? baseKg : ccAutoPrice(baseKg, g.dc));
+      const yd = (my !== '' && my != null) ? parseFloat(my) : (i === 0 ? baseYd : ccAutoPrice(baseYd, g.dc));
+      return {
+        g: g, i: i, kg: kg, yd: yd,
+        kgTyped: (mk !== '' && mk != null), ydTyped: (my !== '' && my != null),
+        kgMargin: costBackMargin(kg, R.kgCost),
+        ydMargin: costBackMargin(yd, R.ydCost)
+      };
+    });
+  }
+  function renderCostGradeMargin(R) {
+    const C = ccState();
+    const rows = ccGradeValues(R);
+    const inp = 'width:112px;padding:6px 8px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;font-family:inherit;text-align:right;box-sizing:border-box;';
+    const mg = v => (v == null || isNaN(v)) ? '<span style="color:#c7cbd1;">-</span>'
+      : `<span style="font-weight:800;color:${v < 0 ? '#c0271f' : (v < 10 ? '#b45309' : '#15803d')};">${v.toFixed(1)}%</span>`;
+    let h = `<div style="background:#fff;border:1px solid #e2e8f0;border-radius:9px;padding:14px 16px;">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:11px;">
+        <div style="font-size:12.5px;font-weight:800;color:#0f172a;">등급별 단가와 마진</div>
+        <div style="font-size:11.5px;color:#94a3b8;">표준 단가 한 칸만 넣으면 나머지가 전부 채워집니다</div>
+        <button class="dash-action-btn" id="cc-grade-setting" style="margin-left:auto;font-size:11.5px;padding:5px 12px;">등급 설정</button>
+        <button class="dash-action-btn" id="cc-price-reset" style="font-size:11.5px;padding:5px 12px;">단가 지우기</button>
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:7px;padding:10px 12px;">
+        <div><label style="font-size:11px;color:#64748b;display:block;margin-bottom:3px;">목표 마진율 %</label>
+          <input type="number" step="0.1" id="cc-target" value="${escapeHtml(String(C.target || ''))}" placeholder="예: 20" style="${inp}width:96px;"></div>
+        <div style="font-size:12.5px;color:#475569;padding-bottom:7px;">
+          예상단가 &nbsp; kg당 <strong id="cc-exp-kg" style="color:#0f172a;">${(() => { const v = costExpectPrice(R.kgCost, C.target); return v == null ? '-' : costMoney(v, 0); })()}</strong>
+          &nbsp;·&nbsp; 야드당 <strong id="cc-exp-yd" style="color:#0f172a;">${(() => { const v = costExpectPrice(R.ydCost, C.target); return v == null ? '-' : costMoney(v, 0); })()}</strong>
+        </div>
+        <button class="dash-action-btn" id="cc-exp-apply" style="font-size:11.5px;padding:6px 13px;">표준 단가에 넣기</button>
+      </div>
+      <div class="dash-table-wrap"><table class="dash-table" style="font-size:12.5px;"><thead><tr>
+        <th style="text-align:left;width:150px;">등급</th>
+        <th style="width:140px;">kg당 단가</th><th style="width:90px;">kg 마진</th>
+        <th style="width:140px;">야드당 단가</th><th style="width:90px;">야드 마진</th>
+        <th style="width:80px;">되돌리기</th>
+      </tr></thead><tbody>
+      <tr style="background:#f1f5f9;">
+        <td style="text-align:left;font-weight:800;color:#334155;">원가</td>
+        <td style="text-align:right;font-weight:800;color:#334155;">${costMoney(R.kgCost, 0)}</td><td></td>
+        <td style="text-align:right;font-weight:800;color:#334155;">${R.ydCost == null ? '-' : costMoney(R.ydCost, 0)}</td><td colspan="2"></td>
+      </tr>`;
+    rows.forEach(r => {
+      h += `<tr>
+        <td style="text-align:left;font-weight:800;color:#0f172a;">${escapeHtml(r.g.name)}${r.i === 0 ? '' : ` <span style="font-size:11px;font-weight:700;color:#7c3aed;">−${r.g.dc}%</span>`}</td>
+        <td style="text-align:right;"><input type="number" step="1" class="cc-price" data-gi="${r.i}" data-u="kg" value="${r.kg == null ? '' : Math.round(r.kg)}" style="${inp}${r.kgTyped ? 'border-color:#7c3aed;background:#faf5ff;font-weight:800;' : ''}"></td>
+        <td style="text-align:right;" class="cc-m" data-gi="${r.i}" data-u="kg">${mg(r.kgMargin)}</td>
+        <td style="text-align:right;"><input type="number" step="1" class="cc-price" data-gi="${r.i}" data-u="yd" value="${r.yd == null ? '' : Math.round(r.yd)}" style="${inp}${r.ydTyped ? 'border-color:#7c3aed;background:#faf5ff;font-weight:800;' : ''}"></td>
+        <td style="text-align:right;" class="cc-m" data-gi="${r.i}" data-u="yd">${mg(r.ydMargin)}</td>
+        <td class="col-action">${(r.kgTyped || r.ydTyped) ? `<button class="dash-action-btn cc-auto" data-gi="${r.i}" style="font-size:11px;padding:4px 9px;">자동</button>` : `<span style="color:#c7cbd1;font-size:11px;">자동</span>`}</td>
+      </tr>`;
+    });
+    h += `</tbody></table></div>
+      <div style="margin-top:9px;font-size:11.5px;color:#94a3b8;line-height:1.8;">
+        보라색 칸은 손으로 고친 값입니다. [자동]을 누르면 표준단가와 할인율에서 다시 계산합니다.<br>
+        마진 = (단가 − 원가) ÷ 단가 × 100. 마진이 10% 아래면 주황색, 원가보다 낮으면 빨간색으로 나옵니다.
+      </div>
+    </div>`;
+    return h;
+  }
+
   function cpMatch(txt) {
     const q = String(state.costSearch || '').trim().toLowerCase();
     if (!q) return true;
@@ -25575,11 +26002,11 @@ function validateBlendSum(blends, label) {
       addBtn.style.display = 'none';
     } else if (state.dashView === 'permissions') {
       title = '권한 관리 (최고관리자 전용)';
-      body = ownerIsLocked() ? renderOwnerLockScreen('권한 관리') : renderPermissionsDash();
+      body = viewIsLocked('permissions') ? renderOwnerLockScreen('권한 관리') : renderPermissionsDash();
       addBtn.style.display = 'none';
     } else if (state.dashView === 'costCalc') {
       title = '원가 계산기 (최고관리자 전용)';
-      body = ownerIsLocked() ? renderOwnerLockScreen('원가 계산기') : renderCostCalcDash();
+      body = viewIsLocked('costCalc') ? renderOwnerLockScreen('원가 계산기') : renderCostCalcDash();
       addBtn.style.display = 'none';
     } else if (state.dashView === 'samples') {
       title = '샘플 보관함';
@@ -25591,15 +26018,15 @@ function validateBlendSum(blends, label) {
       addBtn.style.display = 'none';
     } else if (state.dashView === 'trash') {
       title = '휴지통';
-      body = renderTrashDash();
+      body = viewIsLocked('trash') ? renderOwnerLockScreen('휴지통') : renderTrashDash();
       addBtn.style.display = 'none';
     } else if (state.dashView === 'stampSettings') {
       title = '스탬프 설정 (관리자 전용)';
-      body = renderStampSettings();
+      body = viewIsLocked('stampSettings') ? renderOwnerLockScreen('스탬프 설정') : renderStampSettings();
       addBtn.style.display = 'none';
     } else if (state.dashView === 'specTol') {
       title = '규격 허용치 (관리자 전용)';
-      body = renderSpecTol();
+      body = viewIsLocked('specTol') ? renderOwnerLockScreen('규격 허용치') : renderSpecTol();
     } else if (state.dashView === 'fabricSpecs') {
       title = '원단 기본 스펙 (관리자 전용)';
       body = renderFabricSpecs();
@@ -28714,6 +29141,151 @@ function validateBlendSum(blends, label) {
       renderDashboard();
     }));
     bindRerenderSearch('cp-search', v => { state.costSearch = v; });
+    // ===== hotfix270: 판매 등급 =====
+    (function attachCostGradeHandlers() {
+      const saveEl = document.getElementById('cg-save');
+      if (!saveEl) return;
+      const readRows = () => {
+        const gs = getCostGrades();
+        const next = gs.map((g, i) => ({
+          name: (document.querySelector(`#dash-body .cg-name[data-idx="${i}"]`)?.value || '').trim() || g.name,
+          dc: (i === 0) ? 0 : (parseFloat(document.querySelector(`#dash-body .cg-dc[data-idx="${i}"]`)?.value) || 0)
+        }));
+        return next;
+      };
+      document.getElementById('cg-add')?.addEventListener('click', () => {
+        const next = readRows();
+        if (next.length >= COST_GRADE_MAX) { toast(`등급은 ${COST_GRADE_MAX}개까지 만들 수 있습니다`, 'warning'); return; }
+        next.push({ name: '새 등급', dc: 0 });
+        state.costGrades = next;
+        renderDashboard();
+      });
+      document.querySelectorAll('#dash-body .cg-del').forEach(b => b.addEventListener('click', () => {
+        const i = parseInt(b.dataset.idx, 10);
+        if (i <= 0) return;
+        const next = readRows();
+        if (!confirm(`[${next[i].name}] 등급을 지웁니다. 계속할까요?`)) return;
+        next.splice(i, 1);
+        state.costGrades = next;
+        renderDashboard();
+      }));
+      const move = (i, d) => {
+        const next = readRows();
+        const j = i + d;
+        if (i <= 0 || j <= 0 || j >= next.length) return;
+        const t = next[i]; next[i] = next[j]; next[j] = t;
+        state.costGrades = next;
+        renderDashboard();
+      };
+      document.querySelectorAll('#dash-body .cg-up').forEach(b => b.addEventListener('click', () => move(parseInt(b.dataset.idx, 10), -1)));
+      document.querySelectorAll('#dash-body .cg-down').forEach(b => b.addEventListener('click', () => move(parseInt(b.dataset.idx, 10), 1)));
+      saveEl.addEventListener('click', async () => {
+        const next = readRows();
+        const names = next.map(g => g.name);
+        if (names.some(n => !n)) { toast('등급 이름을 비워 둘 수 없습니다', 'error'); return; }
+        if (new Set(names).size !== names.length) { toast('같은 이름의 등급이 있습니다', 'error'); return; }
+        const bad = next.find((g, i) => i > 0 && (g.dc < 0 || g.dc >= 100));
+        if (bad) { toast('할인율은 0 이상 100 미만으로 넣어 주십시오', 'error'); return; }
+        saveEl.disabled = true;
+        const ok = await saveCostGrades(next);
+        saveEl.disabled = false;
+        if (ok) { toast('판매 등급을 저장했습니다', 'success'); renderDashboard(); }
+      });
+    })();
+    // ===== hotfix270: 원가 계산 화면 =====
+    (function attachCostCalcHandlers() {
+      const itemEl = document.getElementById('cc-item');
+      if (!itemEl) return;
+      const C = ccState();
+      itemEl.addEventListener('change', () => {
+        C.fid = itemEl.value || '';
+        C.cells = {}; C.target = '';
+        C.sim = false; C.simYarn = {}; C.simKnit = ''; C.simProc = {};
+        renderDashboard();
+      });
+      // 계산값만 다시 칠한다 (칸을 다시 그리지 않으므로 입력 중에도 흔들리지 않는다)
+      function ccRepaint() {
+        const R = ccBuild();
+        if (!R) return;
+        const setTxt = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+        setTxt('cc-kgcost', costMoney(R.kgCost, 0));
+        setTxt('cc-ydcost', R.ydCost == null ? '-' : costMoney(R.ydCost, 0));
+        const ek = costExpectPrice(R.kgCost, C.target), ey = costExpectPrice(R.ydCost, C.target);
+        setTxt('cc-exp-kg', ek == null ? '-' : costMoney(ek, 0));
+        setTxt('cc-exp-yd', ey == null ? '-' : costMoney(ey, 0));
+        const rows = ccGradeValues(R);
+        const act = document.activeElement;
+        rows.forEach(r => {
+          [['kg', r.kg, r.kgTyped, r.kgMargin], ['yd', r.yd, r.ydTyped, r.ydMargin]].forEach(([u, val, typed, m]) => {
+            const el = document.querySelector(`#dash-body .cc-price[data-gi="${r.i}"][data-u="${u}"]`);
+            if (el && el !== act && !typed) el.value = (val == null ? '' : Math.round(val));
+            const cell = document.querySelector(`#dash-body .cc-m[data-gi="${r.i}"][data-u="${u}"]`);
+            if (cell) cell.innerHTML = (m == null || isNaN(m)) ? '<span style="color:#c7cbd1;">-</span>'
+              : `<span style="font-weight:800;color:${m < 0 ? '#c0271f' : (m < 10 ? '#b45309' : '#15803d')};">${m.toFixed(1)}%</span>`;
+          });
+        });
+      }
+      document.querySelectorAll('#dash-body .cc-print').forEach(el => el.addEventListener('input', () => {
+        C.print[el.dataset.k] = el.value;
+        ccRepaint();
+      }));
+      const tEl = document.getElementById('cc-target');
+      if (tEl) tEl.addEventListener('input', () => { C.target = tEl.value; ccRepaint(); });
+      document.getElementById('cc-exp-apply')?.addEventListener('click', () => {
+        const R = ccBuild();
+        if (!R) return;
+        const ek = costExpectPrice(R.kgCost, C.target), ey = costExpectPrice(R.ydCost, C.target);
+        if (ek == null && ey == null) { toast('목표 마진율을 먼저 넣어 주십시오', 'warning'); return; }
+        if (ek != null) C.cells[ccCellKey(0, 'kg')] = String(Math.round(ek));
+        if (ey != null) C.cells[ccCellKey(0, 'yd')] = String(Math.round(ey));
+        renderDashboard();
+      });
+      document.querySelectorAll('#dash-body .cc-price').forEach(el => el.addEventListener('input', () => {
+        const key = ccCellKey(parseInt(el.dataset.gi, 10), el.dataset.u);
+        if (String(el.value).trim() === '') delete C.cells[key];
+        else C.cells[key] = el.value;
+        ccRepaint();
+      }));
+      document.querySelectorAll('#dash-body .cc-auto').forEach(b => b.addEventListener('click', () => {
+        const i = parseInt(b.dataset.gi, 10);
+        delete C.cells[ccCellKey(i, 'kg')];
+        delete C.cells[ccCellKey(i, 'yd')];
+        renderDashboard();
+      }));
+      document.getElementById('cc-price-reset')?.addEventListener('click', () => {
+        C.cells = {}; C.target = '';
+        renderDashboard();
+      });
+      document.getElementById('cc-grade-setting')?.addEventListener('click', () => {
+        state.costTab = 'prices';
+        state.costPriceTab = 'grade';
+        renderDashboard();
+      });
+      document.getElementById('cc-sim-toggle')?.addEventListener('click', () => {
+        C.sim = !C.sim;
+        if (!C.sim) { C.simYarn = {}; C.simKnit = ''; C.simProc = {}; }
+        renderDashboard();
+      });
+      document.getElementById('cc-sim-reset')?.addEventListener('click', () => {
+        C.simYarn = {}; C.simKnit = ''; C.simProc = {};
+        renderDashboard();
+      });
+      // 바꿔 보는 값은 칸을 떠날 때 한 번만 다시 계산한다
+      document.querySelectorAll('#dash-body .cc-sim-yarn').forEach(el => el.addEventListener('change', () => {
+        const k = el.dataset.k;
+        if (String(el.value).trim() === '') delete C.simYarn[k]; else C.simYarn[k] = el.value;
+        renderDashboard();
+      }));
+      document.querySelectorAll('#dash-body .cc-sim-proc').forEach(el => el.addEventListener('change', () => {
+        const k = el.dataset.k;
+        if (String(el.value).trim() === '') delete C.simProc[k]; else C.simProc[k] = el.value;
+        renderDashboard();
+      }));
+      document.querySelectorAll('#dash-body .cc-sim-knit').forEach(el => el.addEventListener('change', () => {
+        C.simKnit = String(el.value).trim();
+        renderDashboard();
+      }));
+    })();
     const cpClearEl = document.getElementById('cp-search-clear');
     if (cpClearEl) cpClearEl.addEventListener('click', () => { state.costSearch = ''; renderDashboard(); });
     (function attachCostPriceHandlers() {
@@ -31481,7 +32053,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix269';
+  const VERSION = 'v2.53 hotfix271';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
