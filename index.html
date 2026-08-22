@@ -25078,31 +25078,53 @@ function validateBlendSum(blends, label) {
     if (slot) { slot.innerHTML = ''; slot.dataset.open = ''; }
   }
   
+  // ===== hotfix258: 검색칸 공통 처리 =====
+  // 한글은 초성→중성→종성으로 조합되는 중간에 입력칸을 다시 그리면 자모가 흩어진다
+  // (예: "세원" → "ㅅㅔㅇㅜㅓㄴ"). 조합이 끝나기 전에는 다시 그리지 않는다.
+  function bindRerenderSearch(id, setValue, delay) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    let composing = false;
+    let timer = null;
+    let last = el.value;
+    const doRender = () => {
+      const cur = document.getElementById(id);
+      if (!cur) return;
+      if (cur.value === last) return;
+      last = cur.value;
+      const pos = cur.selectionStart;
+      const wasFocused = (document.activeElement === cur);
+      setValue(cur.value);
+      renderDashboard();
+      const again = document.getElementById(id);
+      if (again && wasFocused) {
+        again.focus();
+        const p = (pos == null) ? again.value.length : pos;
+        try { again.setSelectionRange(p, p); } catch (_) {}
+      }
+    };
+    const fire = () => {
+      if (composing) return;               // 한글 조합 중 — 아직 건드리지 않는다
+      clearTimeout(timer);
+      if (delay) timer = setTimeout(doRender, delay);
+      else doRender();
+    };
+    el.addEventListener('compositionstart', () => { composing = true; });
+    el.addEventListener('compositionend', () => { composing = false; fire(); });
+    el.addEventListener('input', fire);
+    // 목록에서 고른 경우(change)는 조합과 무관하므로 즉시 반영
+    el.addEventListener('change', () => { composing = false; clearTimeout(timer); doRender(); });
+  }
+
   function attachDashHandlers() {
     // v2.51 step2: 클레임 페이지 핸들러
     if (state.dashView === 'claims') {
       // 검색
-      const searchEl = document.getElementById('claims-search');
-      if (searchEl) {
-        let searchTimer;
-        searchEl.addEventListener('input', e => {
-          clearTimeout(searchTimer);
-          const v = e.target.value;
-          searchTimer = setTimeout(() => {
-            if (!state.claimsFilter) state.claimsFilter = { recipient: 'all', search: '', sort: 'date_desc' };
-            state.claimsFilter.search = v;
-            renderDashboard();
-            // 포커스/커서 위치 보존
-            setTimeout(() => {
-              const newSearchEl = document.getElementById('claims-search');
-              if (newSearchEl) {
-                newSearchEl.focus();
-                newSearchEl.setSelectionRange(v.length, v.length);
-              }
-            }, 0);
-          }, 250);
-        });
-      }
+      // hotfix258: 한글 조합 보호
+      bindRerenderSearch('claims-search', v => {
+        if (!state.claimsFilter) state.claimsFilter = { recipient: 'all', search: '', sort: 'date_desc' };
+        state.claimsFilter.search = v;
+      }, 250);
       // 거래처 필터
       const recipSel = document.getElementById('claims-recipient-filter');
       if (recipSel) {
@@ -25762,27 +25784,8 @@ function validateBlendSum(blends, label) {
       });
     });
     
-    // hotfix37/38: 편직 품목 검색 — 실시간 반영(입력/삭제 즉시), 재렌더 후 포커스·커서 복원
-    const knitSearchEl = document.getElementById('knit-item-search');
-    if (knitSearchEl) {
-      const applySearchLive = () => {
-        const pos = knitSearchEl.selectionStart;
-        state.knitItemSearch = knitSearchEl.value || '';
-        clearTimeout(state._knitSearchTimer);
-        state._knitSearchTimer = setTimeout(() => {
-          renderDashboard();
-          const el = document.getElementById('knit-item-search');
-          if (el) { el.focus(); try { el.setSelectionRange(pos, pos); } catch (e) {} }
-        }, 200);
-      };
-      knitSearchEl.addEventListener('input', applySearchLive);
-      // 콤보 목록에서 선택(change)은 즉시 반영
-      knitSearchEl.addEventListener('change', () => {
-        state.knitItemSearch = knitSearchEl.value || '';
-        clearTimeout(state._knitSearchTimer);
-        renderDashboard();
-      });
-    }
+    // hotfix37/38/258: 편직 품목 검색 — 한글 조합 보호 + 커서 자리 복원
+    bindRerenderSearch('knit-item-search', v => { state.knitItemSearch = v || ''; }, 200);
     const knitSearchClearEl = document.getElementById('knit-item-search-clear');
     if (knitSearchClearEl) knitSearchClearEl.addEventListener('click', () => { state.knitItemSearch = ''; renderDashboard(); });
 
@@ -26649,15 +26652,8 @@ function validateBlendSum(blends, label) {
       if (cancelBtn) cancelBtn.addEventListener('click', () => { resetForm(); });
       const aliasHelperBtn = document.getElementById('vendor-alias-helper-btn');
       if (aliasHelperBtn) aliasHelperBtn.addEventListener('click', () => openVendorAliasHelper());
-      // hotfix253: 거래처 검색 (다시 그린 뒤 커서 자리 복원)
-      const vdSearchEl = document.getElementById('vendor-search');
-      if (vdSearchEl) vdSearchEl.addEventListener('input', () => {
-        vdSearch = vdSearchEl.value;
-        const pos = vdSearchEl.selectionStart;
-        renderDashboard();
-        const again = document.getElementById('vendor-search');
-        if (again) { again.focus(); try { again.setSelectionRange(pos, pos); } catch (_) {} }
-      });
+      // hotfix253/258: 거래처 검색 (한글 조합 보호 + 커서 자리 복원)
+      bindRerenderSearch('vendor-search', v => { vdSearch = v; });
       const vdClearEl = document.getElementById('vendor-search-clear');
       if (vdClearEl) vdClearEl.addEventListener('click', () => { vdSearch = ''; renderDashboard(); });
       const vdOffEl = document.getElementById('vendor-show-off');
@@ -27015,15 +27011,8 @@ function validateBlendSum(blends, label) {
         renderDashboard();
       }));
 
-      // hotfix253: 품목 검색 (다시 그린 뒤 커서 자리 복원)
-      const fsSearchEl = document.getElementById('fs-search');
-      if (fsSearchEl) fsSearchEl.addEventListener('input', () => {
-        fsSearch = fsSearchEl.value;
-        const pos = fsSearchEl.selectionStart;
-        renderDashboard();
-        const again = document.getElementById('fs-search');
-        if (again) { again.focus(); try { again.setSelectionRange(pos, pos); } catch (_) {} }
-      });
+      // hotfix253/258: 품목 검색 (한글 조합 보호 + 커서 자리 복원)
+      bindRerenderSearch('fs-search', v => { fsSearch = v; });
       const fsClearEl = document.getElementById('fs-search-clear');
       if (fsClearEl) fsClearEl.addEventListener('click', () => { fsSearch = ''; renderDashboard(); });
       // hotfix253: 판매 종료 품목 보기
@@ -27487,15 +27476,8 @@ function validateBlendSum(blends, label) {
       });
     });
     
-    // ===== hotfix257: 생지출고 목록 검색 =====
-    const gsSearchEl = document.getElementById('gs-search');
-    if (gsSearchEl) gsSearchEl.addEventListener('input', () => {
-      state.gsSearch = gsSearchEl.value;
-      const pos = gsSearchEl.selectionStart;
-      renderDashboard();
-      const again = document.getElementById('gs-search');
-      if (again) { again.focus(); try { again.setSelectionRange(pos, pos); } catch (_) {} }
-    });
+    // ===== hotfix257/258: 생지출고 목록 검색 =====
+    bindRerenderSearch('gs-search', v => { state.gsSearch = v; });
     const gsClearEl = document.getElementById('gs-search-clear');
     if (gsClearEl) gsClearEl.addEventListener('click', () => { state.gsSearch = ''; renderDashboard(); });
     document.querySelectorAll('#dash-body .gs-part-btn').forEach(b => b.addEventListener('click', () => {
@@ -27508,14 +27490,7 @@ function validateBlendSum(blends, label) {
       state.samplesTab = b.dataset.spTab || '염색가공';
       renderDashboard();
     }));
-    const spSearchEl = document.getElementById('sp-search');
-    if (spSearchEl) spSearchEl.addEventListener('input', () => {
-      state.samplesSearch = spSearchEl.value;
-      const pos = spSearchEl.selectionStart;
-      renderDashboard();
-      const again = document.getElementById('sp-search');
-      if (again) { again.focus(); try { again.setSelectionRange(pos, pos); } catch (_) {} }
-    });
+    bindRerenderSearch('sp-search', v => { state.samplesSearch = v; });
     const spClearEl = document.getElementById('sp-search-clear');
     if (spClearEl) spClearEl.addEventListener('click', () => { state.samplesSearch = ''; renderDashboard(); });
     const spShrinkEl = document.getElementById('sp-shrink-only');
@@ -27549,27 +27524,8 @@ function validateBlendSum(blends, label) {
       inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') inp.blur(); });
     });
 
-    // ===== v2.31: 완료된 의뢰서 — 검색·필터·전체삭제 핸들러 =====
-    const cfSearch = document.getElementById('cf-search');
-    if (cfSearch) {
-      // 디바운스 (300ms) — 타이핑 중 매번 리렌더 막음
-      let cfTimer = null;
-      cfSearch.addEventListener('input', () => {
-        clearTimeout(cfTimer);
-        cfTimer = setTimeout(() => {
-          state.completedFilter.search = cfSearch.value;
-          renderDashboard();
-          // 리렌더 후 포커스 복원
-          requestAnimationFrame(() => {
-            const el = document.getElementById('cf-search');
-            if (el) {
-              el.focus();
-              el.setSelectionRange(el.value.length, el.value.length);
-            }
-          });
-        }, 300);
-      });
-    }
+    // ===== v2.31 / hotfix258: 완료된 의뢰서 — 검색·필터·전체삭제 핸들러 =====
+    bindRerenderSearch('cf-search', v => { state.completedFilter.search = v; }, 300);
     const cfType = document.getElementById('cf-type');
     if (cfType) cfType.addEventListener('change', () => {
       state.completedFilter.type = cfType.value;
@@ -30129,7 +30085,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix257';
+  const VERSION = 'v2.53 hotfix258';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
