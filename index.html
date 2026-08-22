@@ -3405,10 +3405,9 @@
      v2.52 부분 입고 CSS 끝
      ============================================================ */
   
-  /* v2.50: 직원은 전체 대시보드에서 [작지/완료]까지 노출, [수정/복사/삭제]만 숨김 — QC 체크 + 의뢰서 확인(이미지/복사/프린트) 가능 */
-  body.is-not-admin .dash-table-overview .col-act-edit,
-  body.is-not-admin .dash-table-overview .col-act-copy,
-  body.is-not-admin .dash-table-overview .col-act-delete {
+  /* hotfix265: 전체 대시보드에서도 등급으로 [수정/복사]를 감추지 않는다.
+     삭제 칸만 화면별 삭제 권한(body.is-no-delete)에 따라 숨겨진다. */
+  body.is-no-delete .dash-table-overview .col-act-delete {
     display: none !important;
   }
 
@@ -4793,37 +4792,22 @@
   }
 
   /* ============================================================
-     v2.22: 직원 권한 제한 (관리자 외에는 삭제·휴지통 UI 일괄 숨김)
-     - body.is-not-admin 클래스가 있으면 모든 삭제/휴지통/복구/영구삭제 버튼이 숨겨짐
-     - body 클래스는 onAuthStateChanged에서 사용자 이메일에 따라 자동 토글됨
+     hotfix265: 화면 권한을 준 사람은 대표와 똑같은 화면을 본다.
+     - 등급으로 화면 요소를 일괄로 감추지 않는다 (메뉴는 [권한 관리]가 담당)
+     - 감추는 것은 삭제 관련 버튼뿐이며, 그것도 화면별 삭제 권한에 따른다
+     - body.is-no-delete  : 이 화면에서 삭제 권한이 없음
+     - body.is-no-purge   : 휴지통 복구·영구삭제 권한이 없음(관리자 이상만)
      ============================================================ */
-  body.is-not-admin #delete-btn,
-  body.is-not-admin .dash-delete-btn,
-  body.is-not-admin .dash-menu-btn[data-view="trash"],
-  body.is-not-admin .dash-menu-btn[data-view="stampSettings"],
-  body.is-not-admin .dash-menu-btn[data-view="fabricSpecs"],
-  body.is-not-admin .dash-menu-btn[data-view="vendors"],
-  body.is-not-admin .dash-menu-btn[data-view="ceoReports"],
-  body.is-not-admin .dash-menu-btn[data-view="completeReports"],
-  body.is-not-admin [data-restore],
-  body.is-not-admin [data-purge] {
+  body.is-no-delete #delete-btn,
+  body.is-no-delete .dash-delete-btn,
+  body.is-no-delete .item-delete-btn,
+  body.is-no-delete th.col-act-delete,
+  body.is-no-delete td.col-act-delete {
     display: none !important;
   }
-  /* v2.51 step3 hotfix6: 거래처별 일일 보고 메뉴는 직원도 사용 가능
-     (의도적으로 권한 제한 CSS에 포함하지 않음 — 모든 직원이 매일 아침 보고 발송 가능) */
-  body.is-not-admin .dash-menu-btn[data-view="daily-report"] {
-    display: block !important;
-  }
-  body.is-not-admin th.col-action,
-  body.is-not-admin td.col-action {
+  body.is-no-purge [data-restore],
+  body.is-no-purge [data-purge] {
     display: none !important;
-  }
-  /* v2.50: [완료]/[작지] 컬럼은 직원에게도 보이도록 예외 처리 — 의뢰서 확인 + QC 체크 가능 */
-  body.is-not-admin th.col-action.col-act-complete,
-  body.is-not-admin td.col-action.col-act-complete,
-  body.is-not-admin th.col-action.col-act-view,
-  body.is-not-admin td.col-action.col-act-view {
-    display: table-cell !important;
   }
   
   /* ==================== v2.51 step2: 클레임(땡처리) 시스템 ==================== */
@@ -6909,10 +6893,15 @@ const state = {
   gsPart: 'all',            // 'all' | '몸판' | '리프'
   ovKnitSearch: '',         // hotfix259: 전체 대시보드 편직 품목 검색
   viewPerms: {},            // hotfix260: settings/permissions — 화면별 최소 등급
+  viewDeletes: {},          // hotfix265: 화면별 삭제 최소 등급 (기본 관리자)
   // hotfix262: 최고관리자 잠금
   ownerPinHash: null,
   ownerUnlocked: false,
   ownerLastActive: 0,
+  // hotfix264: 원가 계산기 1단계 — 원단별 원가 항목 (cost_data/fabric_cost)
+  //   직원도 읽는 settings/fabric_specs와 절대 섞지 않는다. 고정 코드(fid)로만 이어 붙인다.
+  fabricCost: {},           // { fid: {코드명·기계·원사구성·가공법·로스…} }
+  fabricCostLoaded: false,  // 구독이 한 번이라도 내려왔는지 (덮어쓰기 사고 방지)
   // v2.31 완료 탭 필터
   completedFilter: {
     search: '',         // 통합 검색
@@ -9907,7 +9896,7 @@ window.addEventListener('firebase-ready', () => {
       resetForm();
       // v2.50: 직원은 로그인 시 첫 화면을 [진행 현황 → 전체 대시보드 → 염색가공 필터]로 자동 진입
       // (관리자는 기존대로 작성 모드 유지)
-      if (!isAdminUser()) {
+      if (!isAdminEmail()) {
         state.dashView = 'overview';
         state.overviewTypeFilter = '염색가공';
         switchUiMode('dashboard');
@@ -9920,8 +9909,10 @@ window.addEventListener('firebase-ready', () => {
       // v2.34: 스탬프 마스터 구독 해제
       if (stampUnsubCommon) { stampUnsubCommon(); stampUnsubCommon = null; }
       if (stampUnsubBt) { stampUnsubBt(); stampUnsubBt = null; }
-      // v2.22: 로그아웃 시 권한 클래스 정리
+      // hotfix265: 로그아웃 시 권한 클래스 정리
       document.body.classList.remove('is-not-admin');
+      document.body.classList.remove('is-no-delete');
+      document.body.classList.remove('is-no-purge');
       // hotfix262: 로그아웃하면 경영 자료는 다시 잠긴다
       state.ownerUnlocked = false;
       state.ownerPinHash = null;
@@ -9943,8 +9934,17 @@ window.addEventListener('firebase-ready', () => {
     'recoveric9769@gmail.com'      // 담당자 (hotfix241 부여)
   ];
   const ADMIN_EMAIL = ADMIN_EMAILS[0];
-  function isAdminUser() {
+  // hotfix265: 계정 등급 그 자체 (설정 저장·Firestore 규칙과 맞춰야 하는 곳에서 쓴다)
+  function isAdminEmail() {
     return !!(state.user && ADMIN_EMAILS.includes(state.user.email));
+  }
+  // hotfix265: 화면 안 작업 버튼 판정.
+  //   대표가 [권한 관리]에서 화면을 열어준 사람은 그 화면에서 대표와 똑같은 화면을 본다.
+  //   설정·경영·휴지통 화면은 제외(저장 권한이 Firestore 규칙과 묶여 있음).
+  //   삭제만은 canDeleteHere()가 화면별로 따로 판정한다.
+  function isAdminUser() {
+    if (isAdminEmail()) return true;
+    return actGrantedHere();
   }
 
   // ============================================================
@@ -9963,7 +9963,7 @@ window.addEventListener('firebase-ready', () => {
   }
   function userRole() {
     if (isOwnerUser()) return 'owner';
-    if (isAdminUser()) return 'admin';
+    if (isAdminEmail()) return 'admin';
     return 'staff';
   }
   function roleLabel(r) {
@@ -10071,6 +10071,50 @@ window.addEventListener('firebase-ready', () => {
     if (!view) return true;
     return ROLE_RANK[userRole()] >= ROLE_RANK[viewMinRole(view)];
   }
+  // ============================================================
+  // hotfix265: "권한을 준 화면은 대표와 똑같이 보인다"
+  // ------------------------------------------------------------
+  //   · 작업 버튼(수정·복사·완료·부족·재염·되돌리기·공정 처리 등)은
+  //     등급이 아니라 그 화면을 열 수 있는지로 판정한다.
+  //   · 아래 화면들은 제외 — 저장 권한이 Firestore 규칙과 묶여 있어
+  //     화면만 열어주면 저장이 막혀 오히려 헷갈린다.
+  //   · 삭제는 여기에 포함되지 않는다. [권한 관리]에서 화면별로 따로 정한다.
+  // ============================================================
+  const ACT_EXCLUDED_VIEWS = ['stampSettings', 'fabricSpecs', 'vendors', 'specTol', 'permissions', 'costCalc', 'trash'];
+  function actGrantedHere() {
+    if (!state.user) return false;
+    const v = state.dashView || 'overview';
+    if (ACT_EXCLUDED_VIEWS.includes(v)) return false;
+    return canAccessView(v);
+  }
+  // 진행 화면(원사·편직·염색가공·B/T)은 dashView가 전부 'overview'다 → 지금 보고 있는 유형으로 되짚는다
+  const _DEL_TYPE_SCOPE = { '원사': 'yarn', '편직': 'knit', '염색가공': 'finish', 'BT': 'bt', '나염': 'print', '공문': 'of', '생지출고': 'gs' };
+  function deleteScopeForType(type) { return _DEL_TYPE_SCOPE[String(type || '').trim()] || 'finish'; }
+  function currentDeleteScope() {
+    const v = state.dashView || 'overview';
+    if (v !== 'overview') return v;
+    return deleteScopeForType(state.overviewTypeFilter || '염색가공');
+  }
+  // 화면별 삭제 최소 등급 (기본 관리자). 대표는 언제나 가능.
+  function deleteMinRole(view) {
+    const v = view || currentDeleteScope();
+    const saved = (state.viewDeletes || {})[v];
+    if (saved && ROLE_RANK[saved] !== undefined) return saved;
+    return 'admin';
+  }
+  function canDeleteHere(view) {
+    if (isOwnerUser()) return true;
+    return ROLE_RANK[userRole()] >= ROLE_RANK[deleteMinRole(view)];
+  }
+  // 작성 화면은 의뢰서 유형으로 판정한다
+  function canDeleteWo(wo) { return canDeleteHere(deleteScopeForType(wo && wo.type)); }
+  // 영구 삭제·휴지통 복구는 등급 그대로 (Firestore 규칙이 관리자만 허용)
+  function canPurge() { return isAdminEmail(); }
+  // 현재 화면의 삭제 권한을 body 클래스로 반영 (CSS 일괄 숨김)
+  function applyDeletePermClass() {
+    document.body.classList.toggle('is-no-delete', !canDeleteHere());
+    document.body.classList.toggle('is-no-purge', !canPurge());
+  }
   // 사이드바 메뉴에서 권한 없는 항목을 감춘다
   function applyMenuPermissions() {
     document.querySelectorAll('#sidebar-dashboard .dash-menu-btn[data-view]').forEach(btn => {
@@ -10078,21 +10122,26 @@ window.addEventListener('firebase-ready', () => {
       btn.style.display = canAccessView(v) ? '' : 'none';
     });
   }
-  async function saveViewPerms(obj) {
+  async function saveViewPerms(obj, delObj) {
     if (!isOwnerUser()) { toast('최고관리자만 바꿀 수 있습니다', 'error'); return false; }
     const clean = {};
+    const cleanDel = {};
     Object.keys(VIEW_PERMS_DEFAULT).forEach(k => {
       if (OWNER_LOCKED_VIEWS.includes(k)) return;
       const v = obj[k];
       if (v && ROLE_RANK[v] !== undefined) clean[k] = v;
+      const d = (delObj || {})[k];
+      if (d && ROLE_RANK[d] !== undefined) cleanDel[k] = d;
     });
     try {
       await setDoc(doc(db, 'settings', 'permissions'), {
         views: clean,
+        deletes: cleanDel,
         updated_at: serverTimestamp(),
         updated_by: state.user?.email || 'unknown'
       });
       state.viewPerms = clean;
+      state.viewDeletes = cleanDel;
       return true;
     } catch (e) {
       toast('권한 저장 실패: ' + e.message, 'error');
@@ -10307,7 +10356,9 @@ window.addEventListener('firebase-ready', () => {
     // hotfix260: 화면별 권한 구독
     onSnapshot(doc(db, 'settings', 'permissions'), snap => {
       state.viewPerms = (snap.exists() && snap.data().views && typeof snap.data().views === 'object') ? snap.data().views : {};
+      state.viewDeletes = (snap.exists() && snap.data().deletes && typeof snap.data().deletes === 'object') ? snap.data().deletes : {};
       applyMenuPermissions();
+      applyDeletePermClass();
       if (state.uiMode === 'dashboard' && !canAccessView(state.dashView)) {
         state.dashView = 'overview';
         renderDashboard();
@@ -10322,6 +10373,13 @@ window.addEventListener('firebase-ready', () => {
         updateOwnerLockBar();
         if (state.uiMode === 'dashboard' && OWNER_LOCKED_VIEWS.includes(state.dashView)) renderDashboard();
       }, err => console.warn('[owner security sub]', err.message));
+      // hotfix264: 원단별 원가 항목 구독 (최고관리자만 읽을 수 있음)
+      onSnapshot(doc(db, 'cost_data', 'fabric_cost'), snap => {
+        const d = snap.exists() ? snap.data() : null;
+        state.fabricCost = (d && d.items && typeof d.items === 'object') ? d.items : {};
+        state.fabricCostLoaded = true;
+        if (state.uiMode === 'dashboard' && state.dashView === 'fabricSpecs') renderDashboard();
+      }, err => console.warn('[fabricCost sub]', err.message));
     }
   }
   
@@ -10368,6 +10426,8 @@ window.addEventListener('firebase-ready', () => {
   async function saveFabricSpecs(items, gubuns) {
     const cleaned = (items || []).map(it => ({
       name: String(it.name || '').trim(),
+      // hotfix264: 품목 고정 코드 — 이름이 바뀌어도 원가 자료가 끊기지 않게 하는 열쇠
+      ...(String(it.fid || '').trim() ? { fid: String(it.fid).trim() } : {}),
       gubun: String(it.gubun || '').trim() || GUBUN_BODY,
       cat: String(it.cat || '').trim(),
       width: String(it.width || '').trim(),
@@ -10379,6 +10439,8 @@ window.addEventListener('firebase-ready', () => {
       ...(it.cautions ? { cautions: it.cautions } : {}),
       ...(it.updated_at ? { updated_at: it.updated_at } : {})
     })).filter(it => it.name);
+    // hotfix264: 코드가 없는 품목에만 새 코드를 붙인다 (이미 있는 코드는 절대 안 바뀜)
+    assignFabricIds(cleaned);
     // hotfix244: 구분 목록 — 인자 없으면 현재 목록 유지. 몸판·리프는 항상 앞에 고정.
     const gClean = [GUBUN_BODY, GUBUN_RIB];
     (Array.isArray(gubuns) ? gubuns : getFabricGubuns()).forEach(g => {
@@ -10402,7 +10464,7 @@ window.addEventListener('firebase-ready', () => {
   }
   // hotfix158: 거래처(업체) 저장 (관리자만) — settings/vendors
   async function saveVendors(items) {
-    if (!isAdminUser()) { toast('관리자만 변경할 수 있습니다', 'error'); return false; }
+    if (!isAdminEmail()) { toast('관리자만 변경할 수 있습니다', 'error'); return false; }
     const cleaned = (items || []).map(v => {
       const types = Array.isArray(v.types) ? v.types.filter(Boolean) : (v.type ? [String(v.type).trim()] : []);
       // hotfix166: 다른 표기(별칭) 보존 — 대표명과 중복·빈값 제거
@@ -10432,7 +10494,7 @@ window.addEventListener('firebase-ready', () => {
   }
   // hotfix83: 규격 허용치 저장 (관리자만) — settings/spec_tolerance
   async function saveSpecTol(obj) {
-    if (!isAdminUser()) { toast('관리자만 변경할 수 있습니다', 'error'); return false; }
+    if (!isAdminEmail()) { toast('관리자만 변경할 수 있습니다', 'error'); return false; }
     const clean = {
       width_upper: Math.max(0, num(obj.width_upper) || 0),
       width_lower: Math.max(0, num(obj.width_lower) || 0),
@@ -10505,6 +10567,101 @@ window.addEventListener('firebase-ready', () => {
     if (!name) return null;
     const key = String(name).trim().toLowerCase();
     return getFabricSpecs().find(s => String(s.name || '').trim().toLowerCase() === key) || null;
+  }
+
+  // ============================================================
+  // hotfix264: 원가 계산기 1단계 — 원단별 원가 항목
+  // ------------------------------------------------------------
+  //  · 직원이 읽어야 하는 [원단 기본 스펙]과 저장을 완전히 분리한다.
+  //    Firestore 규칙은 문서 단위로만 막히므로, 같은 문서에 두면 감출 수 없다.
+  //  · 이어 붙이는 열쇠는 품목명이 아니라 품목마다 한 번 붙는 고정 코드(fid).
+  //    품목명을 바꿔도 원가 자료가 끊기지 않는다.
+  // ============================================================
+  const COST_PROCS = [
+    '염색/물나염', '텐타', '덤블', '프리셋팅', '컴팩', '기모', '선바이오',
+    '봉침', '물나염과수', '수지텐', '후텐타', '실켓', '샤링', '후바이오', '기타'
+  ];
+  const COST_KNIT_LOSS_DEFAULT = 3;
+  const COST_FIN_LOSS_DEFAULT = 10;
+
+  // 품목 고정 코드 — 없는 품목에만 새로 붙인다. 한 번 붙으면 절대 바뀌지 않는다.
+  function assignFabricIds(list) {
+    const used = new Set();
+    let max = 0;
+    (list || []).forEach(it => {
+      const f = String((it && it.fid) || '').trim();
+      if (!f) return;
+      used.add(f);
+      const m = /^F(\d{4,})$/.exec(f);
+      if (m) max = Math.max(max, parseInt(m[1], 10) || 0);
+    });
+    (list || []).forEach(it => {
+      if (!it) return;
+      if (String(it.fid || '').trim()) { it.fid = String(it.fid).trim(); return; }
+      let code;
+      do { max += 1; code = 'F' + String(max).padStart(4, '0'); } while (used.has(code));
+      used.add(code);
+      it.fid = code;
+    });
+    return list;
+  }
+  function specFid(s) { return String((s && s.fid) || '').trim(); }
+
+  // 게이지 = TRUNC(침수 / 인치 / 3.14, 2)
+  function calcGage(inch, needles) {
+    const i = parseFloat(inch), n = parseFloat(needles);
+    if (!i || !n) return null;
+    return Math.trunc((n / i / 3.14) * 100) / 100;
+  }
+  // 혼용율 = 기여도 / 전체기여도합 × 100.  D환산 = (단위 '수') ? 5315 / 굵기 : 굵기
+  function calcYarnBlend(yarns) {
+    const rows = (Array.isArray(yarns) ? yarns : []).map(y => {
+      const size = parseFloat(y && y.size);
+      const loop = parseFloat(y && y.loop);
+      const name = String((y && y.name) || '').trim();
+      if (!name || !size || !loop) return { name, size, loop, unit: (y && y.unit) || 'D', contrib: 0, pct: 0 };
+      const d = (String((y && y.unit) || 'D') === '수') ? (5315 / size) : size;
+      return { name, size, loop, unit: (y && y.unit) || 'D', contrib: d * loop, pct: 0 };
+    });
+    const sum = rows.reduce((a, r) => a + (r.contrib || 0), 0);
+    if (sum > 0) rows.forEach(r => { r.pct = Math.round((r.contrib / sum) * 1000) / 10; });
+    return rows;
+  }
+  function blendStringFromYarns(yarns) {
+    return calcYarnBlend(yarns).filter(r => r.name && r.pct > 0)
+      .map(r => `${r.name} ${r.pct}%`).join(' ');
+  }
+
+  function getFabricCost(fid) {
+    const key = String(fid || '').trim();
+    if (!key) return null;
+    const all = (state.fabricCost && typeof state.fabricCost === 'object') ? state.fabricCost : {};
+    return all[key] || null;
+  }
+  function fabricCostFilled(fid) {
+    const c = getFabricCost(fid);
+    if (!c) return false;
+    if (Array.isArray(c.yarns) && c.yarns.some(y => y && String(y.name || '').trim())) return true;
+    return !!(String(c.code || '').trim() || String(c.machine || '').trim() || (Array.isArray(c.procs) && c.procs.length));
+  }
+  // 원가 항목 저장 — 최고관리자만. 한 품목만 병합해 쓴다(다른 품목 자료를 건드리지 않음).
+  async function saveFabricCost(fid, obj) {
+    const key = String(fid || '').trim();
+    if (!key) { toast('품목 코드가 없어 원가 자료를 저장하지 못했습니다', 'error'); return false; }
+    if (!isOwnerUser()) { toast('최고관리자만 저장할 수 있습니다', 'error'); return false; }
+    try {
+      await setDoc(doc(db, 'cost_data', 'fabric_cost'), {
+        items: { [key]: obj },
+        updated_at: serverTimestamp(),
+        updated_by: state.user?.email || 'unknown'
+      }, { merge: true });
+      if (!state.fabricCost || typeof state.fabricCost !== 'object') state.fabricCost = {};
+      state.fabricCost[key] = JSON.parse(JSON.stringify(obj));
+      return true;
+    } catch (e) {
+      toast('원가 자료 저장 실패: ' + e.message, 'error');
+      return false;
+    }
   }
   // 작성 화면 품목 자동완성 datalist 갱신
   function refreshFabricSpecDatalist() {
@@ -10805,8 +10962,8 @@ window.addEventListener('firebase-ready', () => {
       </div>`;
     document.getElementById('logout-btn').addEventListener('click', () => signOut(auth));
     
-    // v2.22: 관리자 외에는 body에 'is-not-admin' 클래스 부여 → CSS로 삭제/휴지통 UI 일괄 숨김
-    document.body.classList.toggle('is-not-admin', !isAdminUser());
+    // hotfix265: 등급 일괄 숨김 폐지 — 화면별 삭제 권한만 body 클래스로 반영
+    applyDeletePermClass();
     // hotfix260: 최고관리자 외에는 경영 전용 메뉴 숨김
     document.body.classList.toggle('is-not-owner', !isOwnerUser());
     applyMenuPermissions();
@@ -11055,7 +11212,7 @@ window.addEventListener('firebase-ready', () => {
             <button class="item-edit-btn" data-id="${wo.id}" title="원본을 수정합니다">수정</button>
             <button class="item-cancel-btn" data-id="${wo.id}" title="편집을 취소합니다">취소</button>
             <button class="item-copy-btn" data-id="${wo.id}" title="새 의뢰서로 복사합니다">복사</button>
-            ${isAdminUser() ? `<button class="item-delete-btn" data-id="${wo.id}" title="휴지통으로 보냅니다 (복구 가능)">삭제</button>` : ''}
+            ${canDeleteWo(wo) ? `<button class="item-delete-btn" data-id="${wo.id}" title="휴지통으로 보냅니다 (복구 가능)">삭제</button>` : ''}
           </div>
           <div class="item-num"><span class="item-type">${wo.type || '-'}</span>${escapeHtml(wo.wo_number) || ''}</div>
           <div class="item-title">${escapeHtml(title)}</div>
@@ -11135,10 +11292,10 @@ window.addEventListener('firebase-ready', () => {
     list.querySelectorAll('.item-delete-btn').forEach(btn => {
       btn.addEventListener('click', async (e) => {
         e.stopPropagation();
-        if (!isAdminUser()) { toast('삭제는 대표만 가능합니다', 'info'); return; }
         const id = btn.dataset.id;
         const wo = state.allWorkOrders.find(x => x.id === id);
         if (!wo) return;
+        if (!canDeleteWo(wo)) { toast('삭제 권한이 없습니다', 'info'); return; }
         if (!confirm(`이 의뢰서를 휴지통으로 보낼까요?\n\n[${wo.wo_number || ''}]\n\n(휴지통에서 복구할 수 있습니다. 완전 삭제가 아닙니다.)`)) return;
         btn.disabled = true;
         try {
@@ -11174,8 +11331,8 @@ window.addEventListener('firebase-ready', () => {
     setCopyModeBadge(false);
     state.isDirty = false;
     document.querySelectorAll('.history-item').forEach(el => el.classList.toggle('active', el.dataset.id === wo.id));
-    // v2.22: 삭제 버튼은 관리자에게만 표시
-    document.getElementById('delete-btn').style.display = isAdminUser() ? 'inline-block' : 'none';
+    // hotfix265: 삭제 버튼은 그 의뢰서 유형의 삭제 권한에 따라 표시
+    document.getElementById('delete-btn').style.display = canDeleteWo(wo) ? 'inline-block' : 'none';
     updateSaveStatus('저장됨', 'saved');
     render();
   }
@@ -11414,8 +11571,8 @@ function validateBlendSum(blends, label) {
         // v2.30/v2.32: 신규 저장 완료 → 복사·수정 모드 모두 종료
         setCopyModeBadge(false);
         setEditModeBadge(false);
-        // v2.22: 삭제 버튼은 관리자에게만 표시
-        document.getElementById('delete-btn').style.display = isAdminUser() ? 'inline-block' : 'none';
+        // hotfix265: 삭제 버튼은 그 의뢰서 유형의 삭제 권한에 따라 표시
+        document.getElementById('delete-btn').style.display = canDeleteHere(deleteScopeForType(d.type)) ? 'inline-block' : 'none';
         // 채번된 LOT을 입력칸에도 반영
         if (d.type === '원사' && d.lot_no) {
           const lotEl = document.getElementById('y_lot_no');
@@ -11483,18 +11640,8 @@ function validateBlendSum(blends, label) {
   }
 
   function switchDashView(view) {
-    // v2.22: 직원은 휴지통 뷰 진입 불가 (혹시 라도 들어가면 overview로 리다이렉트)
-    if (view === 'trash' && !isAdminUser()) {
-      view = 'overview';
-    }
-    // hotfix60: 대표 보고함은 관리자 전용
-    if ((view === 'ceoReports' || view === 'completeReports') && !isAdminUser()) {
-      view = 'overview';
-    }
-    // hotfix66: 원단 기본 스펙도 관리자 전용
-    if ((view === 'fabricSpecs' || view === 'specTol' || view === 'vendors') && !isAdminUser()) {
-      view = 'overview';
-    }
+    // hotfix265: 등급 하드코딩 폐지 — 화면 진입 권한은 [권한 관리] 설정 한 곳에서만 판정한다
+    //   (renderDashboard에서 canAccessView로 한 번 더 막는다)
     // v2.51 step3: 일일 보고는 페이지 전환 없이 모달만 진입
     // hotfix6: 관리자/직원 모두 사용 가능 (권한 체크 없음)
     if (view === 'daily-report') {
@@ -13260,7 +13407,7 @@ function validateBlendSum(blends, label) {
   function updateCeoReportBadge() {
     const badge = document.getElementById('ceo-report-badge');
     if (badge) {
-      if (!isAdminUser()) { badge.style.display = 'none'; }
+      if (!canAccessView('ceoReports')) { badge.style.display = 'none'; }
       else {
         const n = countCeoReports();
         if (n > 0) { badge.textContent = n > 99 ? '99+' : String(n); badge.style.display = 'inline-block'; }
@@ -13270,7 +13417,7 @@ function validateBlendSum(blends, label) {
     // hotfix91: 완료 보고 배지
     const cbadge = document.getElementById('complete-report-badge');
     if (cbadge) {
-      if (!isAdminUser()) { cbadge.style.display = 'none'; }
+      if (!canAccessView('completeReports')) { cbadge.style.display = 'none'; }
       else {
         const cn = countCompleteReports();
         if (cn > 0) { cbadge.textContent = cn > 99 ? '99+' : String(cn); cbadge.style.display = 'inline-block'; }
@@ -15355,7 +15502,7 @@ function validateBlendSum(blends, label) {
             await setColorFixResolve(woId, colorIdx, data);
             closeModal();
             toast(`"${cName}" 재검수 합격 — 완료 보고함에서 확인해 주세요`, 'success');
-            if (isAdminUser()) state.dashView = 'completeReports';
+            if (canAccessView('completeReports')) state.dashView = 'completeReports';
             renderDashboard();
           } catch (err) { toast('처리 실패: ' + err.message, 'error'); }
         });
@@ -15382,7 +15529,7 @@ function validateBlendSum(blends, label) {
             await setColorFixCeoHold(woId, colorIdx, data, dev);
             closeModal();
             toast(`"${cName}" 대표 보고함으로 올렸습니다`, 'info');
-            if (isAdminUser()) state.dashView = 'ceoReports';
+            if (canAccessView('ceoReports')) state.dashView = 'ceoReports';
             renderDashboard();
           } catch (err) { toast('대표 보고 실패: ' + err.message, 'error'); }
         });
@@ -19372,7 +19519,7 @@ function validateBlendSum(blends, label) {
       <th class="col-action">작업</th>
       <th class="col-action">복사</th>
       <th class="col-action">완료</th>
-      <th class="col-action">삭제</th>
+      <th class="col-action col-act-delete">삭제</th>
     </tr></thead><tbody>`;
     
     list.forEach(wo => {
@@ -19409,7 +19556,7 @@ function validateBlendSum(blends, label) {
         <td class="col-action"><button class="dash-action-btn dash-edit-btn" data-id="${wo.id}">수정</button></td>
         <td class="col-action"><button class="dash-action-btn dash-copy-btn" data-id="${wo.id}">복사</button></td>
         <td class="col-action"><input type="checkbox" class="dash-complete-cb" data-id="${wo.id}" ${wo.completed ? 'checked' : ''}> ${wo.completed ? '완료' : ''}</td>
-        <td class="col-action"><button class="dash-action-btn danger dash-delete-btn" data-id="${wo.id}">삭제</button></td>
+        <td class="col-action col-act-delete"><button class="dash-action-btn danger dash-delete-btn" data-id="${wo.id}">삭제</button></td>
       </tr>`;
     });
     
@@ -19599,7 +19746,7 @@ function validateBlendSum(blends, label) {
       <th class="col-action">작업</th>
       <th class="col-action">복사</th>
       <th class="col-action">완료</th>
-      <th class="col-action">삭제</th>
+      <th class="col-action col-act-delete">삭제</th>
     </tr></thead><tbody>`;
     
     list.forEach(wo => {
@@ -19667,7 +19814,7 @@ function validateBlendSum(blends, label) {
             <td class="col-action" rowspan="${rowspan}"><button class="dash-action-btn dash-edit-btn" data-id="${wo.id}">수정</button></td>
             <td class="col-action" rowspan="${rowspan}"><button class="dash-action-btn dash-copy-btn" data-id="${wo.id}">복사</button></td>
             <td class="col-action" rowspan="${rowspan}"><input type="checkbox" class="dash-complete-cb" data-id="${wo.id}" ${wo.completed ? 'checked' : ''}> ${wo.completed ? '완료' : ''}${showDoneSuggest ? `<div><button class="knit-done-suggest" data-id="${wo.id}" title="예상 재고가 0 이하입니다. 완료로 바꿀까요?">완료로?</button></div>` : ''}</td>
-            <td class="col-action" rowspan="${rowspan}"><button class="dash-action-btn danger dash-delete-btn" data-id="${wo.id}">삭제</button></td>`;
+            <td class="col-action col-act-delete" rowspan="${rowspan}"><button class="dash-action-btn danger dash-delete-btn" data-id="${wo.id}">삭제</button></td>`;
         }
         html += `</tr>`;
       });
@@ -19786,7 +19933,7 @@ function validateBlendSum(blends, label) {
       <th class="col-action">수정</th>
       <th class="col-action">복사</th>
       <th class="col-action">완료</th>
-      <th class="col-action">삭제</th>
+      <th class="col-action col-act-delete">삭제</th>
     </tr></thead><tbody>`;
     
     rowsToShow.forEach(({ wo, colorIdx, isFirstRow, totalRows }) => {
@@ -19979,7 +20126,7 @@ function validateBlendSum(blends, label) {
       }
       
       const deleteCell = isFirstRow 
-        ? `<td class="col-action" rowspan="${totalRows}"><button class="dash-action-btn danger dash-delete-btn" data-id="${wo.id}">삭제</button></td>` 
+        ? `<td class="col-action col-act-delete" rowspan="${totalRows}"><button class="dash-action-btn danger dash-delete-btn" data-id="${wo.id}">삭제</button></td>` 
         : '';
       
       html += `<tr class="${overdueClass} ${completedClass} ${groupBoundaryClass} ${qcClass}" data-row-id="${wo.id}" data-color-idx="${colorIdx}">
@@ -20045,7 +20192,7 @@ function validateBlendSum(blends, label) {
       <th class="col-action">작업</th>
       <th class="col-action">복사</th>
       <th class="col-action">완료</th>
-      <th class="col-action">삭제</th>
+      <th class="col-action col-act-delete">삭제</th>
     </tr></thead><tbody>`;
     
     list.forEach(wo => {
@@ -20070,7 +20217,7 @@ function validateBlendSum(blends, label) {
         <td class="col-action"><button class="dash-action-btn dash-edit-btn" data-id="${wo.id}">수정</button></td>
         <td class="col-action"><button class="dash-action-btn dash-copy-btn" data-id="${wo.id}">복사</button></td>
         <td class="col-action"><input type="checkbox" class="dash-complete-cb" data-id="${wo.id}" ${wo.completed ? 'checked' : ''}> ${wo.completed ? '완료' : ''}</td>
-        <td class="col-action"><button class="dash-action-btn danger dash-delete-btn" data-id="${wo.id}">삭제</button></td>
+        <td class="col-action col-act-delete"><button class="dash-action-btn danger dash-delete-btn" data-id="${wo.id}">삭제</button></td>
       </tr>`;
     });
     
@@ -20120,7 +20267,7 @@ function validateBlendSum(blends, label) {
       <th class="col-action">수정</th>
       <th class="col-action">복사</th>
       <th class="col-action">완료</th>
-      <th class="col-action">삭제</th>
+      <th class="col-action col-act-delete">삭제</th>
     </tr></thead><tbody>`;
     
     list.forEach(wo => {
@@ -20143,7 +20290,7 @@ function validateBlendSum(blends, label) {
         <td class="col-action"><button class="dash-action-btn dash-edit-btn" data-id="${wo.id}">수정</button></td>
         <td class="col-action"><button class="dash-action-btn dash-copy-btn" data-id="${wo.id}">복사</button></td>
         <td class="col-action"><input type="checkbox" class="dash-complete-cb" data-id="${wo.id}" ${wo.completed ? 'checked' : ''}> ${wo.completed ? '완료' : ''}</td>
-        <td class="col-action"><button class="dash-action-btn danger dash-delete-btn" data-id="${wo.id}">삭제</button></td>
+        <td class="col-action col-act-delete"><button class="dash-action-btn danger dash-delete-btn" data-id="${wo.id}">삭제</button></td>
       </tr>`;
     });
     
@@ -20229,7 +20376,7 @@ function validateBlendSum(blends, label) {
       <th>메모</th>
       <th class="col-action">문서</th>
       <th class="col-action">완료</th>
-      <th class="col-action">삭제</th>
+      <th class="col-action col-act-delete">삭제</th>
     </tr></thead><tbody>`;
 
     let sumJul = 0, sumKg = 0, hasEstimate = false;
@@ -20257,7 +20404,7 @@ function validateBlendSum(blends, label) {
         ${renderEditableCell(wo, 'internal_memo', wo.internal_memo, 'text')}
         <td class="col-action"><button class="dash-action-btn dash-view-btn" data-id="${wo.id}">보기</button> <button class="dash-action-btn dash-gs-edit-btn" data-id="${wo.id}">수정</button></td>
         <td class="col-action"><input type="checkbox" class="dash-complete-cb" data-id="${wo.id}" ${wo.completed ? 'checked' : ''}> ${wo.completed ? '완료' : ''}</td>
-        <td class="col-action"><button class="dash-action-btn danger dash-delete-btn" data-id="${wo.id}">삭제</button></td>
+        <td class="col-action col-act-delete"><button class="dash-action-btn danger dash-delete-btn" data-id="${wo.id}">삭제</button></td>
       </tr>`;
     });
 
@@ -20736,8 +20883,8 @@ function validateBlendSum(blends, label) {
     if (!c) { toast('컬러 정보를 찾을 수 없습니다', 'error'); return; }
     
     // 권한 재확인 (UI 우회 방지)
-    if (!isAdminUser() && c.discard_by !== state.user.email) {
-      toast('관리자 또는 본인이 처리한 클레임만 삭제할 수 있습니다', 'error');
+    if (!canDeleteHere('claims') && c.discard_by !== state.user.email) {
+      toast('삭제 권한이 있는 사람 또는 본인이 처리한 클레임만 삭제할 수 있습니다', 'error');
       return;
     }
     
@@ -20888,7 +21035,7 @@ function validateBlendSum(blends, label) {
   //   QC 합격해 "대표 확인 대기" 중인 차수를 카드로 모아 보여준다.
   //   대표가 각 카드 [✓ 확인 완료] 또는 상단 [✓ 전체 일괄 확인]으로 완료시킨다.
   function renderCompleteReports() {
-    if (!isAdminUser()) return `<div class="dash-empty">대표 전용 화면입니다.</div>`;
+    if (!canAccessView('completeReports')) return `<div class="dash-empty">이 화면을 볼 권한이 없습니다.</div>`;
     const reports = collectCompleteReports();
     let html = `<div style="font-size:12px;color:#555;margin:4px 0 12px;line-height:1.6;">
       QC 합격해 <strong>대표 확인을 기다리는</strong> 건입니다. 검수값과 이력을 확인하고 <strong>[✓ 확인 완료]</strong>를 누르면 비로소 완료됩니다.
@@ -21076,8 +21223,8 @@ function validateBlendSum(blends, label) {
   // 대표 확인이 필요한 모든 보고를 카드로 모아 보여주고, 여기서만 처리(승인/불량)한다.
   // 축률 이상은 대표가 [정상 승인]을 눌러야 비로소 완료된다. 그 전까지는 절대 완료 안 됨.
   function renderCeoReports() {
-    if (!isAdminUser()) {
-      return `<div class="dash-empty">대표 전용 화면입니다.</div>`;
+    if (!canAccessView('ceoReports')) {
+      return `<div class="dash-empty">이 화면을 볼 권한이 없습니다.</div>`;
     }
     const reports = collectCeoReports();
     let html = `<div style="font-size:12px;color:#555;margin:4px 0 12px;line-height:1.6;">
@@ -21400,7 +21547,7 @@ function validateBlendSum(blends, label) {
           <td class="col-act">
             <button class="dash-act-btn claims-act-report" data-id="${wo.id}" data-color-idx="${x.colorIdx}"${partialAttr} title="정산 내역서 출력">내역서</button>
             <button class="dash-act-btn claims-act-edit" data-id="${wo.id}" data-color-idx="${x.colorIdx}"${partialAttr} title="클레임 정보 수정">✎ 수정</button>
-            ${(isAdminUser() || c.discard_by === state.user.email || isPartial) ? `<button class="dash-act-btn claims-act-delete" data-id="${wo.id}" data-color-idx="${x.colorIdx}"${partialAttr} title="클레임 삭제">✕ 삭제</button>` : ''}
+            ${(canDeleteHere('claims') || c.discard_by === state.user.email || isPartial) ? `<button class="dash-act-btn claims-act-delete" data-id="${wo.id}" data-color-idx="${x.colorIdx}"${partialAttr} title="클레임 삭제">✕ 삭제</button>` : ''}
           </td>
         </tr>`;
       });
@@ -21766,7 +21913,7 @@ function validateBlendSum(blends, label) {
   let vdSortDir = 'asc';
   let vdShowOff = false;
   function renderVendors() {
-    if (!isAdminUser()) return `<div class="dash-empty">대표 전용 화면입니다.</div>`;
+    if (!isAdminEmail()) return `<div class="dash-empty">관리자 전용 화면입니다.</div>`;
     const vs = state.vendors || [];
     const offCnt = vs.filter(v => !vendorIsActive(v)).length;
     const lblS = 'font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:4px;';
@@ -21950,14 +22097,18 @@ function validateBlendSum(blends, label) {
   let fsSortDir = 'asc';
   let fsShowOff = false;
   function renderFabricSpecs() {
-    if (!isAdminUser()) return `<div class="dash-empty">대표 전용 화면입니다.</div>`;
+    if (!isAdminEmail()) return `<div class="dash-empty">관리자 전용 화면입니다.</div>`;
     const specs = getFabricSpecs();
     const gubuns = getFabricGubuns();
+    // hotfix264: 원가 항목은 최고관리자에게만, 그것도 경영 자료가 풀려 있을 때만 보인다
+    const costOn = isOwnerUser() && !ownerIsLocked();
     const inputStyle = 'width:100%;padding:7px 9px;border:1px solid #d1d5db;border-radius:5px;font-size:13px;font-family:inherit;box-sizing:border-box;';
     let h = `<div style="font-size:12px;color:#555;margin:4px 0 12px;line-height:1.6;">
       품목별 표준 작업 스펙입니다. 작업의뢰서에서 품목을 고르면 <strong>기준 폭·중량</strong>이 자동으로 채워지고,
       <strong>[기준 불러오기]</strong>를 누르면 <strong>혼용율·튜브·주의사항</strong>까지 한 번에 채워집니다.
-      (샘플·신규 원단은 작업의뢰서에서 직접 입력하면 됩니다.) 단가는 단가관리 시스템에서 관리하므로 여기엔 없습니다.
+      (샘플·신규 원단은 작업의뢰서에서 직접 입력하면 됩니다.)${costOn ? `
+      <br><strong style="color:#0f172a;">최고관리자에게는 품목 수정 창 아래에 원가 자료 칸이 더 보입니다.</strong>
+      원사 구성·게이지·가공법·로스는 <strong>따로 잠긴 곳</strong>에 저장되어 직원·관리자에게는 보이지 않습니다.` : ' 단가는 단가관리 시스템에서 관리하므로 여기엔 없습니다.'}
     </div>
     <div style="margin:0 0 10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
       <button class="dash-action-btn" id="fs-add-btn" style="background:#1e3a8a;color:#fff;font-weight:700;padding:6px 14px;">＋ 새 품목 추가</button>
@@ -22002,10 +22153,10 @@ function validateBlendSum(blends, label) {
     });
     const fsArrow = (k) => fsSortKey === k ? (fsSortDir === 'asc' ? ' ▲' : ' ▼') : ' <span style="color:#cbd5e1;">↕</span>';
     h += `<div class="dash-table-wrap"><table class="dash-table"><thead><tr>
-      <th class="fs-sort-th" data-key="name" style="text-align:left;cursor:pointer;" title="품목명으로 정렬">품목명${fsArrow('name')}</th><th class="fs-sort-th" data-key="gubun" style="cursor:pointer;" title="구분으로 정렬">구분${fsArrow('gubun')}</th><th>${fsGubunFilter === GUBUN_RIB ? '짝 몸판' : (fsGubunFilter === GUBUN_BODY ? '짝 리프' : '짝 연결')}</th><th>조직</th><th>기준 폭</th><th>튜브</th><th>중량 g/y</th><th style="text-align:left;">혼용률</th><th>마지막 수정일</th><th>판매</th><th>수정</th><th>삭제</th>
+      <th class="fs-sort-th" data-key="name" style="text-align:left;cursor:pointer;" title="품목명으로 정렬">품목명${fsArrow('name')}</th><th class="fs-sort-th" data-key="gubun" style="cursor:pointer;" title="구분으로 정렬">구분${fsArrow('gubun')}</th><th>${fsGubunFilter === GUBUN_RIB ? '짝 몸판' : (fsGubunFilter === GUBUN_BODY ? '짝 리프' : '짝 연결')}</th><th>조직</th><th>기준 폭</th><th>튜브</th><th>중량 g/y</th><th style="text-align:left;">혼용률</th>${costOn ? `<th title="원가 항목이 등록된 품목">원가</th>` : ''}<th>마지막 수정일</th><th>판매</th><th>수정</th><th>삭제</th>
     </tr></thead><tbody>`;
     if (shown.length === 0) {
-      h += `<tr><td colspan="12" style="text-align:center;color:#9ca3af;padding:18px;">${specs.length === 0 ? '등록된 품목이 없습니다. [＋ 새 품목 추가] 또는 [기본 품목 채우기]' : (fsq ? `"${escapeHtml(fsSearch)}" 검색 결과가 없습니다.` : '이 구분에 등록된 품목이 없습니다.')}</td></tr>`;
+      h += `<tr><td colspan="${costOn ? 13 : 12}" style="text-align:center;color:#9ca3af;padding:18px;">${specs.length === 0 ? '등록된 품목이 없습니다. [＋ 새 품목 추가] 또는 [기본 품목 채우기]' : (fsq ? `"${escapeHtml(fsSearch)}" 검색 결과가 없습니다.` : '이 구분에 등록된 품목이 없습니다.')}</td></tr>`;
     }
     shown.forEach(({ s, i }) => {
       const pairOk = s.pair_rib ? !!findPairRibSpec(s) : true;
@@ -22030,6 +22181,9 @@ function validateBlendSum(blends, label) {
         <td style="text-align:center;">${s.tube ? '✔' : '-'}</td>
         <td style="text-align:center;">${(s.gy != null && s.gy !== '') ? escapeHtml(String(s.gy)) : '-'}</td>
         <td style="text-align:left;color:${blendBad ? '#b91c1c' : '#6b7280'};font-size:12px;">${escapeHtml(s.blend || '-')}${blendBad ? ` <span style="font-weight:800;" title="혼용률 합계가 100%가 아닙니다">합 ${Math.round(_bsum * 100) / 100}%</span>` : ''}</td>
+        ${costOn ? `<td style="text-align:center;font-size:11px;">${fabricCostFilled(specFid(s))
+          ? `<span style="display:inline-block;padding:2px 9px;border-radius:10px;background:#ecfdf5;border:1px solid #a7f3d0;color:#047857;font-weight:800;">등록</span>`
+          : `<span style="color:#c7cbd1;">-</span>`}</td>` : ''}
         <td style="text-align:center;color:#6b7280;font-size:12px;">${escapeHtml(s.updated_at || '-')}</td>
         <td class="col-action" style="text-align:center;"><button class="dash-action-btn fs-sale-btn" data-idx="${i}" style="font-size:11px;${onSale ? '' : 'color:#b45309;border-color:#fcd34d;'}" title="${onSale ? '작지 품목칸 목록에서 숨깁니다 (기존 의뢰서는 그대로)' : '다시 품목칸 목록에 보이게 합니다'}">${onSale ? '판매 종료' : '판매 재개'}</button></td>
         <td class="col-action col-act-edit"><button class="dash-action-btn fs-edit-btn" data-idx="${i}">수정</button></td>
@@ -22039,7 +22193,7 @@ function validateBlendSum(blends, label) {
     h += `</tbody></table></div>`;
     // 편집 모달
     h += `<div class="dash-modal-bg" id="fs-modal">
-      <div class="dash-modal" style="max-width:460px;">
+      <div class="dash-modal" style="max-width:${costOn ? '780px' : '460px'};">
         <div class="dash-modal-head"><span id="fs-modal-title">품목 추가</span><button class="dash-modal-close" id="fs-modal-close">✕</button></div>
         <div style="padding:16px;display:flex;flex-direction:column;gap:11px;">
           <div><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">품목명</label><input type="text" id="fs-f-name" style="${inputStyle}" placeholder="예: 슈퍼싱글"></div>
@@ -22094,6 +22248,54 @@ function validateBlendSum(blends, label) {
               </div>
             </div>
           </div>
+          ${costOn ? `<div id="fs-cost-wrap" style="border:1px solid #cbd5e1;background:#f8fafc;border-radius:8px;padding:12px 13px;margin-top:4px;">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:9px;">
+              <span style="font-size:12.5px;font-weight:800;color:#0f172a;">원가 자료</span>
+              <span style="font-size:11px;font-weight:700;color:#b45309;background:#fef3c7;border:1px solid #fde68a;border-radius:9px;padding:1px 8px;">최고관리자 전용</span>
+              <span style="font-size:11px;color:#94a3b8;">직원·관리자에게는 이 칸이 보이지 않고, 자료도 따로 잠겨 저장됩니다</span>
+              <span id="fs-cost-code" style="margin-left:auto;font-size:11px;color:#94a3b8;font-weight:700;"></span>
+            </div>
+            <div style="display:flex;gap:8px;margin-bottom:9px;flex-wrap:wrap;">
+              <div style="flex:1;min-width:120px;"><label style="font-size:11.5px;font-weight:700;color:#475569;display:block;margin-bottom:3px;">코드명</label><input type="text" id="fs-c-code" autocomplete="off" style="${inputStyle}" placeholder="예: RS-400S"></div>
+              <div style="flex:1;min-width:110px;"><label style="font-size:11.5px;font-weight:700;color:#475569;display:block;margin-bottom:3px;">기계</label><input type="text" id="fs-c-machine" autocomplete="off" style="${inputStyle}" placeholder="예: 싱글 30G"></div>
+              <div style="flex:1.2;min-width:140px;"><label style="font-size:11.5px;font-weight:700;color:#475569;display:block;margin-bottom:3px;">편직처</label><select id="fs-c-knitter" style="${inputStyle}"></select></div>
+            </div>
+            <div style="display:flex;gap:8px;margin-bottom:11px;flex-wrap:wrap;">
+              <div style="flex:1;min-width:90px;"><label style="font-size:11.5px;font-weight:700;color:#475569;display:block;margin-bottom:3px;">인치</label><input type="number" step="0.1" id="fs-c-inch" style="${inputStyle}" placeholder="34"></div>
+              <div style="flex:1;min-width:90px;"><label style="font-size:11.5px;font-weight:700;color:#475569;display:block;margin-bottom:3px;">침수</label><input type="number" step="1" id="fs-c-needles" style="${inputStyle}" placeholder="3204"></div>
+              <div style="flex:1;min-width:90px;"><label style="font-size:11.5px;font-weight:700;color:#475569;display:block;margin-bottom:3px;">게이지 (자동)</label><input type="text" id="fs-c-gage" readonly style="${inputStyle}background:#eef2f7;font-weight:800;color:#0f172a;"></div>
+              <div style="flex:1;min-width:110px;"><label style="font-size:11.5px;font-weight:700;color:#475569;display:block;margin-bottom:3px;">제작중량 g/y</label><input type="number" step="1" id="fs-c-makegy" style="${inputStyle}" placeholder="비우면 안내중량 사용"></div>
+            </div>
+            <div style="font-size:11.5px;font-weight:800;color:#0f172a;margin-bottom:5px;">원사 구성 <span style="font-weight:400;color:#94a3b8;">— 사종·굵기·단위·루프장을 넣으면 혼용율이 자동으로 나옵니다 (최대 4개)</span></div>
+            <table style="width:100%;border-collapse:collapse;font-size:12px;background:#fff;border:1px solid #e2e8f0;border-radius:6px;overflow:hidden;">
+              <thead><tr style="background:#f1f5f9;color:#475569;font-size:11px;">
+                <th style="padding:5px 6px;text-align:left;">사종</th><th style="padding:5px 6px;width:80px;">굵기</th><th style="padding:5px 6px;width:74px;">단위</th><th style="padding:5px 6px;width:86px;">루프장</th><th style="padding:5px 6px;width:78px;">혼용율</th>
+              </tr></thead>
+              <tbody>
+                ${[0, 1, 2, 3].map(k => `<tr>
+                  <td style="padding:3px 5px;"><input type="text" class="fs-c-y-name" data-k="${k}" autocomplete="off" style="${inputStyle}padding:5px 7px;font-size:12px;" placeholder="${k === 0 ? '예: CM30' : ''}"></td>
+                  <td style="padding:3px 5px;"><input type="number" step="0.01" class="fs-c-y-size" data-k="${k}" style="${inputStyle}padding:5px 7px;font-size:12px;text-align:right;"></td>
+                  <td style="padding:3px 5px;"><select class="fs-c-y-unit" data-k="${k}" style="${inputStyle}padding:5px 4px;font-size:12px;"><option value="D">D</option><option value="수">수</option></select></td>
+                  <td style="padding:3px 5px;"><input type="number" step="0.01" class="fs-c-y-loop" data-k="${k}" style="${inputStyle}padding:5px 7px;font-size:12px;text-align:right;"></td>
+                  <td class="fs-c-y-pct" data-k="${k}" style="padding:3px 5px;text-align:right;font-weight:800;color:#0f172a;">-</td>
+                </tr>`).join('')}
+              </tbody>
+            </table>
+            <div style="display:flex;align-items:center;gap:9px;margin:7px 0 12px;">
+              <span id="fs-c-blend-sum" style="font-size:11.5px;font-weight:800;color:#475569;"></span>
+              <button type="button" class="dash-action-btn" id="fs-c-blend-apply" style="font-size:11px;padding:4px 10px;" title="자동 계산된 혼용율을 위쪽 혼용률 칸에 넣습니다">혼용률 칸에 넣기</button>
+            </div>
+            <div style="display:flex;gap:8px;margin-bottom:9px;flex-wrap:wrap;">
+              <div style="flex:1;min-width:140px;"><label style="font-size:11.5px;font-weight:700;color:#475569;display:block;margin-bottom:3px;">염색처</label><select id="fs-c-dyer" style="${inputStyle}"></select></div>
+              <div style="flex:1;min-width:140px;"><label style="font-size:11.5px;font-weight:700;color:#475569;display:block;margin-bottom:3px;">가공처</label><select id="fs-c-finisher" style="${inputStyle}"></select></div>
+              <div style="flex:0.7;min-width:100px;"><label style="font-size:11.5px;font-weight:700;color:#475569;display:block;margin-bottom:3px;">편직로스 %</label><input type="number" step="0.1" id="fs-c-knitloss" style="${inputStyle}text-align:right;" placeholder="${COST_KNIT_LOSS_DEFAULT}"></div>
+              <div style="flex:0.7;min-width:100px;"><label style="font-size:11.5px;font-weight:700;color:#475569;display:block;margin-bottom:3px;">가공로스 %</label><input type="number" step="0.1" id="fs-c-finloss" style="${inputStyle}text-align:right;" placeholder="${COST_FIN_LOSS_DEFAULT}"></div>
+            </div>
+            <div style="font-size:11.5px;font-weight:800;color:#0f172a;margin-bottom:5px;">가공법 <span style="font-weight:400;color:#94a3b8;">— 이 원단이 늘 거치는 공정을 체크해 두면 원가 계산 화면에서 자동으로 잡힙니다</span></div>
+            <div style="display:flex;flex-wrap:wrap;gap:6px 14px;background:#fff;border:1px solid #e2e8f0;border-radius:6px;padding:8px 10px;">
+              ${COST_PROCS.map(p => `<label style="display:inline-flex;align-items:center;gap:5px;font-size:12px;cursor:pointer;color:#334155;"><input type="checkbox" class="fs-c-proc" value="${escapeHtml(p)}" style="width:14px;height:14px;"> ${escapeHtml(p)}</label>`).join('')}
+            </div>
+          </div>` : ''}
           <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:6px;">
             <button class="dash-action-btn" id="fs-modal-cancel" style="padding:7px 16px;">취소</button>
             <button class="dash-action-btn" id="fs-modal-save" style="background:#1e3a8a;color:#fff;font-weight:700;padding:7px 18px;">저장</button>
@@ -22148,7 +22350,7 @@ function validateBlendSum(blends, label) {
   }
 
   function renderStampSettings() {
-    if (!isAdminUser()) {
+    if (!isAdminEmail()) {
       return `<div class="dash-empty">관리자 전용 화면입니다.<br>관리자 권한이 있는 계정으로 로그인해 주세요.</div>`;
     }
     
@@ -22301,7 +22503,7 @@ function validateBlendSum(blends, label) {
           toast('되돌렸습니다');
         }
         else if (action === 'save') {
-          if (!isAdminUser()) {
+          if (!isAdminEmail()) {
             toast('관리자만 저장할 수 있습니다', 'error');
             return;
           }
@@ -22433,6 +22635,8 @@ function validateBlendSum(blends, label) {
     let h = `<div style="background:#f5f3ff;border:1px solid #ddd6fe;border-radius:8px;padding:12px 14px;margin-bottom:14px;font-size:12.5px;color:#5b21b6;line-height:1.7;">
       화면마다 <strong>누가 볼 수 있는지</strong>를 체크로 정합니다. 최고관리자는 언제나 전부 볼 수 있습니다.<br>
       <strong>관리자</strong> 체크를 풀면 그 화면은 최고관리자만 보게 됩니다. <strong>직원</strong> 체크를 풀면 관리자까지만 봅니다.<br>
+      <strong>화면을 열어주면 그 화면은 대표가 보는 것과 똑같이 보입니다.</strong> 수정·복사·완료·부족·재염 같은 작업 버튼이 전부 나옵니다.<br>
+      <strong>삭제만은 따로</strong>입니다. 오른쪽 [삭제] 칸에서 화면마다 누구까지 지울 수 있는지 정하십시오. 기본은 관리자까지입니다.<br>
       바꾼 뒤 <strong>[저장]</strong>을 눌러야 반영되고, 그 사람이 화면을 새로 고치면 바로 적용됩니다.
     </div>`;
     h += `<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:11px 14px;margin-bottom:16px;font-size:12px;color:#b91c1c;line-height:1.7;">
@@ -22452,7 +22656,7 @@ function validateBlendSum(blends, label) {
     groups.forEach(([title, views]) => {
       h += `<div style="font-size:13px;font-weight:800;color:#1f2937;margin:14px 0 6px;">${title}</div>`;
       h += `<div class="dash-table-wrap" style="max-width:640px;"><table class="dash-table"><thead><tr>
-        <th>화면</th><th style="width:110px;text-align:center;">관리자</th><th style="width:110px;text-align:center;">직원</th><th>지금 보이는 사람</th>
+        <th>화면</th><th style="width:96px;text-align:center;">관리자</th><th style="width:88px;text-align:center;">직원</th><th style="width:150px;text-align:center;">삭제</th><th>지금 보이는 사람</th>
       </tr></thead><tbody>`;
       views.forEach(v => {
         const cur = viewMinRole(v);
@@ -22460,12 +22664,19 @@ function validateBlendSum(blends, label) {
         const admOk = ROLE_RANK[cur] <= ROLE_RANK.admin;
         const stfOk = cur === 'staff';
         const who = cur === 'owner' ? '최고관리자만' : (cur === 'admin' ? '최고관리자 · 관리자' : '전원');
+        const delCur = deleteMinRole(v);   // hotfix265: 화면별 삭제 권한
         h += `<tr>
           <td style="font-weight:700;">${escapeHtml(VIEW_LABELS[v] || v)}</td>
           <td style="text-align:center;">${locked ? '<span style="font-size:11.5px;color:#9ca3af;">불가</span>'
             : `<input type="checkbox" class="perm-adm" data-perm-view="${v}" ${admOk ? 'checked' : ''} style="width:16px;height:16px;cursor:pointer;">`}</td>
           <td style="text-align:center;">${locked ? '<span style="font-size:11.5px;color:#9ca3af;">불가</span>'
             : `<input type="checkbox" class="perm-stf" data-perm-view="${v}" ${stfOk ? 'checked' : ''} ${admOk ? '' : 'disabled'} style="width:16px;height:16px;cursor:pointer;">`}</td>
+          <td style="text-align:center;">${(locked || v === 'daily-report') ? '<span style="font-size:11.5px;color:#9ca3af;">해당 없음</span>'
+            : `<select class="perm-del" data-perm-view="${v}" style="width:100%;padding:4px 6px;border:1px solid #d1d5db;border-radius:5px;font-size:12px;font-family:inherit;">
+                <option value="owner"${delCur === 'owner' ? ' selected' : ''}>대표만</option>
+                <option value="admin"${delCur === 'admin' ? ' selected' : ''}>관리자까지</option>
+                <option value="staff"${delCur === 'staff' ? ' selected' : ''}>직원까지</option>
+              </select>`}</td>
           <td style="font-size:12px;color:#6b7280;">${who}</td>
         </tr>`;
       });
@@ -22487,6 +22698,15 @@ function validateBlendSum(blends, label) {
       if (!adm.checked) next[v] = 'owner';
       else if (stf && stf.checked) next[v] = 'staff';
       else next[v] = 'admin';
+    });
+    return next;
+  }
+  // hotfix265: 화면별 삭제 권한 수집
+  function permCollectDeletesFromScreen() {
+    const next = {};
+    document.querySelectorAll('#dash-body .perm-del').forEach(sel => {
+      const v = sel.dataset.permView;
+      if (v && ROLE_RANK[sel.value] !== undefined) next[v] = sel.value;
     });
     return next;
   }
@@ -22813,7 +23033,7 @@ function validateBlendSum(blends, label) {
       <div class="cfb-row">
         <input type="text" id="cf-search" class="cfb-search" placeholder="의뢰번호 / 품목 / 컬러 / 거래처 검색" value="${escapeHtml(f.search)}">
         <button class="cfb-btn-reset" id="cf-reset" ${isFiltered ? '' : 'disabled'}>초기화</button>
-        ${isAdminUser() ? `<button class="cfb-btn-danger" id="cf-delete-all" ${list.length === 0 ? 'disabled' : ''}>보이는 결과 전체 삭제 (${list.length})</button>` : ''}
+        ${canDeleteHere('completed') ? `<button class="cfb-btn-danger" id="cf-delete-all" ${list.length === 0 ? 'disabled' : ''}>보이는 결과 전체 삭제 (${list.length})</button>` : ''}
       </div>
       <div class="cfb-row">
         <label class="cfb-label">유형
@@ -22885,7 +23105,7 @@ function validateBlendSum(blends, label) {
       <th class="col-action">복사</th>
       <th class="col-action">수정</th>
       <th class="col-action">완료해제</th>
-      <th class="col-action">삭제</th>
+      <th class="col-action col-act-delete">삭제</th>
     </tr></thead><tbody>`;
     
     list.forEach(wo => {
@@ -22928,7 +23148,7 @@ function validateBlendSum(blends, label) {
             <td class="col-action"><button class="dash-action-btn dash-copy-btn" data-id="${wo.id}">복사</button></td>
             <td class="col-action"><button class="dash-action-btn dash-edit-btn" data-id="${wo.id}">수정</button></td>
             <td class="col-action"><input type="checkbox" class="dash-complete-cb" data-id="${wo.id}" checked> 완료</td>
-            <td class="col-action"><button class="dash-action-btn danger dash-delete-btn" data-id="${wo.id}">삭제</button></td>
+            <td class="col-action col-act-delete"><button class="dash-action-btn danger dash-delete-btn" data-id="${wo.id}">삭제</button></td>
           </tr>`;
           return;
         }
@@ -23035,7 +23255,7 @@ function validateBlendSum(blends, label) {
             ${isFirst ? `<td class="col-action" rowspan="${totalRows}"><button class="dash-action-btn dash-copy-btn" data-id="${wo.id}">복사</button></td>` : ''}
             ${isFirst ? `<td class="col-action" rowspan="${totalRows}"><button class="dash-action-btn dash-edit-btn" data-id="${wo.id}">수정</button></td>` : ''}
             <td class="col-action"><input type="checkbox" class="dash-color-complete-cb" data-id="${wo.id}" data-color-idx="${cIdx}" checked> 완료</td>
-            ${isFirst ? `<td class="col-action" rowspan="${totalRows}"><button class="dash-action-btn danger dash-delete-btn" data-id="${wo.id}">삭제</button></td>` : ''}
+            ${isFirst ? `<td class="col-action col-act-delete" rowspan="${totalRows}"><button class="dash-action-btn danger dash-delete-btn" data-id="${wo.id}">삭제</button></td>` : ''}
           </tr>`;
         });
         return;
@@ -23099,7 +23319,7 @@ function validateBlendSum(blends, label) {
         <td class="col-action"><button class="dash-action-btn dash-copy-btn" data-id="${wo.id}">복사</button></td>
         <td class="col-action"><button class="dash-action-btn dash-edit-btn" data-id="${wo.id}">수정</button></td>
         <td class="col-action"><input type="checkbox" class="dash-complete-cb" data-id="${wo.id}" checked> 완료</td>
-        <td class="col-action"><button class="dash-action-btn danger dash-delete-btn" data-id="${wo.id}">삭제</button></td>
+        <td class="col-action col-act-delete"><button class="dash-action-btn danger dash-delete-btn" data-id="${wo.id}">삭제</button></td>
       </tr>`;
     });
     
@@ -24803,7 +25023,7 @@ function validateBlendSum(blends, label) {
         <table class="dash-table"><thead><tr>
           <th style="text-align:center;">스탬프</th><th style="text-align:center;">발주일</th><th style="text-align:center;">경과</th>
           <th>나염용원단명</th><th>디자인명</th><th>원단컬러</th><th>나염컬러</th><th style="text-align:center;">수량</th>
-          <th>거래처(공정)</th><th>메모</th><th style="text-align:center;">작지</th><th style="text-align:center;">수정</th><th style="text-align:center;">복사</th><th style="text-align:center;">완료</th><th style="text-align:center;">삭제</th>
+          <th>거래처(공정)</th><th>메모</th><th style="text-align:center;">작지</th><th style="text-align:center;">수정</th><th style="text-align:center;">복사</th><th style="text-align:center;">완료</th><th class="col-act-delete" style="text-align:center;">삭제</th>
         </tr></thead><tbody>${body}</tbody></table>
       </div>`;
     };
@@ -24956,6 +25176,7 @@ function validateBlendSum(blends, label) {
       state.overviewTypeFilter = state.overviewTypeFilter || '염색가공';
     }
     applyMenuPermissions();
+    applyDeletePermClass();   // hotfix265: 화면마다 삭제 권한이 다를 수 있다
     // hotfix140: 표 안 유형 필터로 바꿔도 사이드바가 현재 카테고리를 정확히 가리키게
     syncSidebarActive();
     // hotfix140: 현재 유형 필터에 맞는 라벨/등록버튼 텍스트 준비
@@ -25348,7 +25569,7 @@ function validateBlendSum(blends, label) {
         <th>수신처</th><th>사종</th><th class="col-num">수량</th><th class="col-num">총 kg</th>
         <th>출고처</th><th>납기일</th><th>용도</th><th class="col-date">입고일</th>
         <th>메모</th><th class="col-action">작지</th><th class="col-action">작업</th>
-        <th class="col-action">복사</th><th class="col-action">완료</th><th class="col-action">삭제</th>
+        <th class="col-action">복사</th><th class="col-action">완료</th><th class="col-action col-act-delete">삭제</th>
       </tr></thead><tbody></tbody></table></div>`;
     }
     if (type === 'knit') {
@@ -25359,7 +25580,7 @@ function validateBlendSum(blends, label) {
         <th class="col-num">예상 kg</th><th>원사 입고</th><th class="col-action">생지 출고</th>
         <th class="col-num">예상 재고 절</th><th class="col-num">예상 재고 kg</th>
         <th>메모</th><th class="col-action">작지</th><th class="col-action">작업</th>
-        <th class="col-action">복사</th><th class="col-action">완료</th><th class="col-action">삭제</th>
+        <th class="col-action">복사</th><th class="col-action">완료</th><th class="col-action col-act-delete">삭제</th>
       </tr></thead><tbody></tbody></table></div>`;
     }
     if (type === 'finish') {
@@ -25371,7 +25592,7 @@ function validateBlendSum(blends, label) {
         <th class="col-date">염색완료</th><th>가공처</th><th class="col-date">가공완료</th>
         <th>후가공처</th><th class="col-date">후가공완료</th><th class="col-action">LOT</th>
         <th>메모</th><th class="col-action">작지</th><th class="col-action">작업</th>
-        <th class="col-action">복사</th><th class="col-action">완료</th><th class="col-action">삭제</th>
+        <th class="col-action">복사</th><th class="col-action">완료</th><th class="col-action col-act-delete">삭제</th>
       </tr></thead><tbody></tbody></table></div>`;
     }
     if (type === 'bt') {
@@ -25381,7 +25602,7 @@ function validateBlendSum(blends, label) {
         <th>염색공장</th><th>품명</th><th>혼용율</th><th class="col-num">컬러수</th>
         <th class="col-date">결과수령일</th><th>판정</th><th>메모</th>
         <th class="col-action">작지</th><th class="col-action">작업</th>
-        <th class="col-action">복사</th><th class="col-action">완료</th><th class="col-action">삭제</th>
+        <th class="col-action">복사</th><th class="col-action">완료</th><th class="col-action col-act-delete">삭제</th>
       </tr></thead><tbody></tbody></table></div>`;
     }
     return '';
@@ -26382,7 +26603,7 @@ function validateBlendSum(blends, label) {
     document.querySelectorAll('#dash-body .dash-goto-complete-rep').forEach(btn => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
-        if (isAdminUser()) { switchDashView('completeReports'); }
+        if (canAccessView('completeReports')) { switchDashView('completeReports'); }
         else { toast('완료 보고는 대표가 확인합니다 — 검수는 끝났습니다', 'info'); }
       });
     });
@@ -26687,7 +26908,7 @@ function validateBlendSum(blends, label) {
     document.querySelectorAll('#dash-body .np-del').forEach(btn => {
       btn.addEventListener('click', async (e) => {
         e.stopPropagation();
-        if (!isAdminUser()) { toast('삭제는 대표만 가능합니다', 'info'); return; }
+        if (!canDeleteHere('print')) { toast('삭제 권한이 없습니다', 'info'); return; }
         const id = btn.dataset.id;
         const wo = state.allWorkOrders.find(w => w.id === id); if (!wo) return;
         if (!confirm(`이 나염작지를 휴지통으로 보낼까요?\n\n[${wo.wo_number || ''}] ${wo.design_name || ''}\n\n(휴지통에서 복구할 수 있습니다)`)) return;
@@ -26703,7 +26924,7 @@ function validateBlendSum(blends, label) {
     document.querySelectorAll('#dash-body .np-rdel').forEach(btn => {
       btn.addEventListener('click', async (e) => {
         e.stopPropagation();
-        if (!isAdminUser()) { toast('삭제는 대표만 가능합니다', 'info'); return; }
+        if (!canDeleteHere('print')) { toast('삭제 권한이 없습니다', 'info'); return; }
         const id = btn.dataset.id; const ri = parseInt(btn.dataset.ri, 10);
         const wo = state.allWorkOrders.find(w => w.id === id); if (!wo) return;
         const r = (wo.print_rows || [])[ri]; if (!r) return;
@@ -26725,7 +26946,7 @@ function validateBlendSum(blends, label) {
     document.querySelectorAll('#dash-body .np-rrestore').forEach(btn => {
       btn.addEventListener('click', async (e) => {
         e.stopPropagation();
-        if (!isAdminUser()) { toast('복구는 대표만 가능합니다', 'info'); return; }
+        if (!canDeleteHere('print')) { toast('복구 권한이 없습니다', 'info'); return; }
         const id = btn.dataset.id; const ri = parseInt(btn.dataset.ri, 10);
         btn.disabled = true;
         try {
@@ -27264,6 +27485,7 @@ function validateBlendSum(blends, label) {
         document.getElementById('fs-f-tube').checked = !!s.tube;
         document.getElementById('fs-f-gy').value = (s.gy != null ? s.gy : '');
         document.getElementById('fs-f-blend').value = s.blend || '';
+        fillCostFields(s);            // hotfix264: 원가 자료 (최고관리자에게만 칸이 있음)
         const sc = s.cautions || {};
         fillFsCautions('dyeing', sc.dyeing);
         fillFsCautions('processing', sc.processing);
@@ -27386,6 +27608,107 @@ function validateBlendSum(blends, label) {
         box.innerHTML = rows.length ? rows.map(r => fsCautionRowHTML(r)).join('') : '';
         box.querySelectorAll('.caution-row').forEach(bindFsCautionRow);
       }
+      // ===== hotfix264: 원가 자료 칸 (최고관리자에게만 존재) =====
+      const costWrap = () => document.getElementById('fs-cost-wrap');
+      let editingCostFid = '';
+      function repaintCostCalc() {
+        if (!costWrap()) return;
+        const gEl = document.getElementById('fs-c-gage');
+        if (gEl) {
+          const g = calcGage(document.getElementById('fs-c-inch')?.value, document.getElementById('fs-c-needles')?.value);
+          gEl.value = (g == null) ? '' : String(g);
+        }
+        const yarns = collectCostYarns();
+        const rows = calcYarnBlend(yarns);
+        let sum = 0;
+        rows.forEach((r, k) => {
+          const cell = costWrap().querySelector(`.fs-c-y-pct[data-k="${k}"]`);
+          if (!cell) return;
+          if (r.name && r.pct > 0) { cell.textContent = r.pct + '%'; sum += r.pct; }
+          else cell.textContent = '-';
+        });
+        const sEl = document.getElementById('fs-c-blend-sum');
+        if (sEl) {
+          const t = Math.round(sum * 10) / 10;
+          if (!t) { sEl.textContent = ''; }
+          else if (Math.abs(t - 100) > 0.15) { sEl.textContent = `합계 ${t}% — 100%가 아닙니다`; sEl.style.color = '#b91c1c'; }
+          else { sEl.textContent = `합계 ${t}%`; sEl.style.color = '#047857'; }
+        }
+      }
+      function collectCostYarns() {
+        const w = costWrap();
+        if (!w) return [];
+        return [0, 1, 2, 3].map(k => ({
+          name: (w.querySelector(`.fs-c-y-name[data-k="${k}"]`)?.value || '').trim(),
+          size: (w.querySelector(`.fs-c-y-size[data-k="${k}"]`)?.value || '').trim(),
+          unit: (w.querySelector(`.fs-c-y-unit[data-k="${k}"]`)?.value || 'D'),
+          loop: (w.querySelector(`.fs-c-y-loop[data-k="${k}"]`)?.value || '').trim()
+        }));
+      }
+      function fillCostFields(s) {
+        const w = costWrap();
+        if (!w) return;
+        editingCostFid = specFid(s);
+        const c = getFabricCost(editingCostFid) || {};
+        const codeEl = document.getElementById('fs-cost-code');
+        if (codeEl) codeEl.textContent = editingCostFid ? ('품목 코드 ' + editingCostFid) : '품목 코드는 저장하면 붙습니다';
+        document.getElementById('fs-c-code').value = c.code || '';
+        document.getElementById('fs-c-machine').value = c.machine || '';
+        document.getElementById('fs-c-inch').value = (c.inch != null ? c.inch : '');
+        document.getElementById('fs-c-needles').value = (c.needles != null ? c.needles : '');
+        document.getElementById('fs-c-makegy').value = (c.make_gy != null ? c.make_gy : '');
+        document.getElementById('fs-c-knitloss').value = (c.knit_loss != null ? c.knit_loss : '');
+        document.getElementById('fs-c-finloss').value = (c.fin_loss != null ? c.fin_loss : '');
+        document.getElementById('fs-c-knitter').innerHTML = vendorOptionsHTML('편직처', c.knitter || '');
+        document.getElementById('fs-c-dyer').innerHTML = vendorOptionsHTML('염색처', c.dyer || '');
+        document.getElementById('fs-c-finisher').innerHTML = vendorOptionsHTML('가공처', c.finisher || '');
+        const ys = Array.isArray(c.yarns) ? c.yarns : [];
+        [0, 1, 2, 3].forEach(k => {
+          const y = ys[k] || {};
+          w.querySelector(`.fs-c-y-name[data-k="${k}"]`).value = y.name || '';
+          w.querySelector(`.fs-c-y-size[data-k="${k}"]`).value = (y.size != null ? y.size : '');
+          w.querySelector(`.fs-c-y-unit[data-k="${k}"]`).value = (y.unit === '수') ? '수' : 'D';
+          w.querySelector(`.fs-c-y-loop[data-k="${k}"]`).value = (y.loop != null ? y.loop : '');
+        });
+        const procs = Array.isArray(c.procs) ? c.procs : [];
+        w.querySelectorAll('.fs-c-proc').forEach(cb => { cb.checked = procs.includes(cb.value); });
+        repaintCostCalc();
+      }
+      function collectCostFields() {
+        const w = costWrap();
+        if (!w) return null;
+        const numOrNull = (v) => (v === '' || v == null) ? null : (parseFloat(v));
+        const yarns = collectCostYarns()
+          .filter(y => y.name || y.size || y.loop)
+          .map(y => ({ name: y.name, size: numOrNull(y.size), unit: y.unit === '수' ? '수' : 'D', loop: numOrNull(y.loop) }));
+        return {
+          code: (document.getElementById('fs-c-code')?.value || '').trim(),
+          machine: (document.getElementById('fs-c-machine')?.value || '').trim(),
+          knitter: (document.getElementById('fs-c-knitter')?.value || '').trim(),
+          dyer: (document.getElementById('fs-c-dyer')?.value || '').trim(),
+          finisher: (document.getElementById('fs-c-finisher')?.value || '').trim(),
+          inch: numOrNull(document.getElementById('fs-c-inch')?.value),
+          needles: numOrNull(document.getElementById('fs-c-needles')?.value),
+          make_gy: numOrNull(document.getElementById('fs-c-makegy')?.value),
+          knit_loss: numOrNull(document.getElementById('fs-c-knitloss')?.value),
+          fin_loss: numOrNull(document.getElementById('fs-c-finloss')?.value),
+          yarns,
+          procs: Array.from(w.querySelectorAll('.fs-c-proc')).filter(cb => cb.checked).map(cb => cb.value),
+          updated_at: todayYMD()
+        };
+      }
+      if (costWrap()) {
+        ['fs-c-inch', 'fs-c-needles'].forEach(id => document.getElementById(id)?.addEventListener('input', repaintCostCalc));
+        costWrap().querySelectorAll('.fs-c-y-name, .fs-c-y-size, .fs-c-y-loop').forEach(el => el.addEventListener('input', repaintCostCalc));
+        costWrap().querySelectorAll('.fs-c-y-unit').forEach(el => el.addEventListener('change', repaintCostCalc));
+        document.getElementById('fs-c-blend-apply')?.addEventListener('click', () => {
+          const txt = blendStringFromYarns(collectCostYarns());
+          if (!txt) { toast('원사 굵기와 루프장을 먼저 넣어주세요', 'warning'); return; }
+          const bEl = document.getElementById('fs-f-blend');
+          if (bEl) { bEl.value = txt; toast('혼용률 칸에 넣었습니다', 'success'); }
+        });
+      }
+
       function collectFsCautions(stage) {
         const box = document.getElementById('fs-cautions-' + stage);
         if (!box) return [];
@@ -27447,7 +27770,13 @@ function validateBlendSum(blends, label) {
         if (entry.gubun !== GUBUN_RIB && (cz.dyeing.length || cz.processing.length || cz.post.length)) entry.cautions = cz;
         const list = getFabricSpecs().map(x => ({ ...x }));
         const prevName = (editingSpecIdx >= 0) ? String(list[editingSpecIdx]?.name || '').trim() : '';
-        if (editingSpecIdx >= 0) { entry.active = list[editingSpecIdx]?.active !== false; list[editingSpecIdx] = entry; }
+        if (editingSpecIdx >= 0) {
+          entry.active = list[editingSpecIdx]?.active !== false;
+          // hotfix264: 품목 고정 코드는 수정해도 그대로 이어간다 (원가 자료가 이 코드에 매달려 있음)
+          const keepFid = String(list[editingSpecIdx]?.fid || '').trim();
+          if (keepFid) entry.fid = keepFid;
+          list[editingSpecIdx] = entry;
+        }
         else list.push(entry);
         // hotfix249: 리프 카드에서 체크한 몸판들의 짝 리프를 한 번에 맞춘다 (몸판 1개 = 리프 1개)
         if (entry.gubun === GUBUN_RIB && fsBodyPick) {
@@ -27469,8 +27798,18 @@ function validateBlendSum(blends, label) {
           // 몸판 품목명을 바꾸면 이 품목을 짝으로 걸어둔 쪽도 따라간다
           list.forEach(x => { if (String(x.pair_rib || '').trim() === prevName) x.pair_rib = name; });
         }
+        // hotfix264: 저장하기 전에 코드를 확정한다 (원가 자료를 붙일 열쇠)
+        assignFabricIds(list);
         const ok = await saveFabricSpecs(list);
-        if (ok) { toast(`"${name}" 저장됨`, 'success'); closeModal(); renderDashboard(); }
+        if (ok) {
+          // hotfix264: 원가 자료는 직원이 읽는 문서와 섞지 않고 따로 저장한다
+          if (costWrap()) {
+            const fid = String((list.find(x => x && x.name === name) || {}).fid || '').trim();
+            const cost = collectCostFields();
+            if (fid && cost) await saveFabricCost(fid, cost);
+          }
+          toast(`"${name}" 저장됨`, 'success'); closeModal(); renderDashboard();
+        }
       });
 
       document.querySelectorAll('.fs-del-btn').forEach(b => b.addEventListener('click', async () => {
@@ -27494,7 +27833,7 @@ function validateBlendSum(blends, label) {
         const extra = cur.length - (SEED_FABRIC_SPECS.length - missing.length);
         if (missing.length === 0) {
           if (!confirm(`기본 34품목이 모두 들어 있습니다.\n\n[확인]을 누르면 전부 기본값으로 되돌립니다.\n· 직접 등록하신 ${extra}품목(리프 포함)이 모두 사라집니다\n· 기본 품목에 손대신 폭·중량·주의사항도 초기값으로 돌아갑니다\n\n되돌릴까요?`)) return;
-          if (!confirm(`한 번 더 확인합니다.\n\n직접 등록하신 ${extra}품목이 정말로 지워집니다.\n계속할까요?`)) return;
+          if (!confirm(`한 번 더 확인합니다.\n\n직접 등록하신 ${extra}품목이 정말로 지워집니다.${isOwnerUser() ? '\n원가 자료가 붙어 있던 품목 코드도 함께 사라집니다.' : ''}\n계속할까요?`)) return;
           const ok = await saveFabricSpecs(SEED_FABRIC_SPECS.map(x => ({ ...x, gubun: GUBUN_BODY })));
           if (ok) { toast('기본 34품목으로 되돌렸습니다', 'warning'); renderDashboard(); }
           return;
@@ -27948,6 +28287,7 @@ function validateBlendSum(blends, label) {
         const id = btn.dataset.id;
         const wo = state.allWorkOrders.find(w => w.id === id);
         if (!wo) return;
+        if (!canDeleteWo(wo)) { toast('이 화면에서 삭제할 권한이 없습니다', 'info'); return; }
         if (!confirm(`이 의뢰서를 삭제하시겠습니까?\n\n[${wo.wo_number || ''}]\n\n(휴지통으로 이동되며, "삭제됨 포함" 체크 시 복구할 수 있습니다)`)) return;
         try {
           await updateDoc(doc(db, 'workorders', id), {
@@ -27965,6 +28305,7 @@ function validateBlendSum(blends, label) {
     // 복구 버튼 (휴지통 모드)
     document.querySelectorAll('#dash-body [data-restore]').forEach(btn => {
       btn.addEventListener('click', async () => {
+        if (!canPurge()) { toast('휴지통 복구는 관리자만 가능합니다', 'info'); return; }
         const id = btn.dataset.restore;
         if (!confirm('이 의뢰서를 복구하시겠습니까?')) return;
         try {
@@ -27982,8 +28323,9 @@ function validateBlendSum(blends, label) {
     // 영구 삭제 버튼 (휴지통 모드)
     document.querySelectorAll('#dash-body [data-purge]').forEach(btn => {
       btn.addEventListener('click', async () => {
+        if (!canPurge()) { toast('영구 삭제는 관리자만 가능합니다', 'info'); return; }
         const id = btn.dataset.purge;
-        if (!confirm('⚠ 영구 삭제 시 복구 불가능합니다.\n정말 영구 삭제하시겠습니까?')) return;
+        if (!confirm('영구 삭제 시 복구 불가능합니다.\n정말 영구 삭제하시겠습니까?')) return;
         if (!confirm('한 번 더 확인합니다. 정말로 영구 삭제할까요?')) return;
         try {
           await deleteDoc(doc(db, 'workorders', id));
@@ -28033,8 +28375,9 @@ function validateBlendSum(blends, label) {
     const permSaveEl = document.getElementById('perm-save');
     if (permSaveEl) permSaveEl.addEventListener('click', async () => {
       const next = permCollectFromScreen();
+      const nextDel = permCollectDeletesFromScreen();   // hotfix265
       permSaveEl.disabled = true; permSaveEl.textContent = '저장 중...';
-      const ok = await saveViewPerms(next);
+      const ok = await saveViewPerms(next, nextDel);
       permSaveEl.disabled = false; permSaveEl.textContent = '저장';
       if (ok) { toast('권한을 저장했습니다', 'success'); renderDashboard(); }
     });
@@ -28042,8 +28385,8 @@ function validateBlendSum(blends, label) {
     if (permPinEl) permPinEl.addEventListener('click', openOwnerPinModal);
     const permResetEl = document.getElementById('perm-reset');
     if (permResetEl) permResetEl.addEventListener('click', async () => {
-      if (!confirm('모든 화면의 권한을 기본값으로 되돌립니다. 계속할까요?')) return;
-      const ok = await saveViewPerms(Object.assign({}, VIEW_PERMS_DEFAULT));
+      if (!confirm('모든 화면의 권한을 기본값으로 되돌립니다.\n삭제 권한도 전부 [관리자까지]로 돌아갑니다. 계속할까요?')) return;
+      const ok = await saveViewPerms(Object.assign({}, VIEW_PERMS_DEFAULT), {});
       if (ok) { toast('기본값으로 되돌렸습니다', 'success'); renderDashboard(); }
     });
 
@@ -28125,7 +28468,7 @@ function validateBlendSum(blends, label) {
     // 보이는 결과 전체 삭제 (관리자만, 2단계 확인)
     const cfDeleteAll = document.getElementById('cf-delete-all');
     if (cfDeleteAll) cfDeleteAll.addEventListener('click', async () => {
-      if (!isAdminUser()) { toast('관리자만 사용할 수 있습니다', 'error'); return; }
+      if (!canDeleteHere('completed')) { toast('이 화면에서 삭제할 권한이 없습니다', 'error'); return; }
       const allList = state.allWorkOrders.filter(wo => wo.completed && !wo.deleted);
       const targets = applyCompletedFilters(allList);
       if (targets.length === 0) { toast('삭제할 항목이 없습니다', 'error'); return; }
@@ -30661,7 +31004,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix263';
+  const VERSION = 'v2.53 hotfix265';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
