@@ -1411,6 +1411,7 @@
     border: 1px solid #d1d5db; background: #fff; color: #6b7280; border-radius: 5px; cursor: pointer;
   }
   .hist-scope-btn.active { background: #0e7490; border-color: #0e7490; color: #fff; }
+  body.is-not-owner .owner-only { display: none !important; }
   .sp-part-body { display:inline-block; padding:1px 7px; border-radius:8px; font-size:11px; font-weight:800; background:#dbeafe; border:1px solid #93c5fd; color:#1e3a8a; }
   .sp-part-rib  { display:inline-block; padding:1px 7px; border-radius:8px; font-size:11px; font-weight:800; background:#ede9fe; border:1px solid #c4b5fd; color:#5b21b6; }
   .sp-bad { color:#c0271f; font-weight:800; }
@@ -6086,6 +6087,9 @@
         <button class="dash-menu-btn admin-only" data-view="fabricSpecs">원단 기본 스펙</button>
         <button class="dash-menu-btn admin-only" data-view="vendors">거래처 관리</button>
         <button class="dash-menu-btn admin-only" data-view="specTol">규격 허용치</button>
+        <div class="dash-menu-section-label owner-only" style="margin-top:10px;">경영 전용 (최고관리자)</div>
+        <button class="dash-menu-btn owner-only" data-view="costCalc" style="background:#fffbeb;border:1px solid #fde68a;color:#92400e;font-weight:800;">원가 계산기</button>
+        <button class="dash-menu-btn owner-only" data-view="permissions" style="background:#f5f3ff;border:1px solid #ddd6fe;color:#5b21b6;font-weight:800;">권한 관리</button>
       </div>
     </div>
   </aside>
@@ -6903,6 +6907,7 @@ const state = {
   gsSearch: '',
   gsPart: 'all',            // 'all' | '몸판' | '리프'
   ovKnitSearch: '',         // hotfix259: 전체 대시보드 편직 품목 검색
+  viewPerms: {},            // hotfix260: settings/permissions — 화면별 최소 등급
   // v2.31 완료 탭 필터
   completedFilter: {
     search: '',         // 통합 검색
@@ -9933,6 +9938,90 @@ window.addEventListener('firebase-ready', () => {
   }
 
   // ============================================================
+  // hotfix260: 등급 3단계 — 최고관리자 / 관리자 / 직원
+  // ------------------------------------------------------------
+  //   최고관리자(owner) : 대표. 원가·단가 등 경영 자료를 본다. 권한 배분도 여기서만
+  //   관리자(admin)     : 설정·삭제까지 가능. 단, 경영 자료는 볼 수 없음
+  //   직원(staff)       : 일상 업무 화면만
+  // ★화면에서 감추는 것만으로는 막을 수 없다. Firestore 규칙에서도 반드시 같이 막아야 한다.
+  // ============================================================
+  const OWNER_EMAILS = [
+    'recoveric.parkyg@gmail.com'   // 박영균 대표 (최고관리자)
+  ];
+  function isOwnerUser() {
+    return !!(state.user && OWNER_EMAILS.includes(state.user.email));
+  }
+  function userRole() {
+    if (isOwnerUser()) return 'owner';
+    if (isAdminUser()) return 'admin';
+    return 'staff';
+  }
+  function roleLabel(r) {
+    return { owner: '최고관리자', admin: '관리자', staff: '직원' }[r || userRole()] || '직원';
+  }
+  const ROLE_RANK = { staff: 0, admin: 1, owner: 2 };
+
+  // 화면별 최소 등급 (기본값). [권한 관리]에서 최고관리자가 바꾼다.
+  const VIEW_PERMS_DEFAULT = {
+    yarn: 'staff', knit: 'staff', finish: 'staff', bt: 'staff', print: 'staff',
+    kpiboard: 'staff', overview: 'staff',
+    completeReports: 'admin', ceoReports: 'admin',
+    of: 'staff', gs: 'staff', claims: 'staff', 'daily-report': 'staff',
+    samples: 'staff', completed: 'staff', trash: 'admin',
+    stampSettings: 'admin', fabricSpecs: 'admin', vendors: 'admin', specTol: 'admin',
+    costCalc: 'owner', permissions: 'owner'
+  };
+  const VIEW_LABELS = {
+    yarn: '원사 진행', knit: '편직 진행', finish: '염색가공 진행', bt: 'B/T 진행', print: '나염가공 진행',
+    kpiboard: '현황판', completeReports: '완료 보고', ceoReports: '불량 보고',
+    of: '공문 목록', gs: '생지출고 목록', claims: '클레임(땡처리)', 'daily-report': '거래처별 일일 보고',
+    samples: '샘플 보관함', completed: '완료된 의뢰서', trash: '휴지통',
+    stampSettings: '스탬프 설정', fabricSpecs: '원단 기본 스펙', vendors: '거래처 관리', specTol: '규격 허용치',
+    costCalc: '원가 계산기', permissions: '권한 관리'
+  };
+  // 등급을 낮출 수 없는 화면 — 경영 자료
+  const OWNER_LOCKED_VIEWS = ['costCalc', 'permissions'];
+
+  function viewMinRole(view) {
+    if (OWNER_LOCKED_VIEWS.includes(view)) return 'owner';
+    const saved = (state.viewPerms || {})[view];
+    if (saved && ROLE_RANK[saved] !== undefined) return saved;
+    return VIEW_PERMS_DEFAULT[view] || 'staff';
+  }
+  function canAccessView(view) {
+    if (!view) return true;
+    return ROLE_RANK[userRole()] >= ROLE_RANK[viewMinRole(view)];
+  }
+  // 사이드바 메뉴에서 권한 없는 항목을 감춘다
+  function applyMenuPermissions() {
+    document.querySelectorAll('#sidebar-dashboard .dash-menu-btn[data-view]').forEach(btn => {
+      const v = btn.dataset.view;
+      btn.style.display = canAccessView(v) ? '' : 'none';
+    });
+  }
+  async function saveViewPerms(obj) {
+    if (!isOwnerUser()) { toast('최고관리자만 바꿀 수 있습니다', 'error'); return false; }
+    const clean = {};
+    Object.keys(VIEW_PERMS_DEFAULT).forEach(k => {
+      if (OWNER_LOCKED_VIEWS.includes(k)) return;
+      const v = obj[k];
+      if (v && ROLE_RANK[v] !== undefined) clean[k] = v;
+    });
+    try {
+      await setDoc(doc(db, 'settings', 'permissions'), {
+        views: clean,
+        updated_at: serverTimestamp(),
+        updated_by: state.user?.email || 'unknown'
+      });
+      state.viewPerms = clean;
+      return true;
+    } catch (e) {
+      toast('권한 저장 실패: ' + e.message, 'error');
+      return false;
+    }
+  }
+
+  // ============================================================
   // v2.53 hotfix7: 데이터 저장소(Firestore) 연결 차단 감지
   // ------------------------------------------------------------
   // 광고 차단 확장(uBlock 등)이 firestore.googleapis.com 통신을
@@ -10136,6 +10225,17 @@ window.addEventListener('firebase-ready', () => {
       state.sampleMemos = (snap.exists() && snap.data().items && typeof snap.data().items === 'object') ? snap.data().items : {};
       if (state.uiMode === 'dashboard' && state.dashView === 'samples' && !state.editingMemoCellId) renderDashboard();
     }, err => console.warn('[sampleMemos sub]', err.message));
+    // hotfix260: 화면별 권한 구독
+    onSnapshot(doc(db, 'settings', 'permissions'), snap => {
+      state.viewPerms = (snap.exists() && snap.data().views && typeof snap.data().views === 'object') ? snap.data().views : {};
+      applyMenuPermissions();
+      if (state.uiMode === 'dashboard' && !canAccessView(state.dashView)) {
+        state.dashView = 'overview';
+        renderDashboard();
+      } else if (state.uiMode === 'dashboard' && state.dashView === 'permissions') {
+        renderDashboard();
+      }
+    }, err => console.warn('[permissions sub]', err.message));
   }
   
   // 마스터 변경 시 화면 동적 갱신
@@ -10604,16 +10704,25 @@ window.addEventListener('firebase-ready', () => {
 
   function renderUserInfo() {
     const u = state.user;
+    const r = userRole();
+    const badgeStyle = r === 'owner'
+      ? 'background:#f5f3ff;border:1px solid #ddd6fe;color:#5b21b6;'
+      : (r === 'admin' ? 'background:#eff6ff;border:1px solid #bfdbfe;color:#1e40af;'
+                       : 'background:#f3f4f6;border:1px solid #e5e7eb;color:#4b5563;');
     document.getElementById('user-info-section').innerHTML = `
       <div class="user-info">
         <div class="name">${escapeHtml(u.displayName || u.email)}</div>
         <div class="email">${escapeHtml(u.email)}</div>
+        <div style="display:inline-block;margin:4px 0 6px;padding:1px 8px;border-radius:9px;font-size:10.5px;font-weight:800;${badgeStyle}">${roleLabel(r)}</div>
         <button class="logout-btn" id="logout-btn">로그아웃</button>
       </div>`;
     document.getElementById('logout-btn').addEventListener('click', () => signOut(auth));
     
     // v2.22: 관리자 외에는 body에 'is-not-admin' 클래스 부여 → CSS로 삭제/휴지통 UI 일괄 숨김
     document.body.classList.toggle('is-not-admin', !isAdminUser());
+    // hotfix260: 최고관리자 외에는 경영 전용 메뉴 숨김
+    document.body.classList.toggle('is-not-owner', !isOwnerUser());
+    applyMenuPermissions();
   }
   
   // 사이드바 클레임 메뉴 배지 갱신 (미해결 N건)
@@ -22220,6 +22329,90 @@ function validateBlendSum(blends, label) {
     return rows;
   }
 
+  // ===== hotfix260/261: 권한 관리 (최고관리자 전용) =====
+  function renderPermissionsDash() {
+    if (!isOwnerUser()) return `<div class="dash-empty">최고관리자만 볼 수 있는 화면입니다.</div>`;
+    const groups = [
+      ['진행 상황', ['yarn', 'knit', 'finish', 'bt', 'print', 'kpiboard']],
+      ['보고', ['completeReports', 'ceoReports', 'daily-report']],
+      ['목록', ['of', 'gs', 'claims', 'samples', 'completed', 'trash']],
+      ['설정', ['stampSettings', 'fabricSpecs', 'vendors', 'specTol']],
+      ['경영 전용 (변경 불가)', ['costCalc', 'permissions']]
+    ];
+    const allViews = groups.reduce((a, g) => a.concat(g[1]), []).filter(v => !OWNER_LOCKED_VIEWS.includes(v));
+    const adminOn = allViews.filter(v => ROLE_RANK[viewMinRole(v)] <= ROLE_RANK.admin).length;
+    const staffOn = allViews.filter(v => viewMinRole(v) === 'staff').length;
+
+    let h = `<div style="background:#f5f3ff;border:1px solid #ddd6fe;border-radius:8px;padding:12px 14px;margin-bottom:14px;font-size:12.5px;color:#5b21b6;line-height:1.7;">
+      화면마다 <strong>누가 볼 수 있는지</strong>를 체크로 정합니다. 최고관리자는 언제나 전부 볼 수 있습니다.<br>
+      <strong>관리자</strong> 체크를 풀면 그 화면은 최고관리자만 보게 됩니다. <strong>직원</strong> 체크를 풀면 관리자까지만 봅니다.<br>
+      바꾼 뒤 <strong>[저장]</strong>을 눌러야 반영되고, 그 사람이 화면을 새로 고치면 바로 적용됩니다.
+    </div>`;
+    h += `<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:11px 14px;margin-bottom:16px;font-size:12px;color:#b91c1c;line-height:1.7;">
+      화면에서 감추는 것만으로는 완전히 막히지 않습니다. <strong>원가 자료는 Firestore 규칙에서도 함께 막아야</strong> 안전합니다.
+    </div>`;
+    h += `<div style="margin-bottom:14px;font-size:12.5px;color:#374151;line-height:1.8;">
+      최고관리자: <strong>${OWNER_EMAILS.map(escapeHtml).join(', ')}</strong><br>
+      관리자: <strong>${ADMIN_EMAILS.filter(e => !OWNER_EMAILS.includes(e)).map(escapeHtml).join(', ') || '(없음)'}</strong>
+      — 지금 <strong>${allViews.length}개 화면 중 ${adminOn}개</strong>를 볼 수 있습니다. 직원은 ${staffOn}개.<br>
+      <span style="color:#6b7280;">계정 등급 자체를 바꾸는 것은 아직 코드 수정이 필요합니다. 아이디·비밀번호 체계는 다음 단계입니다.</span>
+    </div>`;
+    h += `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">
+      <button class="dash-action-btn" id="perm-admin-all" style="padding:7px 14px;font-size:12px;">관리자에게 전부 열기</button>
+      <button class="dash-action-btn" id="perm-admin-none" style="padding:7px 14px;font-size:12px;">관리자 권한 전부 닫기</button>
+    </div>`;
+
+    groups.forEach(([title, views]) => {
+      h += `<div style="font-size:13px;font-weight:800;color:#1f2937;margin:14px 0 6px;">${title}</div>`;
+      h += `<div class="dash-table-wrap" style="max-width:640px;"><table class="dash-table"><thead><tr>
+        <th>화면</th><th style="width:110px;text-align:center;">관리자</th><th style="width:110px;text-align:center;">직원</th><th>지금 보이는 사람</th>
+      </tr></thead><tbody>`;
+      views.forEach(v => {
+        const cur = viewMinRole(v);
+        const locked = OWNER_LOCKED_VIEWS.includes(v);
+        const admOk = ROLE_RANK[cur] <= ROLE_RANK.admin;
+        const stfOk = cur === 'staff';
+        const who = cur === 'owner' ? '최고관리자만' : (cur === 'admin' ? '최고관리자 · 관리자' : '전원');
+        h += `<tr>
+          <td style="font-weight:700;">${escapeHtml(VIEW_LABELS[v] || v)}</td>
+          <td style="text-align:center;">${locked ? '<span style="font-size:11.5px;color:#9ca3af;">불가</span>'
+            : `<input type="checkbox" class="perm-adm" data-perm-view="${v}" ${admOk ? 'checked' : ''} style="width:16px;height:16px;cursor:pointer;">`}</td>
+          <td style="text-align:center;">${locked ? '<span style="font-size:11.5px;color:#9ca3af;">불가</span>'
+            : `<input type="checkbox" class="perm-stf" data-perm-view="${v}" ${stfOk ? 'checked' : ''} ${admOk ? '' : 'disabled'} style="width:16px;height:16px;cursor:pointer;">`}</td>
+          <td style="font-size:12px;color:#6b7280;">${who}</td>
+        </tr>`;
+      });
+      h += `</tbody></table></div>`;
+    });
+    h += `<div style="margin-top:18px;display:flex;gap:8px;">
+      <button class="dash-action-btn" id="perm-save" style="background:#2563eb;color:#fff;font-weight:800;padding:9px 22px;">저장</button>
+      <button class="dash-action-btn" id="perm-reset" style="padding:9px 18px;">기본값으로</button>
+    </div>`;
+    return h;
+  }
+  // 체크 상태 → 최소 등급
+  function permCollectFromScreen() {
+    const next = {};
+    document.querySelectorAll('#dash-body .perm-adm').forEach(adm => {
+      const v = adm.dataset.permView;
+      const stf = document.querySelector(`#dash-body .perm-stf[data-perm-view="${v}"]`);
+      if (!adm.checked) next[v] = 'owner';
+      else if (stf && stf.checked) next[v] = 'staff';
+      else next[v] = 'admin';
+    });
+    return next;
+  }
+
+  // ===== hotfix260: 원가 계산기 (최고관리자 전용) — 뼈대 =====
+  function renderCostCalcDash() {
+    if (!isOwnerUser()) return `<div class="dash-empty">최고관리자만 볼 수 있는 화면입니다.</div>`;
+    return `<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:14px 16px;font-size:13px;color:#92400e;line-height:1.8;">
+      <strong>원가 계산기 자리입니다.</strong><br>
+      이 화면은 최고관리자만 열 수 있고, 등급을 낮출 수 없습니다.<br>
+      무엇을 어떤 순서로 계산할지 정한 뒤 이어서 만듭니다.
+    </div>`;
+  }
+
   function renderSamplesDash() {
     const tab = state.samplesTab || '염색가공';
     let html = `<div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;">
@@ -24568,6 +24761,12 @@ function validateBlendSum(blends, label) {
     const addBtn = document.getElementById('dash-add-btn');
     let body = '';
     let title = '';
+    // hotfix260: 권한 없는 화면은 열지 않는다
+    if (!canAccessView(state.dashView)) {
+      state.dashView = 'overview';
+      state.overviewTypeFilter = state.overviewTypeFilter || '염색가공';
+    }
+    applyMenuPermissions();
     // hotfix140: 표 안 유형 필터로 바꿔도 사이드바가 현재 카테고리를 정확히 가리키게
     syncSidebarActive();
     // hotfix140: 현재 유형 필터에 맞는 라벨/등록버튼 텍스트 준비
@@ -24631,6 +24830,14 @@ function validateBlendSum(blends, label) {
     } else if (state.dashView === 'completeReports') {
       title = '완료 보고';
       body = renderCompleteReports();
+      addBtn.style.display = 'none';
+    } else if (state.dashView === 'permissions') {
+      title = '권한 관리 (최고관리자 전용)';
+      body = renderPermissionsDash();
+      addBtn.style.display = 'none';
+    } else if (state.dashView === 'costCalc') {
+      title = '원가 계산기 (최고관리자 전용)';
+      body = renderCostCalcDash();
       addBtn.style.display = 'none';
     } else if (state.dashView === 'samples') {
       title = '샘플 보관함';
@@ -27596,6 +27803,43 @@ function validateBlendSum(blends, label) {
       });
     });
     
+    // ===== hotfix260/261: 권한 관리 =====
+    // 관리자 체크를 풀면 직원 체크는 자동으로 꺼진다 (관리자가 못 보는데 직원이 볼 수는 없음)
+    document.querySelectorAll('#dash-body .perm-adm').forEach(adm => {
+      adm.addEventListener('change', () => {
+        const stf = document.querySelector(`#dash-body .perm-stf[data-perm-view="${adm.dataset.permView}"]`);
+        if (!stf) return;
+        if (!adm.checked) { stf.checked = false; stf.disabled = true; }
+        else stf.disabled = false;
+      });
+    });
+    const permAllEl = document.getElementById('perm-admin-all');
+    if (permAllEl) permAllEl.addEventListener('click', () => {
+      document.querySelectorAll('#dash-body .perm-adm').forEach(a => { a.checked = true; });
+      document.querySelectorAll('#dash-body .perm-stf').forEach(s => { s.disabled = false; });
+      toast('관리자에게 전부 열었습니다. [저장]을 눌러 주세요', 'success');
+    });
+    const permNoneEl = document.getElementById('perm-admin-none');
+    if (permNoneEl) permNoneEl.addEventListener('click', () => {
+      document.querySelectorAll('#dash-body .perm-adm').forEach(a => { a.checked = false; });
+      document.querySelectorAll('#dash-body .perm-stf').forEach(s => { s.checked = false; s.disabled = true; });
+      toast('관리자 권한을 전부 닫았습니다. [저장]을 눌러 주세요', 'success');
+    });
+    const permSaveEl = document.getElementById('perm-save');
+    if (permSaveEl) permSaveEl.addEventListener('click', async () => {
+      const next = permCollectFromScreen();
+      permSaveEl.disabled = true; permSaveEl.textContent = '저장 중...';
+      const ok = await saveViewPerms(next);
+      permSaveEl.disabled = false; permSaveEl.textContent = '저장';
+      if (ok) { toast('권한을 저장했습니다', 'success'); renderDashboard(); }
+    });
+    const permResetEl = document.getElementById('perm-reset');
+    if (permResetEl) permResetEl.addEventListener('click', async () => {
+      if (!confirm('모든 화면의 권한을 기본값으로 되돌립니다. 계속할까요?')) return;
+      const ok = await saveViewPerms(Object.assign({}, VIEW_PERMS_DEFAULT));
+      if (ok) { toast('기본값으로 되돌렸습니다', 'success'); renderDashboard(); }
+    });
+
     // ===== hotfix257/258: 생지출고 목록 검색 =====
     bindRerenderSearch('gs-search', v => { state.gsSearch = v; });
     const gsClearEl = document.getElementById('gs-search-clear');
@@ -30205,7 +30449,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix259';
+  const VERSION = 'v2.53 hotfix261';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
