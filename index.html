@@ -1391,6 +1391,47 @@
     line-height: 1.4;
     white-space: nowrap;
   }
+  /* hotfix254: 샘플 배지 + 샘플 보관함 */
+  .wo-sample-badge {
+    display: inline-block;
+    margin-top: 3px;
+    padding: 1px 7px;
+    background: #ecfeff;
+    border: 1px solid #67e8f9;
+    color: #0e7490;
+    border-radius: 8px;
+    font-size: 10px;
+    font-weight: 800;
+    line-height: 1.4;
+    white-space: nowrap;
+  }
+  .hist-scope-row { display: flex; gap: 4px; margin: 6px 0 4px; }
+  .hist-scope-btn {
+    flex: 1; padding: 5px 0; font-size: 11px; font-weight: 700; font-family: inherit;
+    border: 1px solid #d1d5db; background: #fff; color: #6b7280; border-radius: 5px; cursor: pointer;
+  }
+  .hist-scope-btn.active { background: #0e7490; border-color: #0e7490; color: #fff; }
+  .sp-part-body { display:inline-block; padding:1px 7px; border-radius:8px; font-size:11px; font-weight:800; background:#dbeafe; border:1px solid #93c5fd; color:#1e3a8a; }
+  .sp-part-rib  { display:inline-block; padding:1px 7px; border-radius:8px; font-size:11px; font-weight:800; background:#ede9fe; border:1px solid #c4b5fd; color:#5b21b6; }
+  .sp-bad { color:#c0271f; font-weight:800; }
+  .sp-warn { color:#b45309; font-weight:800; }
+  .sp-round-1 { color:#9ca3af; font-weight:600; }
+  .sp-round-n { color:#b45309; font-weight:800; background:#fff7ed; border:1px solid #fed7aa; border-radius:8px; padding:1px 7px; }
+  .sp-table tbody tr { cursor: pointer; }
+  .sp-table tbody tr:hover { background: #f0f9ff; }
+  .sp-memo-input {
+    width: 100%; min-width: 90px; padding: 3px 6px; border: 1px solid transparent; background: transparent;
+    font-family: inherit; font-size: 12px; color: #374151; border-radius: 4px;
+  }
+  .sp-memo-input:hover { border-color: #e5e7eb; background: #fff; }
+  .sp-memo-input:focus { border-color: #2563eb; background: #fff; outline: none; }
+  .sp-tab-btn {
+    padding: 7px 16px; font-size: 13px; font-weight: 700; font-family: inherit;
+    border: 1px solid #d1d5db; background: #fff; color: #6b7280; border-radius: 6px; cursor: pointer;
+  }
+  .sp-tab-btn.active { background: #0e7490; border-color: #0e7490; color: #fff; }
+  .sp-sort-th { cursor: pointer; user-select: none; white-space: nowrap; }
+  .sp-sort-th:hover { color: #0e7490; }
   .dash-table {
     width: 100%;
     border-collapse: collapse;
@@ -6011,6 +6052,11 @@
       <input type="text" id="history-color-search" class="history-search-input history-color-input" list="history-color-datalist" autocomplete="off" autocorrect="off" spellcheck="false" placeholder="↳ 컬러로 2차 검색 (목록 선택 · 직접 입력)" lang="ko">
       <datalist id="history-color-datalist"></datalist>
       <div id="history-color-hint" class="history-color-hint"></div>
+      <div class="hist-scope-row">
+        <button type="button" class="hist-scope-btn active" data-scope="all">전체</button>
+        <button type="button" class="hist-scope-btn" data-scope="order">오더만</button>
+        <button type="button" class="hist-scope-btn" data-scope="sample">샘플만</button>
+      </div>
       <div id="history-list"><div class="history-empty">불러오는 중...</div></div>
     </div>
     
@@ -6030,6 +6076,7 @@
         <button class="dash-menu-btn" data-view="gs">생지출고 목록</button>
         <button class="dash-menu-btn" data-view="claims">클레임(땡처리)<span class="claims-menu-badge" id="claims-menu-badge" style="display:none;">0</span></button>
         <button class="dash-menu-btn" data-view="daily-report">거래처별 일일 보고</button>
+        <button class="dash-menu-btn" data-view="samples">샘플 보관함</button>
         <button class="dash-menu-btn" data-view="completed">완료된 의뢰서</button>
         <button class="dash-menu-btn" data-view="trash">휴지통</button>
         <button class="dash-menu-btn admin-only" data-view="stampSettings">스탬프 설정</button>
@@ -6841,6 +6888,14 @@ const state = {
   historyTypeFilter: 'all',
   historySearch: '',
   historyColorSearch: '',   // hotfix252: 이력 2차(컬러) 검색어
+  historySampleScope: 'all', // hotfix254: 이력 범위 'all' | 'order'(오더만) | 'sample'(샘플만)
+  // hotfix254: 샘플 보관함
+  samplesTab: '염색가공',    // '염색가공' | '편직·나염'
+  samplesSearch: '',
+  samplesSortKey: 'date',
+  samplesSortDir: 'desc',
+  samplesShrinkOnly: false,
+  sampleMemos: {},          // settings/sample_memos — 샘플 표 전용 메모 (원본 작지 미변경)
   // v2.31 완료 탭 필터
   completedFilter: {
     search: '',         // 통합 검색
@@ -8321,6 +8376,45 @@ const KNIT_KIND_META = {
   done:    { label: '완료', dot: '#9ca3af', bg: '#f9fafb', text: '#6b7280' }
 };
 function kindMeta(k) { return KNIT_KIND_META[k] || KNIT_KIND_META.regular; }
+
+// ===== hotfix254: 샘플 판별 통일 (샘플 관리 1단계) =====
+//   염색가공 = 생산구분 [샘플] 또는 스탬프 [샘플] 중 하나만 있어도 샘플
+//   편직     = 성격 [샘플](SP). 완료되면 kind가 'done'으로 바뀌므로 코드/품목명으로 되짚음
+//   나염     = 스탬프 [샘플]
+//   ★과거 자료는 절대 바꾸지 않는다. 읽는 쪽에서만 판정한다.
+function woHasSampleStamp(wo) {
+  const arr = Array.isArray(wo && wo.stamps) ? wo.stamps : [];
+  return arr.some(s => String(s || '').trim() === '샘플');
+}
+function knitLooksSample(wo) {
+  const items = (wo && wo.items) || [];
+  const first = items[0] || {};
+  const code = [first.shared_code, first.wo_no, wo && wo.wo_number].filter(Boolean).join(' ');
+  if (/샘플/.test(code)) return true;
+  if (/^SP[-_\s]/i.test(String(first.shared_code || '').trim())) return true;
+  const itemText = items.map(i => (i && i.item) || '').join(' ');
+  if (/샘플/.test(itemText)) return true;
+  const memoText = [wo && wo.internal_memo, wo && wo.notes].filter(Boolean).join(' ');
+  const totalJul = items.reduce((s, i) => s + (parseFloat(i && i.jul) || 0), 0);
+  if (totalJul > 0 && totalJul <= 5 && /샘플/.test(memoText)) return true;
+  return false;
+}
+function isSampleWorkOrder(wo) {
+  if (!wo) return false;
+  if (wo.is_sample === true) return true;
+  if (wo.is_sample === false) return false;
+  if (wo.type === '염색가공') return String(wo.production_type || '').trim() === '샘플' || woHasSampleStamp(wo);
+  if (wo.type === '나염') return woHasSampleStamp(wo);
+  if (wo.type === '편직') {
+    if (wo.kind === 'sample') return true;
+    if (wo.kind && wo.kind !== 'done') return false;
+    return knitLooksSample(wo);
+  }
+  return false;
+}
+function sampleBadgeHtml(wo) {
+  return isSampleWorkOrder(wo) ? `<div class="wo-sample-badge" title="샘플 작지 — 완료하면 [샘플 보관함]으로 갑니다">샘플</div>` : '';
+}
 
 // 컬러가 "보호 대상"인지 (완료됐거나 QC/땡처리 어떤 상태든 들어간 컬러)
 function isProtectedColor(c) {
@@ -10030,6 +10124,11 @@ window.addEventListener('firebase-ready', () => {
         : Object.assign({}, DEFAULT_SPEC_TOL);
       if (state.uiMode === 'dashboard' && state.dashView === 'specTol') renderDashboard();
     }, err => console.warn('[specTol sub]', err.message));
+    // hotfix254: 샘플 표 전용 메모 구독 (원본 작지와 완전히 분리된 메모)
+    onSnapshot(doc(db, 'settings', 'sample_memos'), snap => {
+      state.sampleMemos = (snap.exists() && snap.data().items && typeof snap.data().items === 'object') ? snap.data().items : {};
+      if (state.uiMode === 'dashboard' && state.dashView === 'samples' && !state.editingMemoCellId) renderDashboard();
+    }, err => console.warn('[sampleMemos sub]', err.message));
   }
   
   // 마스터 변경 시 화면 동적 갱신
@@ -10161,6 +10260,24 @@ window.addEventListener('firebase-ready', () => {
     return true;
   }
   function getSpecTol() { return Object.assign({}, DEFAULT_SPEC_TOL, (state && state.specTol) || {}); }
+  // hotfix254: 샘플 표 전용 메모 저장 — settings/sample_memos. 원본 작지는 절대 건드리지 않는다.
+  async function saveSampleMemo(key, value) {
+    if (!key) return false;
+    try {
+      const next = Object.assign({}, state.sampleMemos || {});
+      if (value) next[key] = value; else delete next[key];
+      await setDoc(doc(db, 'settings', 'sample_memos'), {
+        items: next,
+        updated_at: serverTimestamp(),
+        updated_by: state.user?.email || 'unknown'
+      });
+      state.sampleMemos = next;
+      return true;
+    } catch (e) {
+      toast('비고 저장 실패: ' + e.message, 'error');
+      return false;
+    }
+  }
   // 현재 스펙 목록(저장본 우선, 없으면 기본 34품목). hotfix244: 구분 미지정은 '몸판'으로 간주.
   function getFabricSpecs() {
     const base = (state.fabricSpecs && state.fabricSpecs.length) ? state.fabricSpecs : SEED_FABRIC_SPECS;
@@ -10592,6 +10709,13 @@ window.addEventListener('firebase-ready', () => {
     // 타입 필터
     if (state.historyTypeFilter && state.historyTypeFilter !== 'all') {
       visible = visible.filter(wo => wo.type === state.historyTypeFilter);
+    }
+    
+    // hotfix254: 오더만 / 샘플만 범위 필터
+    if (state.historySampleScope === 'sample') {
+      visible = visible.filter(wo => isSampleWorkOrder(wo));
+    } else if (state.historySampleScope === 'order') {
+      visible = visible.filter(wo => !isSampleWorkOrder(wo));
     }
     
     // 검색어 필터 (대소문자 무시, 다양한 필드 종합 검색)
@@ -11456,6 +11580,10 @@ function validateBlendSum(blends, label) {
     if (!['regular','stock','sample','done'].includes(newKind)) return;
     try {
       const updates = { kind: newKind, updated_at: serverTimestamp(), updated_by: state.user.email };
+      // hotfix254: 완료(done)로 넘길 때 샘플이었다면 표식을 남긴다 — 완료돼도 [샘플 보관함]으로 가야 함
+      if (newKind === 'done' && isSampleWorkOrder(wo)) updates.is_sample = true;
+      if (newKind === 'sample') updates.is_sample = true;
+      if (newKind === 'regular' || newKind === 'stock') updates.is_sample = false;
       // hotfix37: 표에서 성격 변경 시 공유코드 접두(PL/SP/ST)도 자동 교체 — 회차 유지, 자동생성 코드만
       const newItems = syncItemsCodePrefix(wo, newKind);
       if (newItems) updates.items = newItems;
@@ -19484,7 +19612,7 @@ function validateBlendSum(blends, label) {
       
       const woUnitCells = isFirstRow ? `
         <td class="col-select" rowspan="${totalRows}"><input type="checkbox" class="dash-row-cb" data-id="${wo.id}" data-list-type="염색가공"></td>
-        <td class="col-no id-hover" rowspan="${totalRows}" title="${escapeHtml(wo.wo_number || '')}"><span class="id-text">${escapeHtml(wo.wo_number || '-')}</span>${progressBadge}</td>
+        <td class="col-no id-hover" rowspan="${totalRows}" title="${escapeHtml(wo.wo_number || '')}"><span class="id-text">${escapeHtml(wo.wo_number || '-')}</span>${progressBadge}${sampleBadgeHtml(wo)}</td>
         <td class="col-stamps" rowspan="${totalRows}">${renderStampMini(wo.stamps) || '-'}</td>
         <td class="col-date" rowspan="${totalRows}">${formatYMD(wo.date)}</td>
         ${compact ? '' : `<td rowspan="${totalRows}">${escapeHtml(wo.production_type || '-')}</td>`}
@@ -21824,8 +21952,265 @@ function validateBlendSum(blends, label) {
     });
   }
   
+  /* ==================== hotfix254: 샘플 보관함 (샘플 관리 2~4단계) ====================
+     · QC 완료된 샘플은 [완료된 의뢰서]가 아니라 여기로 온다.
+     · 표 한 줄 = 컬러 1 × 몸판/리프 1 × 최종 차수. 절수는 최종 차수 입고분(누적 아님).
+     · 비고는 원본 작지를 건드리지 않는 샘플 표 전용 메모(settings/sample_memos).            */
+  const SAMPLE_SHRINK_LIMIT = 2;   // 기획서 확정: 건조기 후 2% 이내, 초과 시 빨강
+
+  // 최종(파이널) 차수 찾기 — QC 수치가 들어간 마지막 차수, 없으면 마지막 차수
+  function sampleFinalReceipt(c) {
+    migrateColorReceipts(c);
+    const rs = (c.receipts || []).filter(r => r);
+    if (!rs.length) return null;
+    for (let i = rs.length - 1; i >= 0; i--) {
+      if (rs[i].qc) return { r: rs[i], no: rs[i].receipt_no || (i + 1), idx: i, all: rs };
+    }
+    const last = rs[rs.length - 1];
+    return { r: last, no: last.receipt_no || rs.length, idx: rs.length - 1, all: rs };
+  }
+  function spN(v, d) {
+    if (v === '' || v === null || v === undefined) return null;
+    const n = parseFloat(v);
+    if (!isFinite(n)) return null;
+    return d === undefined ? n : Math.round(n * Math.pow(10, d)) / Math.pow(10, d);
+  }
+  function sampleMemoKey(woId, colorIdx, part) { return `${woId}|${colorIdx}|${part}`; }
+
+  // 염색가공 샘플 표 줄 만들기
+  function buildFinishSampleRows() {
+    const rows = [];
+    (state.allWorkOrders || []).forEach(wo => {
+      if (!wo || wo.deleted) return;
+      if (wo.type !== '염색가공') return;
+      if (!isSampleWorkOrder(wo)) return;
+      migrateWorkOrderReceipts(wo);
+      const colors = wo.colors || [];
+      colors.forEach((c, ci) => {
+        if (!isColorCompleted(wo, ci)) return;
+        const fin = sampleFinalReceipt(c);
+        const qc = (fin && fin.r && fin.r.qc) || c.qc || null;
+        const roundNo = fin ? fin.no : 1;
+        const prevQc = fin ? fin.all.slice(0, fin.idx).map((r, i) => ({
+          no: r.receipt_no || (i + 1),
+          w: spN(r.qc && r.qc.width_inch, 1),
+          gy: spN(r.qc && r.qc.weight_g_per_y, 0),
+          sw: spN(r.qc && r.qc.shrink_width_pct, 1),
+          sl: spN(r.qc && r.qc.shrink_length_pct, 1)
+        })) : [];
+        const julBody = fin ? spN(fin.r.received_body, 1) : spN(c.body, 1);
+        const julRib  = fin ? spN(fin.r.received_rib, 1)  : spN(c.rib, 1);
+        const doneAt = (fin && (fin.r.qc_done_at || fin.r.accept_at)) || c.completed_at || wo.completed_at || null;
+
+        const mk = (part) => {
+          const isRib = part === 'rib';
+          const src = isRib ? (qc && qc.rib) : qc;
+          const dev = qc ? (isRib
+            ? (qc.rib ? checkSpecDeviationRib(qc.rib, wo) : { width: null, weight: null })
+            : checkSpecDeviation(qc, wo)) : { width: null, weight: null };
+          return {
+            woId: wo.id, colorIdx: ci, part,
+            wo_number: wo.wo_number || '',
+            date: wo.date || '',
+            item: (isRib ? (wo.rib && wo.rib.item) : (wo.body && wo.body.item)) || '',
+            gubun: isRib ? '리프' : '몸판',
+            color: c.name || '',
+            width: spN(src && src.width_inch, 1),
+            width_double: !!(src && src.width_double),
+            width_fail: !!(dev && dev.width && dev.width.fail),
+            width_tip: (dev && dev.width) ? `기준 ${dev.width.specMin}/${dev.width.specMax}″ · 실측 ${dev.width.actual}″` : '',
+            gy: spN(src && src.weight_g_per_y, 0),
+            gy_fail: !!(dev && dev.weight && dev.weight.fail),
+            gy_tip: (dev && dev.weight) ? `기준 ${dev.weight.target}g/y (허용 ${dev.weight.lo}~${dev.weight.hi}) · 실측 ${dev.weight.actual}g/y` : '',
+            sqm: spN(src && src.weight_g_per_sqm, 0),
+            sw: spN(src && src.shrink_width_pct, 1),
+            sl: spN(src && src.shrink_length_pct, 1),
+            jul: isRib ? julRib : julBody,
+            round: roundNo,
+            prevQc,
+            dye: (wo.recipients && wo.recipients.dyeing) || '',
+            proc: (wo.recipients && wo.recipients.processing) || '',
+            done: doneAt
+          };
+        };
+        if ((julBody || 0) > 0 || (!julBody && !julRib)) rows.push(mk('body'));
+        if ((julRib || 0) > 0) rows.push(mk('rib'));
+      });
+    });
+    return rows;
+  }
+
+  function renderSamplesDash() {
+    const tab = state.samplesTab || '염색가공';
+    let html = `<div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;">
+      <button class="sp-tab-btn${tab === '염색가공' ? ' active' : ''}" data-sp-tab="염색가공">염색가공 샘플</button>
+      <button class="sp-tab-btn${tab === '편직·나염' ? ' active' : ''}" data-sp-tab="편직·나염">편직 · 나염 샘플</button>
+    </div>`;
+    html += (tab === '염색가공') ? renderFinishSampleTable() : renderOtherSampleList();
+    return html;
+  }
+
+  function renderFinishSampleTable() {
+    let rows = buildFinishSampleRows();
+    const total = rows.length;
+    const q = String(state.samplesSearch || '').trim().toLowerCase();
+    if (q) {
+      rows = rows.filter(r => [r.item, r.color, r.dye, r.proc, r.gubun, r.wo_number]
+        .some(s => String(s || '').toLowerCase().includes(q)));
+    }
+    if (state.samplesShrinkOnly) {
+      rows = rows.filter(r => (r.sw != null && r.sw > SAMPLE_SHRINK_LIMIT) || (r.sl != null && r.sl > SAMPLE_SHRINK_LIMIT));
+    }
+    const key = state.samplesSortKey || 'date';
+    const dir = state.samplesSortDir === 'asc' ? 1 : -1;
+    const val = (r) => {
+      switch (key) {
+        case 'item': return r.item || '';
+        case 'gubun': return r.gubun || '';
+        case 'color': return r.color || '';
+        case 'width': return r.width == null ? -1e9 : r.width;
+        case 'gy': return r.gy == null ? -1e9 : r.gy;
+        case 'sqm': return r.sqm == null ? -1e9 : r.sqm;
+        case 'sw': return r.sw == null ? -1e9 : r.sw;
+        case 'sl': return r.sl == null ? -1e9 : r.sl;
+        case 'jul': return r.jul == null ? -1e9 : r.jul;
+        case 'round': return r.round || 0;
+        case 'dye': return r.dye || '';
+        case 'proc': return r.proc || '';
+        case 'done': return r.done ? String(r.done) : '';
+        default: return r.date || '';
+      }
+    };
+    rows.sort((a, b) => {
+      const x = val(a), y = val(b);
+      if (typeof x === 'number' && typeof y === 'number') return (x - y) * dir;
+      return String(x).localeCompare(String(y), 'ko') * dir;
+    });
+
+    const arrow = k => (state.samplesSortKey === k) ? (state.samplesSortDir === 'asc' ? ' ▲' : ' ▼') : '';
+    const th = (k, label, cls) => `<th class="sp-sort-th${cls ? ' ' + cls : ''}" data-sp-sort="${k}">${label}${arrow(k)}</th>`;
+
+    let html = `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px;">
+      <input type="text" id="sp-search" lang="ko" autocomplete="off" placeholder="원단 · 컬러 · 염색처 · 가공처 검색" value="${escapeHtml(state.samplesSearch || '')}" style="flex:1;min-width:200px;max-width:340px;padding:7px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;font-family:inherit;">
+      ${state.samplesSearch ? `<button class="dash-action-btn" id="sp-search-clear" style="font-size:11px;padding:5px 10px;">지우기</button>` : ''}
+      <label style="display:inline-flex;align-items:center;gap:5px;font-size:12px;color:#374151;cursor:pointer;">
+        <input type="checkbox" id="sp-shrink-only" ${state.samplesShrinkOnly ? 'checked' : ''}> 축률 ${SAMPLE_SHRINK_LIMIT}% 초과만
+      </label>
+      <span style="margin-left:auto;font-size:12px;color:#6b7280;">${rows.length}줄 표시${rows.length !== total ? ` (전체 ${total}줄)` : ''}</span>
+    </div>`;
+
+    if (total === 0) {
+      return html + `<div class="dash-empty">완료된 염색가공 샘플이 없습니다.<br><br>생산구분 [샘플] 또는 스탬프 [샘플]인 작지가 QC 완료되면 이 곳으로 모입니다.</div>`;
+    }
+    if (rows.length === 0) {
+      return html + `<div class="dash-empty">조건에 맞는 샘플이 없습니다.</div>`;
+    }
+
+    html += `<div class="dash-table-wrap"><table class="dash-table dash-table-no-select sp-table"><thead><tr>
+      ${th('date', '발주일', 'col-date')}
+      ${th('item', '원단명')}
+      ${th('gubun', '구분')}
+      ${th('color', '컬러')}
+      ${th('width', '폭', 'col-num')}
+      ${th('gy', 'y중량', 'col-num')}
+      ${th('sqm', '㎡중량', 'col-num')}
+      ${th('sw', '폭축률', 'col-num')}
+      ${th('sl', '장축률', 'col-num')}
+      ${th('jul', '절수', 'col-num')}
+      ${th('round', '차수', 'col-num')}
+      ${th('dye', '염색처')}
+      ${th('proc', '가공처')}
+      ${th('done', '완료일', 'col-date')}
+      <th>비고</th>
+    </tr></thead><tbody>`;
+
+    rows.forEach(r => {
+      const shrinkCell = (v) => {
+        if (v == null) return `<td class="col-num">-</td>`;
+        const bad = v > SAMPLE_SHRINK_LIMIT;
+        return `<td class="col-num${bad ? ' sp-bad' : ''}"${bad ? ` title="기준 ${SAMPLE_SHRINK_LIMIT}% 이내 — ${v}%"` : ''}>${v}%</td>`;
+      };
+      const widthCell = r.width == null ? `<td class="col-num">-</td>`
+        : `<td class="col-num${r.width_fail ? ' sp-warn' : ''}"${r.width_tip ? ` title="${escapeHtml(r.width_tip)}"` : ''}>${r.width}″${r.width_double ? ' (더블)' : ''}</td>`;
+      const gyCell = r.gy == null ? `<td class="col-num">-</td>`
+        : `<td class="col-num${r.gy_fail ? ' sp-warn' : ''}"${r.gy_tip ? ` title="${escapeHtml(r.gy_tip)}"` : ''}>${r.gy}</td>`;
+      const prevTip = r.prevQc.length
+        ? r.prevQc.map(p => `${p.no}차: 폭 ${p.w == null ? '-' : p.w + '″'} · ${p.gy == null ? '-' : p.gy + 'g/y'} · 폭축 ${p.sw == null ? '-' : p.sw + '%'} · 장축 ${p.sl == null ? '-' : p.sl + '%'}`).join('\n')
+        : '앞 차수 없음';
+      const roundCell = `<td class="col-num"><span class="${r.round >= 2 ? 'sp-round-n' : 'sp-round-1'}" title="${escapeHtml(prevTip)}">${r.round}차</span></td>`;
+      const memo = (state.sampleMemos || {})[sampleMemoKey(r.woId, r.colorIdx, r.part)] || '';
+      return html += `<tr class="sp-row" data-sp-id="${r.woId}">
+        <td class="col-date">${formatYMD(r.date)}</td>
+        <td>${escapeHtml(r.item || '-')}</td>
+        <td><span class="${r.part === 'rib' ? 'sp-part-rib' : 'sp-part-body'}">${r.gubun}</span></td>
+        <td>${escapeHtml(r.color || '-')}</td>
+        ${widthCell}
+        ${gyCell}
+        <td class="col-num">${r.sqm == null ? '-' : r.sqm}</td>
+        ${shrinkCell(r.sw)}
+        ${shrinkCell(r.sl)}
+        <td class="col-num">${r.jul == null ? '-' : r.jul + '절'}</td>
+        ${roundCell}
+        <td>${escapeHtml(normalizeVendorName(r.dye) || r.dye || '-')}</td>
+        <td>${escapeHtml(normalizeVendorName(r.proc) || r.proc || '-')}</td>
+        <td class="col-date">${formatYMD(r.done)}</td>
+        <td><input type="text" class="sp-memo-input" data-sp-memo="${escapeHtml(sampleMemoKey(r.woId, r.colorIdx, r.part))}" value="${escapeHtml(memo)}" placeholder="메모" autocomplete="off"></td>
+      </tr>`;
+    });
+    html += `</tbody></table></div>
+      <div style="margin-top:10px;font-size:12px;color:#6b7280;">
+        줄을 클릭하면 원본 작지가 열립니다. 차수 칸에 마우스를 올리면 앞 차수 수치가 뜹니다.
+        비고는 샘플 표 전용 메모라 원본 작지는 그대로 있습니다.
+      </div>`;
+    return html;
+  }
+
+  // 편직 · 나염 샘플 (표 형태는 5단계 예정 — 지금은 목록으로 모아만 둔다)
+  function renderOtherSampleList() {
+    const list = (state.allWorkOrders || []).filter(wo =>
+      wo && !wo.deleted && wo.completed && (wo.type === '편직' || wo.type === '나염') && isSampleWorkOrder(wo));
+    if (list.length === 0) {
+      return `<div class="dash-empty">완료된 편직 · 나염 샘플이 없습니다.<br><br>편직은 성격 [샘플](SP), 나염은 스탬프 [샘플]인 작지가 완료되면 이 곳으로 모입니다.</div>`;
+    }
+    list.sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+    let html = `<div class="dash-table-wrap"><table class="dash-table dash-table-no-select sp-table"><thead><tr>
+      <th class="col-date">의뢰일</th><th>유형</th><th>품목</th><th>컬러 / 원사색</th>
+      <th class="col-num">절수</th><th>거래처</th><th class="col-date">완료일</th>
+    </tr></thead><tbody>`;
+    list.forEach(wo => {
+      let item = '-', color = '-', jul = '-', vendor = '-';
+      if (wo.type === '편직') {
+        const its = wo.items || [];
+        item = its.map(i => i.item).filter(Boolean).join(', ') || '-';
+        color = its.map(i => i.color).filter(Boolean).join(', ') || '-';
+        const t = its.reduce((s, i) => s + (parseFloat(i.jul) || 0), 0);
+        jul = t ? t + '절' : '-';
+        vendor = wo.recipient || '-';
+      } else {
+        const rs = (wo.print_rows || []).filter(r => r && !r.deleted);
+        item = Array.from(new Set(rs.map(r => r.fabric).filter(Boolean))).join(', ') || wo.design_name || '-';
+        color = Array.from(new Set(rs.map(r => r.fabric_color || r.print_color).filter(Boolean))).join(', ') || '-';
+        const t = rs.reduce((s, r) => s + (parseFloat(r.jul) || 0), 0);
+        jul = t ? t + '절' : '-';
+        vendor = wo.print_factory || wo.dest || '-';
+      }
+      html += `<tr class="sp-row" data-sp-id="${wo.id}">
+        <td class="col-date">${formatYMD(wo.date)}</td>
+        <td>${escapeHtml(wo.type || '-')}</td>
+        <td>${escapeHtml(item)}</td>
+        <td>${escapeHtml(color)}</td>
+        <td class="col-num">${escapeHtml(jul)}</td>
+        <td>${escapeHtml(normalizeVendorName(vendor) || vendor)}</td>
+        <td class="col-date">${formatYMD(wo.completed_at)}</td>
+      </tr>`;
+    });
+    html += `</tbody></table></div><div style="margin-top:10px;font-size:12px;color:#6b7280;">줄을 클릭하면 원본 작지가 열립니다. 편직 샘플 전용 표는 다음 단계에서 만듭니다.</div>`;
+    return html;
+  }
+
   function renderCompletedDash() {
-    const allList = state.allWorkOrders.filter(wo => wo.completed && !wo.deleted);
+    // hotfix254: 완료된 샘플은 [완료된 의뢰서]가 아니라 [샘플 보관함]으로 간다
+    const allList = state.allWorkOrders.filter(wo => wo.completed && !wo.deleted && !isSampleWorkOrder(wo));
     
     // v2.31: 필터 적용
     const list = applyCompletedFilters(allList);
@@ -24062,6 +24447,10 @@ function validateBlendSum(blends, label) {
     } else if (state.dashView === 'completeReports') {
       title = '완료 보고';
       body = renderCompleteReports();
+      addBtn.style.display = 'none';
+    } else if (state.dashView === 'samples') {
+      title = '샘플 보관함';
+      body = renderSamplesDash();
       addBtn.style.display = 'none';
     } else if (state.dashView === 'completed') {
       title = '완료된 의뢰서';
@@ -26751,6 +27140,8 @@ function validateBlendSum(blends, label) {
           // hotfix34: 편직 의뢰서면 kind도 함께 동기화 (완료체크↔done태그)
           if (wo && wo.type === '편직') {
             if (newState) {
+              // hotfix254: 완료 시 샘플이었다면 표식을 남긴다 (완료돼도 [샘플 보관함]으로)
+              if (isSampleWorkOrder(wo)) updates.is_sample = true;
               updates.kind = 'done';
             } else if (wo.kind === 'done') {
               // 완료 해제 시 done이었으면 다시 추론값으로 되돌림
@@ -27021,6 +27412,52 @@ function validateBlendSum(blends, label) {
       });
     });
     
+    // ===== hotfix254: 샘플 보관함 핸들러 =====
+    document.querySelectorAll('#dash-body .sp-tab-btn').forEach(b => b.addEventListener('click', () => {
+      state.samplesTab = b.dataset.spTab || '염색가공';
+      renderDashboard();
+    }));
+    const spSearchEl = document.getElementById('sp-search');
+    if (spSearchEl) spSearchEl.addEventListener('input', () => {
+      state.samplesSearch = spSearchEl.value;
+      const pos = spSearchEl.selectionStart;
+      renderDashboard();
+      const again = document.getElementById('sp-search');
+      if (again) { again.focus(); try { again.setSelectionRange(pos, pos); } catch (_) {} }
+    });
+    const spClearEl = document.getElementById('sp-search-clear');
+    if (spClearEl) spClearEl.addEventListener('click', () => { state.samplesSearch = ''; renderDashboard(); });
+    const spShrinkEl = document.getElementById('sp-shrink-only');
+    if (spShrinkEl) spShrinkEl.addEventListener('change', () => { state.samplesShrinkOnly = spShrinkEl.checked; renderDashboard(); });
+    document.querySelectorAll('#dash-body .sp-sort-th').forEach(t => t.addEventListener('click', () => {
+      const k = t.dataset.spSort || 'date';
+      if (state.samplesSortKey === k) state.samplesSortDir = (state.samplesSortDir === 'asc' ? 'desc' : 'asc');
+      else { state.samplesSortKey = k; state.samplesSortDir = (k === 'date' || k === 'done') ? 'desc' : 'asc'; }
+      renderDashboard();
+    }));
+    // 줄 클릭 → 원본 작지 열기 (비고칸 클릭은 제외)
+    document.querySelectorAll('#dash-body .sp-row').forEach(tr => tr.addEventListener('click', (e) => {
+      if (e.target.closest('.sp-memo-input')) return;
+      const wo = state.allWorkOrders.find(w => w.id === tr.dataset.spId);
+      if (!wo) return;
+      if (wo.type === '나염' && window.__openNayeomPreview) { window.__openNayeomPreview(wo.id); return; }
+      showPreviewModal(wo);
+    }));
+    // 비고 저장 (샘플 표 전용 메모 — 원본 작지는 건드리지 않음)
+    document.querySelectorAll('#dash-body .sp-memo-input').forEach(inp => {
+      inp.addEventListener('focus', () => { state.editingMemoCellId = 'sample|' + inp.dataset.spMemo; });
+      inp.addEventListener('blur', async () => {
+        state.editingMemoCellId = null;
+        const k = inp.dataset.spMemo;
+        const v = inp.value.trim();
+        const cur = (state.sampleMemos || {})[k] || '';
+        if (v === cur) return;
+        const ok = await saveSampleMemo(k, v);
+        if (!ok) inp.value = cur;
+      });
+      inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') inp.blur(); });
+    });
+
     // ===== v2.31: 완료된 의뢰서 — 검색·필터·전체삭제 핸들러 =====
     const cfSearch = document.getElementById('cf-search');
     if (cfSearch) {
@@ -28933,6 +29370,12 @@ document.getElementById('history-color-search').addEventListener('input', (e) =>
   state.historyColorSearch = e.target.value.trim();
   document.dispatchEvent(new CustomEvent('hiwos-rerender-history'));
 });
+// hotfix254: 이력 범위 [전체 / 오더만 / 샘플만]
+document.querySelectorAll('.hist-scope-btn').forEach(b => b.addEventListener('click', () => {
+  state.historySampleScope = b.dataset.scope || 'all';
+  document.querySelectorAll('.hist-scope-btn').forEach(x => x.classList.toggle('active', x === b));
+  document.dispatchEvent(new CustomEvent('hiwos-rerender-history'));
+}));
 
 render();
 
@@ -29595,7 +30038,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix253';
+  const VERSION = 'v2.53 hotfix254';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
