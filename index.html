@@ -10438,7 +10438,8 @@ window.addEventListener('firebase-ready', () => {
           yarns: (d && Array.isArray(d.yarns)) ? d.yarns : [],
           knit: (d && Array.isArray(d.knit)) ? d.knit : [],
           proc: (d && Array.isArray(d.proc)) ? d.proc : [],
-          bundles: (d && Array.isArray(d.bundles)) ? d.bundles : []
+          bundles: (d && Array.isArray(d.bundles)) ? d.bundles : [],
+          def_procs: (d && Array.isArray(d.def_procs)) ? d.def_procs : []
         };
         state.costPricesLoaded = true;
         if (state.uiMode === 'dashboard' && state.dashView === 'costCalc') renderDashboard();
@@ -10750,9 +10751,12 @@ window.addEventListener('firebase-ready', () => {
       yarns: Array.isArray(c.yarns) ? c.yarns : [],
       knit: Array.isArray(c.knit) ? c.knit : [],
       proc: Array.isArray(c.proc) ? c.proc : [],
-      bundles: Array.isArray(c.bundles) ? c.bundles : []
+      bundles: Array.isArray(c.bundles) ? c.bundles : [],
+      def_procs: Array.isArray(c.def_procs) ? c.def_procs : []
     };
   }
+  // hotfix273: 공장을 정하지 않은 단가. 그 공장 단가가 따로 없으면 이걸 쓴다.
+  const COST_COMMON_VENDOR = '(공통)';
   function priceKeyYarn(n) { return 'yarn:' + String(n || '').trim(); }
   function priceKeyKnit(v) { return 'knit:' + String(v || '').trim(); }
   function priceKeyProc(v, pr) { return 'proc:' + String(v || '').trim() + '|' + String(pr || '').trim(); }
@@ -10772,6 +10776,7 @@ window.addEventListener('firebase-ready', () => {
     try {
       await setDoc(doc(db, 'cost_data', 'prices'), {
         yarns: next.yarns || [], knit: next.knit || [], proc: next.proc || [], bundles: next.bundles || [],
+        def_procs: next.def_procs || [],
         updated_at: serverTimestamp(),
         updated_by: state.user?.email || 'unknown'
       });
@@ -10845,33 +10850,47 @@ window.addEventListener('firebase-ready', () => {
     return (kg == null) ? null : { kind: hit.kind || '기타', price: hit.price, kg: kg };
   }
   function knitPriceByVendor(v) {
-    const key = String(v || '').trim().toLowerCase();
-    if (!key) return null;
-    const hit = getCostPrices().knit.find(k => String((k && k.vendor) || '').trim().toLowerCase() === key);
-    return hit ? (parseFloat(hit.price) || 0) : null;
+    const list = getCostPrices().knit;
+    const find = n => {
+      const key = String(n || '').trim().toLowerCase();
+      if (!key) return null;
+      const hit = list.find(k => String((k && k.vendor) || '').trim().toLowerCase() === key);
+      return hit ? (parseFloat(hit.price) || 0) : null;
+    };
+    const own = find(v);
+    return (own == null) ? find(COST_COMMON_VENDOR) : own;
   }
   // 공정 단가 — 묶음이 걸리면 묶음 쪽을 쓴다 (묶어서 싸게 하는 경우가 있다)
   function procPriceByVendor(v, proc) {
-    const vk = String(v || '').trim().toLowerCase();
     const pk = String(proc || '').trim();
-    if (!vk || !pk) return null;
-    const hit = getCostPrices().proc.find(p =>
-      String((p && p.vendor) || '').trim().toLowerCase() === vk &&
-      String((p && p.proc) || '').trim() === pk);
-    return hit ? (parseFloat(hit.price) || 0) : null;
+    if (!pk) return null;
+    const list = getCostPrices().proc;
+    const find = n => {
+      const key = String(n || '').trim().toLowerCase();
+      if (!key) return null;
+      const hit = list.find(p =>
+        String((p && p.vendor) || '').trim().toLowerCase() === key &&
+        String((p && p.proc) || '').trim() === pk);
+      return hit ? (parseFloat(hit.price) || 0) : null;
+    };
+    const own = find(v);
+    return (own == null) ? find(COST_COMMON_VENDOR) : own;
   }
   function bundleMatch(vendor, procs) {
-    const vk = String(vendor || '').trim().toLowerCase();
-    if (!vk) return null;
     const have = new Set((procs || []).map(p => String(p).trim()));
-    const cands = getCostPrices().bundles.filter(b =>
-      String((b && b.vendor) || '').trim().toLowerCase() === vk &&
-      Array.isArray(b.procs) && b.procs.length > 1 &&
-      b.procs.every(p => have.has(String(p).trim())));
-    if (!cands.length) return null;
-    // 걸리는 묶음이 여럿이면 공정을 가장 많이 덮는 것 하나만 쓴다
-    cands.sort((a, b) => b.procs.length - a.procs.length);
-    return cands[0];
+    const pick = n => {
+      const vk = String(n || '').trim().toLowerCase();
+      if (!vk) return null;
+      const cands = getCostPrices().bundles.filter(b =>
+        String((b && b.vendor) || '').trim().toLowerCase() === vk &&
+        Array.isArray(b.procs) && b.procs.length > 1 &&
+        b.procs.every(p => have.has(String(p).trim())));
+      if (!cands.length) return null;
+      // 걸리는 묶음이 여럿이면 공정을 가장 많이 덮는 것 하나만 쓴다
+      cands.sort((a, b) => b.procs.length - a.procs.length);
+      return cands[0];
+    };
+    return pick(vendor) || pick(COST_COMMON_VENDOR);
   }
 
   // ★계산식은 기획서 3번 그대로 — 절대 변경 금지★
@@ -10915,7 +10934,8 @@ window.addEventListener('firebase-ready', () => {
     if (out.knitMissing) out.msgs.push('편직료가 단가표에 없습니다');
     out.knitPrice = out.yarnTotal / ((100 - out.knitLoss) / 100) + out.knitFee;
     // 가공 — kg당 원가 = 편직까지가격 / ((100 - 가공로스) / 100) + 가공비 합계
-    const wanted = Array.isArray(c.procs) ? c.procs.slice() : [];
+    const wanted = (Array.isArray(c.procs) && c.procs.length) ? c.procs.slice() : getCostPrices().def_procs.slice();
+    out.usedDefaultProcs = !(Array.isArray(c.procs) && c.procs.length) && wanted.length > 0;
     const bd = bundleMatch(out.procVendor, wanted);
     const covered = new Set();
     if (bd) {
@@ -10934,7 +10954,8 @@ window.addEventListener('firebase-ready', () => {
       out.procTotal += price;
     });
     if (out.procs.some(p => p.missing && !p.simmed)) out.msgs.push('단가표에 없는 공정이 있습니다');
-    if (!wanted.length) out.msgs.push('원단 기본 스펙에 가공법이 체크되어 있지 않습니다');
+    if (!wanted.length) out.msgs.push('원단 기본 스펙에 가공법이 체크되어 있지 않고, 기본 가공법도 정해져 있지 않습니다');
+    else if (out.usedDefaultProcs) out.msgs.push('이 원단에 가공법이 없어 [기본 가공법]으로 계산했습니다');
     out.kgCost = out.knitPrice / ((100 - out.finLoss) / 100) + out.procTotal;
     // 야드당 원가 = kg당 원가 x (안내중량 / 1000) + 나염비
     out.printFee = ['bon', 'pig', 'ten'].reduce((a, k) => a + (parseFloat((S.print || {})[k]) || 0), 0);
@@ -23464,9 +23485,14 @@ function validateBlendSum(blends, label) {
         <input type="file" id="ci-file" accept=".json,application/json" style="${inp}max-width:400px;">
         <button class="dash-action-btn" id="ci-clear" style="font-size:11.5px;padding:6px 12px;">비우기</button>
       </div>
-      <label style="display:inline-flex;align-items:center;gap:7px;font-size:12.5px;color:#334155;cursor:pointer;margin-bottom:12px;">
+      <label style="display:inline-flex;align-items:center;gap:7px;font-size:12.5px;color:#334155;cursor:pointer;margin-bottom:6px;">
         <input type="checkbox" id="ci-overwrite" style="width:15px;height:15px;">
         이미 있는 단가도 파일의 값으로 바꾸기 <span style="color:#94a3b8;">(바뀐 값은 이력에 쌓입니다)</span>
+      </label><br>
+      <label style="display:inline-flex;align-items:center;gap:7px;font-size:12.5px;color:#334155;cursor:pointer;margin-bottom:12px;">
+        <input type="checkbox" id="ci-mkspec" style="width:15px;height:15px;">
+        [원단 기본 스펙]에 없는 품목을 <strong>판매 종료 상태로</strong> 새로 만들기
+        <span style="color:#94a3b8;">(직원 목록·작지 선택에는 안 나오고, 원가 계산기에서만 쓰입니다)</span>
       </label>
       <div id="ci-preview" style="font-size:12.5px;color:#64748b;line-height:1.9;">파일을 고르면 무엇이 몇 건 들어오는지 여기에 먼저 보여 드립니다.</div>
       <div style="margin-top:13px;">
@@ -23547,6 +23573,11 @@ function validateBlendSum(blends, label) {
       if (i < 0) { P.bundles.push({ vendor: v, procs: procs, price: price, updated_at: at }); sum.bundleNew += 1; pushHist(key, at, price); }
       else if (overwrite && Number(P.bundles[i].price) !== price) { P.bundles[i].price = price; P.bundles[i].updated_at = at; pushHist(key, at, price); }
     });
+    // 기본 가공법 — 파일에 있고 지금 정해진 것이 없을 때만 채운다
+    if (Array.isArray(data.def_procs) && data.def_procs.length && !P.def_procs.length) {
+      P.def_procs = data.def_procs.filter(p => COST_PROCS.includes(String(p).trim()));
+      sum.defProcs = P.def_procs.length;
+    }
     // 원단별 원가 — 품목명이 [원단 기본 스펙]에 있는 것만 고정 코드로 이어 붙인다
     const fab = {};
     (Array.isArray(data.fabric_cost) ? data.fabric_cost : []).forEach(f => {
@@ -23580,10 +23611,27 @@ function validateBlendSum(blends, label) {
     });
     return { prices: P, hist: hist, fab: fab, sum: sum };
   }
-  async function runCostImport(built) {
+  async function runCostImport(data, overwrite, makeSpecs) {
     if (!isOwnerUser()) { toast('최고관리자만 가져올 수 있습니다', 'error'); return false; }
     if (!state.costPricesLoaded) { toast('단가표를 아직 다 읽지 못했습니다. 잠시 뒤 다시 해주십시오', 'warning'); return false; }
     try {
+      if (makeSpecs) {
+        const pre = buildCostImport(data, overwrite);
+        if (pre.sum.fabMissN) {
+          const items = JSON.parse(JSON.stringify(getFabricSpecs()));
+          const seen = new Set(items.map(s => String(s.name || '').trim().toLowerCase()));
+          (Array.isArray(data.fabric_cost) ? data.fabric_cost : []).forEach(f => {
+            const nm = String(f && f.name || '').trim();
+            if (!nm || seen.has(nm.toLowerCase())) return;
+            seen.add(nm.toLowerCase());
+            // 판매 종료로 넣는다 — 목록·작지 선택에는 안 나오고 원가 계산기에서만 찾힌다
+            items.push({ name: nm, gubun: GUBUN_BODY, cat: '', width: '', tube: false, gy: null, blend: '', pair_rib: '', active: false });
+          });
+          const okSpec = await saveFabricSpecs(items);
+          if (!okSpec) return false;
+        }
+      }
+      const built = buildCostImport(data, overwrite);
       const P = built.prices;
       await setDoc(doc(db, 'cost_data', 'prices'), {
         yarns: P.yarns, knit: P.knit, proc: P.proc, bundles: P.bundles,
@@ -23671,7 +23719,16 @@ function validateBlendSum(blends, label) {
     return h;
   }
   function renderProcPriceTable(P) {
-    let h = `<div style="margin-bottom:10px;display:flex;gap:8px;flex-wrap:wrap;">
+    const dp = P.def_procs || [];
+    let h = `<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:11px 14px;margin-bottom:12px;">
+      <div style="font-size:12px;font-weight:800;color:#166534;margin-bottom:7px;">기본 가공법 <span style="font-weight:400;color:#4d7c5f;">— 원단에 가공법을 정해 두지 않았을 때 이 공정들로 계산합니다</span></div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px 16px;margin-bottom:9px;">
+        ${COST_PROCS.map(p => `<label style="display:inline-flex;align-items:center;gap:5px;font-size:12px;cursor:pointer;color:#334155;"><input type="checkbox" class="cp-defproc" value="${escapeHtml(p)}"${dp.includes(p) ? ' checked' : ''} style="width:14px;height:14px;"> ${escapeHtml(p)}</label>`).join('')}
+      </div>
+      <button class="dash-action-btn" id="cp-defproc-save" style="font-size:11.5px;padding:5px 14px;background:#047857;color:#fff;font-weight:700;">기본 가공법 저장</button>
+      <span style="font-size:11.5px;color:#4d7c5f;margin-left:8px;">공장을 <strong>${escapeHtml(COST_COMMON_VENDOR)}</strong>으로 넣은 단가는 어느 공장에나 적용됩니다. 그 공장 단가가 따로 있으면 그쪽이 이깁니다.</span>
+    </div>`;
+    h += `<div style="margin-bottom:10px;display:flex;gap:8px;flex-wrap:wrap;">
       <button class="dash-action-btn" id="cp-add-proc" style="background:#1e3a8a;color:#fff;font-weight:700;padding:6px 14px;">＋ 공정 단가 추가</button>
       <button class="dash-action-btn" id="cp-add-bundle" style="background:#047857;color:#fff;font-weight:700;padding:6px 14px;" title="여러 공정을 묶어 싸게 하는 경우">＋ 묶음 단가 추가</button>
     </div>`;
@@ -29305,6 +29362,13 @@ function validateBlendSum(blends, label) {
       renderDashboard();
     }));
     bindRerenderSearch('cp-search', v => { state.costSearch = v; });
+    // hotfix273: 기본 가공법 저장
+    document.getElementById('cp-defproc-save')?.addEventListener('click', async () => {
+      const next = getCostPrices();
+      next.def_procs = Array.from(document.querySelectorAll('#dash-body .cp-defproc')).filter(cb => cb.checked).map(cb => cb.value);
+      const ok = await saveCostPrices(next, null);
+      if (ok) { toast(next.def_procs.length ? `기본 가공법 ${next.def_procs.length}개를 저장했습니다` : '기본 가공법을 비웠습니다', 'success'); renderDashboard(); }
+    });
     // ===== hotfix272: 자료 가져오기 =====
     (function attachCostImportHandlers() {
       const fileEl = document.getElementById('ci-file');
@@ -29327,12 +29391,18 @@ function validateBlendSum(blends, label) {
         if (s.knitNew || s.knitChg) t += `· 편직료 새로 ${s.knitNew}건 / 값 바꿈 ${s.knitChg}건<br>`;
         if (s.procNew || s.procChg) t += `· 가공 단가 새로 ${s.procNew}건 / 값 바꿈 ${s.procChg}건<br>`;
         if (s.bundleNew) t += `· 묶음 단가 새로 ${s.bundleNew}건<br>`;
+        if (s.defProcs) t += `· 기본 가공법 ${s.defProcs}개 지정<br>`;
         if (s.fabHit || s.fabMissN) {
           t += `· 원단 원가 ${s.fabHit}개 품목에 연결`;
           if (s.fabMissN) t += ` <span style="color:#b45309;font-weight:700;">/ 품목을 못 찾아 건너뜀 ${s.fabMissN}개</span>`;
           t += '<br>';
         }
-        if (s.fabMissN) t += `<span style="font-size:11.5px;color:#b45309;">못 찾은 품목: ${escapeHtml(s.fabMiss.join(', '))}${s.fabMissN > s.fabMiss.length ? ' 외 ' + (s.fabMissN - s.fabMiss.length) + '개' : ''} — [원단 기본 스펙]에 같은 이름으로 먼저 등록하시면 다음 가져오기 때 연결됩니다.</span><br>`;
+        if (s.fabMissN) {
+          const mk = !!(document.getElementById('ci-mkspec') || {}).checked;
+          t += mk
+            ? `<span style="font-size:11.5px;color:#166534;font-weight:700;">못 찾은 ${s.fabMissN}개는 판매 종료 상태로 새로 만들어 연결합니다.</span><br>`
+            : `<span style="font-size:11.5px;color:#b45309;">못 찾은 품목: ${escapeHtml(s.fabMiss.join(', '))}${s.fabMissN > s.fabMiss.length ? ' 외 ' + (s.fabMissN - s.fabMiss.length) + '개' : ''} — 위 [새로 만들기]를 켜시면 한 번에 연결됩니다.</span><br>`;
+        }
         if (s.bad.length) t += `<span style="font-size:11.5px;color:#c0271f;">읽지 못한 줄 ${s.bad.length}개</span>`;
         prevEl.innerHTML = t;
         goEl.disabled = false;
@@ -29357,17 +29427,21 @@ function validateBlendSum(blends, label) {
         rd.readAsText(f, 'utf-8');
       });
       if (owEl) owEl.addEventListener('change', paint);
+      document.getElementById('ci-mkspec')?.addEventListener('change', paint);
       document.getElementById('ci-clear')?.addEventListener('click', () => {
         fileEl.value = ''; raw = null; built = null; paint();
       });
       goEl.addEventListener('click', async () => {
-        if (!built) return;
+        if (!built || !raw) return;
         const s = built.sum;
-        if (!confirm(`원사 ${s.yarnNew + s.yarnChg}건 · 이력 ${s.histAdd}줄 · 원단 ${s.fabHit}개를 넣습니다. 계속할까요?`)) return;
+        const mk = !!(document.getElementById('ci-mkspec') || {}).checked;
+        let msg = `원사 ${s.yarnNew + s.yarnChg}건 · 이력 ${s.histAdd}줄 · 원단 ${s.fabHit}개를 넣습니다.`;
+        if (mk && s.fabMissN) msg += `\n[원단 기본 스펙]에 없는 품목 ${s.fabMissN}개를 판매 종료 상태로 새로 만듭니다.`;
+        if (!confirm(msg + '\n계속할까요?')) return;
         goEl.disabled = true;
-        const ok = await runCostImport(built);
+        const ok = await runCostImport(raw, !!(owEl && owEl.checked), mk);
         goEl.disabled = false;
-        if (ok) { toast('자료를 가져왔습니다', 'success'); state.costPriceTab = 'yarn'; renderDashboard(); }
+        if (ok) { toast('자료를 가져왔습니다', 'success'); state.costTab = 'calc'; renderDashboard(); }
       });
     })();
     // ===== hotfix270: 판매 등급 =====
@@ -32282,7 +32356,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix272';
+  const VERSION = 'v2.53 hotfix273';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
