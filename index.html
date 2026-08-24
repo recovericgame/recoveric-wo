@@ -1228,6 +1228,14 @@
     /* v2.48 hotfix8: sticky 헤더가 dash-header 아래까지 잘 닿도록 background 명시 (스크롤 시 시각 신호) */
     background: #f5f5f5;
   }
+  /* hotfix279: 원가 계산 화면 위 요약 띠. 띠가 top:0을 차지하므로 그 아래 표 머리는 띠 높이만큼 내린다.
+     감싸는 div에는 overflow를 주지 않는다 (주면 sticky가 깨진다). */
+  #cc-sum-bar { position: sticky; top: 0; z-index: 150; }
+  .cc-under-bar .dash-table th { top: 58px; }
+  @media (max-width: 900px) {
+    #cc-sum-bar { position: static; }
+    .cc-under-bar .dash-table th { top: 0; }
+  }
   .dash-title {
     font-size: 18px;
     font-weight: 800;
@@ -6926,6 +6934,9 @@ const state = {
   costTab: 'prices',        // 원가 계산기 안쪽 탭
   costPriceTab: 'yarn',     // 단가표 안쪽 탭: yarn | knit | proc | grade
   costSearch: '',
+  costLists: null,          // hotfix280: { orgs, procs, proc_alias, org_alias } — null이면 기본값 사용
+  ccItemSearch: '',         // hotfix279: 원가 계산 화면 품목 찾기
+  ccFocusFirst: false,      // hotfix279: 품목을 새로 고른 직후 첫 단가 칸에 초점
   costFilter: { yarnKind: 'all', knitVendor: 'all', knitOrg: 'all', procVendor: 'all' },
   // hotfix270: 원가 계산기 3단계 — 판매 등급 · 원가 계산 화면
   costGrades: null,         // [{name, dc}] — null이면 아직 안 읽음(기본값 사용)
@@ -10458,6 +10469,17 @@ window.addEventListener('firebase-ready', () => {
         state.costGradesLoaded = true;
         if (state.uiMode === 'dashboard' && state.dashView === 'costCalc') renderDashboard();
       }, err => console.warn('[costGrades sub]', err.message));
+      // hotfix280: 조직 · 공정 이름 목록 구독 (대표가 늘리고 줄인다)
+      onSnapshot(doc(db, 'cost_data', 'lists'), snap => {
+        const d = snap.exists() ? snap.data() : null;
+        state.costLists = d ? {
+          orgs: Array.isArray(d.orgs) ? d.orgs : [],
+          procs: Array.isArray(d.procs) ? d.procs : [],
+          proc_alias: (d.proc_alias && typeof d.proc_alias === 'object') ? d.proc_alias : {},
+          org_alias: (d.org_alias && typeof d.org_alias === 'object') ? d.org_alias : {}
+        } : null;
+        if (state.uiMode === 'dashboard' && (state.dashView === 'costCalc' || state.dashView === 'fabricSpecs')) renderDashboard();
+      }, err => console.warn('[costLists sub]', err.message));
     }
   }
   
@@ -10655,15 +10677,52 @@ window.addEventListener('firebase-ready', () => {
   //  · 이어 붙이는 열쇠는 품목명이 아니라 품목마다 한 번 붙는 고정 코드(fid).
   //    품목명을 바꿔도 원가 자료가 끊기지 않는다.
   // ============================================================
-  const COST_PROCS = [
+  const COST_PROCS_DEFAULT = [
     '염색', '물나염', '텐타', '덤블', '프리셋팅', '컴팩', '기모', '선바이오',
     '봉침', '물나염과수', '수지텐', '후텐타', '실켓', '샤링', '후바이오', '기타'
   ];
   // hotfix276: 옛 자료의 '염색/물나염' 한 칸은 읽을 때만 '염색'으로 본다. 저장된 값은 고치지 않는다.
   const COST_PROC_ALIAS = { '염색/물나염': '염색' };
+  // hotfix280: 공정 이름과 조직 이름은 대표가 늘리고 줄일 수 있다. cost_data/lists 한 곳에서 관리한다.
+  //   이름을 바꾸면 옛 이름을 alias에 넣어 두므로 이미 저장된 자료가 끊기지 않는다.
+  const KNIT_ORGS_DEFAULT = ['싱글', '쭈리', '3단쭈리', '미니쭈리', '양면', '미쭈', '리프', '골지', '자가드', '와플', '기타'];
+  function costLists() {
+    const L = (state.costLists && typeof state.costLists === 'object') ? state.costLists : {};
+    return {
+      orgs: (Array.isArray(L.orgs) && L.orgs.length) ? L.orgs.slice() : KNIT_ORGS_DEFAULT.slice(),
+      procs: (Array.isArray(L.procs) && L.procs.length) ? L.procs.slice() : COST_PROCS_DEFAULT.slice(),
+      proc_alias: (L.proc_alias && typeof L.proc_alias === 'object') ? L.proc_alias : {},
+      org_alias: (L.org_alias && typeof L.org_alias === 'object') ? L.org_alias : {}
+    };
+  }
+  function getKnitOrgs() { return costLists().orgs; }
+  function getCostProcs() { return costLists().procs; }
   function normProc(p) {
-    const t = String(p == null ? '' : p).trim();
-    return COST_PROC_ALIAS[t] || t;
+    let t = String(p == null ? '' : p).trim();
+    if (COST_PROC_ALIAS[t]) t = COST_PROC_ALIAS[t];
+    const a = costLists().proc_alias;
+    return a[t] || t;
+  }
+  function normOrg(o) {
+    const t = String(o == null ? '' : o).trim();
+    const a = costLists().org_alias;
+    return a[t] || t;
+  }
+  async function saveCostLists(next) {
+    if (!isOwnerUser()) { toast('최고관리자만 저장할 수 있습니다', 'error'); return false; }
+    try {
+      await setDoc(doc(db, 'cost_data', 'lists'), {
+        orgs: next.orgs || [], procs: next.procs || [],
+        proc_alias: next.proc_alias || {}, org_alias: next.org_alias || {},
+        updated_at: serverTimestamp(),
+        updated_by: state.user?.email || 'unknown'
+      });
+      state.costLists = JSON.parse(JSON.stringify(next));
+      return true;
+    } catch (e) {
+      toast('목록 저장 실패: ' + e.message, 'error');
+      return false;
+    }
   }
   const COST_KNIT_LOSS_DEFAULT = 3;
   const COST_FIN_LOSS_DEFAULT = 10;
@@ -10740,8 +10799,7 @@ window.addEventListener('firebase-ready', () => {
   // hotfix277: 현장에서 부르는 이름. 저장값('면'·'포리'·'기타')은 그대로 두고 표시만 바꾼다.
   const YARN_KIND_LABEL = { '면': '방적사', '포리': '포리에스터', '기타': '기타' };
   const yarnKindName = k => YARN_KIND_LABEL[String(k || '').trim()] || String(k || '기타');
-  // 편직료는 공장 × 조직으로 갈린다. 조직을 비우면 그 공장 전체에 적용된다.
-  const KNIT_ORGS = ['싱글', '쭈리', '3단쭈리', '미니쭈리', '양면', '미쭈', '리프', '골지', '자가드', '와플', '기타'];
+  // 편직료는 공장 × 조직 × 품목으로 갈린다. 조직 목록은 getKnitOrgs()가 준다.
   const COST_LB_PER_KG = 2.2046;
   const COST_KG_PER_GORI = 181.44;
   function yarnKgPrice(y) {
@@ -10842,11 +10900,14 @@ window.addEventListener('firebase-ready', () => {
   // hotfix273: 공장을 정하지 않은 단가. 그 공장 단가가 따로 없으면 이걸 쓴다.
   const COST_COMMON_VENDOR = '(공통)';
   function priceKeyYarn(n) { return 'yarn:' + String(n || '').trim(); }
-  function priceKeyKnit(v, org) {
-    const o = String(org || '').trim();
-    return 'knit:' + String(v || '').trim() + (o ? '|' + o : '');
+  // hotfix280: 열쇠 = 공장|조직|품목 · 공장|공정|품목. 뒤가 비면 잘라내므로 옛 열쇠와 그대로 맞물린다.
+  function priceKeyTrim(s) { return String(s).replace(/\|+$/, ''); }
+  function priceKeyKnit(v, org, item) {
+    return priceKeyTrim('knit:' + String(v || '').trim() + '|' + String(org || '').trim() + '|' + String(item || '').trim());
   }
-  function priceKeyProc(v, pr) { return 'proc:' + String(v || '').trim() + '|' + String(pr || '').trim(); }
+  function priceKeyProc(v, pr, item) {
+    return priceKeyTrim('proc:' + String(v || '').trim() + '|' + String(pr || '').trim() + '|' + String(item || '').trim());
+  }
   function priceKeyBundle(v, procs) { return 'bundle:' + String(v || '').trim() + '|' + (Array.isArray(procs) ? procs.join('+') : ''); }
   function priceHistoryOf(key) {
     const all = state.costPriceHistory || {};
@@ -10936,41 +10997,64 @@ window.addEventListener('firebase-ready', () => {
     const kg = yarnKgPrice(hit);
     return (kg == null) ? null : { kind: hit.kind || '기타', price: hit.price, kg: kg };
   }
-  function knitPriceByVendor(v, org) {
+  // 편직료 되짚는 순서: 공장+조직+품목 → 공장+조직 → 공장+품목 → 공장 → (공통) 같은 순서
+  function knitPriceByVendor(v, org, item, info) {
     const list = getCostPrices().knit;
-    const on = String(org || '').trim().toLowerCase();
-    const find = (n, wantOrg) => {
+    const on = normOrg(org).toLowerCase();
+    const it = String(item || '').trim().toLowerCase();
+    const find = (n, wantOrg, wantItem) => {
       const key = String(n || '').trim().toLowerCase();
       if (!key) return null;
+      if (wantOrg && !on) return null;
+      if (wantItem && !it) return null;
       const hit = list.find(k => {
         if (String((k && k.vendor) || '').trim().toLowerCase() !== key) return false;
-        const ko = String((k && k.org) || '').trim().toLowerCase();
-        return wantOrg ? (ko && ko === on) : !ko;
+        const ko = normOrg(k && k.org).toLowerCase();
+        const ki = String((k && k.item) || '').trim().toLowerCase();
+        if (wantOrg ? (ko !== on) : !!ko) return false;
+        if (wantItem ? (ki !== it) : !!ki) return false;
+        return true;
       });
       return hit ? (parseFloat(hit.price) || 0) : null;
     };
-    // 공장+조직 → 공장 전체 → (공통)+조직 → (공통) 전체
-    let r = on ? find(v, true) : null;
-    if (r == null) r = find(v, false);
-    if (r == null && on) r = find(COST_COMMON_VENDOR, true);
-    if (r == null) r = find(COST_COMMON_VENDOR, false);
-    return r;
+    const order = [[v, 1, 1], [v, 1, 0], [v, 0, 1], [v, 0, 0],
+                   [COST_COMMON_VENDOR, 1, 1], [COST_COMMON_VENDOR, 1, 0], [COST_COMMON_VENDOR, 0, 1], [COST_COMMON_VENDOR, 0, 0]];
+    for (let i = 0; i < order.length; i++) {
+      const r = find(order[i][0], order[i][1], order[i][2]);
+      if (r != null) {
+        if (info) { info.byItem = !!order[i][2]; info.byOrg = !!order[i][1]; info.common = (order[i][0] === COST_COMMON_VENDOR); }
+        return r;
+      }
+    }
+    return null;
   }
-  // 공정 단가 — 묶음이 걸리면 묶음 쪽을 쓴다 (묶어서 싸게 하는 경우가 있다)
-  function procPriceByVendor(v, proc) {
+  // 공정 단가 — 품목 지정 줄이 가장 먼저. 묶음이 걸리면 묶음 쪽을 쓴다 (묶어서 싸게 하는 경우가 있다)
+  function procPriceByVendor(v, proc, item, info) {
     const pk = normProc(proc);
     if (!pk) return null;
     const list = getCostPrices().proc;
-    const find = n => {
+    const it = String(item || '').trim().toLowerCase();
+    const find = (n, wantItem) => {
       const key = String(n || '').trim().toLowerCase();
       if (!key) return null;
-      const hit = list.find(p =>
-        String((p && p.vendor) || '').trim().toLowerCase() === key &&
-        normProc(p && p.proc) === pk);
+      if (wantItem && !it) return null;
+      const hit = list.find(p => {
+        if (String((p && p.vendor) || '').trim().toLowerCase() !== key) return false;
+        if (normProc(p && p.proc) !== pk) return false;
+        const pi = String((p && p.item) || '').trim().toLowerCase();
+        return wantItem ? (pi === it) : !pi;
+      });
       return hit ? (parseFloat(hit.price) || 0) : null;
     };
-    const own = find(v);
-    return (own == null) ? find(COST_COMMON_VENDOR) : own;
+    const order = [[v, 1], [v, 0], [COST_COMMON_VENDOR, 1], [COST_COMMON_VENDOR, 0]];
+    for (let i = 0; i < order.length; i++) {
+      const r = find(order[i][0], order[i][1]);
+      if (r != null) {
+        if (info) { info.byItem = !!order[i][1]; info.common = (order[i][0] === COST_COMMON_VENDOR); }
+        return r;
+      }
+    }
+    return null;
   }
   function bundleMatch(vendor, procs) {
     const have = new Set((procs || []).map(p => normProc(p)));
@@ -11028,8 +11112,10 @@ window.addEventListener('firebase-ready', () => {
     // 편직 — 편직까지 가격 = 총원사가 / ((100 - 편직로스) / 100) + 편직료
     //   편직료는 품목마다 다르다. 품목에 적힌 값이 가장 먼저, 없으면 편직공장 단가, 그것도 없으면 (공통).
     const ownFee = (c.knit_fee != null && c.knit_fee !== '') ? parseFloat(c.knit_fee) : null;
-    const knitFound = (ownFee != null && !isNaN(ownFee)) ? ownFee : knitPriceByVendor(out.knitVendor, c.machine);
-    out.knitFrom = (ownFee != null && !isNaN(ownFee)) ? '품목' : (knitFound == null ? '' : '단가표');
+    const kInfo = {};
+    const knitFound = (ownFee != null && !isNaN(ownFee)) ? ownFee : knitPriceByVendor(out.knitVendor, c.machine, fid, kInfo);
+    out.knitFrom = (ownFee != null && !isNaN(ownFee)) ? '품목'
+      : (knitFound == null ? '' : (kInfo.byItem ? '단가표(품목 지정)' : (kInfo.common ? '단가표((공통))' : '단가표')));
     const simKnit = (S.knit !== undefined && S.knit !== '') ? parseFloat(S.knit) : null;
     out.knitFee = (simKnit != null && !isNaN(simKnit)) ? simKnit : (knitFound == null ? 0 : knitFound);
     out.knitMissing = (knitFound == null && !(simKnit != null && !isNaN(simKnit)));
@@ -11050,10 +11136,11 @@ window.addEventListener('firebase-ready', () => {
     wanted.forEach(p => {
       const nm = String(p).trim();
       if (covered.has(nm)) return;
-      const found = procPriceByVendor(out.procVendor, nm);
+      const pInfo = {};
+      const found = procPriceByVendor(out.procVendor, nm, fid, pInfo);
       const sp = (S.proc && S.proc[nm] !== undefined && S.proc[nm] !== '') ? parseFloat(S.proc[nm]) : null;
       const price = (sp != null && !isNaN(sp)) ? sp : (found == null ? 0 : found);
-      out.procs.push({ name: nm, price: price, isBundle: false, missing: (found == null), simmed: (sp != null && !isNaN(sp)) });
+      out.procs.push({ name: nm, price: price, isBundle: false, missing: (found == null), simmed: (sp != null && !isNaN(sp)), byItem: !!pInfo.byItem, common: !!pInfo.common });
       out.procTotal += price;
     });
     if (out.procs.some(p => p.missing && !p.simmed)) out.msgs.push('단가표에 없는 공정이 있습니다');
@@ -22764,7 +22851,7 @@ function validateBlendSum(blends, label) {
             </div>
             <div style="font-size:11.5px;font-weight:800;color:#0f172a;margin-bottom:5px;">가공법 <span style="font-weight:400;color:#94a3b8;">— 이 원단이 늘 거치는 공정을 체크해 두면 원가 계산 화면에서 자동으로 잡힙니다</span></div>
             <div style="display:flex;flex-wrap:wrap;gap:6px 14px;background:#fff;border:1px solid #e2e8f0;border-radius:6px;padding:8px 10px;">
-              ${COST_PROCS.map(p => `<label style="display:inline-flex;align-items:center;gap:5px;font-size:12px;cursor:pointer;color:#334155;"><input type="checkbox" class="fs-c-proc" value="${escapeHtml(p)}" style="width:14px;height:14px;"> ${escapeHtml(p)}</label>`).join('')}
+              ${getCostProcs().map(p => `<label style="display:inline-flex;align-items:center;gap:5px;font-size:12px;cursor:pointer;color:#334155;"><input type="checkbox" class="fs-c-proc" value="${escapeHtml(p)}" style="width:14px;height:14px;"> ${escapeHtml(p)}</label>`).join('')}
             </div>
           </div>` : ''}
           <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:6px;">
@@ -23332,7 +23419,7 @@ function validateBlendSum(blends, label) {
     else if (sub === 'grade') return h + renderCostGradeTable();
     else if (sub === 'import') return h + renderCostImportTab();
     else h += renderProcPriceTable(P);
-    h += renderCostPriceModal();
+    h += renderCostPriceModal() + renderCostListModal();
     return h;
   }
   // hotfix270: 판매 등급 — 표준은 기준선이라 지울 수 없고 할인율 0% 고정
@@ -23402,10 +23489,34 @@ function validateBlendSum(blends, label) {
   }
   function renderCostCalcTab() {
     const C = ccState();
-    const list = ccSpecList();
+    const listAll = ccSpecList();
     const all = getFabricSpecs();
+    const q = String(state.ccItemSearch || '').trim().toLowerCase();
+    const list = q ? listAll.filter(s => String(s.name || '').toLowerCase().includes(q) || specFid(s).toLowerCase().includes(q)) : listAll;
     const inp = 'padding:7px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;font-family:inherit;box-sizing:border-box;';
+    // ── 위쪽 요약 띠 (스크롤해도 붙어 있다)
+    const specTop = ccCurrentSpec();
+    const Rtop = specTop ? ccBuild() : null;
+    let bar = '';
+    if (specTop && Rtop) {
+      const cell = (t, v, big) => `<div style="display:flex;flex-direction:column;justify-content:center;line-height:1.25;">
+        <span style="font-size:10.5px;color:#94a3b8;font-weight:700;">${t}</span>
+        <span style="font-size:${big ? '15px' : '12.5px'};font-weight:800;color:${big ? '#14532d' : '#0f172a'};white-space:nowrap;">${v}</span></div>`;
+      bar = `<div id="cc-sum-bar" style="height:58px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:0 14px;margin-bottom:12px;display:flex;align-items:center;gap:22px;overflow-x:auto;">
+        ${cell('품목', escapeHtml(specTop.name || '-'))}
+        ${cell('편직처', escapeHtml(Rtop.knitVendor || '-') + (Rtop.knitOrg ? ' · ' + escapeHtml(Rtop.knitOrg) : ''))}
+        ${cell('안내중량', Rtop.gy ? Rtop.gy + ' g/y' : '-')}
+        ${cell('kg당 원가', `<span id="cc-bar-kg">${costMoney(Rtop.kgCost, 0)}</span>`, true)}
+        ${cell('야드당 원가', `<span id="cc-bar-yd">${Rtop.ydCost == null ? '-' : costMoney(Rtop.ydCost, 0)}</span>`, true)}
+        ${C.sim ? `<div style="margin-left:auto;font-size:11.5px;font-weight:800;color:#92400e;background:#fef3c7;border:1px solid #fcd34d;border-radius:6px;padding:4px 10px;white-space:nowrap;">바꿔 보는 중</div>` : ''}
+      </div>`;
+    }
+    const ccWrap = body => bar ? (bar + `<div class="cc-under-bar">${body}</div>`) : body;
     let h = `<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:14px;">
+      <div style="min-width:230px;">
+        <label style="font-size:11.5px;font-weight:700;color:#475569;display:block;margin-bottom:4px;">품목 찾기</label>
+        <input type="text" id="cc-item-search" lang="ko" autocomplete="off" placeholder="이름 일부를 치면 아래 목록이 좁혀집니다" value="${escapeHtml(state.ccItemSearch || '')}" style="${inp}min-width:230px;">
+      </div>
       <div style="min-width:280px;">
         <label style="font-size:11.5px;font-weight:700;color:#475569;display:block;margin-bottom:4px;">품목</label>
         <select id="cc-item" style="${inp}min-width:280px;">
@@ -23413,19 +23524,21 @@ function validateBlendSum(blends, label) {
           ${list.map(s => `<option value="${escapeHtml(specFid(s))}"${specFid(s) === C.fid ? ' selected' : ''}>${escapeHtml(s.name)}</option>`).join('')}
         </select>
       </div>
-      <div style="font-size:12px;color:#94a3b8;padding-bottom:8px;">원가 자료가 등록된 품목 ${list.length}개 / 전체 ${all.length}개</div>
+      ${state.ccItemSearch ? `<button class="dash-action-btn" id="cc-item-search-clear" style="font-size:11.5px;padding:6px 12px;margin-bottom:1px;">지우기</button>` : ''}
+      <div style="font-size:12px;color:#94a3b8;padding-bottom:8px;">${q ? `찾은 품목 ${list.length}개 / ` : ''}원가 자료가 등록된 품목 ${listAll.length}개 / 전체 ${all.length}개</div>
     </div>`;
-    if (!list.length) {
-      return h + `<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:14px 16px;font-size:13px;color:#92400e;line-height:1.8;">
+    if (q && !list.length) h += `<div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:7px;padding:9px 12px;font-size:12.5px;color:#9a3412;margin-bottom:12px;">찾는 이름의 품목이 없습니다. 다른 낱말로 찾아 보십시오.</div>`;
+    if (!listAll.length) {
+      return ccWrap(h + `<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:14px 16px;font-size:13px;color:#92400e;line-height:1.8;">
         아직 원가 자료가 등록된 품목이 없습니다.<br>
         [원단 기본 스펙]에서 품목을 열고 <strong>원가 자료</strong> 칸에 원사 구성·가공법·로스를 채워 주십시오. 한 번 채워 두면 이 화면에서는 고를 때마다 원가가 이미 나와 있습니다.
-      </div>`;
+      </div>`);
     }
     if (!C.fid) {
-      return h + `<div class="dash-empty">품목을 고르면 원가가 바로 나옵니다.</div>`;
+      return ccWrap(h + `<div class="dash-empty">품목을 고르면 원가가 바로 나옵니다.</div>`);
     }
     const spec = ccCurrentSpec();
-    if (!spec) return h + `<div class="dash-empty">고른 품목을 찾지 못했습니다. 다시 골라 주십시오.</div>`;
+    if (!spec) return ccWrap(h + `<div class="dash-empty">고른 품목을 찾지 못했습니다. 다시 골라 주십시오.</div>`);
     const R = ccBuild();
     const box = 'background:#fff;border:1px solid #e2e8f0;border-radius:9px;padding:14px 16px;margin-bottom:14px;';
     const lbl = 'font-size:12.5px;font-weight:800;color:#0f172a;margin-bottom:9px;';
@@ -23494,7 +23607,7 @@ function validateBlendSum(blends, label) {
       <td style="text-align:right;">${simInp('cc-sim-knit', 'knit', (C.simKnit !== '' && C.simKnit != null ? C.simKnit : (R.knitMissing ? '' : Math.round(R.knitFee))), '단가 없음')}</td>
       <td style="text-align:left;font-size:11.5px;">${R.knitMissing
         ? `<span style="color:#c0271f;font-weight:800;">단가표에 없음</span>`
-        : `${escapeHtml(R.knitVendor || '편직처 미지정')}${R.knitOrg ? ' · ' + escapeHtml(R.knitOrg) : ''} <span style="color:#64748b;">(${R.knitFrom === '품목' ? '품목 지정' : (R.knitFrom === '단가표' ? '단가표' : '바꿔 본 값')})</span> · kg당`}</td>
+        : `${escapeHtml(R.knitVendor || '편직처 미지정')}${R.knitOrg ? ' · ' + escapeHtml(R.knitOrg) : ''} <span style="color:#64748b;">(${escapeHtml(R.knitFrom === '품목' ? '원단 스펙 편직료' : (R.knitFrom || '바꿔 본 값'))})</span> · kg당`}</td>
     </tr>
     <tr style="background:#f1f5f9;">
       <td style="text-align:left;font-weight:800;">편직까지 가격</td>
@@ -23518,7 +23631,7 @@ function validateBlendSum(blends, label) {
     R.procs.forEach(p => {
       const why = p.missing && !p.simmed
         ? `<span style="color:#c0271f;font-weight:800;">단가표에 없음</span>`
-        : (p.isBundle ? '묶음 단가로 한 값에 계산' : (p.simmed ? `<span style="color:#b45309;font-weight:800;">바꿔 본 값</span>` : '단가표'));
+        : (p.isBundle ? '묶음 단가로 한 값에 계산' : (p.simmed ? `<span style="color:#b45309;font-weight:800;">바꿔 본 값</span>` : (p.byItem ? '단가표(품목 지정)' : (p.common ? '단가표((공통))' : '단가표'))));
       h += `<tr>
         <td style="text-align:left;">${p.isBundle ? '묶음 ' : ''}${costBadge(p.name)}</td>
         <td style="text-align:center;font-size:11.5px;color:#6b7280;">${escapeHtml(R.procVendor || '(공통)')}</td>
@@ -23549,7 +23662,7 @@ function validateBlendSum(blends, label) {
     h += `</div>`;
     // ── 마진표
     h += renderCostGradeMargin(R);
-    return h;
+    return ccWrap(h);
   }
 
   // 등급별 단가·마진 — kg당과 야드당을 나란히 본다 (대표 엑셀과 같은 모양)
@@ -23581,16 +23694,31 @@ function validateBlendSum(blends, label) {
       };
     });
   }
+  // hotfix279: 마진 구간 띠 — 20% 이상 초록 / 10~20% 남색 / 0~10% 주황 / 0 미만 빨강
+  function ccMarginBand(v) {
+    if (v == null || isNaN(v)) return { bg: '#ffffff', fg: '#c7cbd1' };
+    if (v >= 20) return { bg: '#dcfce7', fg: '#15803d' };
+    if (v >= 10) return { bg: '#e0e7ff', fg: '#312e81' };
+    if (v >= 0) return { bg: '#ffedd5', fg: '#b45309' };
+    return { bg: '#fee2e2', fg: '#c0271f' };
+  }
+  function ccMarginCellHtml(v, price, cost) {
+    if (v == null || isNaN(v)) return `<span style="color:#c7cbd1;font-size:17px;font-weight:800;">-</span>`;
+    const b = ccMarginBand(v);
+    const p = parseFloat(price), c = parseFloat(cost);
+    const gain = (!isNaN(p) && !isNaN(c)) ? (p - c) : null;
+    return `<div style="font-size:19px;font-weight:800;color:${b.fg};line-height:1.15;">${v.toFixed(1)}%</div>
+      <div style="font-size:10.5px;color:#64748b;margin-top:1px;white-space:nowrap;">${gain == null ? '' : '이익 ' + costMoney(gain, 0)}</div>`;
+  }
   function renderCostGradeMargin(R) {
     const C = ccState();
     const rows = ccGradeValues(R);
     const inp = 'width:112px;padding:6px 8px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;font-family:inherit;text-align:right;box-sizing:border-box;';
-    const mg = v => (v == null || isNaN(v)) ? '<span style="color:#c7cbd1;">-</span>'
-      : `<span style="font-weight:800;color:${v < 0 ? '#c0271f' : (v < 10 ? '#b45309' : '#15803d')};">${v.toFixed(1)}%</span>`;
+    const pinp = 'width:148px;padding:10px 11px;border:1px solid #cbd5e1;border-radius:7px;font-size:16px;font-weight:700;font-family:inherit;text-align:right;box-sizing:border-box;';
     let h = `<div style="background:#fff;border:1px solid #e2e8f0;border-radius:9px;padding:14px 16px;">
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:11px;">
         <div style="font-size:12.5px;font-weight:800;color:#0f172a;">등급별 단가와 마진</div>
-        <div style="font-size:11.5px;color:#94a3b8;">표준 단가 한 칸만 넣으면 나머지가 전부 채워집니다</div>
+        <div style="font-size:11.5px;color:#94a3b8;">단가를 넣으면 마진이 바로 나옵니다. 표준 한 칸만 넣어도 아래 등급이 전부 채워집니다</div>
         <button class="dash-action-btn" id="cc-grade-setting" style="margin-left:auto;font-size:11.5px;padding:5px 12px;">등급 설정</button>
         <button class="dash-action-btn" id="cc-price-reset" style="font-size:11.5px;padding:5px 12px;">단가 지우기</button>
       </div>
@@ -23605,29 +23733,33 @@ function validateBlendSum(blends, label) {
       </div>
       <div class="dash-table-wrap"><table class="dash-table" style="font-size:12.5px;"><thead><tr>
         <th style="text-align:left;min-width:150px;">등급</th>
-        <th style="min-width:140px;">kg당 단가</th><th style="min-width:90px;">kg 마진</th>
-        <th style="min-width:140px;">야드당 단가</th><th style="min-width:90px;">야드 마진</th>
+        <th style="min-width:160px;">kg당 단가</th><th style="min-width:110px;">kg 마진</th>
+        <th style="min-width:160px;">야드당 단가</th><th style="min-width:110px;">야드 마진</th>
         <th style="min-width:80px;">되돌리기</th>
       </tr></thead><tbody>
-      <tr style="background:#f1f5f9;">
-        <td style="text-align:left;font-weight:800;color:#334155;">원가</td>
-        <td style="text-align:right;font-weight:800;color:#334155;">${costMoney(R.kgCost, 0)}</td><td></td>
-        <td style="text-align:right;font-weight:800;color:#334155;">${R.ydCost == null ? '-' : costMoney(R.ydCost, 0)}</td><td colspan="2"></td>
+      <tr style="background:#e2e8f0;">
+        <td style="text-align:left;font-weight:800;color:#0f172a;">원가 <span style="font-size:11px;font-weight:700;color:#64748b;">(이 줄보다 낮으면 손해)</span></td>
+        <td style="text-align:right;font-weight:800;font-size:15px;color:#0f172a;">${costMoney(R.kgCost, 0)}</td>
+        <td style="text-align:center;font-size:11px;color:#64748b;">kg당</td>
+        <td style="text-align:right;font-weight:800;font-size:15px;color:#0f172a;">${R.ydCost == null ? '-' : costMoney(R.ydCost, 0)}</td>
+        <td style="text-align:center;font-size:11px;color:#64748b;">야드당</td>
+        <td></td>
       </tr>`;
     rows.forEach(r => {
+      const bk = ccMarginBand(r.kgMargin), by = ccMarginBand(r.ydMargin);
       h += `<tr>
-        <td style="text-align:left;font-weight:800;color:#0f172a;">${escapeHtml(r.g.name)}${r.i === 0 ? '' : ` <span style="font-size:11px;font-weight:700;color:#7c3aed;">−${r.g.dc}%</span>`}</td>
-        <td style="text-align:right;"><input type="text" inputmode="numeric" class="cc-money cc-price" data-gi="${r.i}" data-u="kg" value="${r.kg == null ? '' : escapeHtml(moneyInputVal(Math.round(r.kg)))}" style="${inp}${r.kgTyped ? 'border-color:#7c3aed;background:#faf5ff;font-weight:800;' : ''}"></td>
-        <td style="text-align:right;" class="cc-m" data-gi="${r.i}" data-u="kg">${mg(r.kgMargin)}</td>
-        <td style="text-align:right;"><input type="text" inputmode="numeric" class="cc-money cc-price" data-gi="${r.i}" data-u="yd" value="${r.yd == null ? '' : escapeHtml(moneyInputVal(Math.round(r.yd)))}" style="${inp}${r.ydTyped ? 'border-color:#7c3aed;background:#faf5ff;font-weight:800;' : ''}"></td>
-        <td style="text-align:right;" class="cc-m" data-gi="${r.i}" data-u="yd">${mg(r.ydMargin)}</td>
+        <td style="text-align:left;font-weight:800;font-size:14px;color:#0f172a;">${escapeHtml(r.g.name)}${r.i === 0 ? '' : `<br><span style="font-size:11px;font-weight:700;color:#7c3aed;">표준에서 −${r.g.dc}%</span>`}</td>
+        <td style="text-align:right;"><input type="text" inputmode="numeric" class="cc-money cc-price" data-gi="${r.i}" data-u="kg" value="${r.kg == null ? '' : escapeHtml(moneyInputVal(Math.round(r.kg)))}" style="${pinp}${r.kgTyped ? 'border-color:#7c3aed;background:#faf5ff;' : ''}"></td>
+        <td style="text-align:center;background:${bk.bg};" class="cc-m" data-gi="${r.i}" data-u="kg">${ccMarginCellHtml(r.kgMargin, r.kg, R.kgCost)}</td>
+        <td style="text-align:right;"><input type="text" inputmode="numeric" class="cc-money cc-price" data-gi="${r.i}" data-u="yd" value="${r.yd == null ? '' : escapeHtml(moneyInputVal(Math.round(r.yd)))}" style="${pinp}${r.ydTyped ? 'border-color:#7c3aed;background:#faf5ff;' : ''}"></td>
+        <td style="text-align:center;background:${by.bg};" class="cc-m" data-gi="${r.i}" data-u="yd">${ccMarginCellHtml(r.ydMargin, r.yd, R.ydCost)}</td>
         <td class="col-action">${(r.kgTyped || r.ydTyped) ? `<button class="dash-action-btn cc-auto" data-gi="${r.i}" style="font-size:11px;padding:4px 9px;">자동</button>` : `<span style="color:#c7cbd1;font-size:11px;">자동</span>`}</td>
       </tr>`;
     });
     h += `</tbody></table></div>
       <div style="margin-top:9px;font-size:11.5px;color:#94a3b8;line-height:1.8;">
         보라색 칸은 손으로 고친 값입니다. [자동]을 누르면 표준단가와 할인율에서 다시 계산합니다.<br>
-        마진 = (단가 − 원가) ÷ 단가 × 100. 마진이 10% 아래면 주황색, 원가보다 낮으면 빨간색으로 나옵니다.
+        마진 = (단가 − 원가) ÷ 단가 × 100. 마진 20% 이상 초록 · 10~20% 남색 · 0~10% 주황 · 원가보다 낮으면 빨강으로 칸 바탕이 바뀝니다.
       </div>
     </div>`;
     return h;
@@ -23708,9 +23840,9 @@ function validateBlendSum(blends, label) {
       const price = parseFloat(k && k.price);
       if (!v || isNaN(price)) return;
       const at = String(k.updated_at || '').trim() || todayYMD();
-      const i = P.knit.findIndex(x => String(x.vendor || '').trim().toLowerCase() === v.toLowerCase() && String(x.org || '').trim() === org);
-      if (i < 0) { P.knit.push({ vendor: v, org: org, price: price, updated_at: at }); sum.knitNew += 1; pushHist(priceKeyKnit(v, org), at, price); }
-      else if (overwrite && Number(P.knit[i].price) !== price) { P.knit[i].price = price; P.knit[i].updated_at = at; sum.knitChg += 1; pushHist(priceKeyKnit(v, org), at, price); }
+      const i = P.knit.findIndex(x => String(x.vendor || '').trim().toLowerCase() === v.toLowerCase() && String(x.org || '').trim() === org && !String(x.item || '').trim());
+      if (i < 0) { P.knit.push({ vendor: v, org: org, item: '', price: price, updated_at: at }); sum.knitNew += 1; pushHist(priceKeyKnit(v, org, ''), at, price); }
+      else if (overwrite && Number(P.knit[i].price) !== price) { P.knit[i].price = price; P.knit[i].updated_at = at; sum.knitChg += 1; pushHist(priceKeyKnit(v, org, ''), at, price); }
     });
     // 가공 단가
     (Array.isArray(data.proc) ? data.proc : []).forEach(p => {
@@ -23719,9 +23851,9 @@ function validateBlendSum(blends, label) {
       const price = parseFloat(p && p.price);
       if (!v || !pr || isNaN(price)) return;
       const at = String(p.updated_at || '').trim() || todayYMD();
-      const i = P.proc.findIndex(x => String(x.vendor || '').trim().toLowerCase() === v.toLowerCase() && normProc(x.proc) === pr);
-      if (i < 0) { P.proc.push({ vendor: v, proc: pr, price: price, updated_at: at }); sum.procNew += 1; pushHist(priceKeyProc(v, pr), at, price); }
-      else if (overwrite && Number(P.proc[i].price) !== price) { P.proc[i].price = price; P.proc[i].updated_at = at; sum.procChg += 1; pushHist(priceKeyProc(v, pr), at, price); }
+      const i = P.proc.findIndex(x => String(x.vendor || '').trim().toLowerCase() === v.toLowerCase() && normProc(x.proc) === pr && !String(x.item || '').trim());
+      if (i < 0) { P.proc.push({ vendor: v, proc: pr, item: '', price: price, updated_at: at }); sum.procNew += 1; pushHist(priceKeyProc(v, pr, ''), at, price); }
+      else if (overwrite && Number(P.proc[i].price) !== price) { P.proc[i].price = price; P.proc[i].updated_at = at; sum.procChg += 1; pushHist(priceKeyProc(v, pr, ''), at, price); }
     });
     // 묶음 단가
     (Array.isArray(data.bundles) ? data.bundles : []).forEach(b => {
@@ -23737,7 +23869,7 @@ function validateBlendSum(blends, label) {
     });
     // 기본 가공법 — 파일에 있고 지금 정해진 것이 없을 때만 채운다
     if (Array.isArray(data.def_procs) && data.def_procs.length && !P.def_procs.length) {
-      P.def_procs = data.def_procs.map(normProc).filter(p => COST_PROCS.includes(p));
+      P.def_procs = data.def_procs.map(normProc).filter(p => getCostProcs().includes(p));
       sum.defProcs = P.def_procs.length;
     }
     // 원단별 원가 — 품목명이 [원단 기본 스펙]에 있는 것만 고정 코드로 이어 붙인다
@@ -23840,8 +23972,23 @@ function validateBlendSum(blends, label) {
     </div>`;
   }
   function costFilter() {
-    if (!state.costFilter || typeof state.costFilter !== 'object') state.costFilter = { yarnKind: 'all', knitVendor: 'all', knitOrg: 'all', procVendor: 'all' };
-    return state.costFilter;
+    if (!state.costFilter || typeof state.costFilter !== 'object') state.costFilter = {};
+    const F = state.costFilter;
+    ['yarnKind', 'knitVendor', 'knitOrg', 'knitItem', 'procVendor', 'procItem'].forEach(k => { if (!F[k]) F[k] = 'all'; });
+    return F;
+  }
+  // 품목 고정 코드(F0001)로 이름을 찾는다. 이름을 바꿔도 코드는 그대로이므로 자료가 끊기지 않는다.
+  function specNameByFid(fid) {
+    const f = String(fid || '').trim();
+    if (!f) return '';
+    const s = getFabricSpecs().find(x => specFid(x) === f);
+    return s ? String(s.name || f) : (f + ' (없어진 품목)');
+  }
+  function costItemOptions(cur, emptyLabel) {
+    const list = getFabricSpecs().slice().sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'ko'));
+    const c = String(cur || '').trim();
+    return `<option value="">${escapeHtml(emptyLabel || '전체 (품목 안 나눔)')}</option>` +
+      list.map(s => `<option value="${escapeHtml(specFid(s))}"${specFid(s) === c ? ' selected' : ''}>${escapeHtml(s.name)}${s.active === false ? ' (판매 종료)' : ''}</option>`).join('');
   }
   function uniqSorted(arr) {
     return Array.from(new Set(arr.map(x => String(x || '').trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'ko'));
@@ -23890,41 +24037,57 @@ function validateBlendSum(blends, label) {
   }
   function renderKnitPriceTable(P) {
     const F = costFilter();
-    let h = `<div style="margin-bottom:10px;"><button class="dash-action-btn" id="cp-add-knit" style="background:#1e3a8a;color:#fff;font-weight:700;padding:6px 14px;">＋ 편직공장 추가</button></div>`;
+    let h = `<div style="margin-bottom:10px;display:flex;gap:8px;flex-wrap:wrap;">
+      <button class="dash-action-btn" id="cp-add-knit" style="background:#1e3a8a;color:#fff;font-weight:700;padding:6px 14px;">＋ 편직 단가 추가</button>
+      <button class="dash-action-btn" id="cp-org-manage" style="background:#7c3aed;color:#fff;font-weight:700;padding:6px 14px;">조직 관리</button>
+    </div>`;
     const rows = P.knit.map((k, i) => ({ k, i }))
       .filter(o => F.knitVendor === 'all' || String(o.k.vendor || '').trim() === F.knitVendor)
-      .filter(o => F.knitOrg === 'all' || (F.knitOrg === '(전체 조직)' ? !String(o.k.org || '').trim() : String(o.k.org || '').trim() === F.knitOrg))
-      .filter(o => cpMatch(o.k.vendor) || cpMatch(o.k.org));
-    const orgOpts = uniqSorted(P.knit.map(k => k.org)).map(o => ({ v: o, t: o }));
+      .filter(o => F.knitOrg === 'all' || (F.knitOrg === '(전체 조직)' ? !String(o.k.org || '').trim() : normOrg(o.k.org) === F.knitOrg))
+      .filter(o => F.knitItem === 'all' || (F.knitItem === '(품목 안 정함)' ? !String(o.k.item || '').trim() : String(o.k.item || '').trim() === F.knitItem))
+      .filter(o => cpMatch(o.k.vendor) || cpMatch(o.k.org) || cpMatch(specNameByFid(o.k.item)));
+    const orgOpts = uniqSorted(P.knit.map(k => normOrg(k.org))).map(o => ({ v: o, t: o }));
     if (P.knit.some(k => !String(k.org || '').trim())) orgOpts.unshift({ v: '(전체 조직)', t: '조직 안 정함' });
+    const itemOpts = uniqSorted(P.knit.map(k => k.item)).map(f => ({ v: f, t: specNameByFid(f) }));
+    if (P.knit.some(k => !String(k.item || '').trim())) itemOpts.unshift({ v: '(품목 안 정함)', t: '품목 안 정함' });
     h += cpFilterBar(
       cpFilterSel('cp-f-knitvendor', '편직공장', uniqSorted(P.knit.map(k => k.vendor)).map(v => ({ v: v, t: v })), F.knitVendor) +
-      cpFilterSel('cp-f-knitorg', '조직', orgOpts, F.knitOrg), rows.length, P.knit.length);
+      cpFilterSel('cp-f-knitorg', '조직', orgOpts, F.knitOrg) +
+      cpFilterSel('cp-f-knititem', '품목', itemOpts, F.knitItem), rows.length, P.knit.length);
     h += `<div class="dash-table-wrap"><table class="dash-table"><thead><tr>
-      <th style="text-align:left;min-width:150px;">편직공장</th><th style="min-width:120px;">조직</th><th style="min-width:130px;">kg당 편직료</th><th style="min-width:96px;">수정일</th><th style="min-width:64px;">이력</th><th style="min-width:56px;">수정</th><th style="min-width:56px;">삭제</th>
+      <th style="text-align:left;min-width:130px;">편직공장</th><th style="min-width:110px;">조직</th><th style="text-align:left;min-width:180px;">품목</th><th style="min-width:130px;">kg당 편직료</th><th style="min-width:96px;">수정일</th><th style="min-width:64px;">이력</th><th style="min-width:56px;">수정</th><th style="min-width:56px;">삭제</th>
     </tr></thead><tbody>`;
-    if (!rows.length) h += `<tr><td colspan="7" style="text-align:center;color:#9ca3af;padding:18px;">${P.knit.length ? '조건에 맞는 것이 없습니다.' : '등록된 편직공장이 없습니다.'}</td></tr>`;
+    if (!rows.length) h += `<tr><td colspan="8" style="text-align:center;color:#9ca3af;padding:18px;">${P.knit.length ? '조건에 맞는 것이 없습니다.' : '등록된 편직 단가가 없습니다.'}</td></tr>`;
     rows.forEach(({ k, i }) => {
-      const org = String(k.org || '').trim();
+      const org = normOrg(k.org);
+      const fid = String(k.item || '').trim();
       h += `<tr>
         <td style="text-align:left;font-weight:700;">${escapeHtml(k.vendor || '-')}</td>
         <td style="text-align:center;">${org ? costBadge(org) : `<span style="font-size:11px;color:#c7cbd1;">전체</span>`}</td>
+        <td style="text-align:left;font-size:12px;">${fid ? escapeHtml(specNameByFid(fid)) : `<span style="font-size:11px;color:#c7cbd1;">전체</span>`}</td>
         <td style="text-align:right;font-weight:800;color:#0f172a;">${costMoney(parseFloat(k.price), 0)}</td>
         <td style="text-align:center;font-size:12px;color:#6b7280;">${escapeHtml(k.updated_at || '-')}</td>
-        <td style="text-align:center;">${cpHistCell(priceKeyKnit(k.vendor, k.org))}</td>
+        <td style="text-align:center;">${cpHistCell(priceKeyKnit(k.vendor, k.org, k.item))}</td>
         <td class="col-action"><button class="dash-action-btn cp-edit" data-cp-type="knit" data-idx="${i}">수정</button></td>
         <td class="col-action col-act-delete"><button class="dash-action-btn danger cp-del" data-cp-type="knit" data-idx="${i}">삭제</button></td>
       </tr>`;
     });
-    h += `</tbody></table></div>`;
+    h += `</tbody></table></div>
+      <div style="font-size:11.5px;color:#9ca3af;margin-top:8px;line-height:1.7;">
+        찾는 순서는 <strong>공장+조직+품목 → 공장+조직 → 공장+품목 → 공장 → (공통)</strong>입니다. 조직이나 품목을 비워 두면 그 위 단계 전체에 적용됩니다.
+      </div>`;
     return h;
   }
   function renderProcPriceTable(P) {
     const dp = (P.def_procs || []).map(normProc);
+    const PROCS = getCostProcs();
     let h = `<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:11px 14px;margin-bottom:12px;">
-      <div style="font-size:12px;font-weight:800;color:#166534;margin-bottom:7px;">기본 가공법 <span style="font-weight:400;color:#4d7c5f;">— 원단에 가공법을 정해 두지 않았을 때 이 공정들로 계산합니다</span></div>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:7px;">
+        <div style="font-size:12px;font-weight:800;color:#166534;">기본 가공법 <span style="font-weight:400;color:#4d7c5f;">— 원단에 가공법을 정해 두지 않았을 때 이 공정들로 계산합니다</span></div>
+        <button class="dash-action-btn" id="cp-proc-manage" style="margin-left:auto;font-size:11.5px;padding:5px 12px;background:#7c3aed;color:#fff;font-weight:700;">공정 관리</button>
+      </div>
       <div style="display:flex;flex-wrap:wrap;gap:8px 16px;margin-bottom:9px;">
-        ${COST_PROCS.map(p => `<label style="display:inline-flex;align-items:center;gap:5px;font-size:12px;cursor:pointer;color:#334155;"><input type="checkbox" class="cp-defproc" value="${escapeHtml(p)}"${dp.includes(p) ? ' checked' : ''} style="width:14px;height:14px;"> ${escapeHtml(p)}</label>`).join('')}
+        ${PROCS.map(p => `<label style="display:inline-flex;align-items:center;gap:5px;font-size:12px;cursor:pointer;color:#334155;"><input type="checkbox" class="cp-defproc" value="${escapeHtml(p)}"${dp.includes(p) ? ' checked' : ''} style="width:14px;height:14px;"> ${escapeHtml(p)}</label>`).join('')}
       </div>
       <button class="dash-action-btn" id="cp-defproc-save" style="font-size:11.5px;padding:5px 14px;background:#047857;color:#fff;font-weight:700;">기본 가공법 저장</button>
       <span style="font-size:11.5px;color:#4d7c5f;margin-left:8px;">공장을 <strong>${escapeHtml(COST_COMMON_VENDOR)}</strong>으로 넣은 단가는 어느 공장에나 적용됩니다. 그 공장 단가가 따로 있으면 그쪽이 이깁니다.</span>
@@ -23936,25 +24099,34 @@ function validateBlendSum(blends, label) {
     const F = costFilter();
     const rows = P.proc.map((r, i) => ({ r, i }))
       .filter(o => F.procVendor === 'all' || String(o.r.vendor || '').trim() === F.procVendor)
-      .filter(o => cpMatch(o.r.vendor) || cpMatch(normProc(o.r.proc)));
+      .filter(o => F.procItem === 'all' || (F.procItem === '(품목 안 정함)' ? !String(o.r.item || '').trim() : String(o.r.item || '').trim() === F.procItem))
+      .filter(o => cpMatch(o.r.vendor) || cpMatch(normProc(o.r.proc)) || cpMatch(specNameByFid(o.r.item)));
+    const pItemOpts = uniqSorted(P.proc.map(r => r.item)).map(f => ({ v: f, t: specNameByFid(f) }));
+    if (P.proc.some(r => !String(r.item || '').trim())) pItemOpts.unshift({ v: '(품목 안 정함)', t: '품목 안 정함' });
     h += cpFilterBar(cpFilterSel('cp-f-procvendor', '가공소',
-      uniqSorted(P.proc.concat(P.bundles).map(r => r.vendor)).map(v => ({ v: v, t: v })), F.procVendor), rows.length, P.proc.length);
+      uniqSorted(P.proc.concat(P.bundles).map(r => r.vendor)).map(v => ({ v: v, t: v })), F.procVendor) +
+      cpFilterSel('cp-f-procitem', '품목', pItemOpts, F.procItem), rows.length, P.proc.length);
     h += `<div class="dash-table-wrap"><table class="dash-table"><thead><tr>
-      <th style="text-align:left;min-width:150px;">공장</th><th style="min-width:130px;">공정</th><th style="min-width:120px;">kg당 단가</th><th style="min-width:96px;">수정일</th><th style="min-width:64px;">이력</th><th style="min-width:56px;">수정</th><th style="min-width:56px;">삭제</th>
+      <th style="text-align:left;min-width:180px;">품목</th><th style="text-align:left;min-width:120px;">공장</th><th style="min-width:130px;">공정</th><th style="min-width:120px;">kg당 단가</th><th style="min-width:96px;">수정일</th><th style="min-width:64px;">이력</th><th style="min-width:56px;">수정</th><th style="min-width:56px;">삭제</th>
     </tr></thead><tbody>`;
-    if (!rows.length) h += `<tr><td colspan="7" style="text-align:center;color:#9ca3af;padding:18px;">${P.proc.length ? '검색 결과가 없습니다.' : '등록된 공정 단가가 없습니다.'}</td></tr>`;
+    if (!rows.length) h += `<tr><td colspan="8" style="text-align:center;color:#9ca3af;padding:18px;">${P.proc.length ? '조건에 맞는 것이 없습니다.' : '등록된 공정 단가가 없습니다.'}</td></tr>`;
     rows.forEach(({ r, i }) => {
+      const fid = String(r.item || '').trim();
       h += `<tr>
+        <td style="text-align:left;font-size:12px;">${fid ? escapeHtml(specNameByFid(fid)) : `<span style="font-size:11px;color:#c7cbd1;">전체</span>`}</td>
         <td style="text-align:left;font-weight:700;">${escapeHtml(r.vendor || '-')}</td>
         <td style="text-align:center;">${normProc(r.proc) ? costBadge(normProc(r.proc)) : '<span style="color:#c7cbd1;font-size:11px;">-</span>'}</td>
         <td style="text-align:right;font-weight:800;color:#0f172a;">${costMoney(parseFloat(r.price), 0)}</td>
         <td style="text-align:center;font-size:12px;color:#6b7280;">${escapeHtml(r.updated_at || '-')}</td>
-        <td style="text-align:center;">${cpHistCell(priceKeyProc(r.vendor, r.proc))}</td>
+        <td style="text-align:center;">${cpHistCell(priceKeyProc(r.vendor, r.proc, r.item))}</td>
         <td class="col-action"><button class="dash-action-btn cp-edit" data-cp-type="proc" data-idx="${i}">수정</button></td>
         <td class="col-action col-act-delete"><button class="dash-action-btn danger cp-del" data-cp-type="proc" data-idx="${i}">삭제</button></td>
       </tr>`;
     });
-    h += `</tbody></table></div>`;
+    h += `</tbody></table></div>
+      <div style="font-size:11.5px;color:#9ca3af;margin-top:8px;line-height:1.7;">
+        찾는 순서는 <strong>공장+공정+품목 → 공장+공정 → (공통)+공정+품목 → (공통)+공정</strong>입니다. 품목을 비워 두면 그 공장 그 공정 전체에 적용됩니다.
+      </div>`;
     const brows = P.bundles.map((b, i) => ({ b, i }))
       .filter(o => F.procVendor === 'all' || String(o.b.vendor || '').trim() === F.procVendor)
       .filter(o => cpMatch(o.b.vendor) || cpMatch((o.b.procs || []).join(' ')));
@@ -23977,6 +24149,26 @@ function validateBlendSum(blends, label) {
     h += `</tbody></table></div>`;
     return h;
   }
+  // hotfix280: 조직 · 공정 이름 관리 창 (추가 · 이름 바꾸기 · 순서 · 삭제)
+  function renderCostListModal() {
+    return `<div class="dash-modal-bg" id="cl-modal">
+      <div class="dash-modal" style="max-width:560px;">
+        <div class="dash-modal-head"><span id="cl-modal-title">조직 관리</span><button class="dash-modal-close" id="cl-modal-close">✕</button></div>
+        <div style="padding:16px;">
+          <div id="cl-help" style="font-size:12px;color:#475569;line-height:1.8;background:#f8fafc;border:1px solid #e2e8f0;border-radius:7px;padding:10px 12px;margin-bottom:12px;"></div>
+          <div id="cl-rows" style="display:flex;flex-direction:column;gap:7px;max-height:44vh;overflow-y:auto;"></div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:12px;">
+            <input type="text" id="cl-new" lang="ko" autocomplete="off" placeholder="새 이름" style="flex:1;min-width:160px;padding:8px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;font-family:inherit;">
+            <button class="dash-action-btn" id="cl-add" style="background:#1e3a8a;color:#fff;font-weight:700;padding:7px 16px;">＋ 추가</button>
+          </div>
+          <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px;">
+            <button class="dash-action-btn" id="cl-cancel" style="padding:7px 16px;">취소</button>
+            <button class="dash-action-btn" id="cl-save" style="background:#16a34a;color:#fff;font-weight:800;padding:7px 20px;">저장</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  }
   function renderCostPriceModal() {
     const st = 'width:100%;padding:8px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;font-family:inherit;box-sizing:border-box;';
     return `<div class="dash-modal-bg" id="cp-modal">
@@ -23990,13 +24182,15 @@ function validateBlendSum(blends, label) {
           <div id="cp-f-vendor-wrap"><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;" id="cp-f-vendor-label">공장</label>
             <select id="cp-f-vendor" style="${st}"></select></div>
           <div id="cp-f-org-wrap"><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">조직 <span style="font-weight:400;color:#9ca3af;font-size:11px;">— 비우면 그 공장 전체에 적용됩니다</span></label>
-            <select id="cp-f-org" style="${st}"><option value="">전체 (조직 안 나눔)</option>${KNIT_ORGS.map(o => `<option value="${escapeHtml(o)}">${escapeHtml(o)}</option>`).join('')}</select></div>
+            <select id="cp-f-org" style="${st}"><option value="">전체 (조직 안 나눔)</option>${getKnitOrgs().map(o => `<option value="${escapeHtml(o)}">${escapeHtml(o)}</option>`).join('')}</select></div>
           <div id="cp-f-proc-wrap"><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">공정</label>
-            <select id="cp-f-proc" style="${st}">${COST_PROCS.map(p => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join('')}</select></div>
+            <select id="cp-f-proc" style="${st}">${getCostProcs().map(p => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join('')}</select></div>
           <div id="cp-f-procs-wrap"><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:5px;">묶을 공정 <span style="font-weight:400;color:#9ca3af;font-size:11px;">— 둘 이상 고르십시오</span></label>
             <div style="display:flex;flex-wrap:wrap;gap:6px 13px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:9px 11px;">
-              ${COST_PROCS.map(p => `<label style="display:inline-flex;align-items:center;gap:5px;font-size:12px;cursor:pointer;color:#334155;"><input type="checkbox" class="cp-f-bproc" value="${escapeHtml(p)}" style="width:14px;height:14px;"> ${escapeHtml(p)}</label>`).join('')}
+              ${getCostProcs().map(p => `<label style="display:inline-flex;align-items:center;gap:5px;font-size:12px;cursor:pointer;color:#334155;"><input type="checkbox" class="cp-f-bproc" value="${escapeHtml(p)}" style="width:14px;height:14px;"> ${escapeHtml(p)}</label>`).join('')}
             </div></div>
+          <div id="cp-f-item-wrap"><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">품목 <span style="font-weight:400;color:#9ca3af;font-size:11px;">— 비우면 위 조건 전체에 적용됩니다</span></label>
+            <select id="cp-f-item" style="${st}"></select></div>
           <div><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;" id="cp-f-price-label">단가</label>
             <input type="text" inputmode="numeric" id="cp-f-price" autocomplete="off" style="${st}text-align:right;" placeholder="0">
             <div id="cp-f-price-hint" style="font-size:11.5px;color:#2563eb;margin-top:5px;min-height:16px;font-weight:700;"></div></div>
@@ -29576,7 +29770,7 @@ function validateBlendSum(blends, label) {
     }));
     bindRerenderSearch('cp-search', v => { state.costSearch = v; });
     // hotfix277: 표 위 걸러내기
-    const CP_FILTER_MAP = { 'cp-f-yarnkind': 'yarnKind', 'cp-f-knitvendor': 'knitVendor', 'cp-f-knitorg': 'knitOrg', 'cp-f-procvendor': 'procVendor' };
+    const CP_FILTER_MAP = { 'cp-f-yarnkind': 'yarnKind', 'cp-f-knitvendor': 'knitVendor', 'cp-f-knitorg': 'knitOrg', 'cp-f-knititem': 'knitItem', 'cp-f-procvendor': 'procVendor', 'cp-f-procitem': 'procItem' };
     Object.keys(CP_FILTER_MAP).forEach(id => {
       const el = document.getElementById(id);
       if (el) el.addEventListener('change', () => { costFilter()[CP_FILTER_MAP[id]] = el.value; renderDashboard(); });
@@ -29723,6 +29917,12 @@ function validateBlendSum(blends, label) {
         C.fid = itemEl.value || '';
         C.cells = {}; C.target = '';
         C.sim = false; C.simYarn = {}; C.simKnit = ''; C.simProc = {};
+        state.ccFocusFirst = !!C.fid;
+        renderDashboard();
+      });
+      bindRerenderSearch('cc-item-search', v => { state.ccItemSearch = v; });
+      document.getElementById('cc-item-search-clear')?.addEventListener('click', () => {
+        state.ccItemSearch = '';
         renderDashboard();
       });
       // 계산값만 다시 칠한다 (칸을 다시 그리지 않으므로 입력 중에도 흔들리지 않는다)
@@ -29738,14 +29938,18 @@ function validateBlendSum(blends, label) {
         const rows = ccGradeValues(R);
         const act = document.activeElement;
         rows.forEach(r => {
-          [['kg', r.kg, r.kgTyped, r.kgMargin], ['yd', r.yd, r.ydTyped, r.ydMargin]].forEach(([u, val, typed, m]) => {
+          [['kg', r.kg, r.kgTyped, r.kgMargin, R.kgCost], ['yd', r.yd, r.ydTyped, r.ydMargin, R.ydCost]].forEach(([u, val, typed, m, cost]) => {
             const el = document.querySelector(`#dash-body .cc-price[data-gi="${r.i}"][data-u="${u}"]`);
             if (el && el !== act && !typed) el.value = (val == null ? '' : moneyInputVal(Math.round(val)));
             const cell = document.querySelector(`#dash-body .cc-m[data-gi="${r.i}"][data-u="${u}"]`);
-            if (cell) cell.innerHTML = (m == null || isNaN(m)) ? '<span style="color:#c7cbd1;">-</span>'
-              : `<span style="font-weight:800;color:${m < 0 ? '#c0271f' : (m < 10 ? '#b45309' : '#15803d')};">${m.toFixed(1)}%</span>`;
+            if (cell) {
+              cell.style.background = ccMarginBand(m).bg;
+              cell.innerHTML = ccMarginCellHtml(m, val, cost);
+            }
           });
         });
+        const bk = document.getElementById('cc-bar-kg'); if (bk) bk.textContent = costMoney(R.kgCost, 0);
+        const by = document.getElementById('cc-bar-yd'); if (by) by.textContent = (R.ydCost == null ? '-' : costMoney(R.ydCost, 0));
       }
       document.querySelectorAll('#dash-body .cc-print').forEach(el => el.addEventListener('input', () => {
         C.print[el.dataset.k] = unComma(el.value);
@@ -29812,6 +30016,101 @@ function validateBlendSum(blends, label) {
       }));
       // 금액 칸은 치는 동안 콤마가 따라 들어간다 (값을 읽을 때는 위에서 콤마를 뺀다)
       document.querySelectorAll('#dash-body .cc-money').forEach(el => el.addEventListener('input', () => formatMoneyInput(el)));
+      // 품목을 새로 고른 직후에만 첫 단가 칸에 초점을 준다 (그 뒤 다시 그릴 때는 초점을 뺏지 않는다)
+      if (state.ccFocusFirst) {
+        state.ccFocusFirst = false;
+        const first = document.querySelector('#dash-body .cc-price[data-gi="0"][data-u="kg"]');
+        if (first) setTimeout(() => { try { first.focus(); first.select(); } catch (e) { } }, 60);
+      }
+    })();
+    (function attachCostListHandlers() {
+      const modal = document.getElementById('cl-modal');
+      if (!modal) return;
+      let kind = 'orgs';            // 'orgs' | 'procs'
+      let items = [];               // [{ name, old }]  old = 처음 이름(이름을 바꾸면 별칭에 넣는다)
+      const rowsEl = document.getElementById('cl-rows');
+      const usedCount = (name) => {
+        const P = getCostPrices();
+        const n = String(name || '').trim();
+        if (kind === 'orgs') return P.knit.filter(k => normOrg(k.org) === n).length;
+        return P.proc.filter(r => normProc(r.proc) === n).length
+          + P.bundles.filter(b => (b.procs || []).some(x => normProc(x) === n)).length
+          + (P.def_procs || []).filter(x => normProc(x) === n).length;
+      };
+      function paint() {
+        rowsEl.innerHTML = items.map((it, i) => {
+          const used = it.old ? usedCount(it.old) : 0;
+          return `<div style="display:flex;gap:6px;align-items:center;">
+            <span style="width:26px;text-align:center;font-size:12px;font-weight:800;color:#94a3b8;">${i + 1}</span>
+            <input type="text" class="cl-name" data-i="${i}" lang="ko" autocomplete="off" value="${escapeHtml(it.name)}" style="flex:1;min-width:120px;padding:7px 9px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;font-family:inherit;">
+            <span style="font-size:11px;color:${used ? '#2563eb' : '#c7cbd1'};width:56px;text-align:center;font-weight:700;">${used ? used + '건 씀' : '안 씀'}</span>
+            <button class="dash-action-btn cl-up" data-i="${i}" style="font-size:11px;padding:4px 8px;"${i === 0 ? ' disabled' : ''}>위로</button>
+            <button class="dash-action-btn cl-down" data-i="${i}" style="font-size:11px;padding:4px 8px;"${i === items.length - 1 ? ' disabled' : ''}>아래로</button>
+            <button class="dash-action-btn danger cl-del" data-i="${i}" style="font-size:11px;padding:4px 8px;"${used ? ' disabled title="쓰는 단가가 있어 지울 수 없습니다"' : ''}>삭제</button>
+          </div>`;
+        }).join('');
+        rowsEl.querySelectorAll('.cl-name').forEach(el => el.addEventListener('change', () => {
+          items[parseInt(el.dataset.i, 10)].name = el.value.trim();
+        }));
+        rowsEl.querySelectorAll('.cl-up').forEach(b => b.addEventListener('click', () => {
+          const i = parseInt(b.dataset.i, 10); if (i <= 0) return;
+          const t = items[i]; items[i] = items[i - 1]; items[i - 1] = t; paint();
+        }));
+        rowsEl.querySelectorAll('.cl-down').forEach(b => b.addEventListener('click', () => {
+          const i = parseInt(b.dataset.i, 10); if (i >= items.length - 1) return;
+          const t = items[i]; items[i] = items[i + 1]; items[i + 1] = t; paint();
+        }));
+        rowsEl.querySelectorAll('.cl-del').forEach(b => b.addEventListener('click', () => {
+          const i = parseInt(b.dataset.i, 10);
+          items.splice(i, 1); paint();
+        }));
+      }
+      function openCl(k) {
+        kind = k;
+        const L = costLists();
+        items = (k === 'orgs' ? L.orgs : L.procs).map(n => ({ name: n, old: n }));
+        document.getElementById('cl-modal-title').textContent = (k === 'orgs' ? '조직 관리' : '공정 관리');
+        document.getElementById('cl-help').innerHTML = (k === 'orgs')
+          ? '편직 단가에서 고르는 <strong>조직</strong> 목록입니다. 이름을 바꾸면 이미 저장된 단가도 새 이름으로 따라옵니다. 쓰고 있는 조직은 지울 수 없습니다.'
+          : '가공 단가·기본 가공법·원단 가공법에서 고르는 <strong>공정</strong> 목록입니다. 이름을 바꾸면 이미 저장된 단가도 새 이름으로 따라옵니다. 쓰고 있는 공정은 지울 수 없습니다.';
+        document.getElementById('cl-new').value = '';
+        paint();
+        modal.classList.add('show');
+      }
+      const closeCl = () => modal.classList.remove('show');
+      document.getElementById('cp-org-manage')?.addEventListener('click', () => openCl('orgs'));
+      document.getElementById('cp-proc-manage')?.addEventListener('click', () => openCl('procs'));
+      document.getElementById('cl-modal-close')?.addEventListener('click', closeCl);
+      document.getElementById('cl-cancel')?.addEventListener('click', closeCl);
+      modal.addEventListener('click', e => { if (e.target === modal) closeCl(); });
+      document.getElementById('cl-add')?.addEventListener('click', () => {
+        const el = document.getElementById('cl-new');
+        const v = String(el.value || '').trim();
+        if (!v) { toast('이름을 넣어 주세요', 'error'); return; }
+        if (items.some(x => x.name === v)) { toast('같은 이름이 이미 있습니다', 'error'); return; }
+        items.push({ name: v, old: '' });
+        el.value = '';
+        paint();
+      });
+      document.getElementById('cl-save')?.addEventListener('click', async () => {
+        const names = items.map(x => String(x.name || '').trim());
+        if (names.some(n => !n)) { toast('이름을 비워 둘 수 없습니다', 'error'); return; }
+        if (new Set(names).size !== names.length) { toast('같은 이름이 둘 있습니다', 'error'); return; }
+        const L = costLists();
+        const next = { orgs: L.orgs.slice(), procs: L.procs.slice(), proc_alias: Object.assign({}, L.proc_alias), org_alias: Object.assign({}, L.org_alias) };
+        const alias = (kind === 'orgs') ? next.org_alias : next.proc_alias;
+        // 이름을 바꾼 것은 옛 이름 → 새 이름으로 별칭에 넣어 둔다 (저장된 자료를 고치지 않는다)
+        items.forEach(it => { if (it.old && it.old !== it.name) alias[it.old] = it.name; });
+        // 별칭이 사슬로 이어지지 않게 끝점까지 펴 준다
+        Object.keys(alias).forEach(k => {
+          let v = alias[k], n = 0;
+          while (alias[v] && n < 10) { v = alias[v]; n += 1; }
+          alias[k] = v;
+        });
+        if (kind === 'orgs') next.orgs = names; else next.procs = names;
+        const ok = await saveCostLists(next);
+        if (ok) { toast('저장했습니다', 'success'); closeCl(); renderDashboard(); }
+      });
     })();
     const cpClearEl = document.getElementById('cp-search-clear');
     if (cpClearEl) cpClearEl.addEventListener('click', () => { state.costSearch = ''; renderDashboard(); });
@@ -29844,6 +30143,7 @@ function validateBlendSum(blends, label) {
         show('cp-f-org-wrap', type === 'knit');
         show('cp-f-proc-wrap', type === 'proc');
         show('cp-f-procs-wrap', type === 'bundle');
+        show('cp-f-item-wrap', type === 'knit' || type === 'proc');
         show('cp-f-memo-wrap', type === 'bundle');
         document.getElementById('cp-f-price-label').textContent =
           type === 'yarn' ? '단가' : (type === 'bundle' ? '묶음 단가 (kg당)' : 'kg당 단가');
@@ -29854,14 +30154,15 @@ function validateBlendSum(blends, label) {
         const vLabel = document.getElementById('cp-f-vendor-label');
         if (type === 'knit') { vLabel.textContent = '편직공장'; document.getElementById('cp-f-vendor').innerHTML = vendorOptionsHTML('편직처', cur.vendor || ''); }
         else if (type !== 'yarn') { vLabel.textContent = '공장'; document.getElementById('cp-f-vendor').innerHTML = vendorOptionsMulti(['염색처', '가공처', '후가공처'], cur.vendor || ''); }
-        if (type === 'knit') document.getElementById('cp-f-org').value = String(cur.org || '').trim();
-        if (type === 'proc') document.getElementById('cp-f-proc').value = normProc(cur.proc) || COST_PROCS[0];
+        if (type === 'knit') document.getElementById('cp-f-org').value = normOrg(cur.org);
+        if (type === 'proc') document.getElementById('cp-f-proc').value = normProc(cur.proc) || getCostProcs()[0];
+        if (type === 'knit' || type === 'proc') document.getElementById('cp-f-item').innerHTML = costItemOptions(cur.item, '전체 (품목 안 나눔)');
         const picked = Array.isArray(cur.procs) ? cur.procs : [];
         modal.querySelectorAll('.cp-f-bproc').forEach(cb => { cb.checked = picked.includes(cb.value); });
         const histBox = document.getElementById('cp-f-hist');
-        const key = isNew ? '' : (type === 'yarn' ? priceKeyYarn(cur.name) : type === 'knit' ? priceKeyKnit(cur.vendor)
-          : type === 'knit' ? priceKeyKnit(cur.vendor, cur.org)
-          : type === 'proc' ? priceKeyProc(cur.vendor, cur.proc) : priceKeyBundle(cur.vendor, cur.procs));
+        const key = isNew ? '' : (type === 'yarn' ? priceKeyYarn(cur.name)
+          : type === 'knit' ? priceKeyKnit(cur.vendor, cur.org, cur.item)
+          : type === 'proc' ? priceKeyProc(cur.vendor, cur.proc, cur.item) : priceKeyBundle(cur.vendor, cur.procs));
         const hs = key ? priceHistoryOf(key) : [];
         histBox.innerHTML = hs.length
           ? `지난 값: ${hs.slice(-6).map(x => `${escapeHtml(x.d || '')} ${costMoney(parseFloat(x.p), 0)}`).join(' · ')}${hs.length > 6 ? ` (외 ${hs.length - 6}건)` : ''}`
@@ -29900,18 +30201,20 @@ function validateBlendSum(blends, label) {
           const vendor = document.getElementById('cp-f-vendor').value.trim();
           if (!vendor) { toast('편직공장을 골라 주세요', 'error'); return; }
           const org = (document.getElementById('cp-f-org')?.value || '').trim();
-          const dup = P.knit.findIndex((x, i) => i !== cpIdx && String(x.vendor || '').trim() === vendor && String(x.org || '').trim() === org);
-          if (dup >= 0) { toast(org ? '그 편직공장의 그 조직 단가가 이미 있습니다' : '그 편직공장은 이미 있습니다', 'error'); return; }
-          entry = { vendor, org, price, updated_at: todayYMD(), updated_by: state.user?.email || '' };
-          list = P.knit; key = priceKeyKnit(vendor, org);
+          const item = (document.getElementById('cp-f-item')?.value || '').trim();
+          const dup = P.knit.findIndex((x, i) => i !== cpIdx && String(x.vendor || '').trim() === vendor && String(x.org || '').trim() === org && String(x.item || '').trim() === item);
+          if (dup >= 0) { toast('같은 조건(공장·조직·품목)의 편직 단가가 이미 있습니다', 'error'); return; }
+          entry = { vendor, org, item, price, updated_at: todayYMD(), updated_by: state.user?.email || '' };
+          list = P.knit; key = priceKeyKnit(vendor, org, item);
         } else if (cpType === 'proc') {
           const vendor = document.getElementById('cp-f-vendor').value.trim();
           const proc = document.getElementById('cp-f-proc').value;
+          const item = (document.getElementById('cp-f-item')?.value || '').trim();
           if (!vendor) { toast('공장을 골라 주세요', 'error'); return; }
-          const dup = P.proc.findIndex((x, i) => i !== cpIdx && String(x.vendor || '').trim() === vendor && normProc(x.proc) === proc);
-          if (dup >= 0) { toast('그 공장의 그 공정 단가가 이미 있습니다', 'error'); return; }
-          entry = { vendor, proc, price, updated_at: todayYMD(), updated_by: state.user?.email || '' };
-          list = P.proc; key = priceKeyProc(vendor, proc);
+          const dup = P.proc.findIndex((x, i) => i !== cpIdx && String(x.vendor || '').trim() === vendor && normProc(x.proc) === proc && String(x.item || '').trim() === item);
+          if (dup >= 0) { toast('같은 조건(공장·공정·품목)의 단가가 이미 있습니다', 'error'); return; }
+          entry = { vendor, proc, item, price, updated_at: todayYMD(), updated_by: state.user?.email || '' };
+          list = P.proc; key = priceKeyProc(vendor, proc, item);
         } else {
           const vendor = document.getElementById('cp-f-vendor').value.trim();
           const procs = Array.from(modal.querySelectorAll('.cp-f-bproc')).filter(cb => cb.checked).map(cb => cb.value);
@@ -32584,7 +32887,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix278';
+  const VERSION = 'v2.53 hotfix280';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
