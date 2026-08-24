@@ -6952,6 +6952,7 @@ const state = {
   costPriceTab: 'yarn',     // 단가표 안쪽 탭: yarn | knit | proc | grade
   costSearch: '',
   fcSearch: '',             // hotfix281: [원단 원가] 화면 품목 찾기
+  fcBackup: null,           // hotfix287: 편직 사양 CSV 올리기 직전 상태 (되돌리기용)
   costLists: null,          // hotfix280: { orgs, procs, proc_alias, org_alias } — null이면 기본값 사용
   ccItemSearch: '',         // hotfix279: 원가 계산 화면 품목 찾기
   ccFocusFirst: false,      // hotfix279: 품목을 새로 고른 직후 첫 단가 칸에 초점
@@ -10720,6 +10721,130 @@ window.addEventListener('firebase-ready', () => {
     next.orgs.push(name);
     const ok = await saveCostLists(next);
     if (ok) { toast(`조직 [${name}]을(를) 넣었습니다`, 'success'); fillFsCatSelect(name); }
+  }
+  // ===== hotfix287: 편직 사양 CSV — 품목 × 편직공장 한 줄 =====
+  //   자료를 옮기지 않는다. 공장별 사양(knits)이 있으면 그것을, 없으면 옛 칸을 그 공장 사양으로 읽는다.
+  const FC_CSV_COLS = ['품목코드', '품목명', '구분', '조직', '편직공장', '기계', '인치', '침수', '제작중량gy', '편직로스%', 'kg당편직료', '혼용율'];
+  // 한 품목의 공장별 편직 사양 목록. 아직 나누지 않은 품목은 옛 칸 한 줄로 보인다.
+  function knitSpecRows(fid) {
+    const c = getFabricCost(fid) || {};
+    const K = (c.knits && typeof c.knits === 'object') ? c.knits : null;
+    const base = (v) => (v == null || v === '') ? '' : v;
+    if (K && Object.keys(K).length) {
+      return Object.keys(K).sort((a, b) => a.localeCompare(b, 'ko')).map(v => {
+        const k = K[v] || {};
+        return {
+          vendor: v, legacy: false,
+          machine: base(k.machine), inch: base(k.inch), needles: base(k.needles),
+          make_gy: base(k.make_gy), knit_loss: base(k.knit_loss), knit_fee: base(k.knit_fee),
+          blend: base(k.blend)
+        };
+      });
+    }
+    return [{
+      vendor: String(c.knitter || '').trim(), legacy: true,
+      machine: base(c.machine), inch: base(c.inch), needles: base(c.needles),
+      make_gy: base(c.make_gy), knit_loss: base(c.knit_loss), knit_fee: base(c.knit_fee),
+      blend: ''
+    }];
+  }
+  function buildKnitSpecCsv() {
+    const out = [FC_CSV_COLS.join(',')];
+    getFabricSpecs().forEach(s => {
+      const fid = specFid(s);
+      knitSpecRows(fid).forEach(k => {
+        out.push([
+          fid, s.name || '', s.gubun || '', s.cat || '', k.vendor || '',
+          k.machine, k.inch, k.needles, k.make_gy, k.knit_loss, k.knit_fee,
+          k.blend || s.blend || ''
+        ].map(csvCell).join(','));
+      });
+    });
+    return out.join('\r\n');
+  }
+  // CSV 표를 읽어 공장별 사양(knits)을 만든다. 파일에 없는 줄은 손대지 않는다.
+  function applyKnitSpecCsv(table) {
+    if (!Array.isArray(table) || table.length < 2) return { err: '빈 파일입니다' };
+    const head = table[0].map(h => String(h || '').replace(/\s+/g, ''));
+    const idx = {};
+    FC_CSV_COLS.forEach(c => { idx[c] = head.indexOf(c.replace(/\s+/g, '')); });
+    if (idx['품목코드'] < 0 || idx['편직공장'] < 0) {
+      return { err: '[품목코드]와 [편직공장] 열이 있어야 합니다. [편직 사양 CSV 내려받기]로 받은 파일을 고쳐 올려 주십시오' };
+    }
+    const known = {};
+    getFabricSpecs().forEach(s => { const f = specFid(s); if (f) known[f] = s; });
+    const next = {};      // fid -> knits 묶음 (통째로 덮지 않고 줄 단위로 합침)
+    const blends = {};    // fid -> { 공장: 혼용율 }
+    const get = (r, c) => (idx[c] >= 0 ? String(r[idx[c]] == null ? '' : r[idx[c]]).trim() : '');
+    const numOrNull = (v) => (v === '' ? null : (parseFloat(String(v).replace(/,/g, '')) || (String(v).trim() === '0' ? 0 : null)));
+    let changed = 0, skipped = 0, added = 0;
+    const badFids = [], noVendor = [];
+    for (let i = 1; i < table.length; i++) {
+      const r = table[i];
+      const fid = get(r, '품목코드');
+      const vendor = get(r, '편직공장');
+      if (!fid) { skipped++; continue; }
+      if (!known[fid]) { badFids.push(fid); skipped++; continue; }
+      if (!vendor) { noVendor.push(known[fid].name || fid); skipped++; continue; }
+      const cur = getFabricCost(fid) || {};
+      if (!next[fid]) {
+        next[fid] = (cur.knits && typeof cur.knits === 'object') ? JSON.parse(JSON.stringify(cur.knits)) : {};
+      }
+      const had = !!next[fid][vendor];
+      next[fid][vendor] = {
+        machine: get(r, '기계'),
+        inch: numOrNull(get(r, '인치')),
+        needles: numOrNull(get(r, '침수')),
+        make_gy: numOrNull(get(r, '제작중량gy')),
+        knit_loss: numOrNull(get(r, '편직로스%')),
+        knit_fee: numOrNull(get(r, 'kg당편직료')),
+        blend: get(r, '혼용율')
+      };
+      if (had) changed++; else added++;
+      const bl = get(r, '혼용율');
+      if (bl) { if (!blends[fid]) blends[fid] = {}; blends[fid][vendor] = bl; }
+    }
+    const fidCnt = Object.keys(next).length;
+    return { next, blends, changed, added, skipped, fidCnt, badFids, noVendor };
+  }
+  // hotfix287: 올리기 직전 상태를 한 벌 떠 두고, 공장별 사양을 저장한다. 옛 칸은 그대로 남긴다.
+  async function saveKnitSpecs(nextMap, blendMap) {
+    if (!isOwnerUser()) { toast('최고관리자만 저장할 수 있습니다', 'error'); return false; }
+    const fids = Object.keys(nextMap || {});
+    if (!fids.length) { toast('저장할 줄이 없습니다', 'warning'); return false; }
+    try {
+      // 되돌리기용 스냅샷 (이 품목들의 knits 만)
+      const snap = {};
+      fids.forEach(f => {
+        const c = getFabricCost(f) || {};
+        snap[f] = (c.knits && typeof c.knits === 'object') ? JSON.parse(JSON.stringify(c.knits)) : null;
+      });
+      state.fcBackup = { at: new Date().toISOString(), knits: snap };
+      const items = {};
+      fids.forEach(f => { items[f] = { knits: nextMap[f] }; });
+      await setDoc(doc(db, 'cost_data', 'fabric_cost'), {
+        items: items,
+        updated_at: serverTimestamp(),
+        updated_by: state.user?.email || 'unknown'
+      }, { merge: true });
+      if (!state.fabricCost || typeof state.fabricCost !== 'object') state.fabricCost = {};
+      fids.forEach(f => {
+        if (!state.fabricCost[f]) state.fabricCost[f] = {};
+        state.fabricCost[f].knits = JSON.parse(JSON.stringify(nextMap[f]));
+      });
+      // 공장별 혼용율 — 직원도 읽어야 하므로 이름표 쪽 상자에 따로 담는다
+      if (blendMap && Object.keys(blendMap).length) {
+        await setDoc(doc(db, 'settings', 'fabric_blend'), {
+          items: blendMap,
+          updated_at: serverTimestamp(),
+          updated_by: state.user?.email || 'unknown'
+        }, { merge: true });
+      }
+      return true;
+    } catch (e) {
+      toast('편직 사양 저장 실패: ' + e.message, 'error');
+      return false;
+    }
   }
   // hotfix158: 거래처(업체) 저장 (관리자만) — settings/vendors
   async function saveVendors(items) {
@@ -24530,6 +24655,10 @@ function validateBlendSum(blends, label) {
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px;">
       <input type="text" id="fc-search" lang="ko" autocomplete="off" placeholder="품목명 · 품목 코드 · 편직처 검색" value="${escapeHtml(state.fcSearch || '')}" style="${inputStyle}max-width:300px;">
       ${state.fcSearch ? `<button class="dash-action-btn" id="fc-search-clear" style="font-size:11.5px;padding:6px 12px;">지우기</button>` : ''}
+      <button class="dash-action-btn" id="fc-csv-out" style="font-weight:700;padding:6px 14px;" title="품목마다 편직공장별로 한 줄씩 펼쳐 엑셀(CSV)로 내려받습니다">편직 사양 CSV 내려받기</button>
+      <button class="dash-action-btn" id="fc-csv-in" style="font-weight:700;padding:6px 14px;" title="고친 CSV를 올려 편직 사양을 한꺼번에 채웁니다. 파일에 없는 줄은 그대로 둡니다">CSV 올려 채우기</button>
+      <input type="file" id="fc-csv-file" accept=".csv,text/csv" style="display:none;">
+      ${(state.fcBackup ? `<button class="dash-action-btn" id="fc-csv-undo" style="font-weight:700;padding:6px 14px;background:#fff;color:#b45309;border-color:#fcd34d;" title="직전 CSV 올리기 전 상태로 되돌립니다">직전으로 되돌리기</button>` : '')}
       <div style="margin-left:auto;font-size:12px;color:#64748b;">원가 자료 채운 품목 <strong style="color:#0f172a;">${filled}</strong> / 전체 ${specs.length}</div>
     </div>`;
     h += `<div class="dash-table-wrap"><table class="dash-table"><thead><tr>
@@ -24546,7 +24675,12 @@ function validateBlendSum(blends, label) {
         <td style="text-align:left;font-weight:700;">${escapeHtml(s.name || '-')}${s.active === false ? ' <span style="font-size:10.5px;font-weight:700;color:#9ca3af;">판매 종료</span>' : ''}</td>
         <td style="text-align:center;font-size:11.5px;color:#6b7280;">${escapeHtml(s.gubun || '-')}</td>
         <td style="text-align:center;">${s.cat ? costBadge(normOrg(s.cat)) : '<span style="color:#c7cbd1;font-size:11px;">-</span>'}</td>
-        <td style="text-align:left;font-size:12px;">${escapeHtml(c.knitter || '') || '<span style="color:#c7cbd1;">-</span>'}</td>
+        <td style="text-align:left;font-size:12px;">${(() => {
+          const ks = knitSpecRows(fid).filter(k => k.vendor);
+          if (!ks.length) return `<span style="display:inline-block;background:#fffbeb;border:1px solid #fcd34d;color:#b45309;border-radius:4px;padding:1px 6px;font-size:11px;font-weight:700;" title="편직공장이 비어 있습니다. [편직 사양 CSV]로 한꺼번에 채우거나 [채우기]에서 넣어 주십시오">편직공장 확인 필요</span>`;
+          return ks.map(k => escapeHtml(k.vendor)).join(' · ')
+            + (ks.length > 1 ? ` <span style="font-size:10.5px;font-weight:700;color:#1d4ed8;">공장 ${ks.length}</span>` : '');
+        })()}</td>
         <td style="text-align:right;font-size:12px;">${(c.knit_fee == null || c.knit_fee === '') ? '<span style="color:#c7cbd1;font-size:11px;">단가표</span>' : costMoney(parseFloat(c.knit_fee), 0)}</td>
         <td style="text-align:left;font-size:11.5px;color:#475569;">${yarns.length ? escapeHtml(yarns.map(y => y.name).join(' · ')) : '<span style="color:#c7cbd1;">-</span>'}</td>
         <td style="text-align:center;font-size:11px;">${procs.length ? procs.map(x => `<span style="display:inline-block;margin:1px 2px;">${costBadge(x)}</span>`).join('') : '<span style="color:#c7cbd1;">기본 가공법</span>'}</td>
@@ -30649,6 +30783,63 @@ function validateBlendSum(blends, label) {
       if (!modal) return;
       bindRerenderSearch('fc-search', v => { state.fcSearch = v; });
       document.getElementById('fc-search-clear')?.addEventListener('click', () => { state.fcSearch = ''; renderDashboard(); });
+      // hotfix287: 편직 사양 CSV
+      document.getElementById('fc-csv-out')?.addEventListener('click', () => {
+        try {
+          const blob = new Blob(['\uFEFF' + buildKnitSpecCsv()], { type: 'text/csv;charset=utf-8;' });
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download = todayYMD().replace(/-/g, '') + '_편직사양.csv';
+          document.body.appendChild(a); a.click();
+          setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
+          toast('편직 사양 CSV를 내려받았습니다', 'success');
+        } catch (e) { toast('내려받기 실패: ' + e.message, 'error'); }
+      });
+      document.getElementById('fc-csv-in')?.addEventListener('click', () => {
+        document.getElementById('fc-csv-file')?.click();
+      });
+      document.getElementById('fc-csv-file')?.addEventListener('change', (ev) => {
+        const f = ev.target.files && ev.target.files[0];
+        ev.target.value = '';
+        if (!f) return;
+        const rd = new FileReader();
+        rd.onload = async () => {
+          let res;
+          try { res = applyKnitSpecCsv(parseCsvText(rd.result)); }
+          catch (e) { toast('파일을 읽지 못했습니다: ' + e.message, 'error'); return; }
+          if (res.err) { toast(res.err, 'error'); return; }
+          let msg = `올린 파일을 이렇게 반영합니다.\n\n· 품목 ${res.fidCnt}개\n· 새로 넣을 공장 사양 ${res.added}줄\n· 고칠 공장 사양 ${res.changed}줄`;
+          if (res.skipped) msg += `\n· 건너뛴 줄 ${res.skipped}개`;
+          if (res.badFids.length) msg += `\n· 없는 품목코드 ${res.badFids.slice(0, 5).join(', ')}${res.badFids.length > 5 ? ' 외' : ''}`;
+          if (res.noVendor.length) msg += `\n· 편직공장이 빈 줄 ${res.noVendor.length}개 (건너뜁니다)`;
+          msg += `\n\n· 파일에 없는 품목·공장은 그대로 둡니다\n· [원단 기본 스펙]의 자료는 손대지 않습니다\n· 올리기 직전 상태를 떠 두므로 [직전으로 되돌리기]로 돌아올 수 있습니다\n\n계속할까요?`;
+          if (!confirm(msg)) return;
+          const ok = await saveKnitSpecs(res.next, res.blends);
+          if (ok) { toast(`편직 사양 ${res.added + res.changed}줄을 채웠습니다`, 'success'); renderDashboard(); }
+        };
+        rd.onerror = () => toast('파일을 읽지 못했습니다', 'error');
+        rd.readAsText(f, 'utf-8');
+      });
+      document.getElementById('fc-csv-undo')?.addEventListener('click', async () => {
+        const bk = state.fcBackup;
+        if (!bk || !bk.knits) { toast('되돌릴 것이 없습니다', 'warning'); return; }
+        const fids = Object.keys(bk.knits);
+        if (!confirm(`직전 CSV 올리기 전 상태로 되돌릴까요?\n\n· 품목 ${fids.length}개의 편직 사양이 되돌아갑니다\n· 그 뒤에 손으로 고치신 내용도 함께 되돌아갑니다`)) return;
+        try {
+          const items = {};
+          fids.forEach(f => { items[f] = { knits: bk.knits[f] || {} }; });
+          await setDoc(doc(db, 'cost_data', 'fabric_cost'), {
+            items: items, updated_at: serverTimestamp(), updated_by: state.user?.email || 'unknown'
+          }, { merge: true });
+          fids.forEach(f => {
+            if (!state.fabricCost[f]) state.fabricCost[f] = {};
+            state.fabricCost[f].knits = bk.knits[f] ? JSON.parse(JSON.stringify(bk.knits[f])) : {};
+          });
+          state.fcBackup = null;
+          toast('직전 상태로 되돌렸습니다', 'success');
+          renderDashboard();
+        } catch (e) { toast('되돌리기 실패: ' + e.message, 'error'); }
+      });
       const closeFc = () => modal.classList.remove('show');
       document.getElementById('fc-modal-close')?.addEventListener('click', closeFc);
       document.getElementById('fc-modal-cancel')?.addEventListener('click', closeFc);
@@ -33446,7 +33637,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix286';
+  const VERSION = 'v2.53 hotfix287';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
