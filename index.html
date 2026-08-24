@@ -4880,6 +4880,23 @@
     animation: claims-badge-pulse 2.4s ease-in-out infinite;
   }
   .dash-menu-btn.active .ceo-report-badge { background: #fff; color: #dc2626; }
+  /* hotfix283: 거래처별 일일 보고 — 매일 확인해야 하는 화면이라 눈에 띄게 */
+  .daily-menu-badge {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 1px 7px;
+    background: #b45309;
+    color: #fff;
+    border-radius: 10px;
+    font-size: 10px;
+    font-weight: 800;
+    line-height: 1.4;
+    vertical-align: middle;
+    min-width: 18px;
+    text-align: center;
+    box-shadow: 0 1px 2px rgba(180,83,9,0.35);
+  }
+  .dash-menu-btn.active .daily-menu-badge { background: #fff; color: #b45309; }
   /* hotfix60: 대표 보고함 카드 */
   .ceo-report-card { border:1px solid #fecaca; border-left:4px solid #dc2626; border-radius:8px; background:#fff; padding:13px 15px; box-shadow:0 1px 3px rgba(0,0,0,0.06); }
   /* hotfix109/112: 완료보고 카드 내 작업 흐름 — 좌측에 모아 컴팩트하게 */
@@ -6088,7 +6105,7 @@
         <button class="dash-menu-btn" data-view="of">공문 목록</button>
         <button class="dash-menu-btn" data-view="gs">생지출고 목록</button>
         <button class="dash-menu-btn" data-view="claims">클레임(땡처리)<span class="claims-menu-badge" id="claims-menu-badge" style="display:none;">0</span></button>
-        <button class="dash-menu-btn" data-view="daily-report">거래처별 일일 보고</button>
+        <button class="dash-menu-btn" data-view="daily-report" style="background:#fffbeb;border:1px solid #fde68a;color:#b45309;font-weight:800;">거래처별 일일 보고<span class="daily-menu-badge" id="menu-count-daily" style="display:none;">0</span></button>
         <button class="dash-menu-btn" data-view="samples">샘플 보관함</button>
         <button class="dash-menu-btn" data-view="completed">완료된 의뢰서</button>
         <button class="dash-menu-btn admin-only" data-view="fabricSpecs">원단 기본 스펙</button>
@@ -10056,7 +10073,7 @@ window.addEventListener('firebase-ready', () => {
   //   · 새로고침·로그아웃하면 다시 잠긴다
   //   비밀번호 자체는 저장하지 않고 되돌릴 수 없는 값(해시)만 저장한다.
   // ============================================================
-  const OWNER_AUTOLOCK_MIN = 30;
+  const OWNER_AUTOLOCK_MIN = 20;
   async function sha256Hex(s) {
     const buf = new TextEncoder().encode('HIWOS-OWNER:' + String(s));
     const d = await crypto.subtle.digest('SHA-256', buf);
@@ -10398,6 +10415,18 @@ window.addEventListener('firebase-ready', () => {
       if (typeof refreshFabricSpecDatalist === 'function') refreshFabricSpecDatalist();
       if (state.uiMode === 'dashboard' && state.dashView === 'fabricSpecs') renderDashboard();
     }, err => console.warn('[fabricSpec sub]', err.message));
+    // hotfix283: 이름표 상자 — 조직·공정 이름 목록. 금액이 없으므로 직원도 읽는다.
+    //   (금액은 cost_data 상자에 그대로 있고, 이쪽으로 한 글자도 옮기지 않는다)
+    onSnapshot(doc(db, 'settings', 'lists'), snap => {
+      const d = snap.exists() ? snap.data() : null;
+      state.uiLists = d ? {
+        orgs: Array.isArray(d.orgs) ? d.orgs : [],
+        procs: Array.isArray(d.procs) ? d.procs : [],
+        proc_alias: (d.proc_alias && typeof d.proc_alias === 'object') ? d.proc_alias : {},
+        org_alias: (d.org_alias && typeof d.org_alias === 'object') ? d.org_alias : {}
+      } : null;
+      if (state.uiMode === 'dashboard' && (state.dashView === 'fabricSpecs' || state.dashView === 'costCalc')) renderDashboard();
+    }, err => console.warn('[uiLists sub]', err.message));
     // hotfix158: 거래처(업체) 마스터 구독 — 작지 업체 선택용 사전 입력 데이터
     onSnapshot(doc(db, 'settings', 'vendors'), snap => {
       state.vendors = (snap.exists() && Array.isArray(snap.data().items)) ? snap.data().items.filter(v => v && v.name) : [];
@@ -10563,6 +10592,135 @@ window.addEventListener('firebase-ready', () => {
     state.fabricGubuns = gClean;
     return true;
   }
+  // ===== hotfix283: 품목 자료 CSV 내려받기 / 올려 고치기 =====
+  //   주의사항(cautions)은 CSV에 담지 않는다. 올려도 기존 주의사항은 그대로 남는다.
+  const FS_CSV_COLS = ['품목코드', '품목명', '구분', '조직', '짝리프', '기준폭', '튜브', '중량g/y', '혼용률', '판매'];
+  function csvCell(v) {
+    const s = (v == null) ? '' : String(v);
+    return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }
+  function buildFabricSpecCsv() {
+    const rows = [FS_CSV_COLS.join(',')];
+    getFabricSpecs().forEach(s => {
+      rows.push([
+        specFid(s) || '', s.name || '', s.gubun || '', s.cat || '', s.pair_rib || '',
+        s.width || '', s.tube ? 'Y' : 'N', (s.gy == null || s.gy === '') ? '' : s.gy,
+        s.blend || '', specIsOnSale(s) ? '판매중' : '종료'
+      ].map(csvCell).join(','));
+    });
+    return rows.join('\r\n');
+  }
+  // 따옴표·줄바꿈을 지킨 CSV 쪼개기
+  function parseCsvText(txt) {
+    const src = String(txt || '').replace(/^\uFEFF/, '');
+    const out = []; let row = []; let cur = ''; let q = false;
+    for (let i = 0; i < src.length; i++) {
+      const ch = src[i];
+      if (q) {
+        if (ch === '"') { if (src[i + 1] === '"') { cur += '"'; i++; } else q = false; }
+        else cur += ch;
+      } else if (ch === '"') q = true;
+      else if (ch === ',') { row.push(cur); cur = ''; }
+      else if (ch === '\n') { row.push(cur); cur = ''; out.push(row); row = []; }
+      else if (ch === '\r') { /* 무시 */ }
+      else cur += ch;
+    }
+    if (cur !== '' || row.length) { row.push(cur); out.push(row); }
+    return out.filter(r => r.some(c => String(c || '').trim() !== ''));
+  }
+  const fsKeyOf = (v) => String(v || '').replace(/\s+/g, '').toLowerCase();
+  // CSV 표를 지금 품목 목록에 얹는다. CSV에 없는 품목은 절대 지우지 않는다.
+  function applyFabricSpecCsv(table) {
+    if (!Array.isArray(table) || table.length < 2) return { err: '빈 파일입니다' };
+    const head = table[0].map(h => String(h || '').replace(/\s+/g, ''));
+    const idx = {};
+    FS_CSV_COLS.forEach(c => { idx[c] = head.indexOf(c.replace(/\s+/g, '')); });
+    if (idx['품목명'] < 0) return { err: '[품목명] 열이 없습니다. [CSV 내려받기]로 받은 파일을 고쳐서 올려 주십시오' };
+    const list = JSON.parse(JSON.stringify(getFabricSpecs()));
+    const byFid = {}, byName = {};
+    list.forEach((s, i) => {
+      const f = specFid(s); if (f) byFid[f] = i;
+      byName[fsKeyOf(s.name)] = i;
+    });
+    const get = (r, c) => (idx[c] >= 0 ? String(r[idx[c]] == null ? '' : r[idx[c]]).trim() : null);
+    let changed = 0, added = 0, skipped = 0;
+    const addedNames = [], badFids = [];
+    for (let i = 1; i < table.length; i++) {
+      const r = table[i];
+      const name = get(r, '품목명');
+      if (!name) { skipped++; continue; }
+      const fid = get(r, '품목코드');
+      let at = -1;
+      if (fid) {
+        if (byFid[fid] == null) { badFids.push(fid); skipped++; continue; }
+        at = byFid[fid];
+      } else if (byName[fsKeyOf(name)] != null) {
+        at = byName[fsKeyOf(name)];
+      }
+      const put = (target, isNew) => {
+        const set = (col, fn) => { const v = get(r, col); if (v !== null) fn(v); };
+        target.name = name;
+        set('구분', v => { if (v) target.gubun = v; });
+        set('조직', v => { target.cat = v; });
+        set('짝리프', v => { target.pair_rib = v; });
+        set('기준폭', v => { target.width = v; });
+        set('튜브', v => { target.tube = /^(y|yes|о|o|1|true|✓|v|튜브)$/i.test(v) || v === 'Y'; });
+        set('중량g/y', v => { target.gy = (v === '') ? null : (parseFloat(v.replace(/,/g, '')) || null); });
+        set('혼용률', v => { target.blend = v; });
+        set('판매', v => { if (v) target.active = !/종료|중지|off|n/i.test(v); });
+        if (isNew && target.gubun == null) target.gubun = GUBUN_BODY;
+      };
+      if (at >= 0) { put(list[at], false); changed++; }
+      else {
+        const fresh = { name: name, gubun: GUBUN_BODY, cat: '', width: '', tube: false, gy: null, blend: '', pair_rib: '', active: true };
+        put(fresh, true);
+        list.push(fresh);
+        byName[fsKeyOf(name)] = list.length - 1;
+        added++; addedNames.push(name);
+      }
+    }
+    return { list, changed, added, skipped, addedNames, badFids };
+  }
+  // hotfix283: 품목 수정 창의 조직 고르개 — 목록에서 고른다. 옛 이름은 회색으로 남겨 둔다.
+  function fillFsCatSelect(cur) {
+    const sel = document.getElementById('fs-f-cat');
+    if (!sel) return;
+    const now = String(cur == null ? '' : cur).trim();
+    const orgs = getKnitOrgs();
+    let h = `<option value="">— 고르지 않음 —</option>`;
+    h += orgs.map(o => `<option value="${escapeHtml(o)}"${orgKey(o) === orgKey(now) ? ' selected' : ''}>${escapeHtml(o)}</option>`).join('');
+    if (now && !orgs.some(o => orgKey(o) === orgKey(now))) {
+      h += `<option value="${escapeHtml(now)}" selected>${escapeHtml(now)} — 옛 이름 (바꿔 주십시오)</option>`;
+    }
+    sel.innerHTML = h;
+    sel.value = (now && orgs.some(o => orgKey(o) === orgKey(now)))
+      ? (orgs.find(o => orgKey(o) === orgKey(now)) || now) : now;
+  }
+  // 새 조직 넣기 — 띄어쓰기만 다르면 막고, 앞뒤만 겹치면 알려만 준다
+  async function addKnitOrgFromPrompt() {
+    const raw = prompt('새로 넣을 조직 이름을 적어 주십시오.\n(예: 하이멀티싱글)');
+    if (raw == null) return;
+    const name = String(raw).trim();
+    if (!name) return;
+    const { same, like } = findLikeOrg(name);
+    if (same) {
+      alert(`[${same}] 라는 조직이 이미 있습니다.\n띄어쓰기만 다릅니다 — 같은 조직으로 봅니다.\n\n[${same}]로 골라 두겠습니다.`);
+      fillFsCatSelect(same);
+      return;
+    }
+    if (like.length) {
+      if (!confirm(`이름이 비슷한 조직이 있습니다 — ${like.slice(0, 4).join(', ')}\n\n다른 조직이 맞으면 [확인]을 누르십시오.\n[${name}]을(를) 새로 넣습니다.`)) return;
+    }
+    if (!isOwnerUser()) {
+      alert('조직 목록을 늘리는 것은 최고관리자만 할 수 있습니다.\n대표님께 요청해 주십시오.');
+      return;
+    }
+    const L = costLists();
+    const next = { orgs: L.orgs.slice(), procs: L.procs.slice(), proc_alias: Object.assign({}, L.proc_alias), org_alias: Object.assign({}, L.org_alias) };
+    next.orgs.push(name);
+    const ok = await saveCostLists(next);
+    if (ok) { toast(`조직 [${name}]을(를) 넣었습니다`, 'success'); fillFsCatSelect(name); }
+  }
   // hotfix158: 거래처(업체) 저장 (관리자만) — settings/vendors
   async function saveVendors(items) {
     if (!isAdminEmail()) { toast('관리자만 변경할 수 있습니다', 'error'); return false; }
@@ -10686,14 +10844,30 @@ window.addEventListener('firebase-ready', () => {
   const COST_PROC_ALIAS = { '염색/물나염': '염색' };
   // hotfix280: 공정 이름과 조직 이름은 대표가 늘리고 줄일 수 있다. cost_data/lists 한 곳에서 관리한다.
   //   이름을 바꾸면 옛 이름을 alias에 넣어 두므로 이미 저장된 자료가 끊기지 않는다.
-  const KNIT_ORGS_DEFAULT = ['싱글', '쭈리', '3단쭈리', '미니쭈리', '양면', '미쭈', '리프', '골지', '자가드', '와플', '기타'];
+  // hotfix283 (대표 확정): 조직 이름은 줄임말·계열 없이 하나씩 따로 둔다.
+  //   리프도 조직이 있다(1X1 · 2X1 · 후라이스 …). 대표가 화면에서 늘리고 줄인다.
+  const KNIT_ORGS_DEFAULT = [
+    '싱글', '미니쭈리', '미니특양면', '3단쭈리', 'n단쭈리',
+    '특양면', '분또', '인터록', '골지', '와플',
+    '싱글자카드', '양면자카드', '3단쭈리기모', 'n단쭈리기모',
+    '1X1', '2X1', '후라이스', '기타'
+  ];
+  // 뜻이 명백한 옛 이름만 자동으로 새 이름을 가리키게 한다. 저장된 글자는 고치지 않는다.
+  const KNIT_ORG_ALIAS_FIXED = { '미쭈': '미니쭈리', '미니 쭈리': '미니쭈리' };
+  // hotfix283: 이름표 상자(settings/lists)가 있으면 그쪽을 먼저 본다.
+  //   옛 자료(cost_data/lists)만 있는 동안에도 그대로 돌아간다.
   function costLists() {
+    const U = (state.uiLists && typeof state.uiLists === 'object') ? state.uiLists : {};
     const L = (state.costLists && typeof state.costLists === 'object') ? state.costLists : {};
+    const pick = (k, def) => (Array.isArray(U[k]) && U[k].length) ? U[k].slice()
+      : ((Array.isArray(L[k]) && L[k].length) ? L[k].slice() : def.slice());
+    const mrg = (k) => Object.assign({}, (L[k] && typeof L[k] === 'object') ? L[k] : {},
+      (U[k] && typeof U[k] === 'object') ? U[k] : {});
     return {
-      orgs: (Array.isArray(L.orgs) && L.orgs.length) ? L.orgs.slice() : KNIT_ORGS_DEFAULT.slice(),
-      procs: (Array.isArray(L.procs) && L.procs.length) ? L.procs.slice() : COST_PROCS_DEFAULT.slice(),
-      proc_alias: (L.proc_alias && typeof L.proc_alias === 'object') ? L.proc_alias : {},
-      org_alias: (L.org_alias && typeof L.org_alias === 'object') ? L.org_alias : {}
+      orgs: pick('orgs', KNIT_ORGS_DEFAULT),
+      procs: pick('procs', COST_PROCS_DEFAULT),
+      proc_alias: mrg('proc_alias'),
+      org_alias: mrg('org_alias')
     };
   }
   function getKnitOrgs() { return costLists().orgs; }
@@ -10705,19 +10879,47 @@ window.addEventListener('firebase-ready', () => {
     return a[t] || t;
   }
   function normOrg(o) {
-    const t = String(o == null ? '' : o).trim();
+    let t = String(o == null ? '' : o).trim();
+    if (KNIT_ORG_ALIAS_FIXED[t]) t = KNIT_ORG_ALIAS_FIXED[t];
     const a = costLists().org_alias;
-    return a[t] || t;
+    let n = 0;
+    while (a[t] && a[t] !== t && n < 8) { t = a[t]; n++; }
+    return t;
+  }
+  // hotfix283: 띄어쓰기·기호를 뺀 글자 (같은 조직인지 가릴 때만 쓴다)
+  function orgKey(o) { return String(o == null ? '' : o).replace(/[\s·.\-_/]/g, '').toLowerCase(); }
+  // 지금 조직 목록에 없는 옛 이름인가 — [조직 확인 필요] 표시에 쓴다
+  function orgNeedsFix(o) {
+    const t = String(o == null ? '' : o).trim();
+    if (!t) return false;
+    const list = getKnitOrgs().map(orgKey);
+    return !list.includes(orgKey(normOrg(t)));
+  }
+  // 새 조직을 넣을 때 이미 있는 비슷한 이름 찾기
+  //   same = 띄어쓰기만 다름(막는다) / like = 앞뒤가 겹침(알려만 준다)
+  function findLikeOrg(name) {
+    const t = String(name || '').trim();
+    const k = orgKey(t);
+    if (!k) return { same: null, like: [] };
+    const orgs = getKnitOrgs();
+    const same = orgs.find(o => orgKey(o) === k) || null;
+    const like = same ? [] : orgs.filter(o => {
+      const ok = orgKey(o);
+      return ok.length >= 2 && k.length >= 2 && (ok.startsWith(k) || k.startsWith(ok));
+    });
+    return { same, like };
   }
   async function saveCostLists(next) {
     if (!isOwnerUser()) { toast('최고관리자만 저장할 수 있습니다', 'error'); return false; }
     try {
-      await setDoc(doc(db, 'cost_data', 'lists'), {
+      // hotfix283: 이름표 상자로 저장한다 (금액 없음 — 직원도 읽을 수 있어야 함)
+      await setDoc(doc(db, 'settings', 'lists'), {
         orgs: next.orgs || [], procs: next.procs || [],
         proc_alias: next.proc_alias || {}, org_alias: next.org_alias || {},
         updated_at: serverTimestamp(),
         updated_by: state.user?.email || 'unknown'
       });
+      state.uiLists = JSON.parse(JSON.stringify(next));
       state.costLists = JSON.parse(JSON.stringify(next));
       return true;
     } catch (e) {
@@ -13983,6 +14185,17 @@ function validateBlendSum(blends, label) {
       if (n > 0) { el.textContent = n > 999 ? '999+' : String(n); el.style.display = 'inline-block'; }
       else el.style.display = 'none';
     });
+    // hotfix283: 거래처별 일일 보고 — 오늘 보고에 실릴 전체 건수
+    const dEl = document.getElementById('menu-count-daily');
+    if (dEl) {
+      let dn = 0;
+      try {
+        const d = buildDailyReportData() || {};
+        Object.keys(d).forEach(k => { dn += (d[k] || []).length; });
+      } catch (e) { dn = 0; }
+      if (dn > 0) { dEl.textContent = dn > 999 ? '999+' : String(dn); dEl.style.display = 'inline-block'; }
+      else dEl.style.display = 'none';
+    }
   }
   // ===== hotfix60 대표 보고 수집기 끝 =====
 
@@ -22668,20 +22881,25 @@ function validateBlendSum(blends, label) {
     </div>
     <div style="margin:0 0 10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
       <button class="dash-action-btn" id="fs-add-btn" style="background:#1e3a8a;color:#fff;font-weight:700;padding:6px 14px;">＋ 새 품목 추가</button>
-      <button class="dash-action-btn" id="fs-import-btn" style="background:#047857;color:#fff;font-weight:700;padding:6px 14px;" title="기존 작업의뢰서에 입력된 주의사항을 품목별로 모아 기본값으로 채웁니다">기존 의뢰서에서 주의사항 가져오기</button>
       <button class="dash-action-btn" id="fs-gubun-btn" style="font-weight:700;padding:6px 14px;" title="몸판·리프 외에 스와치·문방구 같은 구분을 직접 추가·삭제합니다">구분 관리</button>
       <span style="font-size:12px;color:#6b7280;font-weight:700;">총 ${specs.length}품목</span>
-      <button class="dash-action-btn" id="fs-reset-btn" style="margin-left:auto;font-size:11px;color:#6b7280;" title="기본 34품목 중 빠진 것만 채우거나, 전부 기본값으로 되돌립니다">기본 품목 채우기</button>
+      <button class="dash-action-btn" id="fs-csv-out" style="margin-left:auto;font-weight:700;padding:6px 14px;" title="지금 품목 전부를 엑셀(CSV) 파일로 내려받습니다">CSV 내려받기</button>
+      <button class="dash-action-btn" id="fs-csv-in" style="font-weight:700;padding:6px 14px;" title="내려받아 고친 CSV 파일을 올려 품목 자료를 한꺼번에 고칩니다">CSV 올려 고치기</button>
+      <input type="file" id="fs-csv-file" accept=".csv,text/csv" style="display:none;">
     </div>`;
     // hotfix244: 구분 탭 / hotfix246: 판매 종료 탭
     const tabBase = 'padding:6px 15px;border:1px solid #d1d5db;border-radius:16px;font-size:12px;font-weight:700;cursor:pointer;background:#fff;color:#6b7280;';
     const tabOn = 'padding:6px 15px;border:1px solid #1e3a8a;border-radius:16px;font-size:12px;font-weight:700;cursor:pointer;background:#1e3a8a;color:#fff;';
     const offCnt = specs.filter(s => !specIsOnSale(s)).length;
     const cntOf = (g) => specs.filter(s => s.gubun === g && specIsOnSale(s)).length;
+    // hotfix283: 조직이 비었거나 지금 목록에 없는 옛 이름인 품목
+    const needsOrgFix = (s) => !String(s.cat || '').trim() || orgNeedsFix(s.cat);
+    const orgFixCnt = specs.filter(s => needsOrgFix(s) && (specIsOnSale(s) || fsShowOff)).length;
     h += `<div style="display:flex;gap:7px;flex-wrap:wrap;margin:0 0 10px;">
       <button class="fs-gubun-tab" data-g="__all__" style="${fsGubunFilter === '__all__' ? tabOn : tabBase}">전체 ${fsShowOff ? specs.length : specs.filter(s => specIsOnSale(s)).length}</button>
       ${gubuns.map(g => `<button class="fs-gubun-tab" data-g="${escapeHtml(g)}" style="${fsGubunFilter === g ? tabOn : tabBase}">${escapeHtml(g)} ${cntOf(g)}</button>`).join('')}
       ${offCnt ? `<button class="fs-gubun-tab" data-g="__off__" style="${fsGubunFilter === '__off__' ? 'padding:6px 15px;border:1px solid #b45309;border-radius:16px;font-size:12px;font-weight:700;cursor:pointer;background:#b45309;color:#fff;' : 'padding:6px 15px;border:1px solid #fcd34d;border-radius:16px;font-size:12px;font-weight:700;cursor:pointer;background:#fffbeb;color:#b45309;'}">판매 종료 ${offCnt}</button>` : ''}
+      ${orgFixCnt ? `<button class="fs-gubun-tab" data-g="__orgfix__" style="${fsGubunFilter === '__orgfix__' ? 'padding:6px 15px;border:1px solid #b45309;border-radius:16px;font-size:12px;font-weight:700;cursor:pointer;background:#b45309;color:#fff;' : 'padding:6px 15px;border:1px solid #fcd34d;border-radius:16px;font-size:12px;font-weight:700;cursor:pointer;background:#fffbeb;color:#b45309;'}" title="지금 조직 목록에 없는 옛 이름이거나 조직이 비어 있는 품목입니다">조직 확인 필요 ${orgFixCnt}</button>` : ''}
     </div>`;
     // hotfix253: 검색 + 판매 종료 포함 토글
     h += `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:0 0 10px;">
@@ -22692,7 +22910,8 @@ function validateBlendSum(blends, label) {
     let shown = specs.map((s, i) => ({ s, i })).filter(o =>
       fsGubunFilter === '__all__' ? (specIsOnSale(o.s) || fsShowOff)
         : fsGubunFilter === '__off__' ? !specIsOnSale(o.s)
-          : (o.s.gubun === fsGubunFilter && (specIsOnSale(o.s) || fsShowOff)));
+          : fsGubunFilter === '__orgfix__' ? (needsOrgFix(o.s) && (specIsOnSale(o.s) || fsShowOff))
+            : (o.s.gubun === fsGubunFilter && (specIsOnSale(o.s) || fsShowOff)));
     // 검색어 필터
     const fsq = fsSearch.trim().toLowerCase();
     if (fsq) {
@@ -22712,7 +22931,7 @@ function validateBlendSum(blends, label) {
       <th class="fs-sort-th" data-key="name" style="text-align:left;cursor:pointer;" title="품목명으로 정렬">품목명${fsArrow('name')}</th><th class="fs-sort-th" data-key="gubun" style="cursor:pointer;" title="구분으로 정렬">구분${fsArrow('gubun')}</th><th>${fsGubunFilter === GUBUN_RIB ? '짝 몸판' : (fsGubunFilter === GUBUN_BODY ? '짝 리프' : '짝 연결')}</th><th>조직</th><th>기준 폭</th><th>튜브</th><th>중량 g/y</th><th style="text-align:left;">혼용률</th>${costOn ? `<th title="원가 항목이 등록된 품목">원가</th>` : ''}<th>마지막 수정일</th><th>판매</th><th>수정</th><th>삭제</th>
     </tr></thead><tbody>`;
     if (shown.length === 0) {
-      h += `<tr><td colspan="${costOn ? 13 : 12}" style="text-align:center;color:#9ca3af;padding:18px;">${specs.length === 0 ? '등록된 품목이 없습니다. [＋ 새 품목 추가] 또는 [기본 품목 채우기]' : (fsq ? `"${escapeHtml(fsSearch)}" 검색 결과가 없습니다.` : '이 구분에 등록된 품목이 없습니다.')}</td></tr>`;
+      h += `<tr><td colspan="${costOn ? 13 : 12}" style="text-align:center;color:#9ca3af;padding:18px;">${specs.length === 0 ? '등록된 품목이 없습니다. [＋ 새 품목 추가] 또는 [CSV 올려 고치기]' : (fsq ? `"${escapeHtml(fsSearch)}" 검색 결과가 없습니다.` : '이 구분에 등록된 품목이 없습니다.')}</td></tr>`;
     }
     shown.forEach(({ s, i }) => {
       const pairOk = s.pair_rib ? !!findPairRibSpec(s) : true;
@@ -22732,7 +22951,11 @@ function validateBlendSum(blends, label) {
           : (s.pair_rib
             ? `<span style="display:inline-block;padding:2px 9px;border-radius:10px;background:${pairOk ? '#faf5ff' : '#fef2f2'};border:1px solid ${pairOk ? '#e9d5ff' : '#fecaca'};color:${pairOk ? '#7c3aed' : '#b91c1c'};font-weight:700;">${escapeHtml(s.pair_rib)}${pairOk ? '' : ' (없음)'}</span>`
             : `<span style="color:#c7cbd1;">-</span>`)}</td>
-        <td style="text-align:center;">${escapeHtml(s.cat || '-')}</td>
+        <td style="text-align:center;">${s.cat
+          ? (orgNeedsFix(s.cat)
+            ? `<span style="display:inline-block;background:#fffbeb;border:1px solid #fcd34d;color:#b45309;border-radius:4px;padding:1px 6px;font-size:11px;font-weight:700;" title="지금 조직 목록에 없는 옛 이름입니다. [수정]에서 새 조직으로 바꿔 주십시오">${escapeHtml(s.cat)} · 확인 필요</span>`
+            : escapeHtml(normOrg(s.cat)))
+          : `<span style="display:inline-block;background:#fffbeb;border:1px solid #fcd34d;color:#b45309;border-radius:4px;padding:1px 6px;font-size:11px;font-weight:700;" title="조직이 비어 있습니다. [수정]에서 골라 주십시오">조직 없음</span>`}</td>
         <td style="text-align:center;">${s.width ? escapeHtml(s.width) + '″' : '-'}</td>
         <td style="text-align:center;">${s.tube ? '✔' : '-'}</td>
         <td style="text-align:center;">${(s.gy != null && s.gy !== '') ? escapeHtml(String(s.gy)) : '-'}</td>
@@ -22755,7 +22978,11 @@ function validateBlendSum(blends, label) {
           <div><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">품목명</label><input type="text" id="fs-f-name" style="${inputStyle}" placeholder="예: 슈퍼싱글"></div>
           <div style="display:flex;gap:8px;">
             <div style="flex:1;"><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">구분</label><select id="fs-f-gubun" style="${inputStyle}">${gubuns.map(g => `<option value="${escapeHtml(g)}">${escapeHtml(g)}</option>`).join('')}</select></div>
-            <div style="flex:1;"><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">조직</label><input type="text" id="fs-f-cat" style="${inputStyle}" placeholder="예: 싱글 / 쭈리 / 기모"></div>
+            <div style="flex:1;"><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">조직</label>
+              <div style="display:flex;gap:6px;">
+                <select id="fs-f-cat" style="${inputStyle}flex:1;"></select>
+                <button type="button" class="dash-action-btn" id="fs-f-cat-add" style="white-space:nowrap;padding:6px 10px;font-size:12px;font-weight:700;" title="목록에 없는 조직을 새로 넣습니다">＋ 새 조직</button>
+              </div></div>
           </div>
           <div style="display:flex;gap:8px;align-items:flex-end;">
             <div style="flex:1;"><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">기준 폭</label><input type="text" id="fs-f-width" style="${inputStyle}" placeholder="60/62"></div>
@@ -29031,7 +29258,7 @@ function validateBlendSum(blends, label) {
         });
         const sbEl = document.getElementById('fs-bodies-search'); if (sbEl) sbEl.value = '';
         syncPairVisibility();
-        document.getElementById('fs-f-cat').value = s.cat || '';
+        fillFsCatSelect(s.cat || '');
         document.getElementById('fs-f-width').value = s.width || '';
         document.getElementById('fs-f-tube').checked = !!s.tube;
         document.getElementById('fs-f-gy').value = (s.gy != null ? s.gy : '');
@@ -29185,6 +29412,7 @@ function validateBlendSum(blends, label) {
       document.getElementById('fs-add-btn')?.addEventListener('click', () => openModal(-1));
       document.querySelectorAll('.fs-edit-btn').forEach(b => b.addEventListener('click', () => openModal(parseInt(b.dataset.idx, 10))));
       document.getElementById('fs-modal-close')?.addEventListener('click', closeModal);
+      document.getElementById('fs-f-cat-add')?.addEventListener('click', addKnitOrgFromPrompt);
       document.getElementById('fs-modal-cancel')?.addEventListener('click', closeModal);
       modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); });
 
@@ -29288,6 +29516,45 @@ function validateBlendSum(blends, label) {
         const merged = cur.map(x => ({ ...x })).concat(missing.map(x => ({ ...x, gubun: GUBUN_BODY })));
         const ok = await saveFabricSpecs(merged);
         if (ok) { toast(`${missing.length}품목을 채웠습니다 (기존 품목 그대로)`, 'success'); renderDashboard(); }
+      });
+
+      // hotfix283: 품목 CSV 내려받기
+      document.getElementById('fs-csv-out')?.addEventListener('click', () => {
+        try {
+          const blob = new Blob(['\uFEFF' + buildFabricSpecCsv()], { type: 'text/csv;charset=utf-8;' });
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download = todayYMD().replace(/-/g, '') + '_원단기본스펙.csv';
+          document.body.appendChild(a); a.click();
+          setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
+          toast('CSV 파일을 내려받았습니다', 'success');
+        } catch (e) { toast('내려받기 실패: ' + e.message, 'error'); }
+      });
+      // hotfix283: 품목 CSV 올려 고치기 — CSV에 없는 품목은 그대로 둔다
+      document.getElementById('fs-csv-in')?.addEventListener('click', () => {
+        document.getElementById('fs-csv-file')?.click();
+      });
+      document.getElementById('fs-csv-file')?.addEventListener('change', (ev) => {
+        const f = ev.target.files && ev.target.files[0];
+        ev.target.value = '';
+        if (!f) return;
+        const rd = new FileReader();
+        rd.onload = async () => {
+          let res;
+          try { res = applyFabricSpecCsv(parseCsvText(rd.result)); }
+          catch (e) { toast('파일을 읽지 못했습니다: ' + e.message, 'error'); return; }
+          if (res.err) { toast(res.err, 'error'); return; }
+          let msg = `올린 파일을 이렇게 반영합니다.\n\n· 고칠 품목 ${res.changed}개\n· 새로 넣을 품목 ${res.added}개`;
+          if (res.addedNames.length) msg += ` (${res.addedNames.slice(0, 6).join(', ')}${res.addedNames.length > 6 ? ` 외 ${res.addedNames.length - 6}개` : ''})`;
+          if (res.skipped) msg += `\n· 건너뛴 줄 ${res.skipped}개`;
+          if (res.badFids.length) msg += `\n· 없는 품목코드 ${res.badFids.slice(0, 5).join(', ')}${res.badFids.length > 5 ? ' 외' : ''}`;
+          msg += `\n\n· 파일에 없는 품목은 그대로 둡니다 (지워지지 않습니다)\n· 주의사항은 손대지 않습니다\n\n계속할까요?`;
+          if (!confirm(msg)) return;
+          const ok = await saveFabricSpecs(res.list);
+          if (ok) { toast(`품목 ${res.changed}개를 고치고 ${res.added}개를 넣었습니다`, 'success'); renderDashboard(); }
+        };
+        rd.onerror = () => toast('파일을 읽지 못했습니다', 'error');
+        rd.readAsText(f, 'utf-8');
       });
 
       // hotfix246: 판매 종료 / 판매 재개
@@ -32972,7 +33239,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix282';
+  const VERSION = 'v2.53 hotfix284';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
