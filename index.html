@@ -6934,6 +6934,7 @@ const state = {
   costTab: 'prices',        // 원가 계산기 안쪽 탭
   costPriceTab: 'yarn',     // 단가표 안쪽 탭: yarn | knit | proc | grade
   costSearch: '',
+  fcSearch: '',             // hotfix281: [원단 원가] 화면 품목 찾기
   costLists: null,          // hotfix280: { orgs, procs, proc_alias, org_alias } — null이면 기본값 사용
   ccItemSearch: '',         // hotfix279: 원가 계산 화면 품목 찾기
   ccFocusFirst: false,      // hotfix279: 품목을 새로 고른 직후 첫 단가 칸에 초점
@@ -11083,7 +11084,7 @@ window.addEventListener('firebase-ready', () => {
       yarns: [], yarnTotal: 0,
       knitLoss: (c.knit_loss != null ? parseFloat(c.knit_loss) : COST_KNIT_LOSS_DEFAULT),
       finLoss: (c.fin_loss != null ? parseFloat(c.fin_loss) : COST_FIN_LOSS_DEFAULT),
-      knitVendor: c.knitter || '', knitOrg: String(c.machine || '').trim(), knitFee: 0, knitPrice: 0,
+      knitVendor: c.knitter || '', knitOrg: String((spec && spec.cat) || '').trim(), knitMachine: String(c.machine || '').trim(), knitFee: 0, knitPrice: 0,
       procVendor: c.finisher || c.dyer || '', procs: [], procTotal: 0, bundle: null,
       kgCost: 0, gy: (spec && spec.gy != null) ? parseFloat(spec.gy) : null,
       printFee: 0, ydCost: null, blendSum: 0,
@@ -11113,7 +11114,7 @@ window.addEventListener('firebase-ready', () => {
     //   편직료는 품목마다 다르다. 품목에 적힌 값이 가장 먼저, 없으면 편직공장 단가, 그것도 없으면 (공통).
     const ownFee = (c.knit_fee != null && c.knit_fee !== '') ? parseFloat(c.knit_fee) : null;
     const kInfo = {};
-    const knitFound = (ownFee != null && !isNaN(ownFee)) ? ownFee : knitPriceByVendor(out.knitVendor, c.machine, fid, kInfo);
+    const knitFound = (ownFee != null && !isNaN(ownFee)) ? ownFee : knitPriceByVendor(out.knitVendor, out.knitOrg, fid, kInfo);
     out.knitFrom = (ownFee != null && !isNaN(ownFee)) ? '품목'
       : (knitFound == null ? '' : (kInfo.byItem ? '단가표(품목 지정)' : (kInfo.common ? '단가표((공통))' : '단가표')));
     const simKnit = (S.knit !== undefined && S.knit !== '') ? parseFloat(S.knit) : null;
@@ -22658,14 +22659,12 @@ function validateBlendSum(blends, label) {
     const specs = getFabricSpecs();
     const gubuns = getFabricGubuns();
     // hotfix264: 원가 항목은 최고관리자에게만, 그것도 경영 자료가 풀려 있을 때만 보인다
-    const costOn = isOwnerUser() && !ownerIsLocked();
+    const costOn = false;   // hotfix281: 원가 자료는 [원가 계산기] › [원단 원가]에서만 다룬다
     const inputStyle = 'width:100%;padding:7px 9px;border:1px solid #d1d5db;border-radius:5px;font-size:13px;font-family:inherit;box-sizing:border-box;';
     let h = `<div style="font-size:12px;color:#555;margin:4px 0 12px;line-height:1.6;">
       품목별 표준 작업 스펙입니다. 작업의뢰서에서 품목을 고르면 <strong>기준 폭·중량</strong>이 자동으로 채워지고,
       <strong>[기준 불러오기]</strong>를 누르면 <strong>혼용율·튜브·주의사항</strong>까지 한 번에 채워집니다.
-      (샘플·신규 원단은 작업의뢰서에서 직접 입력하면 됩니다.)${costOn ? `
-      <br><strong style="color:#0f172a;">최고관리자에게는 품목 수정 창 아래에 원가 자료 칸이 더 보입니다.</strong>
-      원사 구성·게이지·가공법·로스는 <strong>따로 잠긴 곳</strong>에 저장되어 직원·관리자에게는 보이지 않습니다.` : ' 단가는 단가관리 시스템에서 관리하므로 여기엔 없습니다.'}
+      (샘플·신규 원단은 작업의뢰서에서 직접 입력하면 됩니다.) 원사 구성·게이지·가공법·로스·단가 같은 원가 자료는 <strong>[원가 계산기]</strong> 화면에서만 다룹니다.
     </div>
     <div style="margin:0 0 10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
       <button class="dash-action-btn" id="fs-add-btn" style="background:#1e3a8a;color:#fff;font-weight:700;padding:6px 14px;">＋ 새 품목 추가</button>
@@ -22805,55 +22804,6 @@ function validateBlendSum(blends, label) {
               </div>
             </div>
           </div>
-          ${costOn ? `<div id="fs-cost-wrap" style="border:1px solid #cbd5e1;background:#f8fafc;border-radius:8px;padding:12px 13px;margin-top:4px;">
-            <div style="display:flex;align-items:center;gap:8px;margin-bottom:9px;">
-              <span style="font-size:12.5px;font-weight:800;color:#0f172a;">원가 자료</span>
-              <span style="font-size:11px;font-weight:700;color:#b45309;background:#fef3c7;border:1px solid #fde68a;border-radius:9px;padding:1px 8px;">최고관리자 전용</span>
-              <span style="font-size:11px;color:#94a3b8;">직원·관리자에게는 이 칸이 보이지 않고, 자료도 따로 잠겨 저장됩니다</span>
-              <span id="fs-cost-code" style="margin-left:auto;font-size:11px;color:#94a3b8;font-weight:700;"></span>
-            </div>
-            <div style="display:flex;gap:8px;margin-bottom:9px;flex-wrap:wrap;">
-              <div style="flex:1;min-width:120px;"><label style="font-size:11.5px;font-weight:700;color:#475569;display:block;margin-bottom:3px;">코드명</label><input type="text" id="fs-c-code" autocomplete="off" style="${inputStyle}" placeholder="예: RS-400S"></div>
-              <div style="flex:1;min-width:110px;"><label style="font-size:11.5px;font-weight:700;color:#475569;display:block;margin-bottom:3px;">기계</label><input type="text" id="fs-c-machine" autocomplete="off" style="${inputStyle}" placeholder="예: 싱글 30G"></div>
-              <div style="flex:1.2;min-width:140px;"><label style="font-size:11.5px;font-weight:700;color:#475569;display:block;margin-bottom:3px;">편직처</label><select id="fs-c-knitter" style="${inputStyle}"></select></div>
-              <div style="flex:1;min-width:120px;"><label style="font-size:11.5px;font-weight:700;color:#475569;display:block;margin-bottom:3px;">편직료 kg당</label><input type="number" step="1" id="fs-c-knitfee" style="${inputStyle}text-align:right;" placeholder="비우면 단가표"></div>
-            </div>
-            <div style="display:flex;gap:8px;margin-bottom:11px;flex-wrap:wrap;">
-              <div style="flex:1;min-width:90px;"><label style="font-size:11.5px;font-weight:700;color:#475569;display:block;margin-bottom:3px;">인치</label><input type="number" step="0.1" id="fs-c-inch" style="${inputStyle}" placeholder="34"></div>
-              <div style="flex:1;min-width:90px;"><label style="font-size:11.5px;font-weight:700;color:#475569;display:block;margin-bottom:3px;">침수</label><input type="number" step="1" id="fs-c-needles" style="${inputStyle}" placeholder="3204"></div>
-              <div style="flex:1;min-width:90px;"><label style="font-size:11.5px;font-weight:700;color:#475569;display:block;margin-bottom:3px;">게이지 (자동)</label><input type="text" id="fs-c-gage" readonly style="${inputStyle}background:#eef2f7;font-weight:800;color:#0f172a;"></div>
-              <div style="flex:1;min-width:110px;"><label style="font-size:11.5px;font-weight:700;color:#475569;display:block;margin-bottom:3px;">제작중량 g/y</label><input type="number" step="1" id="fs-c-makegy" style="${inputStyle}" placeholder="비우면 안내중량 사용"></div>
-            </div>
-            <div style="font-size:11.5px;font-weight:800;color:#0f172a;margin-bottom:5px;">원사 구성 <span style="font-weight:400;color:#94a3b8;">— 사종·굵기·단위·루프장을 넣으면 혼용율이 자동으로 나옵니다 (최대 4개)</span></div>
-            <table style="width:100%;border-collapse:collapse;font-size:12px;background:#fff;border:1px solid #e2e8f0;border-radius:6px;overflow:hidden;">
-              <thead><tr style="background:#f1f5f9;color:#475569;font-size:11px;">
-                <th style="padding:5px 6px;text-align:left;">사종</th><th style="padding:5px 6px;width:80px;">굵기</th><th style="padding:5px 6px;width:74px;">단위</th><th style="padding:5px 6px;width:86px;">루프장</th><th style="padding:5px 6px;width:78px;">혼용율</th>
-              </tr></thead>
-              <tbody>
-                ${[0, 1, 2, 3].map(k => `<tr>
-                  <td style="padding:3px 5px;"><input type="text" class="fs-c-y-name" data-k="${k}" autocomplete="off" style="${inputStyle}padding:5px 7px;font-size:12px;" placeholder="${k === 0 ? '예: CM30' : ''}"></td>
-                  <td style="padding:3px 5px;"><input type="number" step="0.01" class="fs-c-y-size" data-k="${k}" style="${inputStyle}padding:5px 7px;font-size:12px;text-align:right;"></td>
-                  <td style="padding:3px 5px;"><select class="fs-c-y-unit" data-k="${k}" style="${inputStyle}padding:5px 4px;font-size:12px;"><option value="D">D</option><option value="수">수</option></select></td>
-                  <td style="padding:3px 5px;"><input type="number" step="0.01" class="fs-c-y-loop" data-k="${k}" style="${inputStyle}padding:5px 7px;font-size:12px;text-align:right;"></td>
-                  <td class="fs-c-y-pct" data-k="${k}" style="padding:3px 5px;text-align:right;font-weight:800;color:#0f172a;">-</td>
-                </tr>`).join('')}
-              </tbody>
-            </table>
-            <div style="display:flex;align-items:center;gap:9px;margin:7px 0 12px;">
-              <span id="fs-c-blend-sum" style="font-size:11.5px;font-weight:800;color:#475569;"></span>
-              <button type="button" class="dash-action-btn" id="fs-c-blend-apply" style="font-size:11px;padding:4px 10px;" title="자동 계산된 혼용율을 위쪽 혼용률 칸에 넣습니다">혼용률 칸에 넣기</button>
-            </div>
-            <div style="display:flex;gap:8px;margin-bottom:9px;flex-wrap:wrap;">
-              <div style="flex:1;min-width:140px;"><label style="font-size:11.5px;font-weight:700;color:#475569;display:block;margin-bottom:3px;">염색처</label><select id="fs-c-dyer" style="${inputStyle}"></select></div>
-              <div style="flex:1;min-width:140px;"><label style="font-size:11.5px;font-weight:700;color:#475569;display:block;margin-bottom:3px;">가공처</label><select id="fs-c-finisher" style="${inputStyle}"></select></div>
-              <div style="flex:0.7;min-width:100px;"><label style="font-size:11.5px;font-weight:700;color:#475569;display:block;margin-bottom:3px;">편직로스 %</label><input type="number" step="0.1" id="fs-c-knitloss" style="${inputStyle}text-align:right;" placeholder="${COST_KNIT_LOSS_DEFAULT}"></div>
-              <div style="flex:0.7;min-width:100px;"><label style="font-size:11.5px;font-weight:700;color:#475569;display:block;margin-bottom:3px;">가공로스 %</label><input type="number" step="0.1" id="fs-c-finloss" style="${inputStyle}text-align:right;" placeholder="${COST_FIN_LOSS_DEFAULT}"></div>
-            </div>
-            <div style="font-size:11.5px;font-weight:800;color:#0f172a;margin-bottom:5px;">가공법 <span style="font-weight:400;color:#94a3b8;">— 이 원단이 늘 거치는 공정을 체크해 두면 원가 계산 화면에서 자동으로 잡힙니다</span></div>
-            <div style="display:flex;flex-wrap:wrap;gap:6px 14px;background:#fff;border:1px solid #e2e8f0;border-radius:6px;padding:8px 10px;">
-              ${getCostProcs().map(p => `<label style="display:inline-flex;align-items:center;gap:5px;font-size:12px;cursor:pointer;color:#334155;"><input type="checkbox" class="fs-c-proc" value="${escapeHtml(p)}" style="width:14px;height:14px;"> ${escapeHtml(p)}</label>`).join('')}
-            </div>
-          </div>` : ''}
           <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:6px;">
             <button class="dash-action-btn" id="fs-modal-cancel" style="padding:7px 16px;">취소</button>
             <button class="dash-action-btn" id="fs-modal-save" style="background:#1e3a8a;color:#fff;font-weight:700;padding:7px 18px;">저장</button>
@@ -23381,12 +23331,14 @@ function validateBlendSum(blends, label) {
     const tOn = 'padding:7px 18px;border:1px solid #5b21b6;border-radius:8px;font-size:13px;font-weight:800;cursor:pointer;background:#5b21b6;color:#fff;';
     const tOff = 'padding:7px 18px;border:1px solid #d1d5db;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;background:#fff;color:#6b7280;';
     let h = `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;">
+      <button class="cc-tab-btn" data-cc-tab="fabric" style="${tab === 'fabric' ? tOn : tOff}">원단 원가</button>
       <button class="cc-tab-btn" data-cc-tab="prices" style="${tab === 'prices' ? tOn : tOff}">단가표</button>
       <button class="cc-tab-btn" data-cc-tab="calc" style="${tab === 'calc' ? tOn : tOff}">원가 계산</button>
       <button class="cc-tab-btn" data-cc-tab="history" style="${tab === 'history' ? tOn : tOff}">이력</button>
     </div>`;
     if (tab === 'prices') h += renderCostPriceTables();
     else if (tab === 'calc') h += renderCostCalcTab();
+    else if (tab === 'fabric') h += renderCostFabricTab();
     else h += `<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:14px 16px;font-size:13px;color:#92400e;line-height:1.8;">
       <strong>이력 화면은 다음 단계입니다.</strong><br>
       단가표를 먼저 채워 두시면, 품목만 고르면 원가가 이미 나와 있는 상태로 만들어집니다.
@@ -23607,7 +23559,7 @@ function validateBlendSum(blends, label) {
       <td style="text-align:right;">${simInp('cc-sim-knit', 'knit', (C.simKnit !== '' && C.simKnit != null ? C.simKnit : (R.knitMissing ? '' : Math.round(R.knitFee))), '단가 없음')}</td>
       <td style="text-align:left;font-size:11.5px;">${R.knitMissing
         ? `<span style="color:#c0271f;font-weight:800;">단가표에 없음</span>`
-        : `${escapeHtml(R.knitVendor || '편직처 미지정')}${R.knitOrg ? ' · ' + escapeHtml(R.knitOrg) : ''} <span style="color:#64748b;">(${escapeHtml(R.knitFrom === '품목' ? '원단 스펙 편직료' : (R.knitFrom || '바꿔 본 값'))})</span> · kg당`}</td>
+        : `${escapeHtml(R.knitVendor || '편직처 미지정')}${R.knitOrg ? ' · ' + escapeHtml(R.knitOrg) : ''}${R.knitMachine ? ' <span style="color:#94a3b8;">(' + escapeHtml(R.knitMachine) + ')</span>' : ''} <span style="color:#64748b;">(${escapeHtml(R.knitFrom === '품목' ? '원단 스펙 편직료' : (R.knitFrom || '바꿔 본 값'))})</span> · kg당`}</td>
     </tr>
     <tr style="background:#f1f5f9;">
       <td style="text-align:left;font-weight:800;">편직까지 가격</td>
@@ -24168,6 +24120,221 @@ function validateBlendSum(blends, label) {
         </div>
       </div>
     </div>`;
+  }
+  // hotfix281: [원가 계산기] › [원단 원가] — 품목별 원가 자료를 여기서만 다룬다
+  function renderCostFabricTab() {
+    const inputStyle = 'width:100%;padding:7px 9px;border:1px solid #d1d5db;border-radius:5px;font-size:13px;font-family:inherit;box-sizing:border-box;';
+    const specs = getFabricSpecs();
+    const q = String(state.fcSearch || '').trim().toLowerCase();
+    const rows = specs.map((s, i) => ({ s, i, fid: specFid(s), c: getFabricCost(specFid(s)) || {} }))
+      .filter(o => !q || String(o.s.name || '').toLowerCase().includes(q) || o.fid.toLowerCase().includes(q)
+        || String(o.c.knitter || '').toLowerCase().includes(q) || String(o.s.cat || '').toLowerCase().includes(q))
+      .sort((a, b) => String(a.s.name || '').localeCompare(String(b.s.name || ''), 'ko'));
+    const filled = specs.filter(s => fabricCostFilled(specFid(s))).length;
+    let h = `<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px;margin-bottom:14px;font-size:12.5px;color:#475569;line-height:1.8;">
+      품목마다 <strong>원사 구성 · 게이지 · 편직처 · 가공법 · 로스</strong>를 여기서 채웁니다. 한 번 채워 두면 [원가 계산] 화면에서 품목만 고르면 원가가 이미 나와 있습니다.<br>
+      이 자료는 <strong>따로 잠긴 곳</strong>에 저장되어 [원단 기본 스펙] 화면에는 나오지 않습니다. 그 화면은 권한을 준 직원에게 그대로 열어 주셔도 됩니다.
+    </div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px;">
+      <input type="text" id="fc-search" lang="ko" autocomplete="off" placeholder="품목명 · 품목 코드 · 편직처 검색" value="${escapeHtml(state.fcSearch || '')}" style="${inputStyle}max-width:300px;">
+      ${state.fcSearch ? `<button class="dash-action-btn" id="fc-search-clear" style="font-size:11.5px;padding:6px 12px;">지우기</button>` : ''}
+      <div style="margin-left:auto;font-size:12px;color:#64748b;">원가 자료 채운 품목 <strong style="color:#0f172a;">${filled}</strong> / 전체 ${specs.length}</div>
+    </div>`;
+    h += `<div class="dash-table-wrap"><table class="dash-table"><thead><tr>
+      <th style="text-align:left;min-width:190px;">품목명</th><th style="min-width:80px;">구분</th><th style="min-width:110px;">조직</th>
+      <th style="text-align:left;min-width:120px;">편직처</th><th style="min-width:96px;">편직료 kg당</th><th style="min-width:170px;">원사 구성</th>
+      <th style="min-width:150px;">가공법</th><th style="min-width:88px;">로스 편직/가공</th><th style="min-width:96px;">수정일</th><th style="min-width:70px;">원가 자료</th>
+    </tr></thead><tbody>`;
+    if (!rows.length) h += `<tr><td colspan="10" style="text-align:center;color:#9ca3af;padding:18px;">${specs.length ? '찾는 품목이 없습니다.' : '등록된 품목이 없습니다. [원단 기본 스펙]에서 먼저 품목을 만들어 주십시오.'}</td></tr>`;
+    rows.forEach(({ s, fid, c }) => {
+      const yarns = Array.isArray(c.yarns) ? c.yarns.filter(y => y && y.name) : [];
+      const procs = Array.isArray(c.procs) ? c.procs.map(normProc).filter(Boolean) : [];
+      const on = fabricCostFilled(fid);
+      h += `<tr${s.active === false ? ' style="opacity:.62;"' : ''}>
+        <td style="text-align:left;font-weight:700;">${escapeHtml(s.name || '-')}${s.active === false ? ' <span style="font-size:10.5px;font-weight:700;color:#9ca3af;">판매 종료</span>' : ''}</td>
+        <td style="text-align:center;font-size:11.5px;color:#6b7280;">${escapeHtml(s.gubun || '-')}</td>
+        <td style="text-align:center;">${s.cat ? costBadge(normOrg(s.cat)) : '<span style="color:#c7cbd1;font-size:11px;">-</span>'}</td>
+        <td style="text-align:left;font-size:12px;">${escapeHtml(c.knitter || '') || '<span style="color:#c7cbd1;">-</span>'}</td>
+        <td style="text-align:right;font-size:12px;">${(c.knit_fee == null || c.knit_fee === '') ? '<span style="color:#c7cbd1;font-size:11px;">단가표</span>' : costMoney(parseFloat(c.knit_fee), 0)}</td>
+        <td style="text-align:left;font-size:11.5px;color:#475569;">${yarns.length ? escapeHtml(yarns.map(y => y.name).join(' · ')) : '<span style="color:#c7cbd1;">-</span>'}</td>
+        <td style="text-align:center;font-size:11px;">${procs.length ? procs.map(x => `<span style="display:inline-block;margin:1px 2px;">${costBadge(x)}</span>`).join('') : '<span style="color:#c7cbd1;">기본 가공법</span>'}</td>
+        <td style="text-align:center;font-size:11.5px;color:#6b7280;">${(c.knit_loss == null ? COST_KNIT_LOSS_DEFAULT : c.knit_loss)} / ${(c.fin_loss == null ? COST_FIN_LOSS_DEFAULT : c.fin_loss)}%</td>
+        <td style="text-align:center;font-size:12px;color:#6b7280;">${escapeHtml(c.updated_at || '-')}</td>
+        <td class="col-action"><button class="dash-action-btn fc-edit" data-fid="${escapeHtml(fid)}" style="${on ? '' : 'background:#1e3a8a;color:#fff;font-weight:700;'}">${on ? '수정' : '채우기'}</button></td>
+      </tr>`;
+    });
+    h += `</tbody></table></div>`;
+    h += `<div class="dash-modal-bg" id="fc-modal">
+      <div class="dash-modal" style="max-width:820px;">
+        <div class="dash-modal-head"><span>원단 원가 자료</span><button class="dash-modal-close" id="fc-modal-close">✕</button></div>
+        <div style="padding:16px;">
+          <div id="fs-cost-wrap" style="border:0;background:#fff;padding:0;">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:9px;">
+              <span id="fc-modal-item" style="font-size:13.5px;font-weight:800;color:#0f172a;">원가 자료</span>
+              <span style="font-size:11px;font-weight:700;color:#b45309;background:#fef3c7;border:1px solid #fde68a;border-radius:9px;padding:1px 8px;">최고관리자 전용</span>
+              <span style="font-size:11px;color:#94a3b8;">원가 자료는 이 화면에서만 다룹니다. 원단 기본 스펙 화면에는 나오지 않습니다</span>
+              <span id="fs-cost-code" style="margin-left:auto;font-size:11px;color:#94a3b8;font-weight:700;"></span>
+            </div>
+            <div style="display:flex;gap:8px;margin-bottom:9px;flex-wrap:wrap;">
+              <div style="flex:1;min-width:120px;"><label style="font-size:11.5px;font-weight:700;color:#475569;display:block;margin-bottom:3px;">코드명</label><input type="text" id="fs-c-code" autocomplete="off" style="${inputStyle}" placeholder="예: RS-400S"></div>
+              <div style="flex:1;min-width:110px;"><label style="font-size:11.5px;font-weight:700;color:#475569;display:block;margin-bottom:3px;">기계</label><input type="text" id="fs-c-machine" autocomplete="off" style="${inputStyle}" placeholder="예: 싱글 30G"></div>
+              <div style="flex:1.2;min-width:140px;"><label style="font-size:11.5px;font-weight:700;color:#475569;display:block;margin-bottom:3px;">편직처</label><select id="fs-c-knitter" style="${inputStyle}"></select></div>
+              <div style="flex:1;min-width:120px;"><label style="font-size:11.5px;font-weight:700;color:#475569;display:block;margin-bottom:3px;">편직료 kg당</label><input type="number" step="1" id="fs-c-knitfee" style="${inputStyle}text-align:right;" placeholder="비우면 단가표"></div>
+            </div>
+            <div style="display:flex;gap:8px;margin-bottom:11px;flex-wrap:wrap;">
+              <div style="flex:1;min-width:90px;"><label style="font-size:11.5px;font-weight:700;color:#475569;display:block;margin-bottom:3px;">인치</label><input type="number" step="0.1" id="fs-c-inch" style="${inputStyle}" placeholder="34"></div>
+              <div style="flex:1;min-width:90px;"><label style="font-size:11.5px;font-weight:700;color:#475569;display:block;margin-bottom:3px;">침수</label><input type="number" step="1" id="fs-c-needles" style="${inputStyle}" placeholder="3204"></div>
+              <div style="flex:1;min-width:90px;"><label style="font-size:11.5px;font-weight:700;color:#475569;display:block;margin-bottom:3px;">게이지 (자동)</label><input type="text" id="fs-c-gage" readonly style="${inputStyle}background:#eef2f7;font-weight:800;color:#0f172a;"></div>
+              <div style="flex:1;min-width:110px;"><label style="font-size:11.5px;font-weight:700;color:#475569;display:block;margin-bottom:3px;">제작중량 g/y</label><input type="number" step="1" id="fs-c-makegy" style="${inputStyle}" placeholder="비우면 안내중량 사용"></div>
+            </div>
+            <div style="font-size:11.5px;font-weight:800;color:#0f172a;margin-bottom:5px;">원사 구성 <span style="font-weight:400;color:#94a3b8;">— 사종·굵기·단위·루프장을 넣으면 혼용율이 자동으로 나옵니다 (최대 4개)</span></div>
+            <table style="width:100%;border-collapse:collapse;font-size:12px;background:#fff;border:1px solid #e2e8f0;border-radius:6px;overflow:hidden;">
+              <thead><tr style="background:#f1f5f9;color:#475569;font-size:11px;">
+                <th style="padding:5px 6px;text-align:left;">사종</th><th style="padding:5px 6px;width:80px;">굵기</th><th style="padding:5px 6px;width:74px;">단위</th><th style="padding:5px 6px;width:86px;">루프장</th><th style="padding:5px 6px;width:78px;">혼용율</th>
+              </tr></thead>
+              <tbody>
+                ${[0, 1, 2, 3].map(k => `<tr>
+                  <td style="padding:3px 5px;"><input type="text" class="fs-c-y-name" data-k="${k}" autocomplete="off" style="${inputStyle}padding:5px 7px;font-size:12px;" placeholder="${k === 0 ? '예: CM30' : ''}"></td>
+                  <td style="padding:3px 5px;"><input type="number" step="0.01" class="fs-c-y-size" data-k="${k}" style="${inputStyle}padding:5px 7px;font-size:12px;text-align:right;"></td>
+                  <td style="padding:3px 5px;"><select class="fs-c-y-unit" data-k="${k}" style="${inputStyle}padding:5px 4px;font-size:12px;"><option value="D">D</option><option value="수">수</option></select></td>
+                  <td style="padding:3px 5px;"><input type="number" step="0.01" class="fs-c-y-loop" data-k="${k}" style="${inputStyle}padding:5px 7px;font-size:12px;text-align:right;"></td>
+                  <td class="fs-c-y-pct" data-k="${k}" style="padding:3px 5px;text-align:right;font-weight:800;color:#0f172a;">-</td>
+                </tr>`).join('')}
+              </tbody>
+            </table>
+            <div style="display:flex;align-items:center;gap:9px;margin:7px 0 12px;">
+              <span id="fs-c-blend-sum" style="font-size:11.5px;font-weight:800;color:#475569;"></span>
+              <button type="button" class="dash-action-btn" id="fs-c-blend-apply" style="font-size:11px;padding:4px 10px;" title="자동 계산된 혼용율을 이 품목의 혼용률로 저장합니다">품목 혼용률로 저장</button>
+            </div>
+            <div style="display:flex;gap:8px;margin-bottom:9px;flex-wrap:wrap;">
+              <div style="flex:1;min-width:140px;"><label style="font-size:11.5px;font-weight:700;color:#475569;display:block;margin-bottom:3px;">염색처</label><select id="fs-c-dyer" style="${inputStyle}"></select></div>
+              <div style="flex:1;min-width:140px;"><label style="font-size:11.5px;font-weight:700;color:#475569;display:block;margin-bottom:3px;">가공처</label><select id="fs-c-finisher" style="${inputStyle}"></select></div>
+              <div style="flex:0.7;min-width:100px;"><label style="font-size:11.5px;font-weight:700;color:#475569;display:block;margin-bottom:3px;">편직로스 %</label><input type="number" step="0.1" id="fs-c-knitloss" style="${inputStyle}text-align:right;" placeholder="${COST_KNIT_LOSS_DEFAULT}"></div>
+              <div style="flex:0.7;min-width:100px;"><label style="font-size:11.5px;font-weight:700;color:#475569;display:block;margin-bottom:3px;">가공로스 %</label><input type="number" step="0.1" id="fs-c-finloss" style="${inputStyle}text-align:right;" placeholder="${COST_FIN_LOSS_DEFAULT}"></div>
+            </div>
+            <div style="font-size:11.5px;font-weight:800;color:#0f172a;margin-bottom:5px;">가공법 <span style="font-weight:400;color:#94a3b8;">— 이 원단이 늘 거치는 공정을 체크해 두면 원가 계산 화면에서 자동으로 잡힙니다</span></div>
+            <div style="display:flex;flex-wrap:wrap;gap:6px 14px;background:#fff;border:1px solid #e2e8f0;border-radius:6px;padding:8px 10px;">
+              ${getCostProcs().map(p => `<label style="display:inline-flex;align-items:center;gap:5px;font-size:12px;cursor:pointer;color:#334155;"><input type="checkbox" class="fs-c-proc" value="${escapeHtml(p)}" style="width:14px;height:14px;"> ${escapeHtml(p)}</label>`).join('')}
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px;">
+            <button class="dash-action-btn" id="fc-modal-cancel" style="padding:7px 16px;">취소</button>
+            <button class="dash-action-btn" id="fc-modal-save" style="background:#1e3a8a;color:#fff;font-weight:800;padding:7px 20px;">저장</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+    return h;
+  }
+  // hotfix281: 원단 원가 자료 편집 — [원가 계산기] › [원단 원가] 화면 전용
+    const costWrap = () => document.getElementById('fs-cost-wrap');
+    let editingCostFid = '';
+    function repaintCostCalc() {
+      if (!costWrap()) return;
+      const gEl = document.getElementById('fs-c-gage');
+      if (gEl) {
+        const g = calcGage(document.getElementById('fs-c-inch')?.value, document.getElementById('fs-c-needles')?.value);
+        gEl.value = (g == null) ? '' : String(g);
+      }
+      const yarns = collectCostYarns();
+      const rows = calcYarnBlend(yarns);
+      let sum = 0;
+      rows.forEach((r, k) => {
+        const cell = costWrap().querySelector(`.fs-c-y-pct[data-k="${k}"]`);
+        if (!cell) return;
+        if (r.name && r.pct > 0) { cell.textContent = r.pct + '%'; sum += r.pct; }
+        else cell.textContent = '-';
+      });
+      const sEl = document.getElementById('fs-c-blend-sum');
+      if (sEl) {
+        const t = Math.round(sum * 10) / 10;
+        if (!t) { sEl.textContent = ''; }
+        else if (Math.abs(t - 100) > 0.15) { sEl.textContent = `합계 ${t}% — 100%가 아닙니다`; sEl.style.color = '#b91c1c'; }
+        else { sEl.textContent = `합계 ${t}%`; sEl.style.color = '#047857'; }
+      }
+    }
+    function collectCostYarns() {
+      const w = costWrap();
+      if (!w) return [];
+      return [0, 1, 2, 3].map(k => ({
+        name: (w.querySelector(`.fs-c-y-name[data-k="${k}"]`)?.value || '').trim(),
+        size: (w.querySelector(`.fs-c-y-size[data-k="${k}"]`)?.value || '').trim(),
+        unit: (w.querySelector(`.fs-c-y-unit[data-k="${k}"]`)?.value || 'D'),
+        loop: (w.querySelector(`.fs-c-y-loop[data-k="${k}"]`)?.value || '').trim()
+      }));
+    }
+    function fillCostFields(s) {
+      const w = costWrap();
+      if (!w) return;
+      editingCostFid = specFid(s);
+      const c = getFabricCost(editingCostFid) || {};
+      const codeEl = document.getElementById('fs-cost-code');
+      if (codeEl) codeEl.textContent = editingCostFid ? ('품목 코드 ' + editingCostFid) : '품목 코드는 저장하면 붙습니다';
+      document.getElementById('fs-c-code').value = c.code || '';
+      document.getElementById('fs-c-machine').value = c.machine || '';
+      document.getElementById('fs-c-inch').value = (c.inch != null ? c.inch : '');
+      document.getElementById('fs-c-needles').value = (c.needles != null ? c.needles : '');
+      document.getElementById('fs-c-makegy').value = (c.make_gy != null ? c.make_gy : '');
+      document.getElementById('fs-c-knitloss').value = (c.knit_loss != null ? c.knit_loss : '');
+      document.getElementById('fs-c-finloss').value = (c.fin_loss != null ? c.fin_loss : '');
+      document.getElementById('fs-c-knitter').innerHTML = vendorOptionsHTML('편직처', c.knitter || '');
+      document.getElementById('fs-c-knitfee').value = (c.knit_fee != null ? c.knit_fee : '');
+      document.getElementById('fs-c-dyer').innerHTML = vendorOptionsHTML('염색처', c.dyer || '');
+      document.getElementById('fs-c-finisher').innerHTML = vendorOptionsHTML('가공처', c.finisher || '');
+      const ys = Array.isArray(c.yarns) ? c.yarns : [];
+      [0, 1, 2, 3].forEach(k => {
+        const y = ys[k] || {};
+        w.querySelector(`.fs-c-y-name[data-k="${k}"]`).value = y.name || '';
+        w.querySelector(`.fs-c-y-size[data-k="${k}"]`).value = (y.size != null ? y.size : '');
+        w.querySelector(`.fs-c-y-unit[data-k="${k}"]`).value = (y.unit === '수') ? '수' : 'D';
+        w.querySelector(`.fs-c-y-loop[data-k="${k}"]`).value = (y.loop != null ? y.loop : '');
+      });
+      const procs = Array.isArray(c.procs) ? c.procs : [];
+      const procsN = procs.map(normProc);
+      w.querySelectorAll('.fs-c-proc').forEach(cb => { cb.checked = procsN.includes(cb.value); });
+      repaintCostCalc();
+    }
+    function collectCostFields() {
+      const w = costWrap();
+      if (!w) return null;
+      const numOrNull = (v) => (v === '' || v == null) ? null : (parseFloat(v));
+      const yarns = collectCostYarns()
+        .filter(y => y.name || y.size || y.loop)
+        .map(y => ({ name: y.name, size: numOrNull(y.size), unit: y.unit === '수' ? '수' : 'D', loop: numOrNull(y.loop) }));
+      return {
+        code: (document.getElementById('fs-c-code')?.value || '').trim(),
+        machine: (document.getElementById('fs-c-machine')?.value || '').trim(),
+        knitter: (document.getElementById('fs-c-knitter')?.value || '').trim(),
+        knit_fee: numOrNull(document.getElementById('fs-c-knitfee')?.value),
+        dyer: (document.getElementById('fs-c-dyer')?.value || '').trim(),
+        finisher: (document.getElementById('fs-c-finisher')?.value || '').trim(),
+        inch: numOrNull(document.getElementById('fs-c-inch')?.value),
+        needles: numOrNull(document.getElementById('fs-c-needles')?.value),
+        make_gy: numOrNull(document.getElementById('fs-c-makegy')?.value),
+        knit_loss: numOrNull(document.getElementById('fs-c-knitloss')?.value),
+        fin_loss: numOrNull(document.getElementById('fs-c-finloss')?.value),
+        yarns,
+        procs: Array.from(w.querySelectorAll('.fs-c-proc')).filter(cb => cb.checked).map(cb => cb.value),
+        updated_at: todayYMD()
+      };
+    }
+  function bindCostFieldEvents() {
+    if (!costWrap()) return;
+    ['fs-c-inch', 'fs-c-needles'].forEach(id => document.getElementById(id)?.addEventListener('input', repaintCostCalc));
+    costWrap().querySelectorAll('.fs-c-y-name, .fs-c-y-size, .fs-c-y-loop').forEach(el => el.addEventListener('input', repaintCostCalc));
+    costWrap().querySelectorAll('.fs-c-y-unit').forEach(el => el.addEventListener('change', repaintCostCalc));
+    document.getElementById('fs-c-blend-apply')?.addEventListener('click', async () => {
+      const txt = blendStringFromYarns(collectCostYarns());
+      if (!txt) { toast('원사 굵기와 루프장을 먼저 넣어주세요', 'warning'); return; }
+      if (!editingCostFid) { toast('품목을 먼저 고르십시오', 'warning'); return; }
+      const specs = JSON.parse(JSON.stringify(getFabricSpecs()));
+      const i = specs.findIndex(x => specFid(x) === editingCostFid);
+      if (i < 0) { toast('품목을 찾지 못했습니다', 'error'); return; }
+      if (!confirm(`이 품목의 혼용률을 아래 값으로 바꿀까요?\n\n${txt}`)) return;
+      specs[i].blend = txt;
+      const ok = await saveFabricSpecs(specs);
+      if (ok) toast('품목 혼용률을 바꿨습니다', 'success');
+    });
   }
   function renderCostPriceModal() {
     const st = 'width:100%;padding:8px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;font-family:inherit;box-sizing:border-box;';
@@ -28869,7 +29036,6 @@ function validateBlendSum(blends, label) {
         document.getElementById('fs-f-tube').checked = !!s.tube;
         document.getElementById('fs-f-gy').value = (s.gy != null ? s.gy : '');
         document.getElementById('fs-f-blend').value = s.blend || '';
-        fillCostFields(s);            // hotfix264: 원가 자료 (최고관리자에게만 칸이 있음)
         const sc = s.cautions || {};
         fillFsCautions('dyeing', sc.dyeing);
         fillFsCautions('processing', sc.processing);
@@ -28992,109 +29158,6 @@ function validateBlendSum(blends, label) {
         box.innerHTML = rows.length ? rows.map(r => fsCautionRowHTML(r)).join('') : '';
         box.querySelectorAll('.caution-row').forEach(bindFsCautionRow);
       }
-      // ===== hotfix264: 원가 자료 칸 (최고관리자에게만 존재) =====
-      const costWrap = () => document.getElementById('fs-cost-wrap');
-      let editingCostFid = '';
-      function repaintCostCalc() {
-        if (!costWrap()) return;
-        const gEl = document.getElementById('fs-c-gage');
-        if (gEl) {
-          const g = calcGage(document.getElementById('fs-c-inch')?.value, document.getElementById('fs-c-needles')?.value);
-          gEl.value = (g == null) ? '' : String(g);
-        }
-        const yarns = collectCostYarns();
-        const rows = calcYarnBlend(yarns);
-        let sum = 0;
-        rows.forEach((r, k) => {
-          const cell = costWrap().querySelector(`.fs-c-y-pct[data-k="${k}"]`);
-          if (!cell) return;
-          if (r.name && r.pct > 0) { cell.textContent = r.pct + '%'; sum += r.pct; }
-          else cell.textContent = '-';
-        });
-        const sEl = document.getElementById('fs-c-blend-sum');
-        if (sEl) {
-          const t = Math.round(sum * 10) / 10;
-          if (!t) { sEl.textContent = ''; }
-          else if (Math.abs(t - 100) > 0.15) { sEl.textContent = `합계 ${t}% — 100%가 아닙니다`; sEl.style.color = '#b91c1c'; }
-          else { sEl.textContent = `합계 ${t}%`; sEl.style.color = '#047857'; }
-        }
-      }
-      function collectCostYarns() {
-        const w = costWrap();
-        if (!w) return [];
-        return [0, 1, 2, 3].map(k => ({
-          name: (w.querySelector(`.fs-c-y-name[data-k="${k}"]`)?.value || '').trim(),
-          size: (w.querySelector(`.fs-c-y-size[data-k="${k}"]`)?.value || '').trim(),
-          unit: (w.querySelector(`.fs-c-y-unit[data-k="${k}"]`)?.value || 'D'),
-          loop: (w.querySelector(`.fs-c-y-loop[data-k="${k}"]`)?.value || '').trim()
-        }));
-      }
-      function fillCostFields(s) {
-        const w = costWrap();
-        if (!w) return;
-        editingCostFid = specFid(s);
-        const c = getFabricCost(editingCostFid) || {};
-        const codeEl = document.getElementById('fs-cost-code');
-        if (codeEl) codeEl.textContent = editingCostFid ? ('품목 코드 ' + editingCostFid) : '품목 코드는 저장하면 붙습니다';
-        document.getElementById('fs-c-code').value = c.code || '';
-        document.getElementById('fs-c-machine').value = c.machine || '';
-        document.getElementById('fs-c-inch').value = (c.inch != null ? c.inch : '');
-        document.getElementById('fs-c-needles').value = (c.needles != null ? c.needles : '');
-        document.getElementById('fs-c-makegy').value = (c.make_gy != null ? c.make_gy : '');
-        document.getElementById('fs-c-knitloss').value = (c.knit_loss != null ? c.knit_loss : '');
-        document.getElementById('fs-c-finloss').value = (c.fin_loss != null ? c.fin_loss : '');
-        document.getElementById('fs-c-knitter').innerHTML = vendorOptionsHTML('편직처', c.knitter || '');
-        document.getElementById('fs-c-knitfee').value = (c.knit_fee != null ? c.knit_fee : '');
-        document.getElementById('fs-c-dyer').innerHTML = vendorOptionsHTML('염색처', c.dyer || '');
-        document.getElementById('fs-c-finisher').innerHTML = vendorOptionsHTML('가공처', c.finisher || '');
-        const ys = Array.isArray(c.yarns) ? c.yarns : [];
-        [0, 1, 2, 3].forEach(k => {
-          const y = ys[k] || {};
-          w.querySelector(`.fs-c-y-name[data-k="${k}"]`).value = y.name || '';
-          w.querySelector(`.fs-c-y-size[data-k="${k}"]`).value = (y.size != null ? y.size : '');
-          w.querySelector(`.fs-c-y-unit[data-k="${k}"]`).value = (y.unit === '수') ? '수' : 'D';
-          w.querySelector(`.fs-c-y-loop[data-k="${k}"]`).value = (y.loop != null ? y.loop : '');
-        });
-        const procs = Array.isArray(c.procs) ? c.procs : [];
-        const procsN = procs.map(normProc);
-        w.querySelectorAll('.fs-c-proc').forEach(cb => { cb.checked = procsN.includes(cb.value); });
-        repaintCostCalc();
-      }
-      function collectCostFields() {
-        const w = costWrap();
-        if (!w) return null;
-        const numOrNull = (v) => (v === '' || v == null) ? null : (parseFloat(v));
-        const yarns = collectCostYarns()
-          .filter(y => y.name || y.size || y.loop)
-          .map(y => ({ name: y.name, size: numOrNull(y.size), unit: y.unit === '수' ? '수' : 'D', loop: numOrNull(y.loop) }));
-        return {
-          code: (document.getElementById('fs-c-code')?.value || '').trim(),
-          machine: (document.getElementById('fs-c-machine')?.value || '').trim(),
-          knitter: (document.getElementById('fs-c-knitter')?.value || '').trim(),
-          knit_fee: numOrNull(document.getElementById('fs-c-knitfee')?.value),
-          dyer: (document.getElementById('fs-c-dyer')?.value || '').trim(),
-          finisher: (document.getElementById('fs-c-finisher')?.value || '').trim(),
-          inch: numOrNull(document.getElementById('fs-c-inch')?.value),
-          needles: numOrNull(document.getElementById('fs-c-needles')?.value),
-          make_gy: numOrNull(document.getElementById('fs-c-makegy')?.value),
-          knit_loss: numOrNull(document.getElementById('fs-c-knitloss')?.value),
-          fin_loss: numOrNull(document.getElementById('fs-c-finloss')?.value),
-          yarns,
-          procs: Array.from(w.querySelectorAll('.fs-c-proc')).filter(cb => cb.checked).map(cb => cb.value),
-          updated_at: todayYMD()
-        };
-      }
-      if (costWrap()) {
-        ['fs-c-inch', 'fs-c-needles'].forEach(id => document.getElementById(id)?.addEventListener('input', repaintCostCalc));
-        costWrap().querySelectorAll('.fs-c-y-name, .fs-c-y-size, .fs-c-y-loop').forEach(el => el.addEventListener('input', repaintCostCalc));
-        costWrap().querySelectorAll('.fs-c-y-unit').forEach(el => el.addEventListener('change', repaintCostCalc));
-        document.getElementById('fs-c-blend-apply')?.addEventListener('click', () => {
-          const txt = blendStringFromYarns(collectCostYarns());
-          if (!txt) { toast('원사 굵기와 루프장을 먼저 넣어주세요', 'warning'); return; }
-          const bEl = document.getElementById('fs-f-blend');
-          if (bEl) { bEl.value = txt; toast('혼용률 칸에 넣었습니다', 'success'); }
-        });
-      }
 
       function collectFsCautions(stage) {
         const box = document.getElementById('fs-cautions-' + stage);
@@ -29189,12 +29252,7 @@ function validateBlendSum(blends, label) {
         assignFabricIds(list);
         const ok = await saveFabricSpecs(list);
         if (ok) {
-          // hotfix264: 원가 자료는 직원이 읽는 문서와 섞지 않고 따로 저장한다
-          if (costWrap()) {
-            const fid = String((list.find(x => x && x.name === name) || {}).fid || '').trim();
-            const cost = collectCostFields();
-            if (fid && cost) await saveFabricCost(fid, cost);
-          }
+          // hotfix281: 원가 자료는 [원가 계산기] › [원단 원가]에서만 저장한다
           toast(`"${name}" 저장됨`, 'success'); closeModal(); renderDashboard();
         }
       });
@@ -30110,6 +30168,33 @@ function validateBlendSum(blends, label) {
         if (kind === 'orgs') next.orgs = names; else next.procs = names;
         const ok = await saveCostLists(next);
         if (ok) { toast('저장했습니다', 'success'); closeCl(); renderDashboard(); }
+      });
+    })();
+    (function attachCostFabricHandlers() {
+      const modal = document.getElementById('fc-modal');
+      if (!modal) return;
+      bindRerenderSearch('fc-search', v => { state.fcSearch = v; });
+      document.getElementById('fc-search-clear')?.addEventListener('click', () => { state.fcSearch = ''; renderDashboard(); });
+      const closeFc = () => modal.classList.remove('show');
+      document.getElementById('fc-modal-close')?.addEventListener('click', closeFc);
+      document.getElementById('fc-modal-cancel')?.addEventListener('click', closeFc);
+      modal.addEventListener('click', e => { if (e.target === modal) closeFc(); });
+      bindCostFieldEvents();
+      document.querySelectorAll('#dash-body .fc-edit').forEach(b => b.addEventListener('click', () => {
+        const fid = b.dataset.fid || '';
+        const spec = getFabricSpecs().find(x => specFid(x) === fid);
+        if (!spec) { toast('품목을 찾지 못했습니다', 'error'); return; }
+        const t = document.getElementById('fc-modal-item');
+        if (t) t.textContent = String(spec.name || '') + (spec.cat ? ' · ' + spec.cat : '');
+        fillCostFields(spec);
+        modal.classList.add('show');
+      }));
+      document.getElementById('fc-modal-save')?.addEventListener('click', async () => {
+        const cost = collectCostFields();
+        if (!cost) return;
+        if (!editingCostFid) { toast('품목 코드가 없어 저장하지 못했습니다', 'error'); return; }
+        const ok = await saveFabricCost(editingCostFid, cost);
+        if (ok) { toast('원가 자료를 저장했습니다', 'success'); closeFc(); renderDashboard(); }
       });
     })();
     const cpClearEl = document.getElementById('cp-search-clear');
@@ -32887,7 +32972,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix280';
+  const VERSION = 'v2.53 hotfix282';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
