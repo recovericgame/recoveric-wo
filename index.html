@@ -14095,7 +14095,40 @@ function validateBlendSum(blends, label) {
 
     // 최신 보고 먼저
     reports.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
-    return reports;
+    return reports.concat(collectPrintDefectReports());
+  }
+  // hotfix284: 나염 줄 QC 불량 — [불량 보고]에 올린다
+  function collectPrintDefectReports() {
+    const out = [];
+    (state.allWorkOrders || []).forEach(wo => {
+      if (!wo || wo.deleted || wo.completed || wo.type !== '나염') return;
+      (wo.print_rows || []).forEach((r, ri) => {
+        if (!r || r.completed || r.deleted) return;
+        let st = null;
+        try { st = printRowStage(wo, r); } catch (e) { st = null; }
+        if (!st || st.stage !== 'qc_defect') return;
+        const qc = (r.qc && typeof r.qc === 'object') ? r.qc : {};
+        out.push({
+          type: 'printDefect',
+          typeLabel: '나염 불량',
+          theme: '#dc2626',
+          woId: wo.id, rowIdx: ri,
+          woNumber: wo.wo_number || '',
+          item: r.fabric || wo.design_name || '',
+          colorName: r.fabric_color || '',
+          printColor: r.print_color || '',
+          designName: wo.design_name || '',
+          factory: wo.print_factory || '',
+          qtyText: (printRowRecv(r) != null ? printRowRecv(r) : printRowOrdered(r)) + '절',
+          label: printRowLabel(wo, r),
+          notes: qc.notes || r.memo || '',
+          createdAt: (qc && qc.at) || r.qc_done_at || '',
+          createdBy: (qc && qc.by) || r.qc_done_by || ''
+        });
+      });
+    });
+    out.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+    return out;
   }
   function countCeoReports() { return collectCeoReports().length; }
 
@@ -14142,7 +14175,39 @@ function validateBlendSum(blends, label) {
       });
     });
     reports.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
-    return reports;
+    return reports.concat(collectPrintCompleteReports());
+  }
+  // hotfix284 (대표 확정): 나염 줄도 QC가 끝나 완료 판정만 남으면 [완료 보고]에 올린다.
+  function collectPrintCompleteReports() {
+    const out = [];
+    (state.allWorkOrders || []).forEach(wo => {
+      if (!wo || wo.deleted || wo.completed || wo.type !== '나염') return;
+      (wo.print_rows || []).forEach((r, ri) => {
+        if (!r || r.completed || r.deleted) return;
+        let st = null;
+        try { st = printRowStage(wo, r); } catch (e) { st = null; }
+        if (!st || st.stage !== 'await_complete') return;
+        if (st.qc !== 'done' && st.qc !== 'accept') return;
+        const qc = (r.qc && typeof r.qc === 'object') ? r.qc : {};
+        out.push({
+          type: 'printComplete',
+          woId: wo.id, rowIdx: ri,
+          woNumber: wo.wo_number || '',
+          item: r.fabric || wo.design_name || '',
+          colorName: r.fabric_color || '',
+          printColor: r.print_color || '',
+          designName: wo.design_name || '',
+          factory: wo.print_factory || '',
+          qtyText: (printRowRecv(r) != null ? printRowRecv(r) : printRowOrdered(r)) + '절',
+          label: printRowLabel(wo, r),
+          notes: r.memo || qc.notes || '',
+          createdAt: r.qc_done_at || (qc && qc.at) || wo.updated_at || '',
+          createdBy: r.qc_done_by || (qc && qc.by) || ''
+        });
+      });
+    });
+    out.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+    return out;
   }
   function countCompleteReports() { return collectCompleteReports().length; }
   function updateCeoReportBadge() {
@@ -21815,12 +21880,15 @@ function validateBlendSum(blends, label) {
       html += `<div class="dash-empty">확인 대기 중인 완료 건이 없습니다. </div>`;
       return html;
     }
+    // hotfix284: 나염 건은 카드마다 [완료 확정]으로 처리한다 — 일괄 확인은 염색가공 건만
+    const dyeCnt = reports.filter(r => r.type === 'complete').length;
+    const printCnt = reports.length - dyeCnt;
     html += `<div style="margin:0 0 14px;padding:11px 13px;background:#f0fdf4;border:1px solid #bbf7d0;border-left:4px solid #16a34a;border-radius:6px;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
-      <span style="font-size:13px;color:#15803d;font-weight:700;">확인 대기 ${reports.length}건</span>
+      <span style="font-size:13px;color:#15803d;font-weight:700;">확인 대기 ${reports.length}건${printCnt ? ` <span style="color:#7c3aed;">(나염 ${printCnt}건 포함)</span>` : ''}</span>
       <span style="display:flex;gap:8px;flex-wrap:wrap;">
         <label style="display:inline-flex;align-items:center;gap:5px;font-size:12px;color:#15803d;font-weight:700;cursor:pointer;background:#fff;border:1px solid #bbf7d0;border-radius:6px;padding:5px 10px;"><input type="checkbox" id="complete-rep-select-all"> 전체 선택</label>
         <button class="dash-action-btn complete-rep-sel-btn" style="background:#fff;color:#15803d;border-color:#16a34a;font-weight:700;padding:7px 14px;">✓ 선택 확인 (<span id="complete-rep-sel-count">0</span>)</button>
-        <button class="dash-action-btn complete-rep-all-btn" style="background:#16a34a;color:#fff;border-color:#15803d;font-weight:800;padding:7px 16px;">✓ 전체 일괄 확인 (${reports.length}건)</button>
+        <button class="dash-action-btn complete-rep-all-btn" style="background:#16a34a;color:#fff;border-color:#15803d;font-weight:800;padding:7px 16px;">✓ 전체 일괄 확인 (${dyeCnt}건)</button>
       </span>
     </div>`;
 
@@ -21960,6 +22028,31 @@ function validateBlendSum(blends, label) {
 
     html += `<div style="display:flex;flex-direction:column;gap:10px;">`;
     reports.forEach(rep => {
+      // hotfix284: 나염 줄 — 염색가공과 자료 모양이 달라 따로 그린다
+      if (rep.type === 'printComplete') {
+        const pwhen = rep.createdAt ? new Date(rep.createdAt).toLocaleString('ko-KR') : '';
+        html += `<div class="ceo-report-card" style="border-color:#bbf7d0;border-left-color:#16a34a;" data-rep-type="printComplete" data-id="${rep.woId}" data-row-idx="${rep.rowIdx}">
+          <div class="ceo-report-head">
+            <span class="ceo-report-tag" style="background:#7c3aed;">나염</span>
+            <span class="ceo-report-tag" style="background:#16a34a;">확인 대기</span>
+            <span class="ceo-report-title">[${escapeHtml(rep.woNumber)}] ${escapeHtml(rep.item || '-')}</span>
+          </div>
+          <div class="ceo-report-body">
+            <div style="font-size:15px;font-weight:800;color:#0f172a;margin-bottom:7px;line-height:1.4;">${escapeHtml(rep.item || '-')}${rep.colorName ? `<span style="font-weight:700;color:#7c3aed;font-size:14px;"> · ${escapeHtml(rep.colorName)}</span>` : ''}</div>
+            ${rep.designName ? `<div class="ceo-report-line"><span class="ceo-report-k">디자인</span> ${escapeHtml(rep.designName)}</div>` : ''}
+            ${rep.printColor ? `<div class="ceo-report-line"><span class="ceo-report-k">나염컬러</span> ${escapeHtml(rep.printColor)}</div>` : ''}
+            <div class="ceo-report-line"><span class="ceo-report-k">수량</span> ${escapeHtml(rep.qtyText)}</div>
+            <div class="ceo-report-line"><span class="ceo-report-k">상태</span> ${escapeHtml(rep.label || '')}${rep.factory ? ' · ' + escapeHtml(rep.factory) : ''}</div>
+            ${rep.notes ? `<div class="ceo-report-line"><span class="ceo-report-k">특이사항</span> ${escapeHtml(rep.notes)}</div>` : ''}
+            <div class="ceo-report-line" style="color:#9ca3af;font-size:11px;"><span class="ceo-report-k">검수자</span> ${escapeHtml(rep.createdBy || '-')}${pwhen ? ' · ' + escapeHtml(pwhen) : ''}</div>
+          </div>
+          <div class="ceo-report-actions">
+            <button class="dash-action-btn print-rep-goto" data-id="${rep.woId}">나염 화면에서 보기</button>
+            <button class="dash-action-btn print-rep-ok" style="background:#16a34a;color:#fff;border-color:#15803d;font-weight:700;" data-id="${rep.woId}" data-row-idx="${rep.rowIdx}">✓ 완료 확정</button>
+          </div>
+        </div>`;
+        return;
+      }
       const when = rep.createdAt ? new Date(rep.createdAt).toLocaleString('ko-KR') : '';
       const qc = rep.qc || {};
       const fixBadge = rep.fixCount > 0 ? `<span class="ceo-report-tag" style="background:#f97316;">${rep.fixCount}차 수정</span>` : '';
@@ -22017,6 +22110,30 @@ function validateBlendSum(blends, label) {
 
     html += `<div style="display:flex;flex-direction:column;gap:10px;">`;
     reports.forEach(rep => {
+      // hotfix284: 나염 줄 QC 불량
+      if (rep.type === 'printDefect') {
+        const pwhen = rep.createdAt ? new Date(rep.createdAt).toLocaleString('ko-KR') : '';
+        html += `<div class="ceo-report-card" data-rep-type="printDefect" data-id="${rep.woId}" data-row-idx="${rep.rowIdx}">
+          <div class="ceo-report-head">
+            <span class="ceo-report-tag" style="background:#7c3aed;">나염</span>
+            <span class="ceo-report-tag" style="background:${rep.theme};">${escapeHtml(rep.typeLabel)}</span>
+            <span class="ceo-report-title">[${escapeHtml(rep.woNumber)}] ${escapeHtml(rep.item || '-')}</span>
+          </div>
+          <div class="ceo-report-body">
+            <div style="font-size:15px;font-weight:800;color:#0f172a;margin-bottom:7px;line-height:1.4;">${escapeHtml(rep.item || '-')}${rep.colorName ? `<span style="font-weight:700;color:#7c3aed;font-size:14px;"> · ${escapeHtml(rep.colorName)}</span>` : ''}</div>
+            ${rep.designName ? `<div class="ceo-report-line"><span class="ceo-report-k">디자인</span> ${escapeHtml(rep.designName)}</div>` : ''}
+            ${rep.printColor ? `<div class="ceo-report-line"><span class="ceo-report-k">나염컬러</span> ${escapeHtml(rep.printColor)}</div>` : ''}
+            <div class="ceo-report-line"><span class="ceo-report-k">수량</span> ${escapeHtml(rep.qtyText)}</div>
+            <div class="ceo-report-line"><span class="ceo-report-k">상태</span> ${escapeHtml(rep.label || '')}${rep.factory ? ' · ' + escapeHtml(rep.factory) : ''}</div>
+            ${rep.notes ? `<div class="ceo-report-line"><span class="ceo-report-k">특이사항</span> ${escapeHtml(rep.notes)}</div>` : ''}
+            <div class="ceo-report-line" style="color:#9ca3af;font-size:11px;"><span class="ceo-report-k">검수자</span> ${escapeHtml(rep.createdBy || '-')}${pwhen ? ' · ' + escapeHtml(pwhen) : ''}</div>
+          </div>
+          <div class="ceo-report-actions">
+            <button class="dash-action-btn print-rep-goto" data-id="${rep.woId}">나염 화면에서 처리</button>
+          </div>
+        </div>`;
+        return;
+      }
       if (rep.type === 'shrink') {
         const dev = rep.dev;
         const when = rep.createdAt ? new Date(rep.createdAt).toLocaleString('ko-KR') : '';
@@ -28832,6 +28949,29 @@ function validateBlendSum(blends, label) {
     });
 
     // hotfix91: 완료 보고함 — [원단 보기] / [✓ 확인 완료] / [✓ 전체 일괄 확인]
+    // hotfix284: 나염 보고 카드 — [나염 화면에서 보기] · [완료 확정]
+    document.querySelectorAll('#dash-body .print-rep-goto').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        state.dashView = 'print';
+        renderDashboard();
+      });
+    });
+    document.querySelectorAll('#dash-body .print-rep-ok').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (!isAdminUser()) { toast('대표만 처리할 수 있습니다', 'warning'); return; }
+        const id = btn.dataset.id;
+        const ri = parseInt(btn.dataset.rowIdx, 10);
+        if (!id || isNaN(ri)) return;
+        if (!confirm('이 나염 건을 완료로 확정할까요?')) return;
+        try {
+          await setPrintRowStage(id, ri, 'complete');
+          toast('완료 처리했습니다', 'success');
+          renderDashboard();
+        } catch (err) { toast('처리 실패: ' + err.message, 'error'); }
+      });
+    });
     document.querySelectorAll('#dash-body .complete-rep-view-btn').forEach(btn => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -28932,7 +29072,7 @@ function validateBlendSum(blends, label) {
       btn.addEventListener('click', async (e) => {
         e.stopPropagation();
         if (!isAdminUser()) { toast('대표만 확인할 수 있습니다', 'warning'); return; }
-        await __runCompleteConfirm(collectCompleteReports(), btn);
+        await __runCompleteConfirm(collectCompleteReports().filter(r => r.type === 'complete'), btn);
       });
     });
     document.querySelectorAll('#dash-body .ceo-rep-approve-btn').forEach(btn => {
@@ -33239,7 +33379,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix284';
+  const VERSION = 'v2.53 hotfix285';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
