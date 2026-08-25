@@ -24805,7 +24805,7 @@ function validateBlendSum(blends, label) {
     </div>
     <div style="display:flex;gap:7px;flex-wrap:wrap;margin-bottom:12px;align-items:center;">
       <button class="cp-sub-btn" data-cp-sub="yarn" style="${sub === 'yarn' ? sOn : sOff}">원사 설정 ${P.yarns.length}</button>
-      <button class="cp-sub-btn" data-cp-sub="knit" style="${sub === 'knit' ? sOn : sOff}">편직료 설정 ${P.knit.length}</button>
+      <button class="cp-sub-btn" data-cp-sub="knit" style="${sub === 'knit' ? sOn : sOff}">품목별 단가</button>
       <button class="cp-sub-btn" data-cp-sub="proc" style="${sub === 'proc' ? sOn : sOff}">가공단가 설정 ${P.proc.length + P.bundles.length}</button>
       <button class="cp-sub-btn" data-cp-sub="grade" style="${sub === 'grade' ? sOn : sOff}">판매 등급 ${getCostGrades().length}</button>
       <button class="cp-sub-btn" data-cp-sub="import" style="${sub === 'import' ? sOn : sOff}">자료 가져오기</button>
@@ -24814,7 +24814,9 @@ function validateBlendSum(blends, label) {
       ${state.costSearch ? `<button class="dash-action-btn" id="cp-search-clear" style="font-size:11px;padding:5px 10px;">지우기</button>` : ''}
     </div>`;
     if (sub === 'yarn') h += renderYarnPriceTable(P);
-    else if (sub === 'knit') h += renderKnitPriceTable(P);
+    else if (sub === 'knit') h += renderItemPriceGrid(P)
+      + `<details style="margin-top:16px;"><summary style="font-size:12px;font-weight:800;color:#475569;cursor:pointer;">편직 단가 줄 목록 자세히 보기 (${P.knit.length}줄) — 조직으로 걸린 값·(공통) 값은 여기서 고칩니다</summary><div style="margin-top:10px;">`
+      + renderKnitPriceTable(P) + `</div></details>`;
     else if (sub === 'grade') return h + renderCostGradeTable();
     else if (sub === 'import') return h + renderCostImportTab();
     else h += renderProcPriceTable(P);
@@ -25587,6 +25589,243 @@ function validateBlendSum(blends, label) {
         포리에스터는 파운드당 값에 ${COST_LB_PER_KG}을 곱합니다. 스판 등 기타는 kg 값을 그대로 씁니다.
       </div>`;
     return h;
+  }
+  // ============================================================
+  // hotfix309: [품목별 단가] — 원단 기본 스펙 품목을 세로로 늘어놓고
+  //   편직료는 공장을 가로로, 염색·가공료는 공정을 가로로 놓아 격자로 채운다.
+  //   빈 칸은 그 업체 기본값이 흐리게 비쳐 보인다. 숫자를 치면 그 품목만의 값이 된다.
+  //   고친 것은 모아 두었다가 [저장]을 누를 때 한꺼번에 담는다.
+  // ============================================================
+  function cpGrid() {
+    if (!state.cpGrid || typeof state.cpGrid !== 'object') state.cpGrid = {};
+    const g = state.cpGrid;
+    if (g.tab !== 'proc') g.tab = 'knit';
+    if (typeof g.q !== 'string') g.q = '';
+    if (typeof g.only !== 'boolean') g.only = true;
+    if (!g.edit || typeof g.edit !== 'object') g.edit = {};
+    if (typeof g.vendor !== 'string') g.vendor = '';
+    if (!DYE_GRADES.includes(g.grade)) g.grade = '농색';
+    return g;
+  }
+  function cpGridSpecs() {
+    const g = cpGrid();
+    const q = g.q.trim().toLowerCase();
+    return getFabricSpecs()
+      .filter(s => !g.only || s.active !== false)
+      .filter(s => !q || String(s.name || '').toLowerCase().includes(q) || normOrg(s.cat).toLowerCase().includes(q))
+      .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'ko'));
+  }
+  // 편직 열 = 단가표에 있는 편직공장 + 거래처에서 편직처로 잡아 둔 곳
+  function cpGridKnitVendors(P) {
+    const fromPrice = P.knit.map(k => k.vendor).filter(v => String(v || '').trim() !== COST_COMMON_VENDOR);
+    const fromVendor = (state.vendors || []).filter(v => v && vendorIsActive(v)
+      && (Array.isArray(v.types) ? v.types : (v.type ? [v.type] : [])).includes('편직처')).map(v => v.name);
+    return uniqSorted(fromPrice.concat(fromVendor));
+  }
+  function cpGridProcVendors(P) {
+    const fromPrice = P.proc.map(k => k.vendor).concat(P.bundles.map(b => b.vendor))
+      .filter(v => String(v || '').trim() !== COST_COMMON_VENDOR);
+    const fromVendor = (state.vendors || []).filter(v => v && vendorIsActive(v)
+      && (Array.isArray(v.types) ? v.types : (v.type ? [v.type] : [])).some(t => t === '염색처' || t === '가공처')).map(v => v.name);
+    return uniqSorted(fromPrice.concat(fromVendor));
+  }
+  function cpGridOwnKnit(P, vendor, fid) {
+    return P.knit.find(r => String((r && r.vendor) || '').trim() === vendor
+      && String((r && r.item) || '').trim() === fid && !String((r && r.org) || '').trim()) || null;
+  }
+  function cpGridOwnProc(P, vendor, proc, fid) {
+    return P.proc.find(r => String((r && r.vendor) || '').trim() === vendor
+      && normProc(r && r.proc) === normProc(proc) && String((r && r.item) || '').trim() === fid) || null;
+  }
+  function cpGridCell(key, own, base, wide) {
+    const g = cpGrid();
+    const edited = Object.prototype.hasOwnProperty.call(g.edit, key);
+    const val = edited ? g.edit[key] : (own == null ? '' : own);
+    const bg = edited ? '#fef9c3' : (own != null ? '#fffbeb' : '#fff');
+    const bd = edited ? '#eab308' : (own != null ? '#fcd34d' : '#e2e8f0');
+    return `<td style="padding:2px 3px;background:${own != null || edited ? bg : 'transparent'};">
+      <input type="number" step="1" class="cp-g-cell" data-gkey="${escapeHtml(key)}"
+        value="${val === '' || val == null ? '' : escapeHtml(String(val))}"
+        placeholder="${base == null ? '' : Math.round(base).toLocaleString()}"
+        style="width:${wide ? 92 : 76}px;padding:5px 6px;border:1px solid ${bd};border-radius:5px;font-size:12.5px;font-family:inherit;text-align:right;background:${bg};box-sizing:border-box;"></td>`;
+  }
+  function renderItemPriceGrid(P) {
+    const g = cpGrid();
+    const specs = cpGridSpecs();
+    const allN = getFabricSpecs().length;
+    const nEdit = Object.keys(g.edit).length;
+    const sOn = 'padding:6px 15px;border:1px solid #047857;border-radius:16px;font-size:12px;font-weight:800;cursor:pointer;background:#047857;color:#fff;';
+    const sOff = 'padding:6px 15px;border:1px solid #d1d5db;border-radius:16px;font-size:12px;font-weight:700;cursor:pointer;background:#fff;color:#6b7280;';
+    const inp = 'padding:6px 9px;border:1px solid #d1d5db;border-radius:6px;font-size:12.5px;font-family:inherit;background:#fff;';
+    let h = `<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:11px 14px;margin-bottom:12px;font-size:12.5px;color:#166534;line-height:1.8;">
+      <strong>원단 기본 스펙에 있는 품목이 그대로 줄로 깔립니다.</strong> 칸에 단가만 넣으시면 됩니다.<br>
+      <span style="color:#4d7c5f;">빈 칸에 흐리게 보이는 숫자는 <strong>그 업체 기본값</strong>입니다. 그대로 쓰실 것은 비워 두십시오.
+      숫자를 넣으면 <strong>그 품목만의 값</strong>이 되어 노란 바탕으로 바뀝니다.</span>
+    </div>
+    <div style="display:flex;gap:7px;flex-wrap:wrap;align-items:center;margin-bottom:11px;">
+      <button class="cp-g-tab" data-gtab="knit" style="${g.tab === 'knit' ? sOn : sOff}">편직료</button>
+      <button class="cp-g-tab" data-gtab="proc" style="${g.tab === 'proc' ? sOn : sOff}">염색 · 가공료</button>
+      <span style="width:12px;"></span>
+      <input type="text" id="cp-g-q" lang="ko" autocomplete="off" placeholder="품목 · 조직 찾기" value="${escapeHtml(g.q)}" style="${inp}width:180px;">
+      <label style="display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:700;color:#475569;cursor:pointer;">
+        <input type="checkbox" id="cp-g-only" ${g.only ? 'checked' : ''} style="width:14px;height:14px;"> 판매 중인 품목만</label>
+      <span style="font-size:12px;color:#94a3b8;">${specs.length}품목 / 전체 ${allN}개</span>
+      <div style="margin-left:auto;display:flex;gap:8px;align-items:center;">
+        ${nEdit ? `<span style="font-size:12px;font-weight:800;color:#92400e;background:#fef3c7;border:1px solid #fcd34d;border-radius:6px;padding:4px 10px;">고친 칸 ${nEdit}개</span>
+          <button class="dash-action-btn" id="cp-g-undo" style="font-size:11.5px;padding:6px 12px;">되돌리기</button>` : ''}
+        <button class="dash-action-btn" id="cp-g-save" style="background:${nEdit ? '#16a34a' : '#cbd5e1'};color:#fff;font-weight:800;padding:6px 18px;">저장</button>
+      </div>
+    </div>`;
+    if (!specs.length) {
+      return h + `<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:14px 16px;font-size:13px;color:#92400e;line-height:1.8;">
+        보여 드릴 품목이 없습니다. [원단 기본 스펙]에서 품목을 먼저 등록해 주십시오.</div>`;
+    }
+    const nameTd = s => `<td style="text-align:left;font-weight:700;position:sticky;left:0;background:#fff;z-index:2;box-shadow:1px 0 0 #e2e8f0;">
+      ${escapeHtml(s.name || '-')}${s.active === false ? ' <span style="font-size:10px;color:#9ca3af;font-weight:400;">(판매 종료)</span>' : ''}
+      <div style="font-size:10.5px;color:#a3a9b3;font-weight:400;">${escapeHtml(normOrg(s.cat) || '-')} · ${escapeHtml(s.width || '-')}${s.gy ? ' · ' + s.gy + 'g/y' : ''}</div></td>`;
+    if (g.tab === 'knit') {
+      const vs = cpGridKnitVendors(P);
+      h += `<div class="dash-table-wrap" style="max-height:62vh;overflow:auto;"><table class="dash-table" style="font-size:12.5px;"><thead><tr>
+        <th style="text-align:left;min-width:200px;position:sticky;left:0;top:0;background:#f8fafc;z-index:4;">품목</th>
+        <th style="min-width:92px;position:sticky;top:0;background:#f8fafc;z-index:3;">(공통)</th>
+        ${vs.map(v => `<th style="min-width:92px;position:sticky;top:0;background:#f8fafc;z-index:3;">${escapeHtml(v)}</th>`).join('')}
+      </tr></thead><tbody>`;
+      specs.forEach(s => {
+        const fid = specFid(s);
+        h += `<tr>${nameTd(s)}`;
+        [COST_COMMON_VENDOR].concat(vs).forEach(v => {
+          const own = cpGridOwnKnit(P, v, fid);
+          const base = knitPriceByVendor(v, s.cat, '', {});
+          h += cpGridCell('k|' + v + '|' + fid, own ? (parseFloat(own.price) || 0) : null, base);
+        });
+        h += `</tr>`;
+      });
+      h += `</tbody></table></div>
+        <div style="font-size:11.5px;color:#9ca3af;margin-top:8px;line-height:1.7;">
+          맨 왼쪽 <strong>${escapeHtml(COST_COMMON_VENDOR)}</strong> 칸은 어느 공장에나 걸립니다. 그 공장 값이 따로 있으면 그쪽이 이깁니다.
+        </div>`;
+      return h;
+    }
+    // 염색 · 가공료 — 업체를 먼저 고르고, 공정을 가로로 놓는다
+    const pvs = cpGridProcVendors(P);
+    const V = (g.vendor && pvs.includes(g.vendor)) ? g.vendor : (pvs[0] || '');
+    const procs = getCostProcs().filter(p => !procIsYard(p));
+    const yards = getCostProcs().filter(p => procIsYard(p));
+    h += `<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:10px;">
+      <label style="display:inline-flex;align-items:center;gap:6px;font-size:12.5px;font-weight:800;color:#0f172a;">가공소 · 염색소
+        <select id="cp-g-vendor" style="${inp}min-width:170px;">
+          ${pvs.map(v => `<option value="${escapeHtml(v)}"${v === V ? ' selected' : ''}>${escapeHtml(v)}</option>`).join('')}
+          <option value="${escapeHtml(COST_COMMON_VENDOR)}"${V === COST_COMMON_VENDOR ? ' selected' : ''}>${escapeHtml(COST_COMMON_VENDOR)}</option>
+        </select></label>
+      <label style="display:inline-flex;align-items:center;gap:6px;font-size:12.5px;font-weight:700;color:#475569;">염색 등급
+        <select id="cp-g-grade" style="${inp}min-width:100px;">
+          ${DYE_GRADES.map(x => `<option value="${escapeHtml(x)}"${x === g.grade ? ' selected' : ''}>${escapeHtml(x)}</option>`).join('')}
+        </select></label>
+      <span style="font-size:11.5px;color:#94a3b8;">염색 칸은 지금 고른 등급 값입니다. 나염은 야드당이라 이 표에 넣지 않습니다${yards.length ? ' (' + escapeHtml(yards.join(' · ')) + ')' : ''}.</span>
+    </div>`;
+    if (!V) {
+      return h + `<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:14px 16px;font-size:13px;color:#92400e;line-height:1.8;">
+        염색소·가공소로 등록된 거래처가 없습니다. [거래처 관리]에서 구분을 염색처 또는 가공처로 잡아 주십시오.</div>`;
+    }
+    h += `<div class="dash-table-wrap" style="max-height:62vh;overflow:auto;"><table class="dash-table" style="font-size:12.5px;"><thead><tr>
+      <th style="text-align:left;min-width:200px;position:sticky;left:0;top:0;background:#f8fafc;z-index:4;">품목</th>
+      ${procs.map(p => `<th style="min-width:86px;position:sticky;top:0;background:#f8fafc;z-index:3;">${escapeHtml(p)}${procHasGrades(p) ? `<div style="font-size:9.5px;font-weight:400;color:#94a3b8;line-height:1.2;">${escapeHtml(g.grade)}</div>` : ''}</th>`).join('')}
+    </tr></thead><tbody>`;
+    specs.forEach(s => {
+      const fid = specFid(s);
+      h += `<tr>${nameTd(s)}`;
+      procs.forEach(p => {
+        const own = cpGridOwnProc(P, V, p, fid);
+        const grade = procHasGrades(p) ? g.grade : '';
+        let ownVal = null;
+        if (own) ownVal = grade ? (own.grades && own.grades[grade] != null ? parseFloat(own.grades[grade]) : null) : (parseFloat(own.price) || 0);
+        const base = procPriceByVendor(V, p, '', {}, grade);
+        h += cpGridCell('p|' + V + '|' + p + '|' + fid, ownVal, base);
+      });
+      h += `</tr>`;
+    });
+    h += `</tbody></table></div>
+      <div style="font-size:11.5px;color:#9ca3af;margin-top:8px;line-height:1.7;">
+        묶음 단가와 업체 기본값은 <strong>[가공단가 설정]</strong>에서 넣습니다. 여기는 <strong>그 품목만 다른 값</strong>을 넣는 자리입니다.
+      </div>`;
+    return h;
+  }
+  // 고친 칸을 한꺼번에 담는다 (옛 값은 지우지 않고 이력에 쌓는다)
+  async function cpGridSave() {
+    const g = cpGrid();
+    const keys = Object.keys(g.edit);
+    if (!keys.length) { toast('고친 칸이 없습니다', 'warning'); return; }
+    const P = JSON.parse(JSON.stringify(getCostPrices()));
+    const hist = {};
+    const at = todayYMD();
+    let put = 0, del = 0;
+    keys.forEach(k => {
+      const raw = String(g.edit[k] == null ? '' : g.edit[k]).trim();
+      const parts = k.split('|');
+      if (parts[0] === 'k') {
+        const v = parts[1], fid = parts[2];
+        const idx = P.knit.findIndex(r => String((r && r.vendor) || '').trim() === v
+          && String((r && r.item) || '').trim() === fid && !String((r && r.org) || '').trim());
+        if (raw === '') { if (idx >= 0) { P.knit.splice(idx, 1); del += 1; } return; }
+        const price = parseFloat(raw);
+        if (isNaN(price)) return;
+        if (idx >= 0) {
+          if (Number(P.knit[idx].price) === price) return;
+          P.knit[idx].price = price; P.knit[idx].updated_at = at;
+        } else {
+          P.knit.push({ vendor: v, org: '', item: fid, price: price, updated_at: at });
+        }
+        hist[priceKeyKnit(v, '', fid)] = { d: at, p: price };
+        put += 1;
+        return;
+      }
+      const v = parts[1], pr = parts[2], fid = parts[3];
+      const grade = procHasGrades(pr) ? g.grade : '';
+      const idx = P.proc.findIndex(r => String((r && r.vendor) || '').trim() === v
+        && normProc(r && r.proc) === normProc(pr) && String((r && r.item) || '').trim() === fid);
+      if (raw === '') {
+        if (idx < 0) return;
+        if (grade && P.proc[idx].grades && P.proc[idx].grades[grade] != null) {
+          delete P.proc[idx].grades[grade];
+          if (!Object.keys(P.proc[idx].grades).length) P.proc.splice(idx, 1);
+        } else {
+          P.proc.splice(idx, 1);
+        }
+        del += 1;
+        return;
+      }
+      const price = parseFloat(raw);
+      if (isNaN(price)) return;
+      if (idx >= 0) {
+        if (grade) {
+          if (!P.proc[idx].grades || typeof P.proc[idx].grades !== 'object') P.proc[idx].grades = {};
+          if (Number(P.proc[idx].grades[grade]) === price) return;
+          P.proc[idx].grades[grade] = price;
+        } else {
+          if (Number(P.proc[idx].price) === price) return;
+          P.proc[idx].price = price;
+        }
+        P.proc[idx].updated_at = at;
+      } else {
+        // 새 품목 줄을 만들 때는 업체 기본값을 통째로 베껴 온 뒤 이 등급만 바꾼다
+        const base = P.proc.find(r => String((r && r.vendor) || '').trim() === v
+          && normProc(r && r.proc) === normProc(pr) && !String((r && r.item) || '').trim());
+        const row = { vendor: v, proc: normProc(pr), item: fid, price: price, updated_at: at };
+        if (grade) {
+          row.price = base ? (parseFloat(base.price) || 0) : price;
+          row.grades = (base && base.grades && typeof base.grades === 'object') ? JSON.parse(JSON.stringify(base.grades)) : {};
+          row.grades[grade] = price;
+        }
+        P.proc.push(row);
+      }
+      hist[priceKeyProc(v, pr, fid)] = { d: at, p: price };
+      put += 1;
+    });
+    const ok = await saveCostPrices(P, hist);
+    if (!ok) return;
+    g.edit = {};
+    toast(`품목별 단가를 저장했습니다 — 넣거나 고친 것 ${put}개${del ? ` · 비운 것 ${del}개` : ''}`, 'success');
+    renderDashboard();
   }
   function renderKnitPriceTable(P) {
     const F = costFilter();
@@ -32682,6 +32921,36 @@ function validateBlendSum(blends, label) {
       renderDashboard();
     }));
     bindRerenderSearch('cp-search', v => { state.costSearch = v; });
+    // hotfix309: [품목별 단가] 격자
+    document.querySelectorAll('#dash-body .cp-g-tab').forEach(b => b.addEventListener('click', () => {
+      cpGrid().tab = (b.dataset.gtab === 'proc') ? 'proc' : 'knit';
+      renderDashboard();
+    }));
+    document.querySelectorAll('#dash-body .cp-g-cell').forEach(el => el.addEventListener('input', () => {
+      const g = cpGrid(), k = el.dataset.gkey || '';
+      if (!k) return;
+      g.edit[k] = el.value;
+      const bar = document.getElementById('cp-g-save');
+      if (bar) bar.style.background = '#16a34a';
+      el.style.background = '#fef9c3';
+      el.style.borderColor = '#eab308';
+    }));
+    document.getElementById('cp-g-save')?.addEventListener('click', () => { cpGridSave(); });
+    document.getElementById('cp-g-undo')?.addEventListener('click', () => {
+      if (!confirm('고친 칸을 모두 되돌릴까요?\n\n저장하지 않은 값이 사라집니다.')) return;
+      cpGrid().edit = {};
+      renderDashboard();
+    });
+    document.getElementById('cp-g-only')?.addEventListener('change', ev => {
+      cpGrid().only = !!ev.target.checked; renderDashboard();
+    });
+    document.getElementById('cp-g-vendor')?.addEventListener('change', ev => {
+      cpGrid().vendor = ev.target.value || ''; renderDashboard();
+    });
+    document.getElementById('cp-g-grade')?.addEventListener('change', ev => {
+      cpGrid().grade = ev.target.value || '농색'; renderDashboard();
+    });
+    bindRerenderSearch('cp-g-q', v => { cpGrid().q = v; });
     // hotfix277: 표 위 걸러내기
     const CP_FILTER_MAP = { 'cp-f-yarnkind': 'yarnKind', 'cp-f-yarncomp': 'yarnComp', 'cp-f-yarndate': 'yarnDate', 'cp-f-knitvendor': 'knitVendor', 'cp-f-knitorg': 'knitOrg', 'cp-f-knititem': 'knitItem', 'cp-f-procvendor': 'procVendor', 'cp-f-procitem': 'procItem' };
     Object.keys(CP_FILTER_MAP).forEach(id => {
@@ -36051,7 +36320,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix308';
+  const VERSION = 'v2.53 hotfix309';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
