@@ -5965,6 +5965,14 @@
   .sidebar { background: var(--ui-surface); border-right: 1px solid var(--ui-line); padding: 18px 14px; }
   .sidebar h1 { color: var(--brand-deep); letter-spacing: -0.03em; font-weight: 800; }
   .sidebar .sub { color: var(--ui-text-mute); }
+  /* hotfix306: 사이드바 맨 위(로고·버전·계정)는 굴려도 따라 내려가지 않는다 */
+  .sidebar-head {
+    position: sticky; top: 0; z-index: 6;
+    background: var(--ui-surface);
+    margin: -18px -14px 0; padding: 18px 14px 8px;
+    border-bottom: 1px solid var(--ui-line-soft);
+  }
+  .sidebar-head .sub { margin-bottom: 12px; }
   /* 작성/진행현황 모드 스위치 */
   .mode-switch { background: var(--ui-line-soft); border-radius: 11px; padding: 4px; }
   .mode-switch .mode-btn { border-radius: 8px; font-weight: 600; color: var(--ui-text-sub); border: none; }
@@ -6043,9 +6051,11 @@
 
 <div class="app" id="main-app" style="display:none;">
   <aside class="sidebar">
-    <h1>RECOVERIC</h1>
-    <div class="sub" id="hiwos-version-tag">HIWOS v2.51 step3 hotfix9</div>
-    <div id="user-info-section"></div>
+    <div class="sidebar-head">
+      <h1>RECOVERIC</h1>
+      <div class="sub" id="hiwos-version-tag">HIWOS v2.51 step3 hotfix9</div>
+      <div id="user-info-section"></div>
+    </div>
     
     <!-- 모드 전환 -->
     <div class="mode-switch">
@@ -11822,16 +11832,42 @@ window.addEventListener('firebase-ready', () => {
   }
 
   // ★계산식은 기획서 3번 그대로 — 절대 변경 금지★
-  function buildCostCalc(spec, sim) {
+  // hotfix307: 편직공장을 고르면 그 공장 칸 값이 이긴다. 공장 칸에 없는 것은 품목에 적힌 값을 그대로 쓴다
+  //   (옛 자료에는 공장 칸이 없으므로 이 함수가 아무것도 안 바꾼다 — 원가가 예전 그대로 나온다)
+  const FC_KNIT_KEYS = ['machine', 'org', 'inch', 'needles', 'make_gy', 'knit_loss', 'knit_fee'];
+  // 공장 칸에 담긴 루프장 — 사종 이름으로 찾는다 (자리번호로 하면 빈 줄이 있을 때 어긋난다)
+  function fcLoopMap(k) {
+    const ls = k && k.loops;
+    return (ls && typeof ls === 'object' && !Array.isArray(ls) && Object.keys(ls).length) ? ls : null;
+  }
+  function fcMergeKnit(c, vendor) {
+    const v = String(vendor || '').trim();
+    if (!v || !c) return c;
+    const K = (c.knits && typeof c.knits === 'object') ? c.knits[v] : null;
+    if (!K) return c;
+    const out = JSON.parse(JSON.stringify(c));
+    FC_KNIT_KEYS.forEach(k => { if (K[k] != null && K[k] !== '') out[k] = K[k]; });
+    out.knitter = v;
+    // 루프장은 공장마다 다르다. 공장 칸에 값이 있는 사종만 바꾼다
+    const ls = fcLoopMap(K);
+    if (ls) {
+      out.yarns = (Array.isArray(c.yarns) ? c.yarns : []).map(y => {
+        const nl = ls[String((y && y.name) || '').trim()];
+        return (nl == null) ? y : Object.assign({}, y || {}, { loop: nl });
+      });
+    }
+    return out;
+  }
+  function buildCostCalc(spec, sim, vendor) {
     const fid = specFid(spec);
-    const c = getFabricCost(fid) || {};
+    const c = fcMergeKnit(getFabricCost(fid) || {}, vendor);
     const S = sim || {};
     const out = {
       ok: false, msgs: [],
       yarns: [], yarnTotal: 0,
       knitLoss: (c.knit_loss != null ? parseFloat(c.knit_loss) : COST_KNIT_LOSS_DEFAULT),
       finLoss: (c.fin_loss != null ? parseFloat(c.fin_loss) : COST_FIN_LOSS_DEFAULT),
-      knitVendor: c.knitter || '', knitOrg: String((spec && spec.cat) || '').trim(), knitMachine: String(c.machine || '').trim(), knitFee: 0, knitPrice: 0,
+      knitVendor: c.knitter || '', knitOrg: String(c.org || (spec && spec.cat) || '').trim(), knitMachine: String(c.machine || '').trim(), knitFee: 0, knitPrice: 0,
       procVendor: c.finisher || c.dyer || '', procs: [], procTotal: 0, bundle: null,
       kgCost: 0, gy: (spec && spec.gy != null) ? parseFloat(spec.gy) : null,
       printFee: 0, ydCost: null, blendSum: 0,
@@ -24351,7 +24387,7 @@ function validateBlendSum(blends, label) {
     const tOff = 'padding:7px 18px;border:1px solid #d1d5db;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;background:#fff;color:#6b7280;';
     let h = `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;">
       <button class="cc-tab-btn" data-cc-tab="fabric" style="${tab === 'fabric' ? tOn : tOff}">원단 원가</button>
-      <button class="cc-tab-btn" data-cc-tab="prices" style="${tab === 'prices' ? tOn : tOff}">단가표</button>
+      <button class="cc-tab-btn" data-cc-tab="prices" style="${tab === 'prices' ? tOn : tOff}">단가 설정</button>
       <button class="cc-tab-btn" data-cc-tab="calc" style="${tab === 'calc' ? tOn : tOff}">원가 계산</button>
       <button class="cc-tab-btn" data-cc-tab="history" style="${tab === 'history' ? tOn : tOff}">산출서${costQuoteList().length ? ' ' + costQuoteList().length : ''}</button>
     </div>`;
@@ -24768,9 +24804,9 @@ function validateBlendSum(blends, label) {
       <strong>값을 바꾸면 옛 값은 지우지 않고 이력에 그대로 쌓입니다.</strong> 나중에 언제 얼마였는지 되짚을 수 있습니다.
     </div>
     <div style="display:flex;gap:7px;flex-wrap:wrap;margin-bottom:12px;align-items:center;">
-      <button class="cp-sub-btn" data-cp-sub="yarn" style="${sub === 'yarn' ? sOn : sOff}">원사 ${P.yarns.length}</button>
-      <button class="cp-sub-btn" data-cp-sub="knit" style="${sub === 'knit' ? sOn : sOff}">편직료 ${P.knit.length}</button>
-      <button class="cp-sub-btn" data-cp-sub="proc" style="${sub === 'proc' ? sOn : sOff}">가공 단가 ${P.proc.length + P.bundles.length}</button>
+      <button class="cp-sub-btn" data-cp-sub="yarn" style="${sub === 'yarn' ? sOn : sOff}">원사 설정 ${P.yarns.length}</button>
+      <button class="cp-sub-btn" data-cp-sub="knit" style="${sub === 'knit' ? sOn : sOff}">편직료 설정 ${P.knit.length}</button>
+      <button class="cp-sub-btn" data-cp-sub="proc" style="${sub === 'proc' ? sOn : sOff}">가공단가 설정 ${P.proc.length + P.bundles.length}</button>
       <button class="cp-sub-btn" data-cp-sub="grade" style="${sub === 'grade' ? sOn : sOff}">판매 등급 ${getCostGrades().length}</button>
       <button class="cp-sub-btn" data-cp-sub="import" style="${sub === 'import' ? sOn : sOff}">자료 가져오기</button>
       <input type="text" id="cp-search" lang="ko" autocomplete="off" placeholder="이름 · 공장 · 공정 검색" value="${escapeHtml(state.costSearch || '')}"
@@ -25598,16 +25634,16 @@ function validateBlendSum(blends, label) {
   function renderProcPriceTable(P) {
     const dp = (P.def_procs || []).map(normProc);
     const PROCS = getCostProcs();
-    let h = `<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:11px 14px;margin-bottom:12px;">
-      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:7px;">
-        <div style="font-size:12px;font-weight:800;color:#166534;">기본 가공법 <span style="font-weight:400;color:#4d7c5f;">— 원단에 가공법을 정해 두지 않았을 때 이 공정들로 계산합니다</span></div>
-        <button class="dash-action-btn" id="cp-proc-manage" style="margin-left:auto;font-size:11.5px;padding:5px 12px;background:#7c3aed;color:#fff;font-weight:700;">공정 관리</button>
-      </div>
-      <div style="display:flex;flex-wrap:wrap;gap:8px 16px;margin-bottom:9px;">
-        ${PROCS.map(p => `<label style="display:inline-flex;align-items:center;gap:5px;font-size:12px;cursor:pointer;color:#334155;"><input type="checkbox" class="cp-defproc" value="${escapeHtml(p)}"${dp.includes(p) ? ' checked' : ''} style="width:14px;height:14px;"> ${escapeHtml(p)}</label>`).join('')}
-      </div>
-      <button class="dash-action-btn" id="cp-defproc-save" style="font-size:11.5px;padding:5px 14px;background:#047857;color:#fff;font-weight:700;">기본 가공법 저장</button>
-      <span style="font-size:11.5px;color:#4d7c5f;margin-left:8px;">공장을 <strong>${escapeHtml(COST_COMMON_VENDOR)}</strong>으로 넣은 단가는 어느 공장에나 적용됩니다. 그 공장 단가가 따로 있으면 그쪽이 이깁니다.</span>
+    let h = `<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:9px 14px;margin-bottom:12px;display:flex;align-items:flex-start;gap:10px;flex-wrap:wrap;">
+      <details style="flex:1;min-width:260px;">
+        <summary style="font-size:12px;font-weight:800;color:#166534;cursor:pointer;">기본 가공법 ${dp.length ? dp.length + '개' : '없음'} <span style="font-weight:400;color:#4d7c5f;">— 원단에 가공법을 정해 두지 않았을 때 쓰는 공정들. 눌러서 펼칩니다</span></summary>
+        <div style="display:flex;flex-wrap:wrap;gap:8px 16px;margin:10px 0 9px;">
+          ${PROCS.map(p => `<label style="display:inline-flex;align-items:center;gap:5px;font-size:12px;cursor:pointer;color:#334155;"><input type="checkbox" class="cp-defproc" value="${escapeHtml(p)}"${dp.includes(p) ? ' checked' : ''} style="width:14px;height:14px;"> ${escapeHtml(p)}</label>`).join('')}
+        </div>
+        <button class="dash-action-btn" id="cp-defproc-save" style="font-size:11.5px;padding:5px 14px;background:#047857;color:#fff;font-weight:700;">기본 가공법 저장</button>
+        <span style="font-size:11.5px;color:#4d7c5f;margin-left:8px;">공장을 <strong>${escapeHtml(COST_COMMON_VENDOR)}</strong>으로 넣은 단가는 어느 공장에나 적용됩니다. 그 공장 단가가 따로 있으면 그쪽이 이깁니다.</span>
+      </details>
+      <button class="dash-action-btn" id="cp-proc-manage" style="font-size:11.5px;padding:5px 12px;background:#7c3aed;color:#fff;font-weight:700;">공정 관리</button>
     </div>`;
     h += `<div style="margin-bottom:10px;display:flex;gap:8px;flex-wrap:wrap;">
       <button class="dash-action-btn" id="cp-add-proc" style="background:#1e3a8a;color:#fff;font-weight:700;padding:6px 14px;">＋ 공정 단가 추가</button>
@@ -25854,7 +25890,7 @@ function validateBlendSum(blends, label) {
             </div>
             <table style="width:100%;border-collapse:collapse;font-size:12px;background:#fff;border:1px solid #e2e8f0;border-radius:6px;overflow:hidden;">
               <thead><tr style="background:#f1f5f9;color:#475569;font-size:11px;">
-                <th style="padding:5px 6px;text-align:left;">종류</th><th style="padding:5px 6px;text-align:left;">사종</th><th style="padding:5px 6px;width:80px;">굵기</th><th style="padding:5px 6px;width:74px;">단위</th><th style="padding:5px 6px;width:86px;">루프장</th><th style="padding:5px 6px;width:78px;">혼용율</th>
+                <th style="padding:5px 6px;text-align:left;">종류</th><th style="padding:5px 6px;text-align:left;">사종</th><th style="padding:5px 6px;width:80px;">굵기</th><th style="padding:5px 6px;width:74px;">단위</th><th style="padding:5px 6px;width:86px;">루프장<div style="font-size:9.5px;font-weight:400;color:#94a3b8;line-height:1.2;">공장마다</div></th><th style="padding:5px 6px;width:78px;">혼용율</th>
               </tr></thead>
               <tbody>
                 ${[0, 1, 2, 3].map(k => `<tr>
@@ -26299,7 +26335,30 @@ function validateBlendSum(blends, label) {
       }));
     }
     // hotfix288: 편직공장별 사양 — 창 안에서 공장을 갈아 가며 바로 넣는다
-    const FC_VKEYS = ['machine', 'org', 'inch', 'needles', 'make_gy', 'knit_loss', 'knit_fee', 'blend'];
+    const FC_VKEYS = ['machine', 'org', 'inch', 'needles', 'make_gy', 'knit_loss', 'knit_fee', 'blend', 'loops'];
+    // hotfix307: 루프장은 기계가 다르면 달라진다 — 공장 칸에 담는다
+    function fcReadLoops() {
+      const w = costWrap();
+      if (!w) return {};
+      const out = {};
+      [0, 1, 2, 3].forEach(i => {
+        const nm = (w.querySelector(`.fs-c-y-name[data-k="${i}"]`)?.value || '').trim();
+        const v = (w.querySelector(`.fs-c-y-loop[data-k="${i}"]`)?.value || '').trim();
+        if (nm && v !== '') out[nm] = parseFloat(v);
+      });
+      return out;
+    }
+    function fcWriteLoops(k) {
+      const w = costWrap();
+      if (!w) return;
+      const ls = fcLoopMap(k);
+      if (!ls) return;                      // 공장 칸에 없으면 화면에 있는 값(품목 값)을 그대로 둔다
+      [0, 1, 2, 3].forEach(i => {
+        const nm = (w.querySelector(`.fs-c-y-name[data-k="${i}"]`)?.value || '').trim();
+        const el = w.querySelector(`.fs-c-y-loop[data-k="${i}"]`);
+        if (el && nm && ls[nm] != null) el.value = ls[nm];
+      });
+    }
     // hotfix297: 기계 이름은 조직 + 게이지로 저절로 만든다 ("쭈리 30G")
     function fcMachineName(org, inch, needles) {
       const o = String(org || '').trim();
@@ -26323,6 +26382,7 @@ function validateBlendSum(blends, label) {
         org: org,
         inch: inch, needles: needles, make_gy: n('fs-c-makegy'),
         knit_loss: n('fs-c-knitloss'), knit_fee: n('fs-c-knitfee'),
+        loops: fcReadLoops(),
         blend: (document.getElementById('fs-c-vblend')?.value || '').trim()
       };
     }
@@ -26334,6 +26394,7 @@ function validateBlendSum(blends, label) {
       put('fs-c-inch', k.inch); put('fs-c-needles', k.needles);
       put('fs-c-makegy', k.make_gy); put('fs-c-knitloss', k.knit_loss); put('fs-c-knitfee', k.knit_fee);
       put('fs-c-vblend', k.blend);
+      fcWriteLoops(k);
       const sel = document.getElementById('fs-c-knitter');
       if (sel) sel.innerHTML = vendorOptionsHTML('편직처', fcCurVendor || '');
       if (typeof repaintCostCalc === 'function') repaintCostCalc();
@@ -26385,7 +26446,12 @@ function validateBlendSum(blends, label) {
             거래처 구분이 정해지지 않은 곳도 보기 (${L.etc.length}곳)</label>` : ''}
           <div style="font-size:11.5px;color:#64748b;line-height:1.65;margin-top:11px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:7px;padding:8px 11px;">
             ${L.knit.length ? '' : '지금 <strong>편직처로 등록된 거래처가 없습니다.</strong> [거래처 관리]에서 구분을 편직처로 잡아 두시면 이 목록이 깔끔해집니다.<br>'}
-            지금 보고 계신 <strong>${escapeHtml(fcCurVendor || '공장')}</strong> 값이 밑그림으로 깔립니다. 기계·침수·편직료만 고치시면 됩니다.
+            <strong style="color:#0f172a;">이미 넣어 둔 값을 그대로 가져올까요?</strong><br>
+            <select id="fcv-base" style="width:100%;margin-top:6px;padding:7px 9px;border:1px solid #cbd5e1;border-radius:6px;font-size:12.5px;font-family:inherit;background:#fff;">
+              ${Object.keys(fcDraft).map(v => `<option value="${escapeHtml(v)}"${v === fcCurVendor ? ' selected' : ''}>${escapeHtml(v)} 값 그대로 가져오기</option>`).join('')}
+              <option value="">빈 칸으로 시작하기</option>
+            </select>
+            <span style="display:block;margin-top:6px;">가져오면 조직 · 인치 · 침수 · 루프장 · 중량 · 로스가 채워진 채로 열립니다. 편직료는 공장마다 다르므로 늘 비워 둡니다.</span>
           </div>
           <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px;">
             <button type="button" id="fcv-cancel" class="dash-action-btn" style="padding:7px 15px;">취소</button>
@@ -26410,14 +26476,16 @@ function validateBlendSum(blends, label) {
         if (fcDraft[nm]) { alert('이미 들어 있는 공장입니다.'); return; }
         close();
         fcStashVendor();
-        // 지금 공장 값을 밑그림으로 깔아 준다 (기계·침수만 고치면 되도록)
-        const base = fcDraft[fcCurVendor] ? JSON.parse(JSON.stringify(fcDraft[fcCurVendor])) : {};
+        // hotfix307: 어느 공장 값을 가져올지 고른 대로 깔아 준다 (빈 칸을 고르면 아무것도 안 깐다)
+        const from = String(bg.querySelector('#fcv-base')?.value || '').trim();
+        const base = (from && fcDraft[from]) ? JSON.parse(JSON.stringify(fcDraft[from])) : {};
         base.knit_fee = null;
         fcDraft[nm] = base;
         fcCurVendor = nm;
         fcWriteVendorInputs(fcDraft[nm]);
         fcRenderVendorBar();
-        toast(`[${nm}] 사양을 더했습니다 — 기계·침수·편직료를 고쳐 주십시오`, 'success');
+        toast(from ? `[${nm}] 사양을 더했습니다 — [${from}] 값을 가져왔습니다. 루프장·편직료를 고쳐 주십시오`
+          : `[${nm}] 사양을 빈 칸으로 더했습니다`, 'success');
       };
       bg.querySelector('#fcv-go').addEventListener('click', go);
       sel.addEventListener('keydown', ev => { if (ev.key === 'Enter') { ev.preventDefault(); go(); } });
@@ -26695,6 +26763,7 @@ function validateBlendSum(blends, label) {
         w.querySelector(`.fs-c-y-unit[data-k="${k}"]`).value = (y.unit === '수') ? '수' : 'D';
         w.querySelector(`.fs-c-y-loop[data-k="${k}"]`).value = (y.loop != null ? y.loop : '');
       });
+      fcWriteLoops(fcDraft[fcCurVendor]);   // hotfix307: 공장 칸에 루프장이 있으면 그것이 이긴다
       repaintCostCalc();
     }
     function collectCostFields() {
@@ -35982,7 +36051,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix305';
+  const VERSION = 'v2.53 hotfix307';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
