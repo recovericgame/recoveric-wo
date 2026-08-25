@@ -6948,6 +6948,12 @@ const state = {
   costPrices: { yarns: [], knit: [], proc: [], bundles: [] },
   costPricesLoaded: false,
   costPriceHistory: {},     // { 'yarn:CM30': [{d,p}] }
+  // hotfix292: 원가 산출서 — 한 번 계산 = 한 장. 그날 쓴 값이 통째로 박제된다
+  costQuotes: {},           // { 'Q20260824-01': {…} }
+  costQuotesLoaded: false,
+  cqSearch: '',             // 산출서 품목 찾기
+  cqOpen: '',               // 펼쳐 놓은 산출서 번호
+  cqWhy: '',                // 계산식을 펼친 산출서 번호
   costTab: 'prices',        // 원가 계산기 안쪽 탭
   costPriceTab: 'yarn',     // 단가표 안쪽 탭: yarn | knit | proc | grade
   costSearch: '',
@@ -10493,6 +10499,13 @@ window.addEventListener('firebase-ready', () => {
         state.costPriceHistory = (d && d.items && typeof d.items === 'object') ? d.items : {};
         if (state.uiMode === 'dashboard' && state.dashView === 'costCalc') renderDashboard();
       }, err => console.warn('[priceHistory sub]', err.message));
+      // hotfix292: 원가 산출서 구독 (최고관리자만)
+      onSnapshot(doc(db, 'cost_data', 'quotes'), snap => {
+        const d = snap.exists() ? snap.data() : null;
+        state.costQuotes = (d && d.items && typeof d.items === 'object') ? d.items : {};
+        state.costQuotesLoaded = true;
+        if (state.uiMode === 'dashboard' && state.dashView === 'costCalc') renderDashboard();
+      }, err => console.warn('[costQuotes sub]', err.message));
       // hotfix270: 판매 등급 구독 (표준 / 골드 / VIP … 대표가 늘리고 줄인다)
       onSnapshot(doc(db, 'cost_data', 'grades'), snap => {
         const d = snap.exists() ? snap.data() : null;
@@ -10984,6 +10997,10 @@ window.addEventListener('firebase-ready', () => {
     '싱글자카드', '양면자카드', '3단쭈리기모', 'n단쭈리기모',
     '1X1', '2X1', '후라이스', '기타'
   ];
+  // hotfix290: 원사 성분(소재) 이름 목록. 혼방사 혼용율을 적을 때 고르는 값이다.
+  const YARN_MATS_DEFAULT = [
+    '면', '폴리에스터', '레이온', '나일론', '스판덱스', '모달', '텐셀', '아크릴', '울', '린넨'
+  ];
   // 뜻이 명백한 옛 이름만 자동으로 새 이름을 가리키게 한다. 저장된 글자는 고치지 않는다.
   const KNIT_ORG_ALIAS_FIXED = { '미쭈': '미니쭈리', '미니 쭈리': '미니쭈리' };
   // hotfix283: 이름표 상자(settings/lists)가 있으면 그쪽을 먼저 본다.
@@ -10997,6 +11014,7 @@ window.addEventListener('firebase-ready', () => {
       (U[k] && typeof U[k] === 'object') ? U[k] : {});
     return {
       orgs: pick('orgs', KNIT_ORGS_DEFAULT),
+      mats: pick('mats', YARN_MATS_DEFAULT),
       procs: pick('procs', COST_PROCS_DEFAULT),
       proc_alias: mrg('proc_alias'),
       org_alias: mrg('org_alias')
@@ -11043,10 +11061,12 @@ window.addEventListener('firebase-ready', () => {
   }
   async function saveCostLists(next) {
     if (!isOwnerUser()) { toast('최고관리자만 저장할 수 있습니다', 'error'); return false; }
+    // hotfix290: 소재 이름 목록이 빠진 채로 저장되면 화면에서 사라진다. 지금 값을 채워 넣는다.
+    if (!Array.isArray(next.mats) || !next.mats.length) next.mats = costLists().mats;
     try {
       // hotfix283: 이름표 상자로 저장한다 (금액 없음 — 직원도 읽을 수 있어야 함)
       await setDoc(doc(db, 'settings', 'lists'), {
-        orgs: next.orgs || [], procs: next.procs || [],
+        orgs: next.orgs || [], procs: next.procs || [], mats: next.mats || [],
         proc_alias: next.proc_alias || {}, org_alias: next.org_alias || {},
         updated_at: serverTimestamp(),
         updated_by: state.user?.email || 'unknown'
@@ -11105,7 +11125,60 @@ window.addEventListener('firebase-ready', () => {
     if (sum > 0) rows.forEach(r => { r.pct = Math.round((r.contrib / sum) * 1000) / 10; });
     return rows;
   }
+  // ------------------------------------------------------------
+  // hotfix291: 혼용율 2단 계산
+  //   1단  굵기·루프장으로 사종별 비율을 낸다 (원가 계산에 쓰는 값)
+  //   2단  사종마다 성분을 곱해 소재별 비율을 낸다 (서류에 적는 값)
+  //   예)  CM30 55.2% · TC30 44.8%  →  면 70.9% · 폴리에스터 29.1%
+  // ------------------------------------------------------------
+  function yarnEntryByName(name) {
+    const key = String(name || '').trim().toLowerCase();
+    if (!key) return null;
+    return getCostPrices().yarns.find(y => String((y && y.name) || '').trim().toLowerCase() === key) || null;
+  }
+  function calcFiberBlend(yarns) {
+    const rows = calcYarnBlend(yarns).filter(r => r.name && r.pct > 0);
+    const order = [];
+    const map = {};
+    const unknown = [];
+    rows.forEach(r => {
+      const ent = yarnEntryByName(r.name);
+      const comp = ent ? yarnCompOf(ent) : [];
+      if (!comp.length) {
+        unknown.push(r.name);
+        if (!(r.name in map)) order.push(r.name);
+        map[r.name] = (map[r.name] || 0) + r.pct;
+        return;
+      }
+      const s2 = yarnCompSum(comp) || 100;
+      comp.forEach(c => {
+        if (!(c.mat in map)) order.push(c.mat);
+        map[c.mat] = (map[c.mat] || 0) + r.pct * (c.pct / s2);
+      });
+    });
+    let out = order.map(k => ({ mat: k, pct: Math.round(map[k] * 10) / 10 })).filter(x => x.pct > 0);
+    // 반올림 때문에 합이 100에서 살짝 벗어나면 가장 큰 소재에 나머지를 몰아 준다
+    if (out.length) {
+      const sum = Math.round(out.reduce((a, x) => a + x.pct, 0) * 10) / 10;
+      const gap = Math.round((100 - sum) * 10) / 10;
+      if (gap !== 0 && Math.abs(gap) <= 0.5) {
+        let bi = 0;
+        out.forEach((x, i) => { if (x.pct > out[bi].pct) bi = i; });
+        out[bi].pct = Math.round((out[bi].pct + gap) * 10) / 10;
+      }
+    }
+    return { rows: out, unknown: unknown, sum: Math.round(out.reduce((a, x) => a + x.pct, 0) * 10) / 10 };
+  }
+  function fiberBlendText(yarns) {
+    const f = calcFiberBlend(yarns);
+    return f.rows.map(r => `${r.mat} ${r.pct}%`).join(' ');
+  }
+  // [품목 혼용률로 저장]이 담는 글 — 소재 기준으로 바뀌었다
   function blendStringFromYarns(yarns) {
+    return fiberBlendText(yarns);
+  }
+  // 사종 기준(원가 계산에 쓰는 값)은 이 함수로 따로 본다
+  function yarnBlendText(yarns) {
     return calcYarnBlend(yarns).filter(r => r.name && r.pct > 0)
       .map(r => `${r.name} ${r.pct}%`).join(' ');
   }
@@ -11134,16 +11207,100 @@ window.addEventListener('firebase-ready', () => {
   // hotfix277: 현장에서 부르는 이름. 저장값('면'·'포리'·'기타')은 그대로 두고 표시만 바꾼다.
   const YARN_KIND_LABEL = { '면': '방적사', '포리': '포리에스터', '기타': '기타' };
   const yarnKindName = k => YARN_KIND_LABEL[String(k || '').trim()] || String(k || '기타');
+  // ------------------------------------------------------------
+  // hotfix290: 원사 성분(혼용율)
+  //   TC30은 사종 하나지만 실제로는 폴리에스터 65 + 면 35다. 사종 이름만으로는
+  //   거래처에 알리는 혼용율을 낼 수 없으므로 원사마다 성분을 따로 적어 둔다.
+  //   comp 가 없으면 종류(면/포리)로 100%를 잡으므로 옛 자료도 그대로 돌아간다.
+  // ------------------------------------------------------------
+  function getYarnMats() { return costLists().mats; }
+  function yarnCompOf(y) {
+    const raw = (y && Array.isArray(y.comp)) ? y.comp : [];
+    const c = raw.map(x => ({ mat: String((x && x.mat) || '').trim(), pct: parseFloat(x && x.pct) }))
+      .filter(x => x.mat && !isNaN(x.pct) && x.pct > 0);
+    if (c.length) return c;
+    const k = String((y && y.kind) || '기타').trim();
+    if (k === '면') return [{ mat: '면', pct: 100 }];
+    if (k === '포리') return [{ mat: '폴리에스터', pct: 100 }];
+    return [];
+  }
+  function yarnCompSum(list) {
+    return (Array.isArray(list) ? list : []).reduce((a, x) => a + (parseFloat(x && x.pct) || 0), 0);
+  }
+  function yarnCompText(y) {
+    const c = yarnCompOf(y);
+    if (!c.length) return '';
+    return c.map(x => `${x.mat} ${Math.round(x.pct * 10) / 10}%`).join(' · ');
+  }
+  // 대표가 아직 눈으로 확인하지 않은 성분인가 — 노란 [확인 필요] 표시에 쓴다
+  function yarnCompNeedsFix(y) {
+    if (y && Array.isArray(y.comp) && y.comp.length) return !!y.comp_auto;
+    return !yarnCompOf(y).length;
+  }
+  // 사종 이름으로 성분을 미리 짐작한다. 짐작한 값은 반드시 [확인 필요]로 표시한다.
+  const YARN_COMP_RULES = [
+    { k: ['CVC'], comp: [{ mat: '면', pct: 60 }, { mat: '폴리에스터', pct: 40 }] },
+    { k: ['TC', 'T/C', 'PC'], comp: [{ mat: '폴리에스터', pct: 65 }, { mat: '면', pct: 35 }] },
+    { k: ['TR', 'T/R'], comp: [{ mat: '폴리에스터', pct: 65 }, { mat: '레이온', pct: 35 }] },
+    { k: ['모달', 'MODAL'], comp: [{ mat: '모달', pct: 100 }] },
+    { k: ['텐셀', 'TENCEL', '리요셀', 'LYOCELL'], comp: [{ mat: '텐셀', pct: 100 }] },
+    { k: ['스판', 'SPANDEX', '라이크라', 'LYCRA'], comp: [{ mat: '스판덱스', pct: 100 }] },
+    { k: ['나일론', 'NYLON'], comp: [{ mat: '나일론', pct: 100 }] },
+    { k: ['레이온', 'RAYON', '비스코스', 'VISCOSE'], comp: [{ mat: '레이온', pct: 100 }] },
+    { k: ['아크릴', 'ACRYL'], comp: [{ mat: '아크릴', pct: 100 }] },
+    { k: ['린넨', '마사', 'LINEN'], comp: [{ mat: '린넨', pct: 100 }] },
+    { k: ['CM', 'CD', 'OE', '면사'], comp: [{ mat: '면', pct: 100 }] },
+    { k: ['DTY', 'FDY', 'ATY', '폴리', '포리'], comp: [{ mat: '폴리에스터', pct: 100 }] }
+  ];
+  function guessYarnComp(name, kind) {
+    const t = String(name || '').toUpperCase().replace(/\s/g, '');
+    let hit = null;
+    for (let i = 0; i < YARN_COMP_RULES.length; i++) {
+      const r = YARN_COMP_RULES[i];
+      if (r.k.some(k => t.includes(String(k).toUpperCase().replace(/\s/g, '')))) { hit = r; break; }
+    }
+    const comp = hit ? JSON.parse(JSON.stringify(hit.comp)) : yarnCompOf({ kind: kind });
+    // 이름에 비율이 적혀 있으면(예: TC 80/20) 그 비율을 따른다. 합이 100일 때만.
+    if (comp.length === 2) {
+      const m = String(name || '').match(/(\d{1,2})\s*[\/:]\s*(\d{1,2})/);
+      if (m) {
+        const a1 = parseInt(m[1], 10), b1 = parseInt(m[2], 10);
+        if (a1 + b1 === 100) { comp[0].pct = a1; comp[1].pct = b1; }
+      }
+    }
+    return comp;
+  }
   // 편직료는 공장 × 조직 × 품목으로 갈린다. 조직 목록은 getKnitOrgs()가 준다.
   const COST_LB_PER_KG = 2.2046;
-  const COST_KG_PER_GORI = 181.44;
+  // hotfix291: 방적사 kg 단가 — 대표 엑셀 서식과 똑같이 맞춘다
+  //   (고리가격 ÷ 1.1 + 25,000) ÷ 172
+  //     ÷ 1.1     부가세를 뺀다
+  //     + 25,000  고리당 운임
+  //     ÷ 172     고리 하나 181.44kg 에 로스 5%를 미리 뺀 값
+  const COST_KG_PER_GORI = 172;
+  const COST_GORI_RAW_KG = 181.44;
+  const COST_YARN_VAT_DIV = 1.1;
+  const COST_GORI_FREIGHT = 25000;
   function yarnKgPrice(y) {
     const p = parseFloat(y && y.price);
     if (!p && p !== 0) return null;
     const k = String((y && y.kind) || '기타');
-    if (k === '면') return p / COST_KG_PER_GORI;
+    if (k === '면') return (p / COST_YARN_VAT_DIV + COST_GORI_FREIGHT) / COST_KG_PER_GORI;
     if (k === '포리') return p * COST_LB_PER_KG;
     return p;
+  }
+  // [계산식] 창·힌트에 쓰는 풀이 글
+  function yarnKgPriceWhy(y) {
+    const p = parseFloat(y && y.price);
+    if (!p && p !== 0) return '';
+    const k = String((y && y.kind) || '기타');
+    if (k === '면') {
+      const v = p / COST_YARN_VAT_DIV;
+      return `(${costMoney(p, 0)} ÷ ${COST_YARN_VAT_DIV} + ${costMoney(COST_GORI_FREIGHT, 0)}) ÷ ${COST_KG_PER_GORI}`
+        + ` = (${costMoney(v, 0)} + ${costMoney(COST_GORI_FREIGHT, 0)}) ÷ ${COST_KG_PER_GORI} = ${costMoney(yarnKgPrice(y), 0)}원/kg`;
+    }
+    if (k === '포리') return `${costMoney(p, 0)} × ${COST_LB_PER_KG} = ${costMoney(yarnKgPrice(y), 0)}원/kg`;
+    return `${costMoney(p, 0)}원/kg 그대로`;
   }
   function costMoney(n, digits) {
     if (n == null || isNaN(n)) return '-';
@@ -11288,6 +11445,57 @@ window.addEventListener('firebase-ready', () => {
     }
   }
   // ============================================================
+  // hotfix292: 원가 산출서
+  //   한 번 계산 = 한 장. 그날 쓴 값이 통째로 박제되므로
+  //   나중에 단가표가 바뀌어도 옛 산출서는 그대로 남는다.
+  //   저장 위치 cost_data/quotes 의 items[번호]  (최고관리자만)
+  //   지울 때도 자료를 없애지 않고 지움 표시만 한다.
+  // ============================================================
+  function getCostQuotes() {
+    const q = state.costQuotes;
+    return (q && typeof q === 'object') ? q : {};
+  }
+  function costQuoteList(withDeleted) {
+    const all = getCostQuotes();
+    return Object.keys(all).map(k => all[k]).filter(q => q && (withDeleted || !q.deleted))
+      .sort((a, b) => String(b.date || '').localeCompare(String(a.date || ''))
+        || String(b.no || '').localeCompare(String(a.no || '')));
+  }
+  // 같은 품목 안에서 가장 최근 것인가 (비교안은 셈에서 뺀다)
+  function costQuoteIsLatest(q) {
+    if (q.base_no) return false;
+    const same = costQuoteList().filter(x => String(x.fid || '') === String(q.fid || '') && !x.base_no);
+    return same.length ? (same[0].no === q.no) : true;
+  }
+  function newQuoteNo() {
+    const d = todayYMD().replace(/-/g, '');
+    const all = getCostQuotes();
+    for (let i = 1; i < 1000; i++) {
+      const no = 'Q' + d + '-' + String(i).padStart(2, '0');
+      if (!all[no]) return no;
+    }
+    return 'Q' + d + '-' + Date.now();
+  }
+  async function saveCostQuote(q) {
+    if (!isOwnerUser()) { toast('최고관리자만 저장할 수 있습니다', 'error'); return false; }
+    if (!state.costQuotesLoaded) { toast('산출서를 아직 다 읽지 못했습니다. 잠시 뒤 다시 해주십시오', 'warning'); return false; }
+    try {
+      const body = {};
+      body[q.no] = q;
+      await setDoc(doc(db, 'cost_data', 'quotes'), {
+        items: body,
+        updated_at: serverTimestamp(),
+        updated_by: state.user?.email || 'unknown'
+      }, { merge: true });
+      if (!state.costQuotes || typeof state.costQuotes !== 'object') state.costQuotes = {};
+      state.costQuotes[q.no] = JSON.parse(JSON.stringify(q));
+      return true;
+    } catch (e) {
+      toast('산출서 저장 실패: ' + e.message, 'error');
+      return false;
+    }
+  }
+  // ============================================================
   // hotfix270: 원가 계산기 3단계 — 판매 등급 · 원가 계산
   // ------------------------------------------------------------
   //  · 등급은 cost_data/grades 한 곳에서만 관리한다. 표준은 기준선이라
@@ -11426,6 +11634,7 @@ window.addEventListener('firebase-ready', () => {
     };
     // 원사 — 혼용율은 굵기·루프장에서 자동으로 나온다
     const blend = calcYarnBlend(Array.isArray(c.yarns) ? c.yarns : []);
+    out.fiber = calcFiberBlend(Array.isArray(c.yarns) ? c.yarns : []);
     blend.forEach(r => {
       if (!r.name) return;
       const found = yarnPriceByName(r.name);
@@ -23860,15 +24069,157 @@ function validateBlendSum(blends, label) {
       <button class="cc-tab-btn" data-cc-tab="fabric" style="${tab === 'fabric' ? tOn : tOff}">원단 원가</button>
       <button class="cc-tab-btn" data-cc-tab="prices" style="${tab === 'prices' ? tOn : tOff}">단가표</button>
       <button class="cc-tab-btn" data-cc-tab="calc" style="${tab === 'calc' ? tOn : tOff}">원가 계산</button>
-      <button class="cc-tab-btn" data-cc-tab="history" style="${tab === 'history' ? tOn : tOff}">이력</button>
+      <button class="cc-tab-btn" data-cc-tab="history" style="${tab === 'history' ? tOn : tOff}">산출서${costQuoteList().length ? ' ' + costQuoteList().length : ''}</button>
     </div>`;
     if (tab === 'prices') h += renderCostPriceTables();
     else if (tab === 'calc') h += renderCostCalcTab();
     else if (tab === 'fabric') h += renderCostFabricTab();
-    else h += `<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:14px 16px;font-size:13px;color:#92400e;line-height:1.8;">
-      <strong>이력 화면은 다음 단계입니다.</strong><br>
-      단가표를 먼저 채워 두시면, 품목만 고르면 원가가 이미 나와 있는 상태로 만들어집니다.
+    else h += renderCostQuoteTab();
+    return h;
+  }
+
+  // ===== hotfix292: 산출서 =====
+  function cqMoney(n) { return (n == null || isNaN(n)) ? '-' : costMoney(n, 0); }
+  // 계산식 — 사칙연산을 그대로 펼친다
+  function renderQuoteWhy(q) {
+    const secT = 'font-size:12px;font-weight:800;color:#5b21b6;margin:13px 0 5px;';
+    const line = 'font-size:12.5px;color:#334155;line-height:1.95;font-family:inherit;';
+    const box = 'background:#fff;border:1px solid #e9d5ff;border-radius:8px;padding:14px 16px;margin:10px;';
+    let h = `<div style="${box}">
+      <div style="font-size:12.5px;font-weight:800;color:#0f172a;margin-bottom:2px;">${escapeHtml(q.name || '')} · ${escapeHtml(q.knitter || '공장 미지정')}${q.machine ? ' · ' + escapeHtml(q.machine) : ''} · ${escapeHtml(q.date || '')}</div>
+      <div style="font-size:11.5px;color:#94a3b8;">산출서 ${escapeHtml(q.no)} · 안내중량 ${q.guide_gy ? q.guide_gy + ' g/y' : '없음'}${q.make_gy ? ' · 제작중량 ' + q.make_gy + ' g/y' : ''}${q.gauge != null ? ' · 게이지 ' + q.gauge : ''}</div>`;
+
+    // [1] 원사 kg 단가
+    h += `<div style="${secT}">[1] 원사 kg 단가</div><div style="${line}">`;
+    (q.yarns || []).filter(y => y.pct > 0).forEach(y => {
+      let why = '';
+      if (y.kind === '면') {
+        const v = (y.buy != null) ? (y.buy / COST_YARN_VAT_DIV) : null;
+        why = (y.buy == null) ? '' : `(${cqMoney(y.buy)} ÷ ${COST_YARN_VAT_DIV} + 운임 ${cqMoney(COST_GORI_FREIGHT)}) ÷ ${COST_KG_PER_GORI} = (${cqMoney(v)} + ${cqMoney(COST_GORI_FREIGHT)}) ÷ ${COST_KG_PER_GORI} = ${cqMoney(y.kg)}원/kg`;
+      } else if (y.kind === '포리') {
+        why = (y.buy == null) ? '' : `${cqMoney(y.buy)} × ${COST_LB_PER_KG} = ${cqMoney(y.kg)}원/kg`;
+      } else {
+        why = (y.kg == null) ? '' : `${cqMoney(y.kg)}원/kg 그대로`;
+      }
+      h += `&nbsp;&nbsp;<strong>${escapeHtml(y.name)}</strong> <span style="color:#94a3b8;">(${escapeHtml(yarnKindName(y.kind))}${y.size ? ' · ' + escapeHtml(String(y.size)) + escapeHtml(y.unit || '') : ''}${y.loop ? ' · 루프 ' + escapeHtml(String(y.loop)) : ''})</span><br>`;
+      h += `&nbsp;&nbsp;&nbsp;&nbsp;${why ? escapeHtml(why) : '<span style="color:#c0271f;font-weight:700;">단가 없음</span>'}<br>`;
+    });
+    h += `</div>`;
+
+    // [2] 총원사가
+    h += `<div style="${secT}">[2] 총원사가 — 소요량만큼만 더한다</div><div style="${line}">`;
+    (q.yarns || []).filter(y => y.pct > 0).forEach(y => {
+      h += `&nbsp;&nbsp;${escapeHtml(y.name)}&nbsp;&nbsp;${cqMoney(y.kg)} × ${y.pct}% = ${cqMoney(y.applied)}원<br>`;
+    });
+    h += `&nbsp;&nbsp;<strong>합계 ${cqMoney(q.yarnTotal)}원</strong></div>`;
+
+    // [3] 생지 원가
+    h += `<div style="${secT}">[3] 생지 원가 (편직까지)</div><div style="${line}">
+      &nbsp;&nbsp;${cqMoney(q.yarnTotal)} ÷ ${((100 - q.knitLoss) / 100).toFixed(2)} = ${cqMoney(q.yarnAfterLoss)}원 <span style="color:#94a3b8;">(편직로스 ${q.knitLoss}%)</span><br>
+      &nbsp;&nbsp;${cqMoney(q.yarnAfterLoss)} + 편직료 ${cqMoney(q.knitFee)} = <strong>${cqMoney(q.knitPrice)}원/kg</strong>${q.knitFrom ? ` <span style="color:#94a3b8;">(${escapeHtml(q.knitFrom)})</span>` : ''}
     </div>`;
+
+    // [4] 염색 완성 원가
+    h += `<div style="${secT}">[4] 염색 완성 원가</div><div style="${line}">
+      &nbsp;&nbsp;${cqMoney(q.knitPrice)} ÷ ${((100 - q.finLoss) / 100).toFixed(2)} = ${cqMoney(q.knitAfterLoss)}원 <span style="color:#94a3b8;">(가공로스 ${q.finLoss}%)</span><br>`;
+    const pl = (q.procs || []).filter(p => p.price);
+    if (pl.length) h += `&nbsp;&nbsp;가공비&nbsp;&nbsp;${pl.map(p => escapeHtml(p.name) + ' ' + cqMoney(p.price)).join(' + ')} = ${cqMoney(q.procTotal)}원<br>`;
+    else h += `&nbsp;&nbsp;가공비 없음<br>`;
+    h += `&nbsp;&nbsp;${cqMoney(q.knitAfterLoss)} + ${cqMoney(q.procTotal)} = <strong>${cqMoney(q.kgCost)}원/kg</strong>${q.procVendor ? ` <span style="color:#94a3b8;">(${escapeHtml(q.procVendor)})</span>` : ''}</div>`;
+
+    // [5] 야드당
+    h += `<div style="${secT}">[5] 야드당 원가</div><div style="${line}">`;
+    if (!q.guide_gy) h += `&nbsp;&nbsp;<span style="color:#c0271f;font-weight:700;">안내중량이 없어 야드당이 나오지 않습니다</span>`;
+    else {
+      h += `&nbsp;&nbsp;${cqMoney(q.kgCost)} × ${q.guide_gy}g/y ÷ 1000 = ${cqMoney(q.kgCost * q.guide_gy / 1000)}원<br>`;
+      if (q.printFee) h += `&nbsp;&nbsp;+ 나염비 ${cqMoney(q.printFee)}원<br>`;
+      h += `&nbsp;&nbsp;<strong>${cqMoney(q.ydCost)}원/야드</strong>`;
+    }
+    h += `</div>`;
+
+    // [6] 마진
+    if (Array.isArray(q.grades) && q.grades.length) {
+      h += `<div style="${secT}">[6] 판매 등급별 마진</div><div style="${line}">`;
+      q.grades.forEach(g => {
+        if (g.yd != null && q.ydCost != null) h += `&nbsp;&nbsp;<strong>${escapeHtml(g.name)}</strong> 야드 (${cqMoney(g.yd)} − ${cqMoney(q.ydCost)}) ÷ ${cqMoney(g.yd)} × 100 = ${g.ydMargin == null ? '-' : g.ydMargin.toFixed(1) + '%'}<br>`;
+        if (g.kg != null && q.kgCost != null) h += `&nbsp;&nbsp;<strong>${escapeHtml(g.name)}</strong> kg&nbsp;&nbsp;(${cqMoney(g.kg)} − ${cqMoney(q.kgCost)}) ÷ ${cqMoney(g.kg)} × 100 = ${g.kgMargin == null ? '-' : g.kgMargin.toFixed(1) + '%'}<br>`;
+      });
+      h += `</div>`;
+    }
+
+    // [7] 혼용율
+    if (Array.isArray(q.fiber) && q.fiber.length) {
+      h += `<div style="${secT}">[7] 혼용율 — 서류에 적는 값</div><div style="${line}">
+        &nbsp;&nbsp;<strong>${escapeHtml(q.fiber.map(f => f.mat + ' ' + f.pct + '%').join('  ·  '))}</strong><br>
+        &nbsp;&nbsp;<span style="color:#94a3b8;">사종 기준 ${escapeHtml((q.yarns || []).filter(y => y.pct > 0).map(y => y.name + ' ' + y.pct + '%').join(' · '))}</span>
+        ${(q.fiberUnknown && q.fiberUnknown.length) ? `<br>&nbsp;&nbsp;<span style="color:#92400e;font-weight:700;">${escapeHtml(q.fiberUnknown.join(' · '))} — 성분이 없어 사종 이름 그대로 들어갔습니다</span>` : ''}
+      </div>`;
+    }
+    h += `<div style="font-size:11px;color:#a3a9b3;margin-top:12px;">저장 ${escapeHtml(q.saved_at || '')} · ${escapeHtml(q.saved_by || '')}</div>`;
+    h += `</div>`;
+    return h;
+  }
+  function renderCostQuoteTab() {
+    if (!state.costQuotesLoaded) return `<div class="dash-empty">산출서를 읽는 중입니다…</div>`;
+    const q0 = String(state.cqSearch || '').trim().toLowerCase();
+    const all = costQuoteList();
+    const list = q0 ? all.filter(q => String(q.name || '').toLowerCase().includes(q0)
+      || String(q.no || '').toLowerCase().includes(q0)
+      || String(q.knitter || '').toLowerCase().includes(q0)) : all;
+    const inp = 'padding:7px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;font-family:inherit;box-sizing:border-box;';
+    let h = `<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px;margin-bottom:14px;font-size:12.5px;color:#475569;line-height:1.8;">
+      산출서는 <strong>한 번 계산한 결과를 그날 값 그대로 얼려 둔 것</strong>입니다. 나중에 원사값이 오르내려도 옛 산출서는 바뀌지 않습니다.<br>
+      [원가 계산] 화면에서 품목을 고른 뒤 <strong>[이 계산을 산출서로 저장]</strong>을 누르면 여기에 한 줄씩 쌓입니다.
+    </div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:12px;">
+      <div style="min-width:260px;">
+        <label style="font-size:11.5px;font-weight:700;color:#475569;display:block;margin-bottom:4px;">품목 찾기</label>
+        <input type="text" id="cq-search" lang="ko" autocomplete="off" placeholder="품목 이름·산출서 번호·공장" value="${escapeHtml(state.cqSearch || '')}" style="${inp}min-width:260px;">
+      </div>
+      ${state.cqSearch ? `<button class="dash-action-btn" id="cq-search-clear" style="font-size:11.5px;padding:6px 12px;margin-bottom:1px;">지우기</button>` : ''}
+      <div style="font-size:12px;color:#94a3b8;padding-bottom:8px;">${q0 ? `찾은 ${list.length}장 / ` : ''}모두 ${all.length}장</div>
+    </div>`;
+    if (!all.length) {
+      return h + `<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:14px 16px;font-size:13px;color:#92400e;line-height:1.8;">
+        아직 저장된 산출서가 없습니다.<br>
+        [원가 계산] 화면에서 품목을 고르고 <strong>[이 계산을 산출서로 저장]</strong>을 눌러 주십시오.
+      </div>`;
+    }
+    if (!list.length) return h + `<div class="dash-empty">찾는 산출서가 없습니다.</div>`;
+    h += `<div class="dash-table-wrap"><table class="dash-table" style="font-size:12.5px;"><thead><tr>
+      <th style="text-align:left;min-width:112px;">번호</th>
+      <th style="text-align:left;min-width:170px;">품목</th>
+      <th style="min-width:96px;">편직공장</th>
+      <th style="min-width:88px;">날짜</th>
+      <th style="min-width:96px;">kg당</th>
+      <th style="min-width:96px;">야드당</th>
+      <th style="min-width:74px;">기준 마진</th>
+      <th style="min-width:74px;">계산식</th>
+      <th style="min-width:60px;">지우기</th>
+    </tr></thead><tbody>`;
+    list.forEach(q => {
+      const latest = costQuoteIsLatest(q);
+      const g0 = (Array.isArray(q.grades) && q.grades.length) ? q.grades[0] : null;
+      const mg = g0 ? (g0.ydMargin != null ? g0.ydMargin : g0.kgMargin) : null;
+      const band = ccMarginBand(mg);
+      h += `<tr${state.cqWhy === q.no ? ' style="background:#f5f3ff;"' : ''}>
+        <td style="text-align:left;font-weight:700;font-size:11.5px;color:#475569;">${escapeHtml(q.no)}</td>
+        <td style="text-align:left;font-weight:700;">${escapeHtml(q.name || '-')}
+          ${latest ? ` <span style="font-size:10px;font-weight:800;color:#166534;background:#dcfce7;border:1px solid #bbf7d0;border-radius:4px;padding:1px 5px;">최신</span>` : ''}
+          ${q.simmed ? ` <span style="font-size:10px;font-weight:800;color:#92400e;background:#fef3c7;border:1px solid #fcd34d;border-radius:4px;padding:1px 5px;">바꿔 본 값</span>` : ''}
+          ${q.memo ? `<div style="font-size:11px;color:#94a3b8;font-weight:400;margin-top:2px;">${escapeHtml(q.memo)}</div>` : ''}
+        </td>
+        <td style="text-align:center;font-size:11.5px;color:#6b7280;">${escapeHtml(q.knitter || '-')}${q.machine ? `<div style="font-size:10.5px;color:#a3a9b3;">${escapeHtml(q.machine)}</div>` : ''}</td>
+        <td style="text-align:center;font-size:12px;color:#6b7280;">${escapeHtml(q.date || '-')}</td>
+        <td style="text-align:right;font-weight:800;color:#0f172a;">${cqMoney(q.kgCost)}</td>
+        <td style="text-align:right;font-weight:800;color:#0f172a;">${cqMoney(q.ydCost)}</td>
+        <td style="text-align:right;font-weight:800;background:${band.bg};color:${band.fg};">${mg == null ? '-' : mg.toFixed(1) + '%'}</td>
+        <td class="col-action"><button class="dash-action-btn cq-why" data-no="${escapeHtml(q.no)}" style="font-size:11.5px;padding:5px 10px;${state.cqWhy === q.no ? 'background:#5b21b6;color:#fff;font-weight:800;' : ''}">${state.cqWhy === q.no ? '접기' : '계산식'}</button></td>
+        <td class="col-action col-act-delete"><button class="dash-action-btn danger cq-del" data-no="${escapeHtml(q.no)}">지움</button></td>
+      </tr>`;
+      if (state.cqWhy === q.no) h += `<tr><td colspan="9" style="padding:0;background:#faf9ff;">${renderQuoteWhy(q)}</td></tr>`;
+    });
+    h += `</tbody></table></div>`;
     return h;
   }
 
@@ -24030,7 +24381,8 @@ function validateBlendSum(blends, label) {
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
         <div style="${lbl}margin-bottom:0;">원가 내역</div>
         <div style="font-size:11.5px;color:#94a3b8;">${escapeHtml(spec.name)} · 안내중량 ${R.gy ? R.gy + ' g/y' : '없음'} · 편직로스 ${R.knitLoss}% · 가공로스 ${R.finLoss}%</div>
-        <button class="dash-action-btn" id="cc-sim-toggle" style="margin-left:auto;font-size:11.5px;padding:5px 12px;${C.sim ? 'background:#f59e0b;color:#fff;font-weight:800;' : ''}">${C.sim ? '바꿔 보기 끄기' : '원사값 바꿔 보기'}</button>
+        <button class="dash-action-btn" id="cc-quote-save" style="margin-left:auto;font-size:11.5px;padding:5px 12px;background:#5b21b6;color:#fff;font-weight:800;">이 계산을 산출서로 저장</button>
+        <button class="dash-action-btn" id="cc-sim-toggle" style="font-size:11.5px;padding:5px 12px;${C.sim ? 'background:#f59e0b;color:#fff;font-weight:800;' : ''}">${C.sim ? '바꿔 보기 끄기' : '원사값 바꿔 보기'}</button>
         ${C.sim ? `<button class="dash-action-btn" id="cc-sim-reset" style="font-size:11.5px;padding:5px 12px;">원래대로</button>` : ''}
       </div>`;
     if (C.sim) h += `<div style="background:#fef3c7;border:1px solid #fcd34d;border-radius:7px;padding:8px 11px;font-size:12px;color:#92400e;font-weight:700;margin-bottom:10px;">지금은 가상 계산입니다. 여기서 바꾼 값은 어디에도 저장되지 않습니다.</div>`;
@@ -24068,6 +24420,15 @@ function validateBlendSum(blends, label) {
       <td style="text-align:left;font-size:11.5px;color:#64748b;">kg 단가 × 소요량을 모두 더한 값</td>
     </tr>`;
     h += `</tbody></table></div>`;
+    // hotfix291: 서류에 적는 혼용율은 사종이 아니라 소재 기준이다
+    if (R.fiber && R.fiber.rows.length) {
+      h += `<div style="margin-top:9px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:7px;padding:9px 12px;">
+        <span style="font-size:11px;font-weight:800;color:#166534;">혼용율 (서류에 적는 값)</span>
+        <span style="font-size:13px;font-weight:800;color:#14532d;margin-left:9px;">${escapeHtml(R.fiber.rows.map(r => r.mat + ' ' + r.pct + '%').join('  ·  '))}</span>
+        <span style="font-size:11.5px;color:#4d7c5f;margin-left:9px;">사종 기준 ${escapeHtml(R.yarns.filter(y => y.pct > 0).map(y => y.name + ' ' + y.pct + '%').join(' · '))}</span>
+        ${R.fiber.unknown.length ? `<div style="font-size:11.5px;color:#92400e;font-weight:700;margin-top:4px;">${escapeHtml(R.fiber.unknown.join(' · '))} — 성분이 없어 사종 이름 그대로 들어갔습니다</div>` : ''}
+      </div>`;
+    }
     // ── 편직
     h += ccSec('편직');
     h += `<div class="dash-table-wrap"><table class="dash-table" style="font-size:12.5px;"><thead><tr>
@@ -24144,6 +24505,56 @@ function validateBlendSum(blends, label) {
   }
 
   // 등급별 단가·마진 — kg당과 야드당을 나란히 본다 (대표 엑셀과 같은 모양)
+  // hotfix292: 지금 화면의 계산을 산출서 한 장으로 얼린다
+  function buildQuoteFromCurrent(memo) {
+    const spec = ccCurrentSpec();
+    const R = ccBuild();
+    if (!spec || !R) return null;
+    const fid = specFid(spec);
+    const c = getFabricCost(fid) || {};
+    const C = ccState();
+    const gv = ccGradeValues(R).map(x => ({
+      name: x.g.name, dc: x.g.dc, kg: x.kg, yd: x.yd,
+      kgMargin: x.kgMargin, ydMargin: x.ydMargin
+    }));
+    return {
+      no: newQuoteNo(),
+      date: todayYMD(),
+      fid: fid,
+      name: String(spec.name || ''),
+      cat: String(spec.cat || ''),
+      knitter: R.knitVendor || '',
+      machine: R.knitMachine || '',
+      org: R.knitOrg || '',
+      inch: (c.inch != null ? c.inch : ''),
+      needles: (c.needles != null ? c.needles : ''),
+      gauge: calcGage(c.inch, c.needles),
+      make_gy: (c.make_gy != null ? c.make_gy : ''),
+      guide_gy: R.gy,
+      yarns: R.yarns.map(y => ({
+        name: y.name, size: y.size, unit: y.unit, loop: y.loop, pct: y.pct,
+        kind: y.kind, buy: y.buy, buyUnit: y.buyUnit, kg: y.kg, applied: y.applied,
+        missing: !!y.missing
+      })),
+      fiber: (R.fiber && R.fiber.rows) ? R.fiber.rows.slice() : [],
+      fiberUnknown: (R.fiber && R.fiber.unknown) ? R.fiber.unknown.slice() : [],
+      yarnTotal: R.yarnTotal,
+      knitLoss: R.knitLoss, knitFee: R.knitFee, knitFrom: R.knitFrom || '',
+      yarnAfterLoss: R.yarnAfterLoss, knitPrice: R.knitPrice,
+      finLoss: R.finLoss, procVendor: R.procVendor || '',
+      knitAfterLoss: R.knitAfterLoss,
+      procs: R.procs.map(p => ({ name: p.name, price: p.price, isBundle: !!p.isBundle, missing: !!p.missing })),
+      procTotal: R.procTotal,
+      kgCost: R.kgCost,
+      prints: { bon: C.print.bon, pig: C.print.pig, ten: C.print.ten },
+      printFee: R.printFee, ydCost: R.ydCost,
+      grades: gv,
+      memo: String(memo || ''),
+      simmed: !!C.sim,
+      saved_by: state.user?.email || '',
+      saved_at: todayYMD()
+    };
+  }
   function ccCellKey(i, u) { return 'g' + i + ':' + u; }
   function ccAutoPrice(base, dc) {
     if (base == null || isNaN(base)) return null;
@@ -24452,7 +24863,7 @@ function validateBlendSum(blends, label) {
   function costFilter() {
     if (!state.costFilter || typeof state.costFilter !== 'object') state.costFilter = {};
     const F = state.costFilter;
-    ['yarnKind', 'knitVendor', 'knitOrg', 'knitItem', 'procVendor', 'procItem'].forEach(k => { if (!F[k]) F[k] = 'all'; });
+    ['yarnKind', 'yarnComp', 'knitVendor', 'knitOrg', 'knitItem', 'procVendor', 'procItem'].forEach(k => { if (!F[k]) F[k] = 'all'; });
     return F;
   }
   // 품목 고정 코드(F0001)로 이름을 찾는다. 이름을 바꿔도 코드는 그대로이므로 자료가 끊기지 않는다.
@@ -24483,21 +24894,43 @@ function validateBlendSum(blends, label) {
   }
   function renderYarnPriceTable(P) {
     const F = costFilter();
-    let h = `<div style="margin-bottom:10px;"><button class="dash-action-btn" id="cp-add-yarn" style="background:#1e3a8a;color:#fff;font-weight:700;padding:6px 14px;">＋ 사종 추가</button></div>`;
+    let h = `<div style="margin-bottom:10px;display:flex;gap:8px;flex-wrap:wrap;">
+      <button class="dash-action-btn" id="cp-add-yarn" style="background:#1e3a8a;color:#fff;font-weight:700;padding:6px 14px;">＋ 사종 추가</button>
+      <button class="dash-action-btn" id="cp-yarn-guess-all" style="background:#7c3aed;color:#fff;font-weight:700;padding:6px 14px;">성분 한꺼번에 짐작해 넣기</button>
+    </div>`;
+    const needN = P.yarns.filter(y => yarnCompNeedsFix(y)).length;
     const rows = P.yarns.map((y, i) => ({ y, i }))
       .filter(o => F.yarnKind === 'all' || String(o.y.kind || '기타') === F.yarnKind)
-      .filter(o => cpMatch(o.y.name) || cpMatch(yarnKindName(o.y.kind)));
-    h += cpFilterBar(cpFilterSel('cp-f-yarnkind', '종류', YARN_KINDS.map(k => ({ v: k, t: `${yarnKindName(k)} (${YARN_UNIT_LABEL[k]})` })), F.yarnKind), rows.length, P.yarns.length);
+      .filter(o => F.yarnComp === 'all'
+        || (F.yarnComp === 'need' ? yarnCompNeedsFix(o.y)
+          : (F.yarnComp === 'mix' ? yarnCompOf(o.y).length > 1 : true)))
+      .filter(o => cpMatch(o.y.name) || cpMatch(yarnKindName(o.y.kind)) || cpMatch(yarnCompText(o.y)));
+    h += cpFilterBar(
+      cpFilterSel('cp-f-yarnkind', '종류', YARN_KINDS.map(k => ({ v: k, t: `${yarnKindName(k)} (${YARN_UNIT_LABEL[k]})` })), F.yarnKind) +
+      cpFilterSel('cp-f-yarncomp', '성분', [{ v: 'need', t: `확인 필요 (${needN}건)` }, { v: 'mix', t: '혼방사만' }], F.yarnComp),
+      rows.length, P.yarns.length);
+    if (needN) h += `<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:7px;padding:9px 12px;font-size:12.5px;color:#92400e;line-height:1.75;margin-bottom:11px;">
+      성분을 확인해야 할 사종이 <strong>${needN}개</strong> 있습니다. 성분은 거래처에 알리는 혼용율을 낼 때 쓰는 값입니다.<br>
+      위 [성분] 칸에서 <strong>확인 필요</strong>를 고르면 그 사종만 볼 수 있습니다. [수정]을 눌러 성분을 보고 맞으면 그대로 저장하면 됩니다.
+    </div>`;
     h += `<div class="dash-table-wrap"><table class="dash-table"><thead><tr>
-      <th style="text-align:left;min-width:150px;">사종</th><th style="min-width:88px;">종류</th><th style="min-width:110px;">입력 단가</th><th style="min-width:86px;">단위</th>
+      <th style="text-align:left;min-width:150px;">사종</th><th style="min-width:88px;">종류</th><th style="text-align:left;min-width:186px;">성분 (혼용율)</th><th style="min-width:110px;">입력 단가</th><th style="min-width:86px;">단위</th>
       <th style="min-width:110px;">kg 단가</th><th style="min-width:96px;">수정일</th><th style="min-width:64px;">이력</th><th style="min-width:56px;">수정</th><th style="min-width:56px;">삭제</th>
     </tr></thead><tbody>`;
-    if (!rows.length) h += `<tr><td colspan="9" style="text-align:center;color:#9ca3af;padding:18px;">${P.yarns.length ? '검색 결과가 없습니다.' : '등록된 사종이 없습니다. [＋ 사종 추가]를 눌러 주세요.'}</td></tr>`;
+    if (!rows.length) h += `<tr><td colspan="10" style="text-align:center;color:#9ca3af;padding:18px;">${P.yarns.length ? '검색 결과가 없습니다.' : '등록된 사종이 없습니다. [＋ 사종 추가]를 눌러 주세요.'}</td></tr>`;
     rows.forEach(({ y, i }) => {
       const kg = yarnKgPrice(y);
+      const ctxt = yarnCompText(y);
+      const cauto = !!(Array.isArray(y.comp) && y.comp.length && y.comp_auto);
+      const compCell = !ctxt
+        ? `<span style="color:#c0271f;font-weight:700;font-size:11.5px;">성분 없음 — 넣어 주십시오</span>`
+        : `<span style="font-weight:700;color:#0f172a;">${escapeHtml(ctxt)}</span>`
+          + (cauto ? ` <span style="font-size:10.5px;font-weight:800;color:#92400e;background:#fef3c7;border:1px solid #fcd34d;border-radius:4px;padding:1px 5px;">확인 필요</span>` : '')
+          + ((!Array.isArray(y.comp) || !y.comp.length) ? ` <span style="font-size:11px;color:#94a3b8;">(종류로 잡음)</span>` : '');
       h += `<tr>
         <td style="text-align:left;font-weight:700;">${escapeHtml(y.name || '-')}</td>
         <td style="text-align:center;">${costBadge(yarnKindName(y.kind), yarnKindColor(y.kind))}</td>
+        <td style="text-align:left;font-size:12px;">${compCell}</td>
         <td style="text-align:right;">${costMoney(parseFloat(y.price), 0)}</td>
         <td style="text-align:center;font-size:11.5px;color:#6b7280;">${escapeHtml(YARN_UNIT_LABEL[y.kind] || 'kg당')}</td>
         <td style="text-align:right;font-weight:800;color:#0f172a;">${kg == null ? '-' : costMoney(kg, 0)}</td>
@@ -24509,7 +24942,9 @@ function validateBlendSum(blends, label) {
     });
     h += `</tbody></table></div>
       <div style="font-size:11.5px;color:#9ca3af;margin-top:8px;line-height:1.7;">
-        방적사는 고리당 값을 넣으면 ${COST_KG_PER_GORI}으로 나눠 kg 단가를 냅니다. 포리에스터는 파운드당 값에 ${COST_LB_PER_KG}을 곱합니다. 스판 등 기타는 kg 값을 그대로 씁니다.
+        방적사 kg 단가 = (고리당 값 ÷ ${COST_YARN_VAT_DIV} + 운임 ${costMoney(COST_GORI_FREIGHT, 0)}원) ÷ ${COST_KG_PER_GORI}
+        &nbsp;— ÷${COST_YARN_VAT_DIV}는 부가세를 뺀 것, ${COST_KG_PER_GORI}은 고리 하나 ${COST_GORI_RAW_KG}kg 에 로스 5%를 미리 뺀 값입니다.<br>
+        포리에스터는 파운드당 값에 ${COST_LB_PER_KG}을 곱합니다. 스판 등 기타는 kg 값을 그대로 씁니다.
       </div>`;
     return h;
   }
@@ -24742,9 +25177,14 @@ function validateBlendSum(blends, label) {
                 </tr>`).join('')}
               </tbody>
             </table>
-            <div style="display:flex;align-items:center;gap:9px;margin:7px 0 12px;">
+            <div style="display:flex;align-items:center;gap:9px;margin:7px 0 6px;">
               <span id="fs-c-blend-sum" style="font-size:11.5px;font-weight:800;color:#475569;"></span>
-              <button type="button" class="dash-action-btn" id="fs-c-blend-apply" style="font-size:11px;padding:4px 10px;" title="자동 계산된 혼용율을 이 품목의 혼용률로 저장합니다">품목 혼용률로 저장</button>
+              <button type="button" class="dash-action-btn" id="fs-c-blend-apply" style="font-size:11px;padding:4px 10px;" title="소재별 혼용율을 이 품목의 혼용률로 저장합니다">품목 혼용률로 저장</button>
+            </div>
+            <div id="fs-c-fiber-box" style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:7px;padding:8px 11px;margin-bottom:12px;display:none;">
+              <div style="font-size:11px;font-weight:800;color:#166534;margin-bottom:3px;">이 품목 혼용율 — 서류에 적는 값</div>
+              <div id="fs-c-fiber" style="font-size:13.5px;font-weight:800;color:#14532d;line-height:1.5;"></div>
+              <div id="fs-c-fiber-warn" style="font-size:11.5px;color:#92400e;font-weight:700;margin-top:4px;display:none;"></div>
             </div>
             <div style="display:flex;gap:8px;margin-bottom:9px;flex-wrap:wrap;">
               <div style="flex:1;min-width:140px;"><label style="font-size:11.5px;font-weight:700;color:#475569;display:block;margin-bottom:3px;">염색처</label><select id="fs-c-dyer" style="${inputStyle}"></select></div>
@@ -24791,8 +25231,25 @@ function validateBlendSum(blends, label) {
       if (sEl) {
         const t = Math.round(sum * 10) / 10;
         if (!t) { sEl.textContent = ''; }
-        else if (Math.abs(t - 100) > 0.15) { sEl.textContent = `합계 ${t}% — 100%가 아닙니다`; sEl.style.color = '#b91c1c'; }
-        else { sEl.textContent = `합계 ${t}%`; sEl.style.color = '#047857'; }
+        else if (Math.abs(t - 100) > 0.15) { sEl.textContent = `사종 합계 ${t}% — 100%가 아닙니다`; sEl.style.color = '#b91c1c'; }
+        else { sEl.textContent = `사종 합계 ${t}%`; sEl.style.color = '#047857'; }
+      }
+      // hotfix291: 사종 비율에 원사 성분을 곱해 소재별 혼용율을 낸다
+      const fBox = document.getElementById('fs-c-fiber-box');
+      const fEl = document.getElementById('fs-c-fiber');
+      const wEl = document.getElementById('fs-c-fiber-warn');
+      if (fBox && fEl && wEl) {
+        const f = calcFiberBlend(yarns);
+        if (!f.rows.length) { fBox.style.display = 'none'; }
+        else {
+          fBox.style.display = '';
+          fEl.textContent = f.rows.map(r => `${r.mat} ${r.pct}%`).join('  ·  ')
+            + (Math.abs(f.sum - 100) > 0.15 ? `   (합계 ${f.sum}%)` : '');
+          if (f.unknown.length) {
+            wEl.style.display = '';
+            wEl.textContent = `${f.unknown.join(' · ')} — 성분이 없어 사종 이름 그대로 들어갔습니다. [단가표] > [원사]에서 성분을 넣어 주십시오`;
+          } else { wEl.style.display = 'none'; }
+        }
       }
     }
     function collectCostYarns() {
@@ -24957,13 +25414,17 @@ function validateBlendSum(blends, label) {
     costWrap().querySelectorAll('.fs-c-y-name, .fs-c-y-size, .fs-c-y-loop').forEach(el => el.addEventListener('input', repaintCostCalc));
     costWrap().querySelectorAll('.fs-c-y-unit').forEach(el => el.addEventListener('change', repaintCostCalc));
     document.getElementById('fs-c-blend-apply')?.addEventListener('click', async () => {
-      const txt = blendStringFromYarns(collectCostYarns());
+      const yy = collectCostYarns();
+      const txt = blendStringFromYarns(yy);
       if (!txt) { toast('원사 굵기와 루프장을 먼저 넣어주세요', 'warning'); return; }
       if (!editingCostFid) { toast('품목을 먼저 고르십시오', 'warning'); return; }
       const specs = JSON.parse(JSON.stringify(getFabricSpecs()));
       const i = specs.findIndex(x => specFid(x) === editingCostFid);
       if (i < 0) { toast('품목을 찾지 못했습니다', 'error'); return; }
-      if (!confirm(`이 품목의 혼용률을 아래 값으로 바꿀까요?\n\n${txt}`)) return;
+      // hotfix291: 성분을 모르는 원사가 섞여 있으면 사종 이름이 그대로 들어가므로 먼저 알린다
+      const fb = calcFiberBlend(yy);
+      if (fb.unknown.length && !confirm(`아래 원사는 성분이 없어 사종 이름 그대로 들어갑니다.\n\n${fb.unknown.join(' · ')}\n\n[단가표] > [원사]에서 성분을 먼저 넣으시겠습니까?\n[취소]를 누르면 성분을 넣으러 가실 수 있습니다.\n[확인]을 누르면 이대로 저장합니다.`)) return;
+      if (!confirm(`이 품목의 혼용률을 아래 값으로 바꿀까요?\n\n${txt}\n\n사종 기준: ${yarnBlendText(yy)}`)) return;
       specs[i].blend = txt;
       const ok = await saveFabricSpecs(specs);
       if (ok) toast('품목 혼용률을 바꿨습니다', 'success');
@@ -24979,6 +25440,20 @@ function validateBlendSum(blends, label) {
             <input type="text" id="cp-f-name" autocomplete="off" style="${st}" placeholder="예: CM30 · 150/48"></div>
           <div id="cp-f-kind-wrap"><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">종류</label>
             <select id="cp-f-kind" style="${st}">${YARN_KINDS.map(k => `<option value="${k}">${yarnKindName(k)} (${YARN_UNIT_LABEL[k]})</option>`).join('')}</select></div>
+          <div id="cp-f-comp-wrap" style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:7px;padding:10px 11px;">
+            <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-bottom:7px;">
+              <span style="font-size:12px;font-weight:700;color:#374151;">성분 (혼용율)</span>
+              <span style="font-size:11px;color:#9ca3af;">— 거래처에 알리는 혼용율을 낼 때 쓰는 값입니다</span>
+              <button class="dash-action-btn" id="cp-f-comp-auto" style="margin-left:auto;font-size:11px;padding:4px 9px;">이름 보고 채우기</button>
+              <button class="dash-action-btn" id="cp-f-comp-addmat" style="font-size:11px;padding:4px 9px;">＋ 소재 이름</button>
+            </div>
+            <div id="cp-f-comp-rows" style="display:flex;flex-direction:column;gap:6px;"></div>
+            <div id="cp-f-comp-sum" style="font-size:11.5px;font-weight:700;margin-top:7px;min-height:16px;"></div>
+            <div style="font-size:11px;color:#9ca3af;line-height:1.7;margin-top:3px;">
+              혼방사가 아니면 비워 두셔도 됩니다. 비우면 위 [종류]를 보고 방적사는 면 100%, 포리에스터는 폴리에스터 100%로 잡습니다.<br>
+              같은 TC라도 65/35, 80/20처럼 혼용율이 다르면 여기서 고쳐 주십시오.
+            </div>
+          </div>
           <div id="cp-f-vendor-wrap"><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;" id="cp-f-vendor-label">공장</label>
             <select id="cp-f-vendor" style="${st}"></select></div>
           <div id="cp-f-org-wrap"><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">조직 <span style="font-weight:400;color:#9ca3af;font-size:11px;">— 비우면 그 공장 전체에 적용됩니다</span></label>
@@ -30535,7 +31010,28 @@ function validateBlendSum(blends, label) {
     // ===== hotfix268: 원가 계산기 단가표 =====
     document.querySelectorAll('#dash-body .cc-tab-btn').forEach(b => b.addEventListener('click', () => {
       state.costTab = b.dataset.ccTab || 'prices';
+      state.cqWhy = '';
       renderDashboard();
+    }));
+    // hotfix292: 산출서 화면
+    bindRerenderSearch('cq-search', v => { state.cqSearch = v; });
+    document.getElementById('cq-search-clear')?.addEventListener('click', () => { state.cqSearch = ''; renderDashboard(); });
+    document.querySelectorAll('#dash-body .cq-why').forEach(b => b.addEventListener('click', () => {
+      const no = b.dataset.no || '';
+      state.cqWhy = (state.cqWhy === no) ? '' : no;
+      renderDashboard();
+    }));
+    document.querySelectorAll('#dash-body .cq-del').forEach(b => b.addEventListener('click', async () => {
+      const no = b.dataset.no || '';
+      const q = getCostQuotes()[no];
+      if (!q) return;
+      if (!confirm(`산출서 ${no} 를 지울까요?\n\n${q.name || ''} · ${q.date || ''} · kg당 ${cqMoney(q.kgCost)}원\n\n자료는 없애지 않고 지움 표시만 합니다.`)) return;
+      const next = JSON.parse(JSON.stringify(q));
+      next.deleted = true;
+      next.deleted_by = state.user?.email || '';
+      next.deleted_at = todayYMD();
+      const ok = await saveCostQuote(next);
+      if (ok) { toast('지웠습니다', 'success'); state.cqWhy = ''; renderDashboard(); }
     }));
     document.querySelectorAll('#dash-body .cp-sub-btn').forEach(b => b.addEventListener('click', () => {
       state.costPriceTab = b.dataset.cpSub || 'yarn';
@@ -30543,7 +31039,7 @@ function validateBlendSum(blends, label) {
     }));
     bindRerenderSearch('cp-search', v => { state.costSearch = v; });
     // hotfix277: 표 위 걸러내기
-    const CP_FILTER_MAP = { 'cp-f-yarnkind': 'yarnKind', 'cp-f-knitvendor': 'knitVendor', 'cp-f-knitorg': 'knitOrg', 'cp-f-knititem': 'knitItem', 'cp-f-procvendor': 'procVendor', 'cp-f-procitem': 'procItem' };
+    const CP_FILTER_MAP = { 'cp-f-yarnkind': 'yarnKind', 'cp-f-yarncomp': 'yarnComp', 'cp-f-knitvendor': 'knitVendor', 'cp-f-knitorg': 'knitOrg', 'cp-f-knititem': 'knitItem', 'cp-f-procvendor': 'procVendor', 'cp-f-procitem': 'procItem' };
     Object.keys(CP_FILTER_MAP).forEach(id => {
       const el = document.getElementById(id);
       if (el) el.addEventListener('change', () => { costFilter()[CP_FILTER_MAP[id]] = el.value; renderDashboard(); });
@@ -30760,6 +31256,20 @@ function validateBlendSum(blends, label) {
         state.costTab = 'prices';
         state.costPriceTab = 'grade';
         renderDashboard();
+      });
+      // hotfix292: 지금 계산을 산출서 한 장으로 얼려 둔다
+      document.getElementById('cc-quote-save')?.addEventListener('click', async () => {
+        const q = buildQuoteFromCurrent('');
+        if (!q) { toast('품목을 먼저 고르십시오', 'warning'); return; }
+        const memo = prompt(`산출서로 저장합니다.\n\n품목  ${q.name}\n공장  ${q.knitter || '미지정'}\nkg당  ${cqMoney(q.kgCost)}원\n야드당 ${cqMoney(q.ydCost)}원\n\n메모를 남기시겠습니까? (비워도 됩니다)`, '');
+        if (memo === null) return;
+        q.memo = String(memo || '').trim();
+        const ok = await saveCostQuote(q);
+        if (ok) {
+          toast(`산출서 ${q.no} 로 저장했습니다`, 'success');
+          state.costTab = 'history'; state.cqWhy = q.no;
+          renderDashboard();
+        }
       });
       document.getElementById('cc-sim-toggle')?.addEventListener('click', () => {
         C.sim = !C.sim;
@@ -30985,8 +31495,78 @@ function validateBlendSum(blends, label) {
         const p = parseFloat(unComma(document.getElementById('cp-f-price')?.value));
         const kg = yarnKgPrice({ kind, price: p });
         hint.textContent = (kg == null) ? `${YARN_UNIT_LABEL[kind] || 'kg당'} 금액을 넣으면 kg 단가가 여기 나옵니다`
-          : `${YARN_UNIT_LABEL[kind]} ${costMoney(p, 0)} → kg 단가 ${costMoney(kg, 0)}원`;
+          : yarnKgPriceWhy({ kind: kind, price: p });
       }
+      // hotfix290: 원사 성분(혼용율) 입력 줄 — 최대 4가지 소재
+      const CP_COMP_ROWS = 4;
+      function cpCompMatOptions(cur) {
+        const c = String(cur || '').trim();
+        const list = getYarnMats().slice();
+        if (c && !list.some(m => m === c)) list.push(c);
+        return `<option value="">— 없음 —</option>` +
+          list.map(m => `<option value="${escapeHtml(m)}"${m === c ? ' selected' : ''}>${escapeHtml(m)}</option>`).join('');
+      }
+      function cpCompDraw(comp) {
+        const box = document.getElementById('cp-f-comp-rows');
+        if (!box) return;
+        const c = Array.isArray(comp) ? comp : [];
+        let h = '';
+        for (let i = 0; i < CP_COMP_ROWS; i++) {
+          const r = c[i] || {};
+          h += `<div style="display:flex;gap:7px;align-items:center;">
+            <select class="cp-f-comp-mat" data-i="${i}" style="flex:1;padding:6px 8px;border:1px solid #d1d5db;border-radius:6px;font-size:12.5px;font-family:inherit;background:#fff;">${cpCompMatOptions(r.mat)}</select>
+            <input type="text" inputmode="decimal" class="cp-f-comp-pct" data-i="${i}" value="${r.pct != null && r.pct !== '' ? escapeHtml(String(r.pct)) : ''}" placeholder="0"
+              style="width:74px;padding:6px 8px;border:1px solid #d1d5db;border-radius:6px;font-size:12.5px;font-family:inherit;text-align:right;">
+            <span style="font-size:12px;color:#94a3b8;width:12px;">%</span>
+          </div>`;
+        }
+        box.innerHTML = h;
+        box.querySelectorAll('.cp-f-comp-mat').forEach(el => el.addEventListener('change', cpCompSum));
+        box.querySelectorAll('.cp-f-comp-pct').forEach(el => el.addEventListener('input', cpCompSum));
+        cpCompSum();
+      }
+      function cpCompRead() {
+        const out = [];
+        document.querySelectorAll('#cp-f-comp-rows .cp-f-comp-mat').forEach(sel => {
+          const i = sel.dataset.i;
+          const mat = String(sel.value || '').trim();
+          const pv = document.querySelector(`#cp-f-comp-rows .cp-f-comp-pct[data-i="${i}"]`);
+          const pct = parseFloat(pv ? pv.value : '');
+          if (mat && !isNaN(pct) && pct > 0) out.push({ mat: mat, pct: Math.round(pct * 10) / 10 });
+        });
+        return out;
+      }
+      function cpCompSum() {
+        const el = document.getElementById('cp-f-comp-sum');
+        if (!el) return;
+        const c = cpCompRead();
+        if (!c.length) { el.innerHTML = `<span style="color:#94a3b8;font-weight:400;">성분을 넣지 않았습니다 — 종류로 잡습니다</span>`; return; }
+        const sum = Math.round(yarnCompSum(c) * 10) / 10;
+        const ok = Math.abs(sum - 100) <= 0.5;
+        el.innerHTML = `<span style="color:${ok ? '#166534' : '#c0271f'};">합계 ${sum}%</span>`
+          + (ok ? '' : ` <span style="color:#c0271f;font-weight:400;">— 100%가 되어야 저장할 수 있습니다</span>`);
+      }
+      document.getElementById('cp-f-comp-auto')?.addEventListener('click', () => {
+        const nm = document.getElementById('cp-f-name')?.value.trim() || '';
+        const kd = document.getElementById('cp-f-kind')?.value || '기타';
+        const g = guessYarnComp(nm, kd);
+        if (!g.length) { toast('이름으로는 성분을 알 수 없습니다. 손으로 넣어 주십시오', 'warning'); return; }
+        cpCompDraw(g);
+        toast('이름을 보고 채웠습니다. 맞는지 확인해 주십시오', 'success');
+      });
+      document.getElementById('cp-f-comp-addmat')?.addEventListener('click', async () => {
+        const nm = String(prompt('새 소재 이름을 넣으십시오 (예: 아세테이트)') || '').trim();
+        if (!nm) return;
+        const cur = getYarnMats();
+        if (cur.some(m => m.replace(/\s/g, '') === nm.replace(/\s/g, ''))) { toast('이미 있는 소재입니다', 'warning'); return; }
+        const L = costLists();
+        const next = { orgs: L.orgs, procs: L.procs, mats: cur.concat([nm]), proc_alias: L.proc_alias, org_alias: L.org_alias };
+        const ok = await saveCostLists(next);
+        if (!ok) return;
+        const keep = cpCompRead();
+        cpCompDraw(keep);
+        toast(`소재 [${nm}]을(를) 넣었습니다`, 'success');
+      });
       function openCp(type, idx) {
         cpType = type; cpIdx = (idx == null) ? -1 : idx;
         const P = getCostPrices();
@@ -30996,6 +31576,7 @@ function validateBlendSum(blends, label) {
           (isNew ? '추가 — ' : '수정 — ') + ({ yarn: '원사 단가', knit: '편직료', proc: '공정 단가', bundle: '묶음 단가' }[type] || '');
         show('cp-f-name-wrap', type === 'yarn');
         show('cp-f-kind-wrap', type === 'yarn');
+        show('cp-f-comp-wrap', type === 'yarn');
         show('cp-f-vendor-wrap', type !== 'yarn');
         show('cp-f-org-wrap', type === 'knit');
         show('cp-f-proc-wrap', type === 'proc');
@@ -31008,6 +31589,7 @@ function validateBlendSum(blends, label) {
         document.getElementById('cp-f-kind').value = cur.kind || '기타';
         document.getElementById('cp-f-price').value = (cur.price != null ? moneyInputVal(cur.price) : '');
         document.getElementById('cp-f-memo').value = cur.memo || '';
+        if (type === 'yarn') cpCompDraw(isNew ? [] : (Array.isArray(cur.comp) ? cur.comp : yarnCompOf(cur)));
         const vLabel = document.getElementById('cp-f-vendor-label');
         if (type === 'knit') { vLabel.textContent = '편직공장'; document.getElementById('cp-f-vendor').innerHTML = vendorOptionsHTML('편직처', cur.vendor || ''); }
         else if (type !== 'yarn') { vLabel.textContent = '공장'; document.getElementById('cp-f-vendor').innerHTML = vendorOptionsMulti(['염색처', '가공처', '후가공처'], cur.vendor || ''); }
@@ -31030,6 +31612,23 @@ function validateBlendSum(blends, label) {
       }
       const closeCp = () => { modal.classList.remove('show'); cpIdx = -1; };
       document.getElementById('cp-add-yarn')?.addEventListener('click', () => openCp('yarn', -1));
+      // hotfix290: 성분이 비어 있는 사종만 이름을 보고 한꺼번에 채운다. 채운 값은 [확인 필요]로 남는다.
+      document.getElementById('cp-yarn-guess-all')?.addEventListener('click', async () => {
+        const P = JSON.parse(JSON.stringify(getCostPrices()));
+        const hit = [];
+        P.yarns.forEach(y => {
+          if (Array.isArray(y.comp) && y.comp.length) return;
+          const g = guessYarnComp(y.name, y.kind);
+          if (!g.length) return;
+          y.comp = g; y.comp_auto = true;
+          hit.push(`${y.name} → ${g.map(x => x.mat + ' ' + x.pct + '%').join(' · ')}`);
+        });
+        if (!hit.length) { toast('새로 채울 사종이 없습니다', 'warning'); return; }
+        const head = hit.slice(0, 12).join('\n');
+        if (!confirm(`${hit.length}개 사종의 성분을 이름을 보고 채웁니다.\n\n${head}${hit.length > 12 ? `\n… 외 ${hit.length - 12}개` : ''}\n\n채운 값은 [확인 필요]로 표시됩니다. 하나씩 열어 맞는지 봐 주십시오.\n이미 성분이 들어 있는 사종은 손대지 않습니다.`)) return;
+        const ok = await saveCostPrices(P, {});
+        if (ok) { toast(`${hit.length}개 사종에 성분을 채웠습니다`, 'success'); renderDashboard(); }
+      });
       document.getElementById('cp-add-knit')?.addEventListener('click', () => openCp('knit', -1));
       document.getElementById('cp-add-proc')?.addEventListener('click', () => openCp('proc', -1));
       document.getElementById('cp-add-bundle')?.addEventListener('click', () => openCp('bundle', -1));
@@ -31040,6 +31639,13 @@ function validateBlendSum(blends, label) {
       modal.addEventListener('click', e => { if (e.target === modal) closeCp(); });
       document.getElementById('cp-f-price')?.addEventListener('input', function () { formatMoneyInput(this); refreshPriceHint(); });
       document.getElementById('cp-f-kind')?.addEventListener('change', refreshPriceHint);
+      // 사종 이름을 다 치고 다음 칸으로 넘어갈 때, 성분이 비어 있으면 이름을 보고 미리 채워 준다
+      document.getElementById('cp-f-name')?.addEventListener('blur', function () {
+        if (cpType !== 'yarn') return;
+        if (cpCompRead().length) return;
+        const g = guessYarnComp(this.value.trim(), document.getElementById('cp-f-kind')?.value || '기타');
+        if (g.length) cpCompDraw(g);
+      });
 
       document.getElementById('cp-modal-save')?.addEventListener('click', async () => {
         const P = JSON.parse(JSON.stringify(getCostPrices()));
@@ -31052,7 +31658,10 @@ function validateBlendSum(blends, label) {
           const kind = document.getElementById('cp-f-kind').value || '기타';
           const dup = P.yarns.findIndex((x, i) => i !== cpIdx && String(x.name || '').trim().toLowerCase() === name.toLowerCase());
           if (dup >= 0) { toast('같은 사종이 이미 있습니다', 'error'); return; }
-          entry = { name, kind, price, updated_at: todayYMD(), updated_by: state.user?.email || '' };
+          // hotfix290: 성분(혼용율). 넣었으면 합이 100%여야 한다. 창에서 저장하면 대표가 확인한 것으로 본다.
+          const comp = cpCompRead();
+          if (comp.length && Math.abs(yarnCompSum(comp) - 100) > 0.5) { toast('성분 합계가 100%가 되어야 합니다', 'error'); return; }
+          entry = { name, kind, price, comp: comp, comp_auto: false, updated_at: todayYMD(), updated_by: state.user?.email || '' };
           list = P.yarns; key = priceKeyYarn(name);
         } else if (cpType === 'knit') {
           const vendor = document.getElementById('cp-f-vendor').value.trim();
@@ -33744,7 +34353,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix289';
+  const VERSION = 'v2.53 hotfix292';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
