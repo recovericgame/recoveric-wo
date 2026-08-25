@@ -25599,7 +25599,7 @@ function validateBlendSum(blends, label) {
   function cpGrid() {
     if (!state.cpGrid || typeof state.cpGrid !== 'object') state.cpGrid = {};
     const g = state.cpGrid;
-    if (g.tab !== 'proc') g.tab = 'knit';
+    if (g.tab !== 'proc' && g.tab !== 'base') g.tab = 'knit';
     if (typeof g.q !== 'string') g.q = '';
     if (typeof g.only !== 'boolean') g.only = true;
     if (!g.edit || typeof g.edit !== 'object') g.edit = {};
@@ -25663,6 +25663,7 @@ function validateBlendSum(blends, label) {
       숫자를 넣으면 <strong>그 품목만의 값</strong>이 되어 노란 바탕으로 바뀝니다.</span>
     </div>
     <div style="display:flex;gap:7px;flex-wrap:wrap;align-items:center;margin-bottom:11px;">
+      <button class="cp-g-tab" data-gtab="base" style="${g.tab === 'base' ? sOn : sOff}">기본 자료</button>
       <button class="cp-g-tab" data-gtab="knit" style="${g.tab === 'knit' ? sOn : sOff}">편직료</button>
       <button class="cp-g-tab" data-gtab="proc" style="${g.tab === 'proc' ? sOn : sOff}">염색 · 가공료</button>
       <span style="width:12px;"></span>
@@ -25683,6 +25684,52 @@ function validateBlendSum(blends, label) {
     const nameTd = s => `<td style="text-align:left;font-weight:700;position:sticky;left:0;background:#fff;z-index:2;box-shadow:1px 0 0 #e2e8f0;">
       ${escapeHtml(s.name || '-')}${s.active === false ? ' <span style="font-size:10px;color:#9ca3af;font-weight:400;">(판매 종료)</span>' : ''}
       <div style="font-size:10.5px;color:#a3a9b3;font-weight:400;">${escapeHtml(normOrg(s.cat) || '-')} · ${escapeHtml(s.width || '-')}${s.gy ? ' · ' + s.gy + 'g/y' : ''}</div></td>`;
+    if (g.tab === 'base') {
+      const need = `<span style="font-size:11px;font-weight:800;color:#b45309;">등록</span>`;
+      const dash = `<span style="color:#c7cbd1;font-size:11px;">-</span>`;
+      h += `<div class="dash-table-wrap" style="max-height:62vh;overflow:auto;"><table class="dash-table" style="font-size:12.5px;"><thead><tr>
+        <th style="text-align:left;min-width:190px;position:sticky;left:0;top:0;background:#f8fafc;z-index:4;">품목명</th>
+        ${['구분', '조직', '기준폭', '튜브', '안내중량', '생산중량', '루프장', '혼용율', '공정', '마지막 수정일', '판매']
+          .map(t => `<th style="min-width:${t === '혼용율' || t === '공정' ? 150 : (t === '마지막 수정일' ? 96 : 80)}px;position:sticky;top:0;background:#f8fafc;z-index:3;">${t}</th>`).join('')}
+        <th style="min-width:74px;position:sticky;top:0;background:#f8fafc;z-index:3;">수정</th>
+      </tr></thead><tbody>`;
+      specs.forEach(s => {
+        const fid = specFid(s);
+        const c = getFabricCost(fid) || {};
+        const ks = (c.knits && typeof c.knits === 'object') ? c.knits : {};
+        const pk = ks[String(c.knitter || '').trim()] || ks[Object.keys(ks)[0]] || {};
+        const ys = Array.isArray(c.yarns) ? c.yarns.filter(y => y && y.name) : [];
+        const loops = ys.map(y => {
+          const ls = fcLoopMap(pk);
+          const v = (ls && ls[String(y.name).trim()] != null) ? ls[String(y.name).trim()] : y.loop;
+          return (v == null || v === '') ? null : v;
+        }).filter(v => v != null);
+        const fiber = ys.length ? fiberBlendText(ys) : '';
+        const makeGy = (pk.make_gy != null && pk.make_gy !== '') ? pk.make_gy : c.make_gy;
+        const procs = Array.isArray(c.procs) ? c.procs : [];
+        const cell = (v, ok) => `<td style="text-align:center;font-size:11.5px;${ok ? 'color:#0f172a;' : 'background:#fffbeb;'}">${ok ? v : need}</td>`;
+        h += `<tr>${nameTd(s)}
+          ${cell(escapeHtml(s.cat || ''), !!String(s.cat || '').trim())}
+          ${cell(escapeHtml(normOrg(pk.org) || normOrg(s.cat) || ''), !!(normOrg(pk.org) || normOrg(s.cat)))}
+          ${cell(escapeHtml(s.width || ''), !!String(s.width || '').trim())}
+          <td style="text-align:center;font-size:11.5px;color:${s.tube ? '#1e3a8a' : '#c7cbd1'};font-weight:${s.tube ? 800 : 400};">${s.tube ? '튜브 ×2' : '실폭'}</td>
+          ${cell((s.gy != null && s.gy !== '') ? s.gy + ' g/y' : '', s.gy != null && s.gy !== '')}
+          ${cell((makeGy != null && makeGy !== '') ? makeGy + ' g/y' : '', makeGy != null && makeGy !== '')}
+          ${cell(escapeHtml(loops.join(' · ')), loops.length > 0)}
+          <td style="text-align:center;font-size:11px;color:#475569;">${fiber ? escapeHtml(fiber) : dash}</td>
+          <td style="text-align:center;font-size:11px;">${procs.length ? procs.map(x => `<span style="display:inline-block;margin:1px 2px;">${costBadge(x)}</span>`).join('') : `<span style="color:#c7cbd1;">기본 가공법</span>`}</td>
+          <td style="text-align:center;font-size:11.5px;color:#6b7280;">${escapeHtml(c.updated_at || '') || dash}</td>
+          <td style="text-align:center;font-size:11px;font-weight:800;color:${s.active === false ? '#9ca3af' : '#166534'};">${s.active === false ? '판매 종료' : '판매 중'}</td>
+          <td class="col-action"><button class="dash-action-btn fc-edit" data-fid="${escapeHtml(fid)}" style="${Object.keys(c).length ? '' : 'background:#1e3a8a;color:#fff;font-weight:700;'}">${Object.keys(c).length ? '수정' : '등록'}</button></td>
+        </tr>`;
+      });
+      h += `</tbody></table></div>
+        <div style="font-size:11.5px;color:#9ca3af;margin-top:8px;line-height:1.7;">
+          <strong style="color:#b45309;">노란 칸이 아직 안 채운 자리</strong>입니다. [등록]이나 [수정]을 누르면 그 자리에서 원가 자료 창이 열립니다.
+          품목을 새로 만들거나 지우는 것은 <strong>[원단 기본 스펙]</strong> 화면에서 합니다.
+        </div>` + renderFcModalHtml();
+      return h;
+    }
     if (g.tab === 'knit') {
       const vs = cpGridKnitVendors(P);
       h += `<div class="dash-table-wrap" style="max-height:62vh;overflow:auto;"><table class="dash-table" style="font-size:12.5px;"><thead><tr>
@@ -26085,7 +26132,12 @@ function validateBlendSum(blends, label) {
       </tr>`;
     });
     h += `</tbody></table></div>`;
-    h += `<div class="dash-modal-bg" id="fc-modal">
+    h += renderFcModalHtml();
+    return h;
+  }
+  // hotfix310: [원가 자료] 창 껍데기 — [원단 원가]와 [단가 설정] 두 곳에서 같이 쓴다
+  function renderFcModalHtml() {
+    return `<div class="dash-modal-bg" id="fc-modal">
       <div class="dash-modal" style="max-width:960px;">
         <div class="dash-modal-head"><span>원단 원가 자료</span><button class="dash-modal-close" id="fc-modal-close">✕</button></div>
         <div style="padding:16px;">
@@ -26181,7 +26233,6 @@ function validateBlendSum(blends, label) {
         </div>
       </div>
     </div>`;
-    return h;
   }
   // hotfix281: 원단 원가 자료 편집 — [원가 계산기] › [원단 원가] 화면 전용
     const costWrap = () => document.getElementById('fs-cost-wrap');
@@ -36320,7 +36371,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix309';
+  const VERSION = 'v2.53 hotfix310';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
