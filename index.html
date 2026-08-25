@@ -6954,6 +6954,10 @@ const state = {
   cqSearch: '',             // 산출서 품목 찾기
   cqOpen: '',               // 펼쳐 놓은 산출서 번호
   cqWhy: '',                // 계산식을 펼친 산출서 번호
+  // hotfix294: 비교안 — 산출서를 통째로 복사해 한 곳만 바꾸고 나란히 본다
+  cqCompare: '',            // 나란히 보고 있는 원본 산출서 번호
+  cqDraft: null,            // 지금 고치고 있는 비교안 (저장 전 임시)
+  cqDraftBase: '',          // 그 비교안의 원본 번호
   costTab: 'prices',        // 원가 계산기 안쪽 탭
   costPriceTab: 'yarn',     // 단가표 안쪽 탭: yarn | knit | proc | grade
   costSearch: '',
@@ -6968,7 +6972,7 @@ const state = {
   costGradesLoaded: false,
   costCalc: {
     fid: '',                // 고른 품목의 고정 코드
-    print: { bon: '', pig: '', ten: '' },   // 나염비(야드당) 본염·안료·텐타
+    print: { bon: '', pig: '', ten: '', post: '', loss: '' },   // 나염 — 본염·안료·텐타(야드당) · 나염후가공료(kg당) · 나염로스(%)
     target: '',             // 목표 마진율
     cells: {},              // 손으로 고친 단가 칸  { 'g0:kg': 9700 }
     sim: false,             // 원사값 바꿔 보기
@@ -8306,64 +8310,137 @@ function getReceiptsTotalRib(c) {
 }
 // ==================== v2.53 입고 차수 헬퍼 끝 ====================
 
-// ==================== hotfix130: 모달 공통 가드 ====================
-//  표준 모달 UX: (1) 바깥에서 "누르고~뗀" 진짜 백드롭 클릭일 때만 닫기
-//   (안에서 드래그해 텍스트 선택하다 바깥에서 떼도 안 닫힘), (2) 작성 중이면 닫기 전 확인.
-//  dash-modal-bg / hist-modal-bg 를 쓰는 모든 팝업에 한 번에 적용된다.
-function modalHasUnsavedInput(modal) {
-  if (!modal) return false;
-  const fields = modal.querySelectorAll('input, textarea, select');
-  for (let i = 0; i < fields.length; i++) {
-    const f = fields[i];
-    if (f.disabled || f.readOnly || f.type === 'hidden') continue;
-    if (f.type === 'checkbox' || f.type === 'radio') {
-      if (f.checked !== f.defaultChecked) return true;
-    } else if (f.tagName === 'SELECT') {
-      const opts = f.options;
-      for (let j = 0; j < opts.length; j++) { if (opts[j].selected !== opts[j].defaultSelected) return true; }
-    } else {
-      if ((f.value || '') !== (f.defaultValue || '')) return true;
-    }
-  }
-  return false;
+// ==================== hotfix293: 모달 공통 가드 (전면 교체) ====================
+//  표준 모달 UX — 화면에 뜨는 모든 팝업에 한 번에 적용된다.
+//   (1) 팝업 바깥을 "누르고 그 자리에서 뗀" 진짜 백드롭 클릭일 때만 닫는다.
+//       (팝업 안에서 글자를 끌어 선택하다 바깥에서 손을 떼도 안 닫힌다)
+//   (2) 무언가를 입력·선택한 뒤에 닫으려 하면 "저장하지 않고 닫을까요?" 를 먼저 묻는다.
+//   (3) 나중에 만들어지는 팝업까지 전부 덮는다 — 문서 한 곳에서 가로채기 때문.
+//  옛 hotfix130 가드는 dash-modal-bg / hist-modal-bg 두 개만 덮었다. 그것을 대신한다.
+const MODAL_BG_SEL = '.dash-modal-bg, .color-picker-modal-bg, .hiwos-modal-bg';
+function modalOverlayOf(el) {
+  return (el && el.closest) ? el.closest(MODAL_BG_SEL) : null;
 }
+function modalIsDirty(modal) { return !!(modal && modal.__hiwosDirty); }
+function modalMarkClean(modal) { if (modal) { modal.__hiwosDirty = false; modal.__downOnBackdrop = undefined; } }
+function modalMarkDirty(modal) { if (modal) modal.__hiwosDirty = true; }
+function modalConfirmClose(modal) {
+  if (!modalIsDirty(modal)) return true;
+  return confirm('입력하던 내용이 있습니다.\n저장하지 않고 닫을까요?');
+}
+// 옛 이름을 쓰던 곳이 있어도 안 깨지게 남겨 둔다
+function modalHasUnsavedInput(modal) { return modalIsDirty(modal); }
 function installModalGuards() {
-  ['dash-modal-bg', 'hist-modal-bg'].forEach(function (id) {
-    const modal = document.getElementById(id);
-    if (!modal || modal.__guardInstalled) return;
-    modal.__guardInstalled = true;
-    // 마우스 누름이 백드롭(모달 자신)에서 시작했는지 기록
-    modal.addEventListener('mousedown', function (e) {
-      modal.__downOnBackdrop = (e.target === modal);
-    }, true);
-    // 캡처 단계에서 닫기 시도를 먼저 가로챔
-    modal.addEventListener('click', function (e) {
-      if (!modal.classList.contains('show')) return;
-      const onBackdrop = (e.target === modal);
-      const onCloseBtn = !!(e.target.closest && e.target.closest('.dash-modal-close'));
-      if (!onBackdrop && !onCloseBtn) return;  // 모달 내부 일반 클릭은 통과
-      // 안에서 드래그를 시작해 바깥(백드롭)에서 뗀 경우 → 닫지 않음
-      if (onBackdrop && modal.__downOnBackdrop === false) {
-        e.stopImmediatePropagation();
-        e.preventDefault();
-        return;
-      }
-      // 작성하던 내용이 있으면 확인
-      if (modalHasUnsavedInput(modal)) {
-        if (!confirm('작성하던 내용이 있습니다.\n저장하지 않고 팝업을 닫을까요?')) {
-          e.stopImmediatePropagation();
-          e.preventDefault();
-        }
-      }
+  if (typeof document === 'undefined' || document.__hiwosModalGuard) return;
+  document.__hiwosModalGuard = true;
+
+  // 사람이 실제로 손댔을 때만 "입력 중"으로 본다 (프로그램이 채워 넣은 값은 세지 않는다)
+  ['input', 'change'].forEach(function (evt) {
+    document.addEventListener(evt, function (e) {
+      if (!e.isTrusted) return;
+      modalMarkDirty(modalOverlayOf(e.target));
     }, true);
   });
+
+  // 마우스 누름이 백드롭(팝업 바깥 어두운 곳)에서 시작했는지 기록
+  document.addEventListener('mousedown', function (e) {
+    const m = modalOverlayOf(e.target);
+    if (m) m.__downOnBackdrop = (e.target === m);
+  }, true);
+
+  // 닫기 시도를 캡처 단계에서 먼저 가로챈다
+  document.addEventListener('click', function (e) {
+    const m = modalOverlayOf(e.target);
+    if (!m) return;
+    const onBackdrop = (e.target === m);
+    const onCloseBtn = !!(e.target.closest && e.target.closest('.dash-modal-close'));
+    if (!onBackdrop && !onCloseBtn) return;   // 팝업 안쪽 보통 클릭은 그냥 통과
+    if (onBackdrop && m.__downOnBackdrop === false) {   // 안에서 끌어 바깥에서 뗀 것
+      e.stopImmediatePropagation();
+      e.preventDefault();
+      return;
+    }
+    if (!modalConfirmClose(m)) {
+      e.stopImmediatePropagation();
+      e.preventDefault();
+      return;
+    }
+    modalMarkClean(m);
+  }, true);
+
+  // 팝업이 새로 열리거나 닫히면 "입력 중" 표시를 지운다
+  try {
+    const mo = new MutationObserver(function (recs) {
+      for (let i = 0; i < recs.length; i++) {
+        const r = recs[i];
+        const t = r.target;
+        if (r.type !== 'attributes' || !t || !t.matches || !t.matches(MODAL_BG_SEL)) continue;
+        const nowShown = t.classList.contains('show');
+        const wasShown = /(^|\s)show(\s|$)/.test(r.oldValue || '');
+        if (!nowShown || !wasShown) modalMarkClean(t);
+      }
+    });
+    mo.observe(document.documentElement, {
+      attributes: true, attributeFilter: ['class'], attributeOldValue: true, subtree: true
+    });
+  } catch (err) { /* 관찰이 안 되어도 나머지 가드는 그대로 돈다 */ }
 }
 if (typeof document !== 'undefined') {
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', installModalGuards);
   else installModalGuards();
 }
-// ==================== hotfix130 끝 ====================
+// ==================== hotfix293 모달 가드 끝 ====================
 
+
+// ==================== hotfix295: Ctrl+Enter = 저장 ====================
+//  팝업 안에서 Ctrl+Enter(맥은 Command+Enter)를 누르면 그 팝업의 [저장] 단추를 누른 것과 같다.
+//  저장 단추를 찾는 순서: data-modal-save → id가 -save 로 끝나는 단추 → 글자가 "저장"으로 시작하는 단추
+function modalIsOpen(m) {
+  if (!m) return false;
+  if (m.classList.contains('show')) return true;
+  return m.classList.contains('hiwos-modal-bg');   // 그때그때 만들어 붙이는 팝업은 떠 있으면 열린 것
+}
+function modalTopOpen() {
+  const all = Array.prototype.slice.call(document.querySelectorAll(MODAL_BG_SEL));
+  const open = all.filter(modalIsOpen);
+  return open.length ? open[open.length - 1] : null;
+}
+function modalSaveBtn(m) {
+  if (!m) return null;
+  const usable = b => b && !b.disabled && b.offsetParent !== null;
+  let b = m.querySelector('[data-modal-save]');
+  if (usable(b)) return b;
+  const btns = Array.prototype.slice.call(m.querySelectorAll('button'));
+  b = btns.filter(x => /-save$/.test(String(x.id || '')) && usable(x)).pop();
+  if (b) return b;
+  b = btns.filter(x => /^\s*저장/.test(String(x.textContent || '')) && usable(x)).pop();
+  return b || null;
+}
+function installModalSaveHotkey() {
+  if (typeof document === 'undefined' || document.__hiwosSaveHotkey) return;
+  document.__hiwosSaveHotkey = true;
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Enter' || !(e.ctrlKey || e.metaKey)) return;
+    let m = modalOverlayOf(e.target);
+    if (!m || !modalIsOpen(m)) m = modalTopOpen();
+    let btn = modalSaveBtn(m);
+    if (!btn && !m) {
+      // 팝업이 하나도 안 떠 있으면, 화면에 [저장] 단추가 딱 하나일 때만 누른다
+      const cands = Array.prototype.slice.call(document.querySelectorAll('#dash-body button'))
+        .filter(x => /^\s*저장\s*$/.test(String(x.textContent || '')) && !x.disabled && x.offsetParent !== null);
+      if (cands.length === 1) btn = cands[0];
+    }
+    if (!btn) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    btn.click();
+  }, true);
+}
+if (typeof document !== 'undefined') {
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', installModalSaveHotkey);
+  else installModalSaveHotkey();
+}
+// ==================== hotfix295 끝 ====================
 
 const PROTECTED_COLOR_FIELDS = [
   'completed', 'completed_at',
@@ -11496,7 +11573,73 @@ window.addEventListener('firebase-ready', () => {
     }
   }
   // ============================================================
-  // hotfix270: 원가 계산기 3단계 — 판매 등급 · 원가 계산
+  // hotfix294: 비교안
+  //   산출서를 통째로 복사해 한 곳만 바꾸고 나란히 본다.
+  //   비교안은 base_no 로 원본에 묶인다. 한 원본에 최대 3장.
+  //   ★ 다시 셈할 때 단가표를 보지 않는다. 그 산출서에 얼려 둔 값만 쓴다.
+  // ============================================================
+  const CQ_COMPARE_MAX = 3;
+  function cqNum(v) { const x = parseFloat(v); return isNaN(x) ? 0 : x; }
+  function quoteChildren(no) {
+    const key = String(no || '');
+    if (!key) return [];
+    return costQuoteList().filter(x => String(x.base_no || '') === key)
+      .sort((a, b) => String(a.no || '').localeCompare(String(b.no || '')));
+  }
+  // 얼려 둔 값만 가지고 처음부터 다시 셈한다 (확정 계산식 그대로)
+  function recalcQuote(q) {
+    if (!q) return q;
+    q.yarns = Array.isArray(q.yarns) ? q.yarns : [];
+    const blend = calcYarnBlend(q.yarns);
+    q.blendSum = 0;
+    q.yarns.forEach((y, i) => {
+      y.pct = blend[i] ? blend[i].pct : 0;
+      y.applied = (y.kg == null || y.kg === '') ? 0 : cqNum(y.kg) * (y.pct / 100);
+      q.blendSum += y.pct;
+    });
+    q.blendSum = Math.round(q.blendSum * 10) / 10;
+    q.yarnTotal = q.yarns.reduce((a, y) => a + cqNum(y.applied), 0);
+    const fb = calcFiberBlend(q.yarns);
+    q.fiber = fb.rows;
+    q.fiberUnknown = fb.unknown;
+    q.yarnAfterLoss = q.yarnTotal / ((100 - cqNum(q.knitLoss)) / 100);
+    q.knitPrice = q.yarnAfterLoss + cqNum(q.knitFee);
+    q.knitAfterLoss = q.knitPrice / ((100 - cqNum(q.finLoss)) / 100);
+    q.procs = Array.isArray(q.procs) ? q.procs : [];
+    q.procTotal = q.procs.reduce((a, p) => a + cqNum(p.price), 0);
+    q.kgCost = q.knitAfterLoss + q.procTotal;
+    if (!q.prints || typeof q.prints !== 'object') q.prints = { bon: '', pig: '', ten: '', post: '', loss: '' };
+    q.printFee = ['bon', 'pig', 'ten'].reduce((a, k) => a + cqNum(q.prints[k]), 0);
+    q.printPost = cqNum(q.prints.post);
+    q.printLoss = cqNum(q.prints.loss);
+    q.hasPrint = !!(q.printFee || q.printPost || q.printLoss);
+    q.printKgCost = (q.kgCost + q.printPost) / ((100 - q.printLoss) / 100);
+    q.ydCost = cqNum(q.guide_gy) ? (q.printKgCost * (cqNum(q.guide_gy) / 1000) + q.printFee) : null;
+    q.kgCostBack = (cqNum(q.guide_gy) && q.ydCost != null) ? (q.ydCost / (cqNum(q.guide_gy) / 1000)) : null;
+    q.grades = Array.isArray(q.grades) ? q.grades : [];
+    q.grades.forEach(g => {
+      g.kgMargin = costBackMargin(g.kg, q.kgCost);
+      g.ydMargin = costBackMargin(g.yd, q.ydCost);
+    });
+    return q;
+  }
+  // 원본을 통째로 복사해 비교안 뼈대를 만든다 (아직 저장하지 않는다)
+  function buildCompareDraft(base) {
+    if (!base) return null;
+    const d = JSON.parse(JSON.stringify(base));
+    d.no = newQuoteNo();
+    d.base_no = String(base.base_no || base.no);   // 비교안의 비교안도 원본에 붙인다
+    d.date = todayYMD();
+    d.name = String(base.name || '') + '비교';
+    d.memo = '';
+    d.simmed = false;
+    d.deleted = false;
+    d.saved_by = state.user?.email || '';
+    d.saved_at = todayYMD();
+    return recalcQuote(d);
+  }
+
+
   // ------------------------------------------------------------
   //  · 등급은 cost_data/grades 한 곳에서만 관리한다. 표준은 기준선이라
   //    지울 수 없고 할인율도 0% 고정이다. 나머지는 늘리고 줄일 수 있다.
@@ -11692,9 +11835,18 @@ window.addEventListener('firebase-ready', () => {
     else if (out.usedDefaultProcs) out.msgs.push('이 원단에 가공법이 없어 [기본 가공법]으로 계산했습니다');
     out.knitAfterLoss = out.knitPrice / ((100 - out.finLoss) / 100);
     out.kgCost = out.knitPrice / ((100 - out.finLoss) / 100) + out.procTotal;
-    // 야드당 원가 = kg당 원가 x (안내중량 / 1000) + 나염비
-    out.printFee = ['bon', 'pig', 'ten'].reduce((a, k) => a + (parseFloat((S.print || {})[k]) || 0), 0);
-    out.ydCost = (out.gy ? (out.kgCost * (out.gy / 1000) + out.printFee) : null);
+    // 야드당 원가 — hotfix296 나염 (가) 방식
+    //   (염색완성 + 나염후가공료) ÷ ((100 − 나염로스)/100) → × 안내중량 ÷ 1000 → + 나염료(야드당)
+    //   나염이 없으면(후가공료 0 · 로스 0 · 나염료 0) 예전과 똑같이 kg당 × 중량 ÷ 1000 이 된다
+    const SP = S.print || {};
+    out.printFee = ['bon', 'pig', 'ten'].reduce((a, k) => a + (parseFloat(SP[k]) || 0), 0);
+    out.printPost = parseFloat(SP.post) || 0;
+    out.printLoss = parseFloat(SP.loss) || 0;
+    out.hasPrint = !!(out.printFee || out.printPost || out.printLoss);
+    out.printKgCost = (out.kgCost + out.printPost) / ((100 - out.printLoss) / 100);
+    out.ydCost = (out.gy ? (out.printKgCost * (out.gy / 1000) + out.printFee) : null);
+    // 나염 원단은 야드당이 본 값이다. kg당은 야드당을 되돌린 참고 값으로 함께 보여 준다
+    out.kgCostBack = (out.gy && out.ydCost != null) ? (out.ydCost / (out.gy / 1000)) : null;
     if (!out.gy) out.msgs.push('안내중량(g/y)이 없어 야드당 원가를 낼 수 없습니다');
     out.ok = out.yarns.length > 0;
     return out;
@@ -24128,11 +24280,19 @@ function validateBlendSum(blends, label) {
     h += `&nbsp;&nbsp;${cqMoney(q.knitAfterLoss)} + ${cqMoney(q.procTotal)} = <strong>${cqMoney(q.kgCost)}원/kg</strong>${q.procVendor ? ` <span style="color:#94a3b8;">(${escapeHtml(q.procVendor)})</span>` : ''}</div>`;
 
     // [5] 야드당
-    h += `<div style="${secT}">[5] 야드당 원가</div><div style="${line}">`;
+    h += `<div style="${secT}">[5] 야드당 원가${q.hasPrint ? ' — 나염' : ''}</div><div style="${line}">`;
     if (!q.guide_gy) h += `&nbsp;&nbsp;<span style="color:#c0271f;font-weight:700;">안내중량이 없어 야드당이 나오지 않습니다</span>`;
+    else if (q.hasPrint) {
+      const post = cqNum(q.printPost), loss = cqNum(q.printLoss);
+      h += `&nbsp;&nbsp;염색 완성 ${cqMoney(q.kgCost)}${post ? ' + 나염 후 가공료 ' + cqMoney(post) : ''} = ${cqMoney(q.kgCost + post)}원<br>`;
+      h += `&nbsp;&nbsp;${cqMoney(q.kgCost + post)} ÷ ${(100 - loss) / 100} <span style="color:#94a3b8;">(나염로스 ${loss}%)</span> = ${cqMoney(q.printKgCost)}원/kg<br>`;
+      h += `&nbsp;&nbsp;${cqMoney(q.printKgCost)} × ${q.guide_gy}g/y ÷ 1000 = ${cqMoney(q.printKgCost * q.guide_gy / 1000)}원<br>`;
+      if (q.printFee) h += `&nbsp;&nbsp;+ 나염료(야드당) ${cqMoney(q.printFee)}원<br>`;
+      h += `&nbsp;&nbsp;<strong>${cqMoney(q.ydCost)}원/야드</strong> <span style="color:#94a3b8;">← 나염 원단은 이것이 본 값</span><br>`;
+      h += `&nbsp;&nbsp;kg으로 되돌리면 ${cqMoney(q.kgCostBack)}원/kg <span style="color:#94a3b8;">(참고값)</span>`;
+    }
     else {
       h += `&nbsp;&nbsp;${cqMoney(q.kgCost)} × ${q.guide_gy}g/y ÷ 1000 = ${cqMoney(q.kgCost * q.guide_gy / 1000)}원<br>`;
-      if (q.printFee) h += `&nbsp;&nbsp;+ 나염비 ${cqMoney(q.printFee)}원<br>`;
       h += `&nbsp;&nbsp;<strong>${cqMoney(q.ydCost)}원/야드</strong>`;
     }
     h += `</div>`;
@@ -24186,25 +24346,52 @@ function validateBlendSum(blends, label) {
       </div>`;
     }
     if (!list.length) return h + `<div class="dash-empty">찾는 산출서가 없습니다.</div>`;
+    // ── 나란히 보기 화면으로 갈아탄다
+    if (state.cqCompare && getCostQuotes()[state.cqCompare]) {
+      return h + renderQuoteCompare(getCostQuotes()[state.cqCompare]);
+    }
+    // ── 원본을 먼저 놓고 그 아래에 딸린 비교안을 붙인다
+    const shown = {};
+    const ordered = [];
+    list.forEach(q => {
+      if (q.base_no) return;
+      ordered.push({ q: q, child: false });
+      shown[q.no] = true;
+      quoteChildren(q.no).forEach(c => { ordered.push({ q: c, child: true }); shown[c.no] = true; });
+    });
+    list.forEach(q => { if (!shown[q.no]) ordered.push({ q: q, child: !!q.base_no }); });
+    const CQ_COLS = 10;
     h += `<div class="dash-table-wrap"><table class="dash-table" style="font-size:12.5px;"><thead><tr>
       <th style="text-align:left;min-width:112px;">번호</th>
-      <th style="text-align:left;min-width:170px;">품목</th>
+      <th style="text-align:left;min-width:190px;">품목</th>
       <th style="min-width:96px;">편직공장</th>
       <th style="min-width:88px;">날짜</th>
       <th style="min-width:96px;">kg당</th>
       <th style="min-width:96px;">야드당</th>
       <th style="min-width:74px;">기준 마진</th>
+      <th style="min-width:150px;">비교안</th>
       <th style="min-width:74px;">계산식</th>
       <th style="min-width:60px;">지우기</th>
     </tr></thead><tbody>`;
-    list.forEach(q => {
+    ordered.forEach(row => {
+      const q = row.q;
       const latest = costQuoteIsLatest(q);
       const g0 = (Array.isArray(q.grades) && q.grades.length) ? q.grades[0] : null;
       const mg = g0 ? (g0.ydMargin != null ? g0.ydMargin : g0.kgMargin) : null;
       const band = ccMarginBand(mg);
-      h += `<tr${state.cqWhy === q.no ? ' style="background:#f5f3ff;"' : ''}>
-        <td style="text-align:left;font-weight:700;font-size:11.5px;color:#475569;">${escapeHtml(q.no)}</td>
-        <td style="text-align:left;font-weight:700;">${escapeHtml(q.name || '-')}
+      const kids = row.child ? [] : quoteChildren(q.no);
+      let cmpCell = '';
+      if (row.child) {
+        cmpCell = `<button class="dash-action-btn cq-cmp-open" data-no="${escapeHtml(q.base_no || '')}" style="font-size:11px;padding:4px 9px;">나란히 보기</button>
+          <button class="dash-action-btn cq-cmp-edit" data-no="${escapeHtml(q.no)}" style="font-size:11px;padding:4px 9px;">고치기</button>`;
+      } else {
+        cmpCell = `<button class="dash-action-btn cq-cmp-new" data-no="${escapeHtml(q.no)}" style="font-size:11px;padding:4px 9px;background:#1e3a8a;color:#fff;font-weight:800;">비교안 만들기</button>`;
+        if (kids.length) cmpCell += ` <button class="dash-action-btn cq-cmp-open" data-no="${escapeHtml(q.no)}" style="font-size:11px;padding:4px 9px;">나란히 보기 ${kids.length}</button>`;
+      }
+      h += `<tr${state.cqWhy === q.no ? ' style="background:#f5f3ff;"' : (row.child ? ' style="background:#fbfcfe;"' : '')}>
+        <td style="text-align:left;font-weight:700;font-size:11.5px;color:#475569;">${row.child ? '<span style="color:#a3a9b3;">└ </span>' : ''}${escapeHtml(q.no)}</td>
+        <td style="text-align:left;font-weight:700;${row.child ? 'padding-left:16px;' : ''}">${escapeHtml(q.name || '-')}
+          ${row.child ? ` <span style="font-size:10px;font-weight:800;color:#1e3a8a;background:#e0e7ff;border:1px solid #c7d2fe;border-radius:4px;padding:1px 5px;">비교안</span>` : ''}
           ${latest ? ` <span style="font-size:10px;font-weight:800;color:#166534;background:#dcfce7;border:1px solid #bbf7d0;border-radius:4px;padding:1px 5px;">최신</span>` : ''}
           ${q.simmed ? ` <span style="font-size:10px;font-weight:800;color:#92400e;background:#fef3c7;border:1px solid #fcd34d;border-radius:4px;padding:1px 5px;">바꿔 본 값</span>` : ''}
           ${q.memo ? `<div style="font-size:11px;color:#94a3b8;font-weight:400;margin-top:2px;">${escapeHtml(q.memo)}</div>` : ''}
@@ -24214,13 +24401,214 @@ function validateBlendSum(blends, label) {
         <td style="text-align:right;font-weight:800;color:#0f172a;">${cqMoney(q.kgCost)}</td>
         <td style="text-align:right;font-weight:800;color:#0f172a;">${cqMoney(q.ydCost)}</td>
         <td style="text-align:right;font-weight:800;background:${band.bg};color:${band.fg};">${mg == null ? '-' : mg.toFixed(1) + '%'}</td>
+        <td class="col-action" style="white-space:nowrap;">${cmpCell}</td>
         <td class="col-action"><button class="dash-action-btn cq-why" data-no="${escapeHtml(q.no)}" style="font-size:11.5px;padding:5px 10px;${state.cqWhy === q.no ? 'background:#5b21b6;color:#fff;font-weight:800;' : ''}">${state.cqWhy === q.no ? '접기' : '계산식'}</button></td>
         <td class="col-action col-act-delete"><button class="dash-action-btn danger cq-del" data-no="${escapeHtml(q.no)}">지움</button></td>
       </tr>`;
-      if (state.cqWhy === q.no) h += `<tr><td colspan="9" style="padding:0;background:#faf9ff;">${renderQuoteWhy(q)}</td></tr>`;
+      if (state.cqWhy === q.no) h += `<tr><td colspan="${CQ_COLS}" style="padding:0;background:#faf9ff;">${renderQuoteWhy(q)}</td></tr>`;
     });
     h += `</tbody></table></div>`;
+    h += renderQuoteDraftModal();
     return h;
+  }
+
+  // ── hotfix294: 나란히 보기 — 원본과 비교안을 한 표에 놓고 다른 값만 노란 바탕
+  function renderQuoteCompare(base) {
+    const kids = quoteChildren(base.no).slice(0, CQ_COMPARE_MAX);
+    const cols = [base].concat(kids);
+    const money = v => (v == null || isNaN(v)) ? '-' : costMoney(v, 0);
+    const pctT = v => (v == null || isNaN(v)) ? '-' : (Math.round(v * 10) / 10) + '%';
+    const rows = [];
+    const add = (label, fn, star) => rows.push({ label: label, star: !!star, vals: cols.map(fn) });
+    add('편직공장', q => ({ t: (q.knitter || '-') + (q.machine ? ' · ' + q.machine : '') }));
+    add('안내중량', q => ({ t: cqNum(q.guide_gy) ? cqNum(q.guide_gy) + ' g/y' : '-', n: cqNum(q.guide_gy) }));
+    const maxY = cols.reduce((a, q) => Math.max(a, (q.yarns || []).length), 0);
+    for (let i = 0; i < maxY; i++) {
+      add('원사 ' + (i + 1), q => {
+        const y = (q.yarns || [])[i];
+        if (!y) return { t: '-' };
+        return { t: `${y.name || '-'}<div style="font-size:11px;color:#64748b;">kg ${money(y.kg)} · ${y.pct == null ? '-' : y.pct + '%'}</div>` };
+      });
+    }
+    add('총원사가', q => ({ t: money(q.yarnTotal), n: q.yarnTotal }));
+    add('편직로스', q => ({ t: pctT(q.knitLoss), n: cqNum(q.knitLoss) }));
+    add('편직료', q => ({ t: money(q.knitFee), n: cqNum(q.knitFee) }));
+    add('생지 원가 (kg)', q => ({ t: money(q.knitPrice), n: q.knitPrice }), true);
+    add('가공처', q => ({ t: q.procVendor || '-' }));
+    add('가공로스', q => ({ t: pctT(q.finLoss), n: cqNum(q.finLoss) }));
+    add('가공비 합계', q => ({ t: money(q.procTotal), n: q.procTotal }));
+    add('kg당 원가 (염색완성)', q => ({ t: money(q.kgCost), n: q.kgCost }), true);
+    add('나염 후 가공료', q => ({ t: money(cqNum(q.printPost)), n: cqNum(q.printPost) }));
+    add('나염로스', q => ({ t: pctT(cqNum(q.printLoss)), n: cqNum(q.printLoss) }));
+    add('나염료 (야드)', q => ({ t: money(cqNum(q.printFee)), n: cqNum(q.printFee) }));
+    add('야드당 원가', q => ({ t: money(q.ydCost), n: q.ydCost }), true);
+    add('제시단가 (야드)', q => {
+      const g = (q.grades || [])[0];
+      return { t: (g && g.yd != null) ? money(g.yd) : '-', n: (g && g.yd != null) ? cqNum(g.yd) : null };
+    });
+    add('YD 마진', q => {
+      const g = (q.grades || [])[0];
+      return { t: (g && g.ydMargin != null) ? g.ydMargin.toFixed(1) + '%' : '-', n: (g && g.ydMargin != null) ? g.ydMargin : null, isPct: true };
+    }, true);
+    let h = `<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px;">
+      <div style="font-size:14px;font-weight:800;color:#0f172a;">나란히 보기 — ${escapeHtml(base.name || '')}</div>
+      <div style="font-size:11.5px;color:#94a3b8;">원본과 다른 값만 노란 바탕입니다. 비교안은 원본당 ${CQ_COMPARE_MAX}장까지 만들 수 있습니다.</div>
+      <button class="dash-action-btn" id="cq-cmp-close" style="margin-left:auto;font-size:11.5px;padding:6px 14px;">목록으로</button>
+    </div>`;
+    if (!kids.length) {
+      return h + `<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:14px 16px;font-size:13px;color:#92400e;line-height:1.8;">
+        이 산출서에는 아직 비교안이 없습니다. 목록에서 <strong>[비교안 만들기]</strong>를 눌러 주십시오.
+      </div>`;
+    }
+    h += `<div class="dash-table-wrap"><table class="dash-table" style="font-size:12.5px;"><thead><tr>
+      <th style="text-align:left;min-width:130px;">항목</th>
+      ${cols.map((q, ci) => `<th style="min-width:160px;">
+        <div style="font-weight:800;color:#0f172a;">${escapeHtml(q.name || '-')}</div>
+        <div style="font-size:10.5px;color:#94a3b8;font-weight:400;">${escapeHtml(q.no)} · ${escapeHtml(q.date || '')}</div>
+        ${ci === 0 ? `<div style="font-size:10px;font-weight:800;color:#166534;">원본</div>`
+          : `<div style="margin-top:3px;display:flex;gap:4px;justify-content:center;">
+              <button class="dash-action-btn cq-cmp-edit" data-no="${escapeHtml(q.no)}" style="font-size:10.5px;padding:3px 8px;">고치기</button>
+              <button class="dash-action-btn cq-cmp-promote" data-no="${escapeHtml(q.no)}" style="font-size:10.5px;padding:3px 8px;">본안으로</button>
+            </div>`}
+      </th>`).join('')}
+    </tr></thead><tbody>`;
+    rows.forEach(r => {
+      const b = r.vals[0];
+      h += `<tr${r.star ? ' style="background:#f0fdf4;"' : ''}>
+        <td style="text-align:left;font-weight:${r.star ? '800' : '700'};color:${r.star ? '#14532d' : '#334155'};">${escapeHtml(r.label)}</td>`;
+      r.vals.forEach((v, ci) => {
+        const same = (ci === 0) || (v.t === b.t);
+        let diff = '';
+        if (ci > 0 && !same && v.n != null && b.n != null && !isNaN(v.n) && !isNaN(b.n)) {
+          const d = v.n - b.n;
+          if (Math.abs(d) >= 0.05) {
+            const up = d > 0;
+            diff = `<div style="font-size:10.5px;font-weight:800;color:${up ? '#c0271f' : '#15803d'};">${up ? '▲' : '▼'} ${r.isPct ? (Math.abs(Math.round(d * 10) / 10) + '%p') : costMoney(Math.abs(d), 0)}</div>`;
+          }
+        }
+        h += `<td style="text-align:center;font-weight:${r.star ? '800' : '700'};${same ? 'color:#94a3b8;' : 'background:#fef9c3;color:#0f172a;'}">${v.t}${diff}</td>`;
+      });
+      h += `</tr>`;
+    });
+    h += `</tbody></table></div>`;
+    h += renderQuoteDraftModal();
+    return h;
+  }
+  // ── hotfix294: 비교안 고치기 창. 얼려 둔 값만 고치고 그 자리에서 다시 셈한다
+  function renderQuoteDraftModal() {
+    const d = state.cqDraft;
+    if (!d) return '';
+    const iS = 'padding:5px 8px;border:1px solid #d1d5db;border-radius:5px;font-size:12px;font-family:inherit;box-sizing:border-box;text-align:right;';
+    const lbl = 'font-size:11px;font-weight:700;color:#475569;display:block;margin-bottom:3px;';
+    const sec = t => `<div style="font-size:12px;font-weight:800;color:#334155;margin:13px 0 6px;">${t}</div>`;
+    const yarnNames = getCostPrices().yarns.map(y => String((y && y.name) || '').trim()).filter(Boolean)
+      .sort((a, b) => a.localeCompare(b, 'ko'));
+    let h = `<div class="dash-modal-bg show" id="cq-modal"><div class="dash-modal" style="max-width:860px;">
+      <div class="dash-modal-head"><span>비교안 고치기 — ${escapeHtml(state.cqDraftBase || '')} 에서 복사</span>
+        <button class="dash-modal-close" id="cq-modal-close">닫기</button></div>
+      <div style="padding:15px 18px;max-height:74vh;overflow:auto;">
+      <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:7px;padding:9px 12px;font-size:12px;color:#1e3a8a;line-height:1.7;margin-bottom:12px;">
+        여기서 고친 값은 <strong>이 비교안에만</strong> 들어갑니다. 단가표도 원본 산출서도 바뀌지 않습니다.<br>
+        값을 하나 고칠 때마다 아래 <strong>결과</strong>가 바로 다시 계산됩니다.
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;">
+        <div style="flex:1;min-width:230px;"><label style="${lbl}">비교안 이름</label>
+          <input type="text" lang="ko" id="cqd-name" value="${escapeHtml(d.name || '')}" style="${iS}text-align:left;width:100%;"></div>
+        <div style="flex:1;min-width:230px;"><label style="${lbl}">메모 (무엇을 바꿔 본 것인지)</label>
+          <input type="text" lang="ko" id="cqd-memo" value="${escapeHtml(d.memo || '')}" placeholder="예: 아스킨을 75/36 DTY로" style="${iS}text-align:left;width:100%;"></div>
+        <div style="width:120px;"><label style="${lbl}">안내중량 g/y</label>
+          <input type="text" inputmode="numeric" id="cqd-gy" value="${escapeHtml(String(d.guide_gy == null ? '' : d.guide_gy))}" style="${iS}width:100%;"></div>
+      </div>`;
+    h += sec('원사 — 사종을 바꾸면 kg 단가가 단가표에서 저절로 따라옵니다');
+    h += `<div class="dash-table-wrap"><table class="dash-table" style="font-size:12px;"><thead><tr>
+      <th style="text-align:left;min-width:190px;">사종</th><th style="min-width:74px;">굵기</th><th style="min-width:64px;">단위</th>
+      <th style="min-width:74px;">루프장</th><th style="min-width:104px;">kg 단가</th><th style="min-width:64px;">비율</th>
+    </tr></thead><tbody>`;
+    (d.yarns || []).forEach((y, i) => {
+      const cur = String(y.name || '').trim();
+      const inList = yarnNames.some(n => n.toLowerCase() === cur.toLowerCase());
+      h += `<tr>
+        <td style="text-align:left;"><select class="cqd-y-name" data-i="${i}" style="${iS}text-align:left;width:100%;">
+          <option value="">— 빼기 —</option>
+          ${(inList || !cur) ? '' : `<option value="${escapeHtml(cur)}" selected>${escapeHtml(cur)} (단가표에 없음)</option>`}
+          ${yarnNames.map(n => `<option value="${escapeHtml(n)}"${n.toLowerCase() === cur.toLowerCase() ? ' selected' : ''}>${escapeHtml(n)}</option>`).join('')}
+        </select></td>
+        <td><input type="text" inputmode="decimal" class="cqd-y-size" data-i="${i}" value="${escapeHtml(String(y.size == null ? '' : y.size))}" style="${iS}width:100%;"></td>
+        <td><select class="cqd-y-unit" data-i="${i}" style="${iS}text-align:center;width:100%;">
+          <option value="수"${String(y.unit || '') === '수' ? ' selected' : ''}>수</option>
+          <option value="D"${String(y.unit || '') !== '수' ? ' selected' : ''}>D</option>
+        </select></td>
+        <td><input type="text" inputmode="decimal" class="cqd-y-loop" data-i="${i}" value="${escapeHtml(String(y.loop == null ? '' : y.loop))}" style="${iS}width:100%;"></td>
+        <td><input type="text" inputmode="numeric" class="cqd-y-kg" data-i="${i}" value="${escapeHtml(moneyInputVal(y.kg == null ? '' : Math.round(y.kg)))}" style="${iS}width:100%;"></td>
+        <td style="text-align:right;font-weight:800;color:#0f172a;" class="cqd-y-pct" data-i="${i}">${y.pct == null ? '-' : y.pct + '%'}</td>
+      </tr>`;
+    });
+    h += `</tbody></table></div>`;
+    h += sec('편직');
+    h += `<div style="display:flex;gap:10px;flex-wrap:wrap;">
+      <div style="width:130px;"><label style="${lbl}">편직로스 %</label>
+        <input type="text" inputmode="decimal" id="cqd-knitloss" value="${escapeHtml(String(d.knitLoss == null ? '' : d.knitLoss))}" style="${iS}width:100%;"></div>
+      <div style="width:150px;"><label style="${lbl}">편직료 (kg당)</label>
+        <input type="text" inputmode="numeric" id="cqd-knitfee" value="${escapeHtml(moneyInputVal(d.knitFee == null ? '' : Math.round(d.knitFee)))}" style="${iS}width:100%;"></div>
+    </div>`;
+    h += sec('염색·가공 — 공정을 아예 빼려면 단가를 0으로 두십시오');
+    h += `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
+      <div style="width:130px;"><label style="${lbl}">가공로스 %</label>
+        <input type="text" inputmode="decimal" id="cqd-finloss" value="${escapeHtml(String(d.finLoss == null ? '' : d.finLoss))}" style="${iS}width:100%;"></div>
+    </div>`;
+    h += `<div class="dash-table-wrap"><table class="dash-table" style="font-size:12px;"><thead><tr>
+      <th style="text-align:left;min-width:230px;">공정</th><th style="min-width:120px;">단가</th>
+    </tr></thead><tbody>`;
+    (d.procs || []).forEach((p, i) => {
+      h += `<tr>
+        <td style="text-align:left;font-weight:700;">${escapeHtml(p.name || '-')}${p.isBundle ? ' <span style="font-size:10px;font-weight:800;color:#1e3a8a;background:#e0e7ff;border-radius:4px;padding:1px 5px;">묶음</span>' : ''}</td>
+        <td><input type="text" inputmode="numeric" class="cqd-p-price" data-i="${i}" value="${escapeHtml(moneyInputVal(p.price == null ? '' : Math.round(p.price)))}" style="${iS}width:100%;"></td>
+      </tr>`;
+    });
+    h += `</tbody></table></div>`;
+    h += sec('나염 · 제시단가 — 나염이 없으면 전부 비워 두십시오');
+    h += `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px;align-items:flex-end;">
+      <div style="width:150px;"><label style="${lbl}">나염 후 가공료 (kg당)</label>
+        <input type="text" inputmode="numeric" class="cqd-print" data-k="post" value="${escapeHtml(moneyInputVal((d.prints || {}).post == null ? '' : (d.prints || {}).post))}" style="${iS}width:100%;"></div>
+      <div style="width:110px;"><label style="${lbl}">나염로스 %</label>
+        <input type="text" inputmode="decimal" class="cqd-print" data-k="loss" value="${escapeHtml(String((d.prints || {}).loss == null ? '' : (d.prints || {}).loss))}" style="${iS}width:100%;"></div>
+      <div style="width:1px;align-self:stretch;background:#e2e8f0;"></div>
+      ${[['bon', '본염 (야드)'], ['pig', '안료 (야드)'], ['ten', '텐타 (야드)']].map(([k, t]) => `<div style="width:120px;"><label style="${lbl}">${t}</label>
+        <input type="text" inputmode="numeric" class="cqd-print" data-k="${k}" value="${escapeHtml(moneyInputVal((d.prints || {})[k] == null ? '' : (d.prints || {})[k]))}" style="${iS}width:100%;"></div>`).join('')}
+    </div>`;
+    h += `<div class="dash-table-wrap"><table class="dash-table" style="font-size:12px;"><thead><tr>
+      <th style="text-align:left;min-width:120px;">등급</th><th style="min-width:110px;">kg당 제시</th><th style="min-width:110px;">야드당 제시</th>
+    </tr></thead><tbody>`;
+    (d.grades || []).forEach((g, i) => {
+      h += `<tr>
+        <td style="text-align:left;font-weight:700;">${escapeHtml(g.name || '-')}</td>
+        <td><input type="text" inputmode="numeric" class="cqd-g-kg" data-i="${i}" value="${escapeHtml(moneyInputVal(g.kg == null ? '' : g.kg))}" style="${iS}width:100%;"></td>
+        <td><input type="text" inputmode="numeric" class="cqd-g-yd" data-i="${i}" value="${escapeHtml(moneyInputVal(g.yd == null ? '' : g.yd))}" style="${iS}width:100%;"></td>
+      </tr>`;
+    });
+    h += `</tbody></table></div>`;
+    h += `<div id="cqd-result" style="margin-top:14px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:11px 14px;display:flex;gap:20px;flex-wrap:wrap;">
+      ${cqResultCells(d)}
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px;">
+      <button class="dash-action-btn" id="cqd-cancel" style="padding:7px 16px;">취소</button>
+      <button class="dash-action-btn" id="cqd-save" style="background:#1e3a8a;color:#fff;font-weight:800;padding:7px 20px;">비교안 저장</button>
+    </div>
+    </div></div></div>`;
+    return h;
+  }
+  function cqResultCells(d) {
+    const g0 = (d.grades || [])[0];
+    const cell = (t, v, big) => `<div style="display:flex;flex-direction:column;line-height:1.3;">
+      <span style="font-size:10.5px;color:#4d7c5f;font-weight:700;">${t}</span>
+      <span style="font-size:${big ? '16px' : '13px'};font-weight:800;color:#14532d;white-space:nowrap;">${v}</span></div>`;
+    return cell('총원사가', cqMoney(d.yarnTotal))
+      + cell('생지 원가', cqMoney(d.knitPrice))
+      + cell('염색 완성 (kg)', cqMoney(d.kgCost), true)
+      + (d.hasPrint ? cell('나염 완성 (kg 되돌림)', cqMoney(d.kgCostBack)) : '')
+      + cell('야드당 원가', cqMoney(d.ydCost), true)
+      + cell('YD 마진', (g0 && g0.ydMargin != null) ? g0.ydMargin.toFixed(1) + '%' : '-', true)
+      + cell('혼용율', (d.fiber || []).length ? escapeHtml((d.fiber || []).map(r => r.mat + ' ' + r.pct + '%').join(' · ')) : '-');
   }
 
   // ===== hotfix268: 단가표 =====
@@ -24290,10 +24678,11 @@ function validateBlendSum(blends, label) {
   // ===== hotfix270: 원가 계산 화면 =====
   function ccState() {
     if (!state.costCalc || typeof state.costCalc !== 'object') {
-      state.costCalc = { fid: '', print: { bon: '', pig: '', ten: '' }, target: '', cells: {}, sim: false, simYarn: {}, simKnit: '', simProc: {} };
+      state.costCalc = { fid: '', print: { bon: '', pig: '', ten: '', post: '', loss: '' }, target: '', cells: {}, sim: false, simYarn: {}, simKnit: '', simProc: {} };
     }
     const c = state.costCalc;
-    if (!c.print || typeof c.print !== 'object') c.print = { bon: '', pig: '', ten: '' };
+    if (!c.print || typeof c.print !== 'object') c.print = { bon: '', pig: '', ten: '', post: '', loss: '' };
+    ['bon', 'pig', 'ten', 'post', 'loss'].forEach(k => { if (c.print[k] === undefined) c.print[k] = ''; });
     if (!c.cells || typeof c.cells !== 'object') c.cells = {};
     if (!c.simYarn || typeof c.simYarn !== 'object') c.simYarn = {};
     if (!c.simProc || typeof c.simProc !== 'object') c.simProc = {};
@@ -24485,17 +24874,31 @@ function validateBlendSum(blends, label) {
       <td style="text-align:left;font-size:11.5px;color:#4338ca;">${costMoney(R.knitAfterLoss, 0)} + 가공비 ${costMoney(R.procTotal, 0)}</td>
     </tr>`;
     h += `</tbody></table></div>`;
-    // 나염비
-    h += `<div style="margin-top:11px;display:flex;gap:9px;flex-wrap:wrap;align-items:flex-end;">
-      <div style="font-size:11.5px;font-weight:800;color:#475569;padding-bottom:8px;">나염비 (야드당)</div>
-      ${[['bon', '본염'], ['pig', '안료'], ['ten', '텐타']].map(([k, t]) => `<div><label style="font-size:11px;color:#64748b;display:block;margin-bottom:3px;">${t}</label>
-        <input type="text" inputmode="numeric" class="cc-money cc-print" data-k="${k}" value="${escapeHtml(moneyInputVal(C.print[k]))}" placeholder="0" style="width:96px;${inp}text-align:right;padding:5px 8px;font-size:12px;"></div>`).join('')}
-      <div style="font-size:12px;color:#64748b;padding-bottom:8px;">나염 없는 원단은 비워 두십시오.</div>
+    // 나염 — hotfix296: (염색완성 + 나염후가공료) → 나염로스 → 야드 환산 → + 나염료
+    h += `<div style="margin-top:11px;background:${R.hasPrint ? '#fff7ed' : '#fff'};border:1px solid ${R.hasPrint ? '#fed7aa' : '#e2e8f0'};border-radius:8px;padding:10px 13px;">
+      <div style="font-size:11.5px;font-weight:800;color:#475569;margin-bottom:7px;">나염 — 없는 원단은 전부 비워 두십시오</div>
+      <div style="display:flex;gap:9px;flex-wrap:wrap;align-items:flex-end;">
+        <div><label style="font-size:11px;color:#64748b;display:block;margin-bottom:3px;">나염 후 가공료 (kg당)</label>
+          <input type="text" inputmode="numeric" class="cc-money cc-print" data-k="post" value="${escapeHtml(moneyInputVal(C.print.post))}" placeholder="0" style="width:116px;${inp}text-align:right;padding:5px 8px;font-size:12px;"></div>
+        <div><label style="font-size:11px;color:#64748b;display:block;margin-bottom:3px;">나염로스 %</label>
+          <input type="text" inputmode="decimal" class="cc-print" data-k="loss" value="${escapeHtml(String(C.print.loss == null ? '' : C.print.loss))}" placeholder="0" style="width:86px;${inp}text-align:right;padding:5px 8px;font-size:12px;"></div>
+        <div style="width:1px;align-self:stretch;background:#e2e8f0;margin:0 4px;"></div>
+        <div style="font-size:11.5px;font-weight:800;color:#475569;padding-bottom:8px;">나염료 (야드당)</div>
+        ${[['bon', '본염'], ['pig', '안료'], ['ten', '텐타']].map(([k, t]) => `<div><label style="font-size:11px;color:#64748b;display:block;margin-bottom:3px;">${t}</label>
+          <input type="text" inputmode="numeric" class="cc-money cc-print" data-k="${k}" value="${escapeHtml(moneyInputVal(C.print[k]))}" placeholder="0" style="width:96px;${inp}text-align:right;padding:5px 8px;font-size:12px;"></div>`).join('')}
+      </div>
+      <div style="font-size:11.5px;color:#9a3412;margin-top:7px;line-height:1.7;">
+        물나염은 여기가 아니라 위 <strong>가공</strong> 쪽([물나염과수]·[염색/물나염]) 칸에 넣습니다. 여기 야드당 세 칸은 <strong>본염·안료·텐타</strong>뿐입니다.
+      </div>
     </div>`;
     h += `<div style="margin-top:11px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:11px 14px;display:flex;gap:22px;flex-wrap:wrap;align-items:center;">
-      <div><span style="font-size:11.5px;color:#166534;font-weight:700;">kg당 원가</span> <span id="cc-kgcost" style="font-size:16px;font-weight:800;color:#14532d;margin-left:6px;">${costMoney(R.kgCost, 0)}</span></div>
-      <div><span style="font-size:11.5px;color:#166534;font-weight:700;">야드당 원가</span> <span id="cc-ydcost" style="font-size:16px;font-weight:800;color:#14532d;margin-left:6px;">${R.ydCost == null ? '-' : costMoney(R.ydCost, 0)}</span></div>
-      <div style="font-size:11.5px;color:#4d7c5f;">${R.gy ? `kg당 원가 × ${R.gy}g/y ÷ 1000${R.printFee ? ' + 나염비 ' + costMoney(R.printFee, 0) : ''}` : ''}</div>
+      <div><span style="font-size:11.5px;color:#166534;font-weight:700;">kg당 원가</span> <span id="cc-kgcost" style="font-size:16px;font-weight:800;color:#14532d;margin-left:6px;">${costMoney(R.hasPrint ? R.kgCostBack : R.kgCost, 0)}</span>${R.hasPrint ? `<span style="font-size:10.5px;color:#4d7c5f;margin-left:5px;">되돌린 참고값</span>` : ''}</div>
+      <div><span style="font-size:11.5px;color:#166534;font-weight:700;">야드당 원가</span> <span id="cc-ydcost" style="font-size:16px;font-weight:800;color:#14532d;margin-left:6px;">${R.ydCost == null ? '-' : costMoney(R.ydCost, 0)}</span>${R.hasPrint ? `<span style="font-size:10.5px;color:#166534;font-weight:800;margin-left:5px;">본 값</span>` : ''}</div>
+      <div style="font-size:11.5px;color:#4d7c5f;">${R.gy
+      ? (R.hasPrint
+        ? `(염색완성 ${costMoney(R.kgCost, 0)}${R.printPost ? ' + 나염후가공 ' + costMoney(R.printPost, 0) : ''}) ÷ ${(100 - R.printLoss) / 100} × ${R.gy}g/y ÷ 1000${R.printFee ? ' + 나염료 ' + costMoney(R.printFee, 0) : ''}`
+        : `kg당 원가 × ${R.gy}g/y ÷ 1000`)
+      : ''}</div>
     </div>`;
     if (R.msgs.length) h += `<div style="margin-top:10px;background:#fef2f2;border:1px solid #fecaca;border-radius:7px;padding:9px 12px;font-size:12px;color:#991b1b;line-height:1.8;">${R.msgs.map(m => '· ' + escapeHtml(m)).join('<br>')}</div>`;
     h += `</div>`;
@@ -24546,8 +24949,10 @@ function validateBlendSum(blends, label) {
       procs: R.procs.map(p => ({ name: p.name, price: p.price, isBundle: !!p.isBundle, missing: !!p.missing })),
       procTotal: R.procTotal,
       kgCost: R.kgCost,
-      prints: { bon: C.print.bon, pig: C.print.pig, ten: C.print.ten },
-      printFee: R.printFee, ydCost: R.ydCost,
+      prints: { bon: C.print.bon, pig: C.print.pig, ten: C.print.ten, post: C.print.post, loss: C.print.loss },
+      printFee: R.printFee, printPost: R.printPost, printLoss: R.printLoss,
+      hasPrint: R.hasPrint, printKgCost: R.printKgCost, kgCostBack: R.kgCostBack,
+      ydCost: R.ydCost,
       grades: gv,
       memo: String(memo || ''),
       simmed: !!C.sim,
@@ -27183,6 +27588,7 @@ function validateBlendSum(blends, label) {
     const initDouble = !!qc.width_double;
     const iaw = calcActualWidth(qc.width_inch, initDouble);
     const bg = document.createElement('div');
+    bg.className = 'hiwos-modal-bg';   // hotfix293: 모달 공통 가드가 잡을 수 있게 (모양은 바뀌지 않는다)
     bg.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.5);z-index:99999;display:flex;align-items:flex-start;justify-content:center;padding:24px;overflow:auto;';
     bg.innerHTML = `<div style="background:#fff;border-radius:11px;max-width:860px;width:100%;box-shadow:0 22px 55px rgba(0,0,0,.3);overflow:hidden;font-family:var(--font-gothic);margin:auto 0;">
       <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 20px;border-bottom:1px solid #e5e7eb;background:#f8fafc;">
@@ -27432,6 +27838,7 @@ function validateBlendSum(blends, label) {
     const p2 = (x) => String(x).padStart(2, '0');
     const stamp = `[${p2(d.getMonth() + 1)}/${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}]`;
     const bg = document.createElement('div');
+    bg.className = 'hiwos-modal-bg';   // hotfix293: 모달 공통 가드가 잡을 수 있게 (모양은 바뀌지 않는다)
     bg.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:99999;display:flex;align-items:center;justify-content:center;padding:20px;';
     bg.innerHTML = `<div style="background:#fff;border-radius:10px;max-width:760px;width:100%;box-shadow:0 20px 50px rgba(0,0,0,.28);overflow:hidden;font-family:var(--font-gothic);">
       <div style="display:flex;align-items:center;justify-content:space-between;padding:13px 18px;border-bottom:1px solid #e5e7eb;">
@@ -31011,6 +31418,9 @@ function validateBlendSum(blends, label) {
     document.querySelectorAll('#dash-body .cc-tab-btn').forEach(b => b.addEventListener('click', () => {
       state.costTab = b.dataset.ccTab || 'prices';
       state.cqWhy = '';
+      state.cqCompare = '';
+      state.cqDraft = null;
+      state.cqDraftBase = '';
       renderDashboard();
     }));
     // hotfix292: 산출서 화면
@@ -31033,6 +31443,148 @@ function validateBlendSum(blends, label) {
       const ok = await saveCostQuote(next);
       if (ok) { toast('지웠습니다', 'success'); state.cqWhy = ''; renderDashboard(); }
     }));
+    // hotfix294: 비교안
+    document.getElementById('cq-cmp-close')?.addEventListener('click', () => {
+      state.cqCompare = ''; renderDashboard();
+    });
+    document.querySelectorAll('#dash-body .cq-cmp-open').forEach(b => b.addEventListener('click', () => {
+      state.cqCompare = b.dataset.no || ''; state.cqWhy = ''; renderDashboard();
+    }));
+    document.querySelectorAll('#dash-body .cq-cmp-new').forEach(b => b.addEventListener('click', () => {
+      const base = getCostQuotes()[b.dataset.no || ''];
+      if (!base) return;
+      if (quoteChildren(base.no).length >= CQ_COMPARE_MAX) {
+        toast(`비교안은 원본 하나에 ${CQ_COMPARE_MAX}장까지입니다. 하나를 지우고 다시 만들어 주십시오`, 'warning'); return;
+      }
+      state.cqDraft = buildCompareDraft(base);
+      state.cqDraftBase = base.no;
+      renderDashboard();
+    }));
+    document.querySelectorAll('#dash-body .cq-cmp-edit').forEach(b => b.addEventListener('click', () => {
+      const q = getCostQuotes()[b.dataset.no || ''];
+      if (!q) return;
+      state.cqDraft = recalcQuote(JSON.parse(JSON.stringify(q)));
+      state.cqDraftBase = q.base_no || q.no;
+      renderDashboard();
+    }));
+    document.querySelectorAll('#dash-body .cq-cmp-promote').forEach(b => b.addEventListener('click', async () => {
+      const q = getCostQuotes()[b.dataset.no || ''];
+      if (!q) return;
+      if (!confirm(`${q.name || ''} 를 본안으로 올릴까요?\n\n비교안 표시를 떼고 새 산출서 한 장으로 남습니다.\n원본과 이 비교안은 그대로 두고 한 장이 더 생깁니다.`)) return;
+      const n = JSON.parse(JSON.stringify(q));
+      n.no = newQuoteNo();
+      n.base_no = '';
+      n.date = todayYMD();
+      n.name = String(q.name || '').replace(/비교$/, '') || String(q.name || '');
+      n.memo = (q.memo ? q.memo + ' / ' : '') + '비교안 ' + q.no + ' 를 본안으로';
+      n.saved_by = state.user?.email || '';
+      n.saved_at = todayYMD();
+      recalcQuote(n);
+      const ok = await saveCostQuote(n);
+      if (ok) { toast('본안으로 올렸습니다', 'success'); state.cqCompare = ''; renderDashboard(); }
+    }));
+    // ── 비교안 고치기 창
+    const cqdEl = id => document.getElementById(id);
+    const cqdRead = () => {
+      const d = state.cqDraft;
+      if (!d) return null;
+      d.name = (cqdEl('cqd-name')?.value || '').trim();
+      d.memo = (cqdEl('cqd-memo')?.value || '').trim();
+      const gy = parseFloat(unComma(cqdEl('cqd-gy')?.value || ''));
+      d.guide_gy = isNaN(gy) ? '' : gy;
+      document.querySelectorAll('#cq-modal .cqd-y-name').forEach(s => {
+        const y = d.yarns[parseInt(s.dataset.i, 10)]; if (y) y.name = s.value;
+      });
+      document.querySelectorAll('#cq-modal .cqd-y-size').forEach(s => {
+        const y = d.yarns[parseInt(s.dataset.i, 10)]; if (y) y.size = unComma(s.value);
+      });
+      document.querySelectorAll('#cq-modal .cqd-y-unit').forEach(s => {
+        const y = d.yarns[parseInt(s.dataset.i, 10)]; if (y) y.unit = s.value;
+      });
+      document.querySelectorAll('#cq-modal .cqd-y-loop').forEach(s => {
+        const y = d.yarns[parseInt(s.dataset.i, 10)]; if (y) y.loop = unComma(s.value);
+      });
+      document.querySelectorAll('#cq-modal .cqd-y-kg').forEach(s => {
+        const y = d.yarns[parseInt(s.dataset.i, 10)];
+        if (!y) return;
+        const v = parseFloat(unComma(s.value));
+        y.kg = isNaN(v) ? null : v;
+      });
+      const kl = parseFloat(unComma(cqdEl('cqd-knitloss')?.value || ''));
+      d.knitLoss = isNaN(kl) ? 0 : kl;
+      const kf = parseFloat(unComma(cqdEl('cqd-knitfee')?.value || ''));
+      d.knitFee = isNaN(kf) ? 0 : kf;
+      const fl = parseFloat(unComma(cqdEl('cqd-finloss')?.value || ''));
+      d.finLoss = isNaN(fl) ? 0 : fl;
+      document.querySelectorAll('#cq-modal .cqd-p-price').forEach(s => {
+        const p = d.procs[parseInt(s.dataset.i, 10)];
+        if (!p) return;
+        const v = parseFloat(unComma(s.value));
+        p.price = isNaN(v) ? 0 : v;
+      });
+      if (!d.prints || typeof d.prints !== 'object') d.prints = { bon: '', pig: '', ten: '' };
+      document.querySelectorAll('#cq-modal .cqd-print').forEach(s => {
+        const v = parseFloat(unComma(s.value));
+        d.prints[s.dataset.k] = isNaN(v) ? '' : v;
+      });
+      document.querySelectorAll('#cq-modal .cqd-g-kg').forEach(s => {
+        const g = d.grades[parseInt(s.dataset.i, 10)];
+        if (!g) return;
+        const v = parseFloat(unComma(s.value));
+        g.kg = isNaN(v) ? null : v;
+      });
+      document.querySelectorAll('#cq-modal .cqd-g-yd').forEach(s => {
+        const g = d.grades[parseInt(s.dataset.i, 10)];
+        if (!g) return;
+        const v = parseFloat(unComma(s.value));
+        g.yd = isNaN(v) ? null : v;
+      });
+      return recalcQuote(d);
+    };
+    const cqdRefresh = () => {
+      const d = cqdRead();
+      if (!d) return;
+      const box = document.getElementById('cqd-result');
+      if (box) box.innerHTML = cqResultCells(d);
+      document.querySelectorAll('#cq-modal .cqd-y-pct').forEach(td => {
+        const y = d.yarns[parseInt(td.dataset.i, 10)];
+        td.textContent = (y && y.pct != null) ? y.pct + '%' : '-';
+      });
+    };
+    if (document.getElementById('cq-modal')) {
+      document.querySelectorAll('#cq-modal input, #cq-modal select').forEach(el => {
+        el.addEventListener('input', cqdRefresh);
+        el.addEventListener('change', cqdRefresh);
+      });
+      // 사종을 바꾸면 그 사종의 kg 단가를 단가표에서 데려온다
+      document.querySelectorAll('#cq-modal .cqd-y-name').forEach(s => s.addEventListener('change', () => {
+        const found = yarnPriceByName(s.value);
+        const box = document.querySelector(`#cq-modal .cqd-y-kg[data-i="${s.dataset.i}"]`);
+        if (box) box.value = found ? moneyInputVal(Math.round(found.kg)) : '';
+        if (!found && s.value) toast(`${s.value} 는 단가표에 kg 단가가 없습니다. 직접 넣어 주십시오`, 'warning');
+        cqdRefresh();
+      }));
+      const cqdClose = () => { state.cqDraft = null; state.cqDraftBase = ''; renderDashboard(); };
+      document.getElementById('cq-modal-close')?.addEventListener('click', cqdClose);
+      document.getElementById('cqd-cancel')?.addEventListener('click', cqdClose);
+      document.getElementById('cq-modal')?.addEventListener('click', e => {
+        if (e.target && e.target.id === 'cq-modal') cqdClose();
+      });
+      document.getElementById('cqd-save')?.addEventListener('click', async () => {
+        const d = cqdRead();
+        if (!d) return;
+        if (!String(d.name || '').trim()) { toast('비교안 이름을 넣어 주십시오', 'error'); return; }
+        d.yarns = (d.yarns || []).filter(y => String(y.name || '').trim());
+        recalcQuote(d);
+        const ok = await saveCostQuote(d);
+        if (ok) {
+          toast('비교안을 저장했습니다', 'success');
+          state.cqCompare = d.base_no || '';
+          state.cqDraft = null; state.cqDraftBase = '';
+          renderDashboard();
+        }
+      });
+    }
     document.querySelectorAll('#dash-body .cp-sub-btn').forEach(b => b.addEventListener('click', () => {
       state.costPriceTab = b.dataset.cpSub || 'yarn';
       renderDashboard();
@@ -31199,7 +31751,7 @@ function validateBlendSum(blends, label) {
         const R = ccBuild();
         if (!R) return;
         const setTxt = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
-        setTxt('cc-kgcost', costMoney(R.kgCost, 0));
+        setTxt('cc-kgcost', costMoney(R.hasPrint ? R.kgCostBack : R.kgCost, 0));
         setTxt('cc-ydcost', R.ydCost == null ? '-' : costMoney(R.ydCost, 0));
         const ek = costExpectPrice(R.kgCost, C.target), ey = costExpectPrice(R.ydCost, C.target);
         setTxt('cc-exp-kg', ek == null ? '-' : costMoney(ek, 0));
@@ -31217,7 +31769,7 @@ function validateBlendSum(blends, label) {
             }
           });
         });
-        const bk = document.getElementById('cc-bar-kg'); if (bk) bk.textContent = costMoney(R.kgCost, 0);
+        const bk = document.getElementById('cc-bar-kg'); if (bk) bk.textContent = costMoney(R.hasPrint ? R.kgCostBack : R.kgCost, 0);
         const by = document.getElementById('cc-bar-yd'); if (by) by.textContent = (R.ydCost == null ? '-' : costMoney(R.ydCost, 0));
       }
       document.querySelectorAll('#dash-body .cc-print').forEach(el => el.addEventListener('input', () => {
@@ -34353,7 +34905,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix292';
+  const VERSION = 'v2.53 hotfix296';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
