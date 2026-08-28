@@ -11342,6 +11342,21 @@ window.addEventListener('firebase-ready', () => {
   }
   // 혼용율 = 기여도 / 전체기여도합 × 100.  D환산 = (단위 '수') ? 5315 / 굵기 : 굵기
   function calcYarnBlend(yarns) {
+    // hotfix313: 비율을 정하는 길이 둘이다 — 루프장으로 셈하기 / 손으로 넣기.
+    //   품목마다 고른다. 손으로 넣은 품목은 원사 줄에 bmode:'manual' 이 찍혀 있다.
+    //   루프장 값은 지우지 않는다 — 되돌리면 그대로 살아나야 한다.
+    const __arr = (Array.isArray(yarns) ? yarns : []);
+    if (__arr.some(y => y && String(y.bmode || '') === 'manual')) {
+      return __arr.map(y => {
+        const name = String((y && y.name) || '').trim();
+        const pm = parseFloat(y && y.pct_manual);
+        return {
+          name, size: parseFloat(y && y.size), loop: parseFloat(y && y.loop),
+          unit: (y && y.unit) || 'D', contrib: 0, manual: true,
+          pct: (!name || isNaN(pm)) ? 0 : Math.round(pm * 10) / 10
+        };
+      });
+    }
     const rows = (Array.isArray(yarns) ? yarns : []).map(y => {
       const size = parseFloat(y && y.size);
       const loop = parseFloat(y && y.loop);
@@ -26315,26 +26330,32 @@ function validateBlendSum(blends, label) {
             <div style="display:flex;align-items:center;gap:9px;margin-bottom:5px;flex-wrap:wrap;">
               <span style="font-size:11.5px;font-weight:800;color:#0f172a;">원사 구성</span>
               <span style="font-size:11.5px;font-weight:400;color:#94a3b8;">— 종류를 고르면 그 종류 사종만 보입니다. 단가표에 있는 사종만 고를 수 있습니다 (최대 4개)</span>
+              <span style="display:inline-flex;align-items:center;gap:10px;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:6px;padding:3px 10px;">
+                <span style="font-size:11px;font-weight:800;color:#475569;">비율 정하는 법</span>
+                <label style="font-size:11.5px;font-weight:700;color:#334155;cursor:pointer;display:inline-flex;align-items:center;gap:4px;"><input type="radio" name="fs-c-bmode" class="fs-c-bmode" value="loop" checked style="cursor:pointer;">루프장으로 계산</label>
+                <label style="font-size:11.5px;font-weight:700;color:#334155;cursor:pointer;display:inline-flex;align-items:center;gap:4px;"><input type="radio" name="fs-c-bmode" class="fs-c-bmode" value="manual" style="cursor:pointer;">직접 입력</label>
+              </span>
               <input type="text" id="fs-c-yq" lang="ko" autocomplete="off" placeholder="사종 이름으로 목록 좁히기"
                 style="margin-left:auto;width:180px;padding:5px 9px;border:1px solid #d1d5db;border-radius:6px;font-size:12px;font-family:inherit;">
             </div>
             <table style="width:100%;border-collapse:collapse;font-size:12px;background:#fff;border:1px solid #e2e8f0;border-radius:6px;overflow:hidden;">
               <thead><tr style="background:#f1f5f9;color:#475569;font-size:11px;">
-                <th style="padding:5px 6px;text-align:left;">종류</th><th style="padding:5px 6px;text-align:left;">사종</th><th style="padding:5px 6px;width:80px;">굵기</th><th style="padding:5px 6px;width:74px;">단위</th><th style="padding:5px 6px;width:86px;">루프장<div style="font-size:9.5px;font-weight:400;color:#94a3b8;line-height:1.2;">공장마다</div></th><th style="padding:5px 6px;width:78px;">혼용율</th>
+                <th style="padding:5px 6px;text-align:left;">종류</th><th style="padding:5px 6px;text-align:left;">사종</th><th style="padding:5px 6px;width:80px;">굵기</th><th style="padding:5px 6px;width:74px;">단위</th><th class="fs-c-col-loop" style="padding:5px 6px;width:86px;">루프장<div style="font-size:9.5px;font-weight:400;color:#94a3b8;line-height:1.2;">공장마다</div></th><th style="padding:5px 6px;width:88px;">혼용율</th>
               </tr></thead>
               <tbody>
                 ${[0, 1, 2, 3].map(k => `<tr>
                   <td style="padding:3px 5px;width:118px;"><select class="fs-c-y-kind" data-k="${k}" style="${inputStyle}padding:5px 4px;font-size:12px;"></select></td>
                   <td style="padding:3px 5px;"><select class="fs-c-y-name" data-k="${k}" style="${inputStyle}padding:5px 7px;font-size:12px;"></select></td>
-                  <td style="padding:3px 5px;"><input type="number" step="0.01" class="fs-c-y-size" data-k="${k}" style="${inputStyle}padding:5px 7px;font-size:12px;text-align:right;"></td>
+                  <td style="padding:3px 5px;"><input type="text" inputmode="decimal" class="fs-c-y-size" data-k="${k}" style="${inputStyle}padding:5px 7px;font-size:12px;text-align:right;"></td>
                   <td style="padding:3px 5px;"><select class="fs-c-y-unit" data-k="${k}" style="${inputStyle}padding:5px 4px;font-size:12px;"><option value="D">D</option><option value="수">수</option></select></td>
-                  <td style="padding:3px 5px;"><input type="number" step="0.01" class="fs-c-y-loop" data-k="${k}" style="${inputStyle}padding:5px 7px;font-size:12px;text-align:right;"></td>
-                  <td class="fs-c-y-pct" data-k="${k}" style="padding:3px 5px;text-align:right;font-weight:800;color:#0f172a;">-</td>
+                  <td class="fs-c-col-loop" style="padding:3px 5px;"><input type="text" inputmode="decimal" class="fs-c-y-loop" data-k="${k}" style="${inputStyle}padding:5px 7px;font-size:12px;text-align:right;"></td>
+                  <td style="padding:3px 5px;text-align:right;"><span class="fs-c-y-pct" data-k="${k}" style="font-weight:800;color:#be185d;">-</span><input type="text" inputmode="decimal" class="fs-c-y-pctin" data-k="${k}" style="${inputStyle}padding:5px 7px;font-size:12px;text-align:right;font-weight:800;color:#be185d;display:none;"></td>
                 </tr>`).join('')}
               </tbody>
             </table>
             <div style="display:flex;align-items:center;gap:9px;margin:7px 0 6px;">
               <span id="fs-c-blend-sum" style="font-size:11.5px;font-weight:800;color:#475569;"></span>
+              <button type="button" class="dash-action-btn" id="fs-c-blend-100" style="font-size:11px;padding:4px 10px;display:none;" title="지금 넣은 값의 비례를 지키면서 합계를 100%로 맞춥니다">100%로 맞추기</button>
               <button type="button" class="dash-action-btn" id="fs-c-blend-apply" style="font-size:11px;padding:4px 10px;" title="소재별 혼용율을 이 품목의 혼용률로 저장합니다">품목 혼용률로 저장</button>
             </div>
             <div id="fs-c-fiber-box" style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:7px;padding:8px 11px;margin-bottom:12px;display:none;">
@@ -26537,9 +26558,12 @@ function validateBlendSum(blends, label) {
       const sEl = document.getElementById('fs-c-blend-sum');
       if (sEl) {
         const t = Math.round(sum * 10) / 10;
-        if (!t) { sEl.textContent = ''; }
-        else if (Math.abs(t - 100) > 0.15) { sEl.textContent = `사종 합계 ${t}% — 100%가 아닙니다`; sEl.style.color = '#b91c1c'; }
-        else { sEl.textContent = `사종 합계 ${t}%`; sEl.style.color = '#047857'; }
+        const manual = (typeof fcBlendMode === 'function') && fcBlendMode() === 'manual';
+        if (!t) { sEl.textContent = manual ? '비율 합계 0% — 비율을 넣어 주십시오' : ''; sEl.style.color = '#b91c1c'; }
+        else if (Math.abs(t - 100) > 0.15) {
+          sEl.textContent = `비율 합계 ${t}% — 100%가 아닙니다. 원가가 그만큼 어긋납니다`;
+          sEl.style.color = '#b91c1c';
+        } else { sEl.textContent = `비율 합계 ${t}%`; sEl.style.color = '#047857'; }
       }
       // hotfix291: 사종 비율에 원사 성분을 곱해 소재별 혼용율을 낸다
       const fBox = document.getElementById('fs-c-fiber-box');
@@ -26756,12 +26780,53 @@ function validateBlendSum(blends, label) {
     function collectCostYarns() {
       const w = costWrap();
       if (!w) return [];
+      const bm = fcBlendMode();
       return [0, 1, 2, 3].map(k => ({
         name: (w.querySelector(`.fs-c-y-name[data-k="${k}"]`)?.value || '').trim(),
         size: (w.querySelector(`.fs-c-y-size[data-k="${k}"]`)?.value || '').trim(),
         unit: (w.querySelector(`.fs-c-y-unit[data-k="${k}"]`)?.value || 'D'),
-        loop: (w.querySelector(`.fs-c-y-loop[data-k="${k}"]`)?.value || '').trim()
+        loop: (w.querySelector(`.fs-c-y-loop[data-k="${k}"]`)?.value || '').trim(),
+        bmode: bm,
+        pct_manual: (w.querySelector(`.fs-c-y-pctin[data-k="${k}"]`)?.value || '').trim()
       }));
+    }
+    // hotfix313: 비율을 정하는 법 — 이 품목 하나에만 걸린다
+    function fcBlendMode() {
+      const w = costWrap();
+      if (!w) return 'loop';
+      const el = w.querySelector('.fs-c-bmode:checked');
+      return (el && el.value === 'manual') ? 'manual' : 'loop';
+    }
+    // 루프장 칸은 화면에서 감춘다. 값은 자료에 그대로 남는다 — 되돌리면 다시 나온다.
+    function fcApplyBlendMode() {
+      const w = costWrap();
+      if (!w) return;
+      const manual = fcBlendMode() === 'manual';
+      w.querySelectorAll('.fs-c-col-loop').forEach(el => { el.style.display = manual ? 'none' : ''; });
+      w.querySelectorAll('.fs-c-y-pct').forEach(el => { el.style.display = manual ? 'none' : ''; });
+      w.querySelectorAll('.fs-c-y-pctin').forEach(el => { el.style.display = manual ? '' : 'none'; });
+      const b100 = document.getElementById('fs-c-blend-100');
+      if (b100) b100.style.display = manual ? '' : 'none';
+    }
+    // 넣은 값의 비례를 지키면서 합계를 딱 100%로 맞춘다
+    function fcFitBlend100() {
+      const w = costWrap();
+      if (!w) return;
+      const els = [0, 1, 2, 3].map(k => ({
+        k,
+        el: w.querySelector(`.fs-c-y-pctin[data-k="${k}"]`),
+        nm: (w.querySelector(`.fs-c-y-name[data-k="${k}"]`)?.value || '').trim()
+      })).filter(o => o.el && o.nm);
+      const vals = els.map(o => { const v = parseFloat(o.el.value); return isNaN(v) || v < 0 ? 0 : v; });
+      const sum = vals.reduce((a, v) => a + v, 0);
+      if (!(sum > 0)) { toast('비율을 먼저 넣어 주십시오', 'warning'); return; }
+      const out = vals.map(v => Math.round((v / sum) * 1000) / 10);
+      let big = 0;
+      out.forEach((v, i) => { if (v > out[big]) big = i; });
+      const diff = Math.round((100 - out.reduce((a, v) => a + v, 0)) * 10) / 10;
+      out[big] = Math.round((out[big] + diff) * 10) / 10;
+      els.forEach((o, i) => { o.el.value = String(out[i]); });
+      repaintCostCalc();
     }
     // hotfix288: 편직공장별 사양 — 창 안에서 공장을 갈아 가며 바로 넣는다
     const FC_VKEYS = ['machine', 'org', 'inch', 'needles', 'make_gy', 'knit_loss', 'knit_fee', 'blend', 'loops'];
@@ -27186,12 +27251,19 @@ function validateBlendSum(blends, label) {
       document.getElementById('fs-c-finisher').innerHTML = vendorOptionsHTML('가공처', c.finisher || '');
       const ys = Array.isArray(c.yarns) ? c.yarns : [];
       fcPaintYarnPicks([0, 1, 2, 3].map(k => (ys[k] && ys[k].name) ? ys[k].name : ''));
+      // hotfix313: 비율 정하는 법 — 품목에 저장된 것을 그대로 켠다 (없으면 루프장)
+      const __bm = (String(c.blend_mode || '') === 'manual'
+        || ys.some(y => y && String(y.bmode || '') === 'manual')) ? 'manual' : 'loop';
+      w.querySelectorAll('.fs-c-bmode').forEach(r => { r.checked = (r.value === __bm); });
       [0, 1, 2, 3].forEach(k => {
         const y = ys[k] || {};
         w.querySelector(`.fs-c-y-size[data-k="${k}"]`).value = (y.size != null ? y.size : '');
         w.querySelector(`.fs-c-y-unit[data-k="${k}"]`).value = (y.unit === '수') ? '수' : 'D';
         w.querySelector(`.fs-c-y-loop[data-k="${k}"]`).value = (y.loop != null ? y.loop : '');
+        const pin = w.querySelector(`.fs-c-y-pctin[data-k="${k}"]`);
+        if (pin) pin.value = (y.pct_manual != null ? y.pct_manual : '');
       });
+      fcApplyBlendMode();
       fcWriteLoops(fcDraft[fcCurVendor]);   // hotfix307: 공장 칸에 루프장이 있으면 그것이 이긴다
       repaintCostCalc();
     }
@@ -27199,9 +27271,13 @@ function validateBlendSum(blends, label) {
       const w = costWrap();
       if (!w) return null;
       const numOrNull = (v) => (v === '' || v == null) ? null : (parseFloat(v));
+      const __bm = fcBlendMode();
       const yarns = collectCostYarns()
-        .filter(y => y.name || y.size || y.loop)
-        .map(y => ({ name: y.name, size: numOrNull(y.size), unit: y.unit === '수' ? '수' : 'D', loop: numOrNull(y.loop) }));
+        .filter(y => y.name || y.size || y.loop || y.pct_manual)
+        .map(y => ({
+          name: y.name, size: numOrNull(y.size), unit: y.unit === '수' ? '수' : 'D', loop: numOrNull(y.loop),
+          bmode: __bm, pct_manual: numOrNull(y.pct_manual)
+        }));
       // hotfix288: 지금 창의 값을 고른 공장 칸에 담고, 공장별 사양을 통째로 낸다
       fcStashVendor();
       const knits = {};
@@ -27226,6 +27302,7 @@ function validateBlendSum(blends, label) {
         print_loss: numOrNull(document.getElementById('fs-c-printloss')?.value),
         print_post: numOrNull(document.getElementById('fs-c-printpost')?.value),
         yarns,
+        blend_mode: __bm,
         procs: Array.from(fcProcSel).map(p => normProc(p)).filter(Boolean),
         updated_at: todayYMD()
       };
@@ -27236,7 +27313,13 @@ function validateBlendSum(blends, label) {
       document.getElementById(id)?.addEventListener('input', repaintCostCalc));
     ['fs-c-org', 'fs-c-knitter', 'fs-c-dyer', 'fs-c-finisher'].forEach(id =>
       document.getElementById(id)?.addEventListener('change', repaintCostCalc));
-    costWrap().querySelectorAll('.fs-c-y-size, .fs-c-y-loop').forEach(el => el.addEventListener('input', repaintCostCalc));
+    costWrap().querySelectorAll('.fs-c-y-size, .fs-c-y-loop, .fs-c-y-pctin').forEach(el => el.addEventListener('input', repaintCostCalc));
+    // hotfix313: 비율 정하는 법 갈아타기 · 100%로 맞추기
+    costWrap().querySelectorAll('.fs-c-bmode').forEach(el => el.addEventListener('change', () => {
+      fcApplyBlendMode();
+      repaintCostCalc();
+    }));
+    document.getElementById('fs-c-blend-100')?.addEventListener('click', fcFitBlend100);
     costWrap().querySelectorAll('.fs-c-y-unit').forEach(el => el.addEventListener('change', repaintCostCalc));
     // hotfix305: 종류를 바꾸면 그 종류 사종만 남기고, 사종을 고르면 굵기·단위를 채워 준다
     costWrap().querySelectorAll('.fs-c-y-kind').forEach(el => el.addEventListener('change', () => {
@@ -36513,7 +36596,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix312';
+  const VERSION = 'v2.53 hotfix313';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
