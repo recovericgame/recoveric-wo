@@ -6134,6 +6134,7 @@
         <button type="button" class="dash-grp-head admin-only" data-grp="set">설정 및 관리</button>
         <div class="dash-grp" data-grp="set">
           <button class="dash-menu-btn admin-only" data-view="fabricSpecs">원단 스펙 설정</button>
+          <button class="dash-menu-btn admin-only" data-view="yarnSetup">원사 설정</button>
           <button class="dash-menu-btn admin-only" data-view="vendors">거래처 관리</button>
         </div>
 
@@ -7015,8 +7016,9 @@ const state = {
   cqCompare: '',            // 나란히 보고 있는 원본 산출서 번호
   cqDraft: null,            // 지금 고치고 있는 비교안 (저장 전 임시)
   cqDraftBase: '',          // 그 비교안의 원본 번호
-  costTab: 'prices',        // 원가 계산기 안쪽 탭
-  costPriceTab: 'yarn',     // 단가표 안쪽 탭: yarn | knit | proc | grade
+  costTab: 'card',          // 원가 계산기 안쪽 탭: card | fabric | prices | history
+  ccCardFid: '', ccCardOrg: '', ccCardQ: '',   // hotfix317: 품목 카드에서 고른 품목·조직·찾는 글자
+  costPriceTab: 'knit',     // 단가표 안쪽 탭: knit | proc | grade | import (원사 설정은 [설정 및 관리]로 옮겼다)
   costSearch: '',
   fcSearch: '',             // hotfix281: [원단 원가] 화면 품목 찾기
   fcBackup: null,           // hotfix287: 편직 사양 CSV 올리기 직전 상태 (되돌리기용)
@@ -10186,7 +10188,7 @@ window.addEventListener('firebase-ready', () => {
     of: 'staff', gs: 'staff', claims: 'staff', 'daily-report': 'staff',
     samples: 'staff', completed: 'staff', trash: 'owner',
     stampSettings: 'owner', specTol: 'owner',
-    fabricSpecs: 'admin', vendors: 'admin',
+    fabricSpecs: 'admin', vendors: 'admin', yarnSetup: 'admin',
     costCalc: 'owner', permissions: 'owner'
   };
   const VIEW_LABELS = {
@@ -10195,6 +10197,7 @@ window.addEventListener('firebase-ready', () => {
     of: '공문조회', gs: '생지출고조회', claims: '클레임(땡처리)조회', 'daily-report': '가공소 일일 체크',
     samples: '샘플 조회', completed: '완료의뢰서 조회', trash: '휴지통',
     stampSettings: '작지 스템프 설정', fabricSpecs: '원단 스펙 설정', vendors: '거래처 관리', specTol: '규격 허용치 설정',
+    yarnSetup: '원사 설정',
     costCalc: '원가 계산기', permissions: '권한 설정'
   };
   // 등급을 낮출 수 없는 화면 — 경영 자료
@@ -10686,27 +10689,27 @@ window.addEventListener('firebase-ready', () => {
           def_procs: (d && Array.isArray(d.def_procs)) ? d.def_procs : []
         };
         state.costPricesLoaded = true;
-        if (state.uiMode === 'dashboard' && state.dashView === 'costCalc') renderDashboard();
+        renderCostFromSub();
       }, err => console.warn('[costPrices sub]', err.message));
       // hotfix268: 단가 이력 구독 (옛 값은 지우지 않고 쌓기만 한다)
       onSnapshot(doc(db, 'cost_data', 'price_history'), snap => {
         const d = snap.exists() ? snap.data() : null;
         state.costPriceHistory = (d && d.items && typeof d.items === 'object') ? d.items : {};
-        if (state.uiMode === 'dashboard' && state.dashView === 'costCalc') renderDashboard();
+        renderCostFromSub();
       }, err => console.warn('[priceHistory sub]', err.message));
       // hotfix292: 원가 산출서 구독 (최고관리자만)
       onSnapshot(doc(db, 'cost_data', 'quotes'), snap => {
         const d = snap.exists() ? snap.data() : null;
         state.costQuotes = (d && d.items && typeof d.items === 'object') ? d.items : {};
         state.costQuotesLoaded = true;
-        if (state.uiMode === 'dashboard' && state.dashView === 'costCalc') renderDashboard();
+        renderCostFromSub();
       }, err => console.warn('[costQuotes sub]', err.message));
       // hotfix270: 판매 등급 구독 (표준 / 골드 / VIP … 대표가 늘리고 줄인다)
       onSnapshot(doc(db, 'cost_data', 'grades'), snap => {
         const d = snap.exists() ? snap.data() : null;
         state.costGrades = (d && Array.isArray(d.list) && d.list.length) ? d.list : null;
         state.costGradesLoaded = true;
-        if (state.uiMode === 'dashboard' && state.dashView === 'costCalc') renderDashboard();
+        renderCostFromSub();
       }, err => console.warn('[costGrades sub]', err.message));
       // hotfix280: 조직 · 공정 이름 목록 구독 (대표가 늘리고 줄인다)
       onSnapshot(doc(db, 'cost_data', 'lists'), snap => {
@@ -24605,16 +24608,17 @@ function validateBlendSum(blends, label) {
 
   function renderCostCalcDash() {
     if (!isOwnerUser()) return `<div class="dash-empty">최고관리자만 볼 수 있는 화면입니다.</div>`;
-    const tab = state.costTab || 'prices';
+    const tab = state.costTab || 'card';
     const tOn = 'padding:7px 18px;border:1px solid #5b21b6;border-radius:8px;font-size:13px;font-weight:800;cursor:pointer;background:#5b21b6;color:#fff;';
     const tOff = 'padding:7px 18px;border:1px solid #d1d5db;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;background:#fff;color:#6b7280;';
     let h = `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;">
+      <button class="cc-tab-btn" data-cc-tab="card" style="${tab === 'card' ? tOn : tOff}">품목 카드</button>
       <button class="cc-tab-btn" data-cc-tab="fabric" style="${tab === 'fabric' ? tOn : tOff}">원단 원가</button>
       <button class="cc-tab-btn" data-cc-tab="prices" style="${tab === 'prices' ? tOn : tOff}">단가 설정</button>
-      <button class="cc-tab-btn" data-cc-tab="calc" style="${tab === 'calc' ? tOn : tOff}">원가 계산</button>
       <button class="cc-tab-btn" data-cc-tab="history" style="${tab === 'history' ? tOn : tOff}">산출서${costQuoteList().length ? ' ' + costQuoteList().length : ''}</button>
     </div>`;
-    if (tab === 'prices') h += renderCostPriceTables();
+    if (tab === 'card') h += renderCostCardTab();
+    else if (tab === 'prices') h += renderCostPriceTables();
     else if (tab === 'calc') h += renderCostCalcTab();
     else if (tab === 'fabric') h += renderCostFabricTab();
     else h += renderCostQuoteTab();
@@ -25018,7 +25022,7 @@ function validateBlendSum(blends, label) {
 
   // ===== hotfix268: 단가표 =====
   function renderCostPriceTables() {
-    const sub = state.costPriceTab || 'yarn';
+    const sub = state.costPriceTab || 'knit';
     const P = getCostPrices();
     const sOn = 'padding:6px 15px;border:1px solid #1e3a8a;border-radius:16px;font-size:12px;font-weight:700;cursor:pointer;background:#1e3a8a;color:#fff;';
     const sOff = 'padding:6px 15px;border:1px solid #d1d5db;border-radius:16px;font-size:12px;font-weight:700;cursor:pointer;background:#fff;color:#6b7280;';
@@ -25027,7 +25031,6 @@ function validateBlendSum(blends, label) {
       <strong>값을 바꾸면 옛 값은 지우지 않고 이력에 그대로 쌓입니다.</strong> 나중에 언제 얼마였는지 되짚을 수 있습니다.
     </div>
     <div style="display:flex;gap:7px;flex-wrap:wrap;margin-bottom:12px;align-items:center;">
-      <button class="cp-sub-btn" data-cp-sub="yarn" style="${sub === 'yarn' ? sOn : sOff}">원사 설정 ${P.yarns.length}</button>
       <button class="cp-sub-btn" data-cp-sub="knit" style="${sub === 'knit' ? sOn : sOff}">품목별 단가</button>
       <button class="cp-sub-btn" data-cp-sub="proc" style="${sub === 'proc' ? sOn : sOff}">가공단가 설정 ${P.proc.length + P.bundles.length}</button>
       <button class="cp-sub-btn" data-cp-sub="grade" style="${sub === 'grade' ? sOn : sOff}">판매 등급 ${getCostGrades().length}</button>
@@ -25036,8 +25039,7 @@ function validateBlendSum(blends, label) {
         style="margin-left:auto;min-width:200px;max-width:300px;padding:7px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;font-family:inherit;">
       ${state.costSearch ? `<button class="dash-action-btn" id="cp-search-clear" style="font-size:11px;padding:5px 10px;">지우기</button>` : ''}
     </div>`;
-    if (sub === 'yarn') h += renderYarnPriceTable(P);
-    else if (sub === 'knit') h += renderItemPriceGrid(P)
+    if (sub === 'knit') h += renderItemPriceGrid(P)
       + `<details style="margin-top:16px;"><summary style="font-size:12px;font-weight:800;color:#475569;cursor:pointer;">편직 단가 줄 목록 자세히 보기 (${P.knit.length}줄) — 조직으로 걸린 값·(공통) 값은 여기서 고칩니다</summary><div style="margin-top:10px;">`
       + renderKnitPriceTable(P) + `</div></details>`;
     else if (sub === 'grade') return h + renderCostGradeTable();
@@ -25740,6 +25742,80 @@ function validateBlendSum(blends, label) {
     const n = priceHistoryOf(key).length;
     return n > 1 ? `<span style="font-size:11px;color:#2563eb;font-weight:700;" title="지금까지 ${n}번 바뀌었습니다">${n}회</span>` : `<span style="color:#c7cbd1;font-size:11px;">-</span>`;
   }
+  // ============================================================
+  // hotfix316: [설정 및 관리] > [원사 설정]
+  //   사종 이름 · 구분 · 성분(혼용율) · 단위만 관리한다.
+  //   값(단가 · 운임 · 로스율)은 원가 계산기의 원사 줄에서 넣는다.
+  // ============================================================
+  function renderYarnSetupDash() {
+    const P = getCostPrices();
+    const F = costFilter();
+    let h = `<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px;margin-bottom:14px;font-size:12.5px;color:#475569;line-height:1.8;">
+      여기서는 <strong>사종 이름 · 구분 · 성분(혼용율) · 단위</strong>만 관리합니다.<br>
+      <strong>단가 · 운임 · 로스율은 원가 계산기의 원사 줄에서 넣습니다.</strong> 거기서 친 값이 그대로 이력에 쌓입니다.<br>
+      성분은 거래처에 알리는 혼용율을 낼 때 쓰는 값입니다. 성분이 없으면 혼용율을 낼 수 없습니다.
+    </div>
+    <div style="margin-bottom:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+      <button class="dash-action-btn" id="cp-add-yarn" style="background:#1e3a8a;color:#fff;font-weight:700;padding:6px 14px;">＋ 사종 추가</button>
+      <button class="dash-action-btn" id="cp-yarn-guess-all" style="padding:6px 12px;">이름 보고 성분 채우기</button>
+      <input type="text" id="cp-search" lang="ko" autocomplete="off" placeholder="사종 이름 검색" value="${escapeHtml(state.costSearch || '')}"
+        style="margin-left:auto;min-width:200px;max-width:300px;padding:7px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;font-family:inherit;">
+      ${state.costSearch ? `<button class="dash-action-btn" id="cp-search-clear" style="font-size:11px;padding:5px 10px;">지우기</button>` : ''}
+    </div>`;
+    const needN = P.yarns.filter(y => yarnCompNeedsFix(y)).length;
+    let rows = P.yarns.map((y, i) => ({ y, i }))
+      .filter(o => F.yarnKind === 'all' || String(o.y.kind || '기타') === F.yarnKind)
+      .filter(o => F.yarnComp === 'all'
+        || (F.yarnComp === 'need' ? yarnCompNeedsFix(o.y)
+          : (F.yarnComp === 'mix' ? yarnCompOf(o.y).length > 1 : true)))
+      .filter(o => {
+        const q = String(F.yarnName || '').trim().toLowerCase();
+        return !q || String(o.y.name || '').toLowerCase().includes(q);
+      })
+      .filter(o => cpMatch(o.y.name));
+    if (F.yarnSort) {
+      const key = F.yarnSort.replace(/_d$/, ''), desc = /_d$/.test(F.yarnSort);
+      const val = o => key === 'kind' ? yarnKindName(o.y.kind) : String(o.y.name || '');
+      rows.sort((a, b) => {
+        const c = val(a).localeCompare(val(b), 'ko', { numeric: true });
+        return (c || String(a.y.name || '').localeCompare(String(b.y.name || ''), 'ko', { numeric: true })) * (desc ? -1 : 1);
+      });
+    }
+    h += cpFilterBar(
+      cpFilterText('cp-f-yarnname', '사종 찾기', F.yarnName, '사종 이름') +
+      cpFilterSel('cp-f-yarnkind', '구분', YARN_KINDS.map(k => ({ v: k, t: `${yarnKindName(k)} (${YARN_UNIT_LABEL[k]})` })), F.yarnKind) +
+      cpFilterSel('cp-f-yarncomp', '성분', [{ v: 'need', t: `확인 필요 (${needN}건)` }, { v: 'mix', t: '혼방사만' }], F.yarnComp) +
+      ((F.yarnName || F.yarnKind !== 'all' || F.yarnComp !== 'all' || F.yarnSort)
+        ? `<button class="dash-action-btn" id="cp-f-yarnreset" style="font-size:11.5px;padding:5px 10px;">거르기 지우기</button>` : ''),
+      rows.length, P.yarns.length);
+    if (needN) h += `<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:7px;padding:9px 12px;font-size:12.5px;color:#92400e;line-height:1.75;margin-bottom:11px;">
+      성분을 확인해야 할 사종이 <strong>${needN}개</strong> 있습니다. 위 [성분] 칸에서 <strong>확인 필요</strong>를 고르면 그 사종만 볼 수 있습니다.
+    </div>`;
+    h += `<div class="dash-table-wrap"><table class="dash-table"><thead><tr>
+      ${cpSortTh('name', '사종', 'text-align:left;min-width:170px;')}${cpSortTh('kind', '구분', 'min-width:100px;')}<th style="text-align:left;min-width:230px;">성분 (혼용율)</th><th style="min-width:96px;">단위</th><th style="min-width:56px;">수정</th><th style="min-width:56px;">삭제</th>
+    </tr></thead><tbody>`;
+    if (!rows.length) h += `<tr><td colspan="6" style="text-align:center;color:#9ca3af;padding:18px;">${P.yarns.length ? '검색 결과가 없습니다.' : '등록된 사종이 없습니다. [＋ 사종 추가]를 눌러 주세요.'}</td></tr>`;
+    rows.forEach(({ y, i }) => {
+      const ctxt = yarnCompText(y);
+      const cauto = !!(Array.isArray(y.comp) && y.comp.length && y.comp_auto);
+      const compCell = !ctxt
+        ? `<span style="color:#c0271f;font-weight:700;font-size:11.5px;">성분 없음 — 넣어 주십시오</span>`
+        : `<span style="font-weight:700;color:#0f172a;">${escapeHtml(ctxt)}</span>`
+          + (cauto ? ` <span style="font-size:10.5px;font-weight:800;color:#92400e;background:#fef3c7;border:1px solid #fcd34d;border-radius:4px;padding:1px 5px;">확인 필요</span>` : '')
+          + ((!Array.isArray(y.comp) || !y.comp.length) ? ` <span style="font-size:11px;color:#94a3b8;">(구분으로 잡음)</span>` : '');
+      h += `<tr>
+        <td style="text-align:left;font-weight:700;">${escapeHtml(y.name || '-')}</td>
+        <td style="text-align:center;">${costBadge(yarnKindName(y.kind), yarnKindColor(y.kind))}</td>
+        <td style="text-align:left;font-size:12px;">${compCell}</td>
+        <td style="text-align:center;font-size:11.5px;color:#6b7280;">${escapeHtml(YARN_UNIT_LABEL[y.kind] || 'kg당')}</td>
+        <td class="col-action"><button class="dash-action-btn cp-edit" data-cp-type="yarn" data-idx="${i}">수정</button></td>
+        <td class="col-action col-act-delete"><button class="dash-action-btn danger cp-del" data-cp-type="yarn" data-idx="${i}">삭제</button></td>
+      </tr>`;
+    });
+    h += `</tbody></table></div>`;
+    h += renderCostPriceModal() + renderCostListModal();
+    return h;
+  }
   function renderYarnPriceTable(P) {
     const F = costFilter();
     let h = `<div style="margin-bottom:10px;display:flex;gap:8px;flex-wrap:wrap;">
@@ -26363,14 +26439,89 @@ function validateBlendSum(blends, label) {
     return h;
   }
   // hotfix310: [원가 자료] 창 껍데기 — [원단 원가]와 [단가 설정] 두 곳에서 같이 쓴다
-  function renderFcModalHtml() {
+  // ============================================================
+  // hotfix317: 품목 카드 — 원가 계산기의 기본 화면
+  //   조직 ▾ 품목명 ▾ 으로 고르면 그 원단 한 장이 통째로 펼쳐진다.
+  //   창(팝업)이 아니라 한 장짜리 서류처럼 쓴다.
+  // ============================================================
+  // 지금 카드에 펼칠 품목. 고른 것이 거르기에 걸려 안 보이면 보이는 것 중 첫째로 내려간다
+  function ccCardList() {
+    const org = String(state.ccCardOrg || '').trim();
+    const q = String(state.ccCardQ || '').trim().toLowerCase();
+    return getFabricSpecs()
+      .filter(x => !org || normOrg(x.cat) === org)
+      .filter(x => !q || String(x.name || '').toLowerCase().includes(q))
+      .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'ko', { numeric: true }));
+  }
+  function ccCardFid() {
+    const list = ccCardList();
+    const f = String(state.ccCardFid || '').trim();
+    if (f && list.some(x => specFid(x) === f)) return f;
+    return list.length ? specFid(list[0]) : '';
+  }
+  function renderCostCardTab() {
+    const specs = getFabricSpecs();
     const inputStyle = 'width:100%;padding:7px 9px;border:1px solid #d1d5db;border-radius:5px;font-size:13px;font-family:inherit;box-sizing:border-box;';
+    if (!specs.length) return `<div class="dash-empty">등록된 품목이 없습니다. [원단 스펙 설정]에서 [＋ 새 품목 추가]로 먼저 만들어 주십시오.</div>`;
+    const org = String(state.ccCardOrg || '').trim();
+    const q = String(state.ccCardQ || '').trim().toLowerCase();
+    const orgs = Array.from(new Set(specs.map(x => normOrg(x.cat)).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'ko'));
+    const shown = ccCardList();
+    const fid = ccCardFid();
+    const cur = specs.find(x => specFid(x) === fid) || null;
+    let h = `<div style="display:flex;gap:9px;flex-wrap:wrap;align-items:flex-end;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:11px 13px;margin-bottom:13px;">
+      <div style="flex:0 0 170px;"><label style="font-size:11.5px;font-weight:700;color:#475569;display:block;margin-bottom:3px;">1. 조직</label>
+        <select id="cc-card-org" style="${inputStyle}"><option value="">전체</option>${orgs.map(o => `<option value="${escapeHtml(o)}"${o === org ? ' selected' : ''}>${escapeHtml(o)}</option>`).join('')}</select></div>
+      <div style="flex:0 0 230px;"><label style="font-size:11.5px;font-weight:700;color:#475569;display:block;margin-bottom:3px;">2. 품목명</label>
+        <select id="cc-card-item" style="${inputStyle}">${shown.length
+          ? shown.map(x => `<option value="${escapeHtml(specFid(x))}"${specFid(x) === fid ? ' selected' : ''}>${escapeHtml(x.name || '')}${x.active === false ? ' (판매 종료)' : ''}</option>`).join('')
+          : '<option value="">찾는 품목이 없습니다</option>'}</select></div>
+      <div style="flex:0 0 170px;"><label style="font-size:11.5px;font-weight:700;color:#475569;display:block;margin-bottom:3px;">이름으로 찾기</label>
+        <input type="text" id="cc-card-q" lang="ko" autocomplete="off" value="${escapeHtml(state.ccCardQ || '')}" placeholder="글자를 치면 좁혀집니다" style="${inputStyle}"></div>
+      <div style="margin-left:auto;font-size:11.5px;color:#94a3b8;line-height:1.7;padding-bottom:6px;">
+        전체 ${specs.length}품목 · 보이는 것 ${shown.length}<br>새 품목은 [원단 스펙 설정]의 [＋ 새 품목 추가]에서 만듭니다
+      </div>
+    </div>`;
+    if (!cur) return h + `<div class="dash-empty">품목을 고르십시오.</div>`;
+    h += `<div id="cc-card-head" style="background:#0f172a;color:#fff;border-radius:10px;padding:12px 16px;margin-bottom:13px;">
+      <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;">
+        <span style="font-size:19px;font-weight:800;">${escapeHtml(cur.name || '')}</span>
+        <span style="font-size:11px;font-weight:800;border-radius:9px;padding:2px 9px;background:${cur.active === false ? '#7f1d1d' : '#166534'};">${cur.active === false ? '판매 종료' : '판매 중'}</span>
+        <span style="font-size:11px;font-weight:800;border-radius:9px;padding:2px 9px;background:#1e293b;color:#cbd5e1;">${escapeHtml(fid)}</span>
+        <span style="font-size:11.5px;color:#94a3b8;">${escapeHtml(normOrg(cur.cat) || '조직 없음')}${cur.gubun ? ' · ' + escapeHtml(cur.gubun) : ''}</span>
+      </div>
+      <div id="cc-card-sum" style="margin-top:7px;font-size:12px;color:#94a3b8;">셈하는 중입니다…</div>
+    </div>`;
+    h += renderFcBodyHtml(true);
+    return h;
+  }
+  function fcPaintCardHead() {
+    const el = document.getElementById('cc-card-sum');
+    if (!el) return;
+    const R = fcLiveCalc();
+    const m = n => costMoney(n, 0);
+    const one = (t, v) => `<span style="color:#94a3b8;">${t}</span> <strong style="color:#fff;font-size:14px;">${v}</strong>`;
+    el.innerHTML = [
+      one('총원사가', m(R.yarnTotal)),
+      one('생지값', m(R.knitPrice)),
+      one('kg당', m(R.kgCost)),
+      one('야드당', R.ydCost == null ? '-' : m(R.ydCost))
+    ].join('<span style="color:#334155;">&nbsp;·&nbsp;</span>');
+  }
+  function renderFcModalHtml() {
     return `<div class="dash-modal-bg" id="fc-modal">
       <div class="dash-modal" style="max-width:960px;">
         <div class="dash-modal-head"><span>원단 원가 자료</span><button class="dash-modal-close" id="fc-modal-close">✕</button></div>
-        <div style="padding:16px;">
+        <div style="padding:16px;">${renderFcBodyHtml(false)}</div>
+      </div>
+    </div>`;
+  }
+  // hotfix317: 창 속을 따로 뽑는다 — 품목 카드에서는 이 속만 통째로 화면에 편다
+  function renderFcBodyHtml(inCard) {
+    const inputStyle = 'width:100%;padding:7px 9px;border:1px solid #d1d5db;border-radius:5px;font-size:13px;font-family:inherit;box-sizing:border-box;';
+    return `
           <div id="fs-cost-wrap" style="border:0;background:#fff;padding:0;">
-            <div style="display:flex;align-items:center;gap:8px;margin-bottom:9px;">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:9px;${inCard ? 'display:none;' : ''}">
               <span id="fc-modal-item" style="font-size:13.5px;font-weight:800;color:#0f172a;">원가 자료</span>
               <span style="font-size:11px;font-weight:700;color:#b45309;background:#fef3c7;border:1px solid #fde68a;border-radius:9px;padding:1px 8px;">최고관리자 전용</span>
               <span style="font-size:11px;color:#94a3b8;">원가 자료는 이 화면에서만 다룹니다. 원단 기본 스펙 화면에는 나오지 않습니다</span>
@@ -26477,13 +26628,10 @@ function validateBlendSum(blends, label) {
           <div id="fs-c-why" style="display:none;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:11px 14px;margin-top:8px;font-size:11.5px;color:#334155;line-height:1.9;"></div>
           <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px;flex-wrap:wrap;">
             <button class="dash-action-btn" id="fs-c-whytoggle" style="padding:7px 14px;margin-right:auto;">계산근거 펼치기</button>
-            <button class="dash-action-btn" id="fc-modal-cancel" style="padding:7px 16px;">취소</button>
+            ${inCard ? '' : `<button class="dash-action-btn" id="fc-modal-cancel" style="padding:7px 16px;">취소</button>`}
             <button class="dash-action-btn" id="fs-c-toquote" style="padding:7px 16px;background:#5b21b6;color:#fff;font-weight:800;">이 자료로 산출서 만들기</button>
             <button class="dash-action-btn" id="fc-modal-save" data-modal-save style="background:#1e3a8a;color:#fff;font-weight:800;padding:7px 20px;">저장</button>
-          </div>
-        </div>
-      </div>
-    </div>`;
+          </div>`;
   }
   // hotfix281: 원단 원가 자료 편집 — [원가 계산기] › [원단 원가] 화면 전용
     const costWrap = () => document.getElementById('fs-cost-wrap');
@@ -26817,6 +26965,7 @@ function validateBlendSum(blends, label) {
       }));
     }
     function fcPaintResult() {
+      fcPaintCardHead();
       const el = document.getElementById('fs-c-result');
       if (!el) return;
       const R = fcLiveCalc();
@@ -27628,7 +27777,7 @@ function validateBlendSum(blends, label) {
             </div></div>
           <div id="cp-f-item-wrap"><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">품목 <span style="font-weight:400;color:#9ca3af;font-size:11px;">— 비우면 위 조건 전체에 적용됩니다</span></label>
             <select id="cp-f-item" style="${st}"></select></div>
-          <div><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;" id="cp-f-price-label">단가</label>
+          <div id="cp-f-price-wrap"><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;" id="cp-f-price-label">단가</label>
             <input type="text" inputmode="numeric" id="cp-f-price" autocomplete="off" style="${st}text-align:right;" placeholder="0">
             <div id="cp-f-price-hint" style="font-size:11.5px;color:#2563eb;margin-top:5px;min-height:16px;font-weight:700;"></div></div>
           <div id="cp-f-memo-wrap"><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">메모</label>
@@ -29990,6 +30139,17 @@ function validateBlendSum(blends, label) {
   // hotfix302: [원단 원가 자료] 창이 떠 있는 동안에는 화면을 다시 그리지 않는다.
   //   단가표를 저장하면 구독이 화면을 다시 그리는데, 그때 창이 통째로 사라져 넣던 값이 날아갔다.
   //   창이 떠 있으면 창 안만 새로 셈하고, 창을 닫을 때 밀린 그리기를 한다.
+  // hotfix317: 품목 카드가 펼쳐져 있으면 구독이 화면을 통째로 다시 그리지 않는다.
+  //   그리면 대표가 넣고 있던 값이 그 자리에서 날아간다. 카드 안만 새로 셈한다.
+  function ccCardIsOpen() {
+    return state.uiMode === 'dashboard' && state.dashView === 'costCalc'
+      && (state.costTab || 'card') === 'card' && !!document.getElementById('fs-cost-wrap');
+  }
+  function renderCostFromSub() {
+    if (!(state.uiMode === 'dashboard' && state.dashView === 'costCalc')) return;
+    if (ccCardIsOpen()) { try { if (typeof repaintCostCalc === 'function') repaintCostCalc(); } catch (_) {} return; }
+    renderDashboard();
+  }
   function fcModalIsOpen() {
     const m = document.getElementById('fc-modal');
     return !!(m && m.classList.contains('show'));
@@ -30103,6 +30263,10 @@ function validateBlendSum(blends, label) {
     } else if (state.dashView === 'specTol') {
       title = '규격 허용치 (관리자 전용)';
       body = viewIsLocked('specTol') ? renderOwnerLockScreen('규격 허용치') : renderSpecTol();
+    } else if (state.dashView === 'yarnSetup') {
+      title = '원사 설정 (관리자 전용)';
+      body = renderYarnSetupDash();
+      addBtn.style.display = 'none';
     } else if (state.dashView === 'fabricSpecs') {
       title = '원단 기본 스펙 (관리자 전용)';
       body = renderFabricSpecs();
@@ -33241,7 +33405,7 @@ function validateBlendSum(blends, label) {
     });
     // ===== hotfix268: 원가 계산기 단가표 =====
     document.querySelectorAll('#dash-body .cc-tab-btn').forEach(b => b.addEventListener('click', () => {
-      state.costTab = b.dataset.ccTab || 'prices';
+      state.costTab = b.dataset.ccTab || 'card';
       state.cqWhy = '';
       state.cqCompare = '';
       state.cqDraft = null;
@@ -33411,7 +33575,7 @@ function validateBlendSum(blends, label) {
       });
     }
     document.querySelectorAll('#dash-body .cp-sub-btn').forEach(b => b.addEventListener('click', () => {
-      state.costPriceTab = b.dataset.cpSub || 'yarn';
+      state.costPriceTab = b.dataset.cpSub || 'knit';
       renderDashboard();
     }));
     bindRerenderSearch('cp-search', v => { state.costSearch = v; });
@@ -33542,7 +33706,7 @@ function validateBlendSum(blends, label) {
         goEl.disabled = true;
         const ok = await runCostImport(raw, !!(owEl && owEl.checked), mk);
         goEl.disabled = false;
-        if (ok) { toast('자료를 가져왔습니다', 'success'); state.costTab = 'calc'; renderDashboard(); }
+        if (ok) { toast('자료를 가져왔습니다', 'success'); state.costTab = 'card'; renderDashboard(); }
       });
     })();
     // ===== hotfix270: 판매 등급 =====
@@ -33816,7 +33980,8 @@ function validateBlendSum(blends, label) {
     })();
     (function attachCostFabricHandlers() {
       const modal = document.getElementById('fc-modal');
-      if (!modal) return;
+      const inCard = !modal && !!document.getElementById('fs-cost-wrap');
+      if (!modal && !inCard) return;
       bindRerenderSearch('fc-search', v => { state.fcSearch = v; });
       document.getElementById('fc-search-clear')?.addEventListener('click', () => { state.fcSearch = ''; renderDashboard(); });
       // hotfix298: 판매 중인 품목만 보기 · 머리글 눌러 줄 세우기
@@ -33887,13 +34052,31 @@ function validateBlendSum(blends, label) {
         } catch (e) { toast('되돌리기 실패: ' + e.message, 'error'); }
       });
       const closeFc = () => {
-        modal.classList.remove('show');
+        if (modal) modal.classList.remove('show');
         if (state.__fcPendingRender) { state.__fcPendingRender = false; renderDashboard(); }
       };
       document.getElementById('fc-modal-close')?.addEventListener('click', closeFc);
       document.getElementById('fc-modal-cancel')?.addEventListener('click', closeFc);
-      modal.addEventListener('click', e => { if (e.target === modal) closeFc(); });
+      if (modal) modal.addEventListener('click', e => { if (e.target === modal) closeFc(); });
+      // hotfix317: 품목 카드 — 고르기 줄
+      document.getElementById('cc-card-org')?.addEventListener('change', ev => {
+        state.ccCardOrg = ev.target.value || ''; state.ccCardFid = ''; renderDashboard();
+      });
+      document.getElementById('cc-card-item')?.addEventListener('change', ev => {
+        state.ccCardFid = ev.target.value || ''; renderDashboard();
+      });
+      bindRerenderSearch('cc-card-q', v => { state.ccCardQ = v; state.ccCardFid = ''; });
       bindCostFieldEvents();
+      // 카드 화면에서는 고른 품목을 바로 펼친다
+      if (inCard) {
+        const f = ccCardFid();
+        const spec = getFabricSpecs().find(x => specFid(x) === f);
+        if (spec) {
+          const t = document.getElementById('fc-modal-item');
+          if (t) t.textContent = String(spec.name || '') + (spec.cat ? ' · ' + spec.cat : '');
+          fillCostFields(spec);
+        }
+      }
       document.querySelectorAll('#dash-body .fc-edit').forEach(b => b.addEventListener('click', () => {
         const fid = b.dataset.fid || '';
         const spec = getFabricSpecs().find(x => specFid(x) === fid);
@@ -33926,7 +34109,10 @@ function validateBlendSum(blends, label) {
         return true;
       };
       document.getElementById('fc-modal-save')?.addEventListener('click', async () => {
-        if (await fcSaveAll()) { toast('원가 자료를 저장했습니다', 'success'); closeFc(); renderDashboard(); }
+        if (!(await fcSaveAll())) return;
+        toast('원가 자료를 저장했습니다', 'success');
+        if (inCard) { repaintCostCalc(); return; }   // 카드에서는 보던 자리에 그대로 머문다
+        closeFc(); renderDashboard();
       });
       document.getElementById('fs-c-toquote')?.addEventListener('click', async () => {
         if (!(await fcSaveAll())) return;
@@ -34046,6 +34232,12 @@ function validateBlendSum(blends, label) {
         show('cp-f-procs-wrap', type === 'bundle');
         show('cp-f-item-wrap', type === 'knit' || type === 'proc');
         show('cp-f-memo-wrap', type === 'bundle');
+        // hotfix316: [원사 설정] 화면에서는 단가를 넣지 않는다 (값은 원가 계산기의 원사 줄에서)
+        const setupOnly = (state.dashView === 'yarnSetup' && type === 'yarn');
+        show('cp-f-price-wrap', !setupOnly);
+        document.getElementById('cp-modal-title').textContent = setupOnly
+          ? ((cpIdx < 0) ? '사종 추가' : '사종 수정')
+          : document.getElementById('cp-modal-title').textContent;
         document.getElementById('cp-f-price-label').textContent =
           type === 'yarn' ? '단가' : (type === 'bundle' ? '묶음 단가 (kg당)' : 'kg당 단가');
         document.getElementById('cp-f-name').value = cur.name || '';
@@ -34112,8 +34304,10 @@ function validateBlendSum(blends, label) {
 
       document.getElementById('cp-modal-save')?.addEventListener('click', async () => {
         const P = JSON.parse(JSON.stringify(getCostPrices()));
+        // hotfix316: [원사 설정] 화면에서는 단가를 넣지 않는다. 옛 값을 그대로 둔다.
+        const setupOnly = (state.dashView === 'yarnSetup' && cpType === 'yarn');
         const price = parseFloat(unComma(document.getElementById('cp-f-price').value));
-        if (isNaN(price) || price < 0) { toast('단가를 넣어 주세요', 'error'); return; }
+        if (!setupOnly && (isNaN(price) || price < 0)) { toast('단가를 넣어 주세요', 'error'); return; }
         let entry = null, list = null, key = '';
         if (cpType === 'yarn') {
           const name = document.getElementById('cp-f-name').value.trim();
@@ -34124,7 +34318,16 @@ function validateBlendSum(blends, label) {
           // hotfix290: 성분(혼용율). 넣었으면 합이 100%여야 한다. 창에서 저장하면 대표가 확인한 것으로 본다.
           const comp = cpCompRead();
           if (comp.length && Math.abs(yarnCompSum(comp) - 100) > 0.5) { toast('성분 합계가 100%가 되어야 합니다', 'error'); return; }
-          entry = { name, kind, price, comp: comp, comp_auto: false, updated_at: todayYMD(), updated_by: state.user?.email || '' };
+          const prev = (cpIdx >= 0 && P.yarns[cpIdx]) ? P.yarns[cpIdx] : {};
+          entry = {
+            name, kind,
+            price: setupOnly ? (prev.price != null ? prev.price : null) : price,
+            // 값 칸은 원가 계산기에서 채운다 — 여기서 지우지 않는다
+            ship: (prev.ship == null ? null : prev.ship),
+            loss: (prev.loss == null ? null : prev.loss),
+            last_vendor: prev.last_vendor || '',
+            comp: comp, comp_auto: false, updated_at: todayYMD(), updated_by: state.user?.email || ''
+          };
           list = P.yarns; key = priceKeyYarn(name);
         } else if (cpType === 'knit') {
           const vendor = document.getElementById('cp-f-vendor').value.trim();
@@ -34155,7 +34358,7 @@ function validateBlendSum(blends, label) {
         const prevPrice = (cpIdx >= 0 && list[cpIdx]) ? parseFloat(list[cpIdx].price) : null;
         if (cpIdx >= 0) list[cpIdx] = entry; else list.push(entry);
         const adds = {};
-        if (prevPrice == null || prevPrice !== price) adds[key] = { d: todayYMD(), p: price };
+        if (!setupOnly && (prevPrice == null || prevPrice !== price)) adds[key] = { d: todayYMD(), p: price };
         const ok = await saveCostPrices(P, adds);
         if (ok) { toast('저장했습니다', 'success'); closeCp(); renderDashboard(); }
       });
@@ -36819,7 +37022,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix315';
+  const VERSION = 'v2.53 hotfix317';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
