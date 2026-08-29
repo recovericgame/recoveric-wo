@@ -11380,6 +11380,44 @@ window.addEventListener('firebase-ready', () => {
     if (!key) return null;
     return getCostPrices().yarns.find(y => String((y && y.name) || '').trim().toLowerCase() === key) || null;
   }
+  // hotfix315: 사종 + 업체로 값을 찾는다.
+  //   그 업체로 쳐 넣은 마지막 값이 있으면 그것이 이기고, 없으면 사종 마스터 값을 쓴다.
+  function yarnEntryFor(name, vendor) {
+    const base = yarnEntryByName(name);
+    if (!base) return null;
+    const out = {
+      name: base.name, kind: base.kind || '기타', comp: base.comp,
+      price: base.price,
+      ship: (base.ship == null || base.ship === '') ? null : base.ship,
+      loss: (base.loss == null || base.loss === '') ? null : base.loss,
+      from: ''
+    };
+    const v = String(vendor || '').trim();
+    if (v) {
+      const h = lastYarnEntryOf(name, v);
+      if (h) { out.price = h.price; out.ship = h.ship; out.loss = h.loss; out.from = v; }
+    }
+    return out;
+  }
+  // 원사 줄 하나를 값 꾸러미로 바꾼다. 줄에 친 값이 가장 세고, 없으면 사종×업체, 그다음 사종 마스터
+  function fcYarnEnt(y) {
+    const nm = String((y && y.name) || '').trim();
+    if (!nm) return null;
+    const base = yarnEntryFor(nm, (y && y.vendor) || '');
+    const numOr = (a, b) => { const v = parseFloat(a); return isNaN(v) ? b : v; };
+    const bp = base ? parseFloat(base.price) : NaN;
+    const price = numOr(y && y.price, bp);
+    if (isNaN(price)) return null;
+    return {
+      name: nm,
+      kind: base ? String(base.kind || '기타') : '기타',
+      price: price,
+      ship: numOr(y && y.ship, base ? numOr(base.ship, NaN) : NaN),
+      loss: numOr(y && y.loss, base ? numOr(base.loss, NaN) : NaN),
+      vendor: String((y && y.vendor) || '').trim(),
+      typed: !isNaN(parseFloat(y && y.price))
+    };
+  }
   function calcFiberBlend(yarns) {
     const rows = calcYarnBlend(yarns).filter(r => r.name && r.pct > 0);
     const order = [];
@@ -11516,35 +11554,51 @@ window.addEventListener('firebase-ready', () => {
   }
   // 편직료는 공장 × 조직 × 품목으로 갈린다. 조직 목록은 getKnitOrgs()가 준다.
   const COST_LB_PER_KG = 2.2046;
-  // hotfix291: 방적사 kg 단가 — 대표 엑셀 서식과 똑같이 맞춘다
-  //   (고리가격 ÷ 1.1 + 25,000) ÷ 172
-  //     ÷ 1.1     부가세를 뺀다
-  //     + 25,000  고리당 운임
-  //     ÷ 172     고리 하나 181.44kg 에 로스 5%를 미리 뺀 값
-  const COST_KG_PER_GORI = 172;
+  // ────────────────────────────────────────────────────────────
+  // hotfix315: 원사 kg 환산 — FM 방식
+  //   방적사  (고리값 ÷ 1.1 + 운임) ÷ 181.44 ÷ (1 − 로스율/100)
+  //   포리    (파운드값 × 2.2046 + 운임) ÷ (1 − 로스율/100)
+  //   기타    (kg값 + 운임) ÷ (1 − 로스율/100)
+  //   181.44는 고리 하나를 kg으로 바꾸는 숫자일 뿐 파운드와 무관하다.
+  //   옛 식은 ÷172 였다 — 181.44 에 로스 5%를 미리 뺀 값이었다.
+  //   이제 운임과 로스율을 사종마다 칸으로 따로 넣는다.
+  // ────────────────────────────────────────────────────────────
   const COST_GORI_RAW_KG = 181.44;
+  const COST_KG_PER_GORI_OLD = 172;     // 옛 식 — 얼려 둔 산출서 풀이글에만 쓴다. 다시 계산하지 않는다
   const COST_YARN_VAT_DIV = 1.1;
-  const COST_GORI_FREIGHT = 25000;
+  const COST_GORI_FREIGHT = 25000;      // 방적사 운임 기본값 (칸이 비면 이 값)
+  const COST_YARN_LOSS_DEFAULT = 5;     // 방적사 로스율 기본값 %
+  function yarnShipOf(y) {
+    const v = parseFloat(y && y.ship);
+    if (!isNaN(v)) return v;
+    return (String((y && y.kind) || '기타') === '면') ? COST_GORI_FREIGHT : 0;
+  }
+  function yarnLossOf(y) {
+    const v = parseFloat(y && y.loss);
+    if (!isNaN(v)) return v;
+    return (String((y && y.kind) || '기타') === '면') ? COST_YARN_LOSS_DEFAULT : 0;
+  }
   function yarnKgPrice(y) {
     const p = parseFloat(y && y.price);
-    if (!p && p !== 0) return null;
+    if (isNaN(p)) return null;
     const k = String((y && y.kind) || '기타');
-    if (k === '면') return (p / COST_YARN_VAT_DIV + COST_GORI_FREIGHT) / COST_KG_PER_GORI;
-    if (k === '포리') return p * COST_LB_PER_KG;
-    return p;
+    const f = yarnShipOf(y);
+    const lo = (100 - yarnLossOf(y)) / 100;
+    if (!(lo > 0)) return null;
+    if (k === '면') return (p / COST_YARN_VAT_DIV + f) / COST_GORI_RAW_KG / lo;
+    if (k === '포리') return (p * COST_LB_PER_KG + f) / lo;
+    return (p + f) / lo;
   }
   // [계산식] 창·힌트에 쓰는 풀이 글
   function yarnKgPriceWhy(y) {
     const p = parseFloat(y && y.price);
-    if (!p && p !== 0) return '';
+    if (isNaN(p)) return '';
     const k = String((y && y.kind) || '기타');
-    if (k === '면') {
-      const v = p / COST_YARN_VAT_DIV;
-      return `(${costMoney(p, 0)} ÷ ${COST_YARN_VAT_DIV} + ${costMoney(COST_GORI_FREIGHT, 0)}) ÷ ${COST_KG_PER_GORI}`
-        + ` = (${costMoney(v, 0)} + ${costMoney(COST_GORI_FREIGHT, 0)}) ÷ ${COST_KG_PER_GORI} = ${costMoney(yarnKgPrice(y), 0)}원/kg`;
-    }
-    if (k === '포리') return `${costMoney(p, 0)} × ${COST_LB_PER_KG} = ${costMoney(yarnKgPrice(y), 0)}원/kg`;
-    return `${costMoney(p, 0)}원/kg 그대로`;
+    const f = yarnShipOf(y), L = yarnLossOf(y);
+    const lt = `(1 − ${costMoney(L, 1)}/100)`;
+    if (k === '면') return `(${costMoney(p, 0)} ÷ ${COST_YARN_VAT_DIV} + 운임 ${costMoney(f, 0)}) ÷ ${COST_GORI_RAW_KG} ÷ ${lt} = ${costMoney(yarnKgPrice(y), 0)}원/kg`;
+    if (k === '포리') return `(${costMoney(p, 0)} × ${COST_LB_PER_KG} + 운임 ${costMoney(f, 0)}) ÷ ${lt} = ${costMoney(yarnKgPrice(y), 0)}원/kg`;
+    return `(${costMoney(p, 0)} + 운임 ${costMoney(f, 0)}) ÷ ${lt} = ${costMoney(yarnKgPrice(y), 0)}원/kg`;
   }
   function costMoney(n, digits) {
     if (n == null || isNaN(n)) return '-';
@@ -11636,6 +11690,8 @@ window.addEventListener('firebase-ready', () => {
   // hotfix273: 공장을 정하지 않은 단가. 그 공장 단가가 따로 없으면 이걸 쓴다.
   const COST_COMMON_VENDOR = '(공통)';
   function priceKeyYarn(n) { return 'yarn:' + String(n || '').trim(); }
+  // hotfix315: 업체를 붙인 이력 열쇠. 업체가 비면 옛 열쇠와 똑같아진다 (priceKeyTrim 이 끝의 | 를 자른다)
+  function priceKeyYarnV(n, v) { return priceKeyTrim('yarn:' + String(n || '').trim() + '|' + String(v || '').trim()); }
   // hotfix280: 열쇠 = 공장|조직|품목 · 공장|공정|품목. 뒤가 비면 잘라내므로 옛 열쇠와 그대로 맞물린다.
   function priceKeyTrim(s) { return String(s).replace(/\|+$/, ''); }
   function priceKeyKnit(v, org, item) {
@@ -11645,6 +11701,20 @@ window.addEventListener('firebase-ready', () => {
     return priceKeyTrim('proc:' + String(v || '').trim() + '|' + String(pr || '').trim() + '|' + String(item || '').trim());
   }
   function priceKeyBundle(v, procs) { return 'bundle:' + String(v || '').trim() + '|' + (Array.isArray(procs) ? procs.join('+') : ''); }
+  // 그 사종 × 그 업체의 마지막 값 (이력에서 뽑는다). 없으면 null
+  function lastYarnEntryOf(name, vendor) {
+    const h = priceHistoryOf(priceKeyYarnV(name, vendor));
+    if (!h.length) return null;
+    const e = h[h.length - 1] || {};
+    const p = parseFloat(e.p);
+    if (isNaN(p)) return null;
+    return {
+      price: p,
+      ship: (e.ship == null || e.ship === '') ? null : parseFloat(e.ship),
+      loss: (e.loss == null || e.loss === '') ? null : parseFloat(e.loss),
+      d: String(e.d || '').trim()
+    };
+  }
   function priceHistoryOf(key) {
     const all = state.costPriceHistory || {};
     return Array.isArray(all[key]) ? all[key] : [];
@@ -24568,7 +24638,7 @@ function validateBlendSum(blends, label) {
       let why = '';
       if (y.kind === '면') {
         const v = (y.buy != null) ? (y.buy / COST_YARN_VAT_DIV) : null;
-        why = (y.buy == null) ? '' : `(${cqMoney(y.buy)} ÷ ${COST_YARN_VAT_DIV} + 운임 ${cqMoney(COST_GORI_FREIGHT)}) ÷ ${COST_KG_PER_GORI} = (${cqMoney(v)} + ${cqMoney(COST_GORI_FREIGHT)}) ÷ ${COST_KG_PER_GORI} = ${cqMoney(y.kg)}원/kg`;
+        why = (y.buy == null) ? '' : `(${cqMoney(y.buy)} ÷ ${COST_YARN_VAT_DIV} + 운임 ${cqMoney(COST_GORI_FREIGHT)}) ÷ ${COST_KG_PER_GORI_OLD} = (${cqMoney(v)} + ${cqMoney(COST_GORI_FREIGHT)}) ÷ ${COST_KG_PER_GORI_OLD} = ${cqMoney(y.kg)}원/kg <span style="color:#94a3b8;">(그날 쓴 옛 식 그대로입니다)</span>`;
       } else if (y.kind === '포리') {
         why = (y.buy == null) ? '' : `${cqMoney(y.buy)} × ${COST_LB_PER_KG} = ${cqMoney(y.kg)}원/kg`;
       } else {
@@ -25740,9 +25810,10 @@ function validateBlendSum(blends, label) {
     });
     h += `</tbody></table></div>
       <div style="font-size:11.5px;color:#9ca3af;margin-top:8px;line-height:1.7;">
-        방적사 kg 단가 = (고리당 값 ÷ ${COST_YARN_VAT_DIV} + 운임 ${costMoney(COST_GORI_FREIGHT, 0)}원) ÷ ${COST_KG_PER_GORI}
-        &nbsp;— ÷${COST_YARN_VAT_DIV}는 부가세를 뺀 것, ${COST_KG_PER_GORI}은 고리 하나 ${COST_GORI_RAW_KG}kg 에 로스 5%를 미리 뺀 값입니다.<br>
-        포리에스터는 파운드당 값에 ${COST_LB_PER_KG}을 곱합니다. 스판 등 기타는 kg 값을 그대로 씁니다.
+        방적사 kg 단가 = (고리당 값 ÷ ${COST_YARN_VAT_DIV} + 운임) ÷ ${COST_GORI_RAW_KG} ÷ (1 − 로스율/100)
+        &nbsp;— ÷${COST_YARN_VAT_DIV}는 부가세를 뺀 것, ${COST_GORI_RAW_KG}은 고리 하나를 kg으로 바꾸는 숫자입니다 (파운드와 무관합니다).<br>
+        포리에스터는 (파운드당 값 × ${COST_LB_PER_KG} + 운임) ÷ (1 − 로스율/100), 스판 등 기타는 (kg 값 + 운임) ÷ (1 − 로스율/100) 입니다.<br>
+        운임과 로스율은 <strong>[원가 계산기] > [원단 원가]</strong> 창의 원사 줄에서 넣습니다. 비워 두면 방적사는 운임 ${costMoney(COST_GORI_FREIGHT, 0)}원 · 로스율 ${COST_YARN_LOSS_DEFAULT}%, 그 밖은 0으로 셈합니다.
       </div>`;
     return h;
   }
@@ -26341,9 +26412,10 @@ function validateBlendSum(blends, label) {
               <input type="text" id="fs-c-yq" lang="ko" autocomplete="off" placeholder="사종 이름으로 목록 좁히기"
                 style="margin-left:auto;width:180px;padding:5px 9px;border:1px solid #d1d5db;border-radius:6px;font-size:12px;font-family:inherit;">
             </div>
-            <table style="width:100%;border-collapse:collapse;font-size:12px;background:#fff;border:1px solid #e2e8f0;border-radius:6px;overflow:hidden;">
+            <div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:6px;background:#fff;">
+            <table style="width:100%;min-width:1140px;border-collapse:collapse;font-size:12px;background:#fff;">
               <thead><tr style="background:#f1f5f9;color:#475569;font-size:11px;">
-                <th style="padding:5px 6px;text-align:left;">종류</th><th style="padding:5px 6px;text-align:left;">사종</th><th style="padding:5px 6px;width:80px;">굵기</th><th style="padding:5px 6px;width:74px;">단위</th><th class="fs-c-col-loop" style="padding:5px 6px;width:86px;">루프장<div style="font-size:9.5px;font-weight:400;color:#94a3b8;line-height:1.2;">공장마다</div></th><th style="padding:5px 6px;width:92px;">사용량 %<div style="font-size:9.5px;font-weight:400;color:#94a3b8;line-height:1.2;">원가 셈에 씀</div></th>
+                <th style="padding:5px 6px;text-align:left;">종류</th><th style="padding:5px 6px;text-align:left;">사종</th><th style="padding:5px 6px;width:80px;">굵기</th><th style="padding:5px 6px;width:74px;">단위</th><th class="fs-c-col-loop" style="padding:5px 6px;width:86px;">루프장<div style="font-size:9.5px;font-weight:400;color:#94a3b8;line-height:1.2;">공장마다</div></th><th style="padding:5px 6px;width:92px;">사용량 %<div style="font-size:9.5px;font-weight:400;color:#94a3b8;line-height:1.2;">원가 셈에 씀</div></th><th style="padding:5px 6px;min-width:140px;">원사업체</th><th style="padding:5px 6px;width:108px;">원사 단가</th><th style="padding:5px 6px;width:64px;">단위</th><th style="padding:5px 6px;width:92px;">운임</th><th style="padding:5px 6px;width:74px;">로스율 %</th><th style="padding:5px 6px;width:90px;">kg 환산</th><th style="padding:5px 6px;width:92px;">적용가<div style="font-size:9.5px;font-weight:400;color:#94a3b8;line-height:1.2;">kg환산 × 사용량</div></th>
               </tr></thead>
               <tbody>
                 ${[0, 1, 2, 3].map(k => `<tr>
@@ -26353,10 +26425,18 @@ function validateBlendSum(blends, label) {
                   <td style="padding:3px 5px;"><select class="fs-c-y-unit" data-k="${k}" style="${inputStyle}padding:5px 4px;font-size:12px;"><option value="D">D</option><option value="수">수</option></select></td>
                   <td class="fs-c-col-loop" style="padding:3px 5px;"><input type="text" inputmode="decimal" class="fs-c-y-loop" data-k="${k}" style="${inputStyle}padding:5px 7px;font-size:12px;text-align:right;"></td>
                   <td style="padding:3px 5px;text-align:right;"><span class="fs-c-y-pct" data-k="${k}" style="font-weight:800;color:#be185d;">-</span><input type="text" inputmode="decimal" class="fs-c-y-pctin" data-k="${k}" style="${inputStyle}padding:5px 7px;font-size:12px;text-align:right;font-weight:800;color:#be185d;display:none;"></td>
+                  <td style="padding:3px 5px;"><select class="fs-c-y-vendor" data-k="${k}" style="${inputStyle}padding:5px 4px;font-size:12px;"></select></td>
+                  <td style="padding:3px 5px;"><input type="text" inputmode="numeric" class="fs-c-y-price" data-k="${k}" style="${inputStyle}padding:5px 7px;font-size:12px;text-align:right;" placeholder="비우면 단가표"></td>
+                  <td style="padding:3px 5px;text-align:center;"><span class="fs-c-y-punit" data-k="${k}" style="font-size:11px;color:#94a3b8;">-</span></td>
+                  <td style="padding:3px 5px;"><input type="text" inputmode="numeric" class="fs-c-y-ship" data-k="${k}" style="${inputStyle}padding:5px 7px;font-size:12px;text-align:right;"></td>
+                  <td style="padding:3px 5px;"><input type="text" inputmode="decimal" class="fs-c-y-loss" data-k="${k}" style="${inputStyle}padding:5px 7px;font-size:12px;text-align:right;"></td>
+                  <td style="padding:3px 5px;text-align:right;"><span class="fs-c-y-kg" data-k="${k}" style="font-weight:700;color:#334155;">-</span></td>
+                  <td style="padding:3px 5px;text-align:right;"><span class="fs-c-y-apply" data-k="${k}" style="font-weight:800;color:#0f172a;">-</span></td>
                 </tr>`).join('')}
               </tbody>
             </table>
-            <div style="display:flex;align-items:center;gap:9px;margin:7px 0 6px;">
+            </div>
+            <div style="display:flex;align-items:center;gap:9px;margin:7px 0 6px;flex-wrap:wrap;">
               <span id="fs-c-blend-sum" style="font-size:11.5px;font-weight:800;color:#475569;"></span>
               <button type="button" class="dash-action-btn" id="fs-c-blend-100" style="font-size:11px;padding:4px 10px;display:none;" title="지금 넣은 값의 비례를 지키면서 합계를 100%로 맞춥니다">100%로 맞추기</button>
               <button type="button" class="dash-action-btn" id="fs-c-blend-apply" style="font-size:11px;padding:4px 10px;" title="아래 소재별 혼용율을 이 품목의 혼용율로 저장합니다. 사용량이 아니라 혼용율이 저장됩니다">품목 혼용율로 저장</button>
@@ -26433,7 +26513,7 @@ function validateBlendSum(blends, label) {
     function fcLiveCalc() {
       const numOf = id => { const v = (document.getElementById(id)?.value || '').trim(); return v === '' ? null : parseFloat(v); };
       const yarns = collectCostYarns();
-      const rows = calcYarnBlend(yarns).filter(r => r.name);
+      const rows = calcYarnBlend(yarns).map((r, k) => { r.__k = k; return r; }).filter(r => r.name);
       const out = {
         yarns: [], yarnTotal: 0, blendSum: 0, missYarn: [], missProc: [],
         knitLoss: (numOf('fs-c-knitloss') == null ? COST_KNIT_LOSS_DEFAULT : numOf('fs-c-knitloss')),
@@ -26445,10 +26525,10 @@ function validateBlendSum(blends, label) {
         kgCost: 0, ydCost: null, gy: numOf('fs-c-guidegy'), makeGy: numOf('fs-c-makegy')
       };
       rows.forEach(r => {
-        const ent = yarnEntryByName(r.name);
+        const ent = fcYarnEnt(yarns[r.__k]);
         const kg = ent ? yarnKgPrice(ent) : null;
         const applied = (kg == null) ? 0 : kg * (r.pct / 100);
-        out.yarns.push({ name: r.name, pct: r.pct, size: r.size, loop: r.loop, unit: r.unit, contrib: r.contrib, ent: ent, kg: kg, applied: applied });
+        out.yarns.push({ name: r.name, pct: r.pct, size: r.size, loop: r.loop, unit: r.unit, contrib: r.contrib, ent: ent, kg: kg, applied: applied, vendor: ent ? ent.vendor : '' });
         if (kg == null) out.missYarn.push(r.name);
         out.yarnTotal += applied;
         out.blendSum += r.pct;
@@ -26562,9 +26642,32 @@ function validateBlendSum(blends, label) {
       let sum = 0;
       rows.forEach((r, k) => {
         const cell = costWrap().querySelector(`.fs-c-y-pct[data-k="${k}"]`);
-        if (!cell) return;
-        if (r.name && r.pct > 0) { cell.textContent = r.pct + '%'; sum += r.pct; }
-        else cell.textContent = '-';
+        if (cell) {
+          if (r.name && r.pct > 0) { cell.textContent = r.pct + '%'; }
+          else cell.textContent = '-';
+        }
+        if (r.name && r.pct > 0) sum += r.pct;
+        // hotfix315: 그 줄의 kg 환산 · 적용가 · 단위 글자
+        const w2 = costWrap();
+        const uEl2 = w2.querySelector(`.fs-c-y-punit[data-k="${k}"]`);
+        const kEl2 = w2.querySelector(`.fs-c-y-kg[data-k="${k}"]`);
+        const aEl2 = w2.querySelector(`.fs-c-y-apply[data-k="${k}"]`);
+        const pEl2 = w2.querySelector(`.fs-c-y-price[data-k="${k}"]`);
+        const sEl2 = w2.querySelector(`.fs-c-y-ship[data-k="${k}"]`);
+        const lEl2 = w2.querySelector(`.fs-c-y-loss[data-k="${k}"]`);
+        const ent2 = fcYarnEnt(yarns[k]);
+        if (uEl2) uEl2.textContent = ent2 ? (YARN_UNIT_LABEL[ent2.kind] || 'kg당') : '-';
+        const kg2 = ent2 ? yarnKgPrice(ent2) : null;
+        if (kEl2) {
+          kEl2.textContent = (kg2 == null) ? '-' : costMoney(kg2, 0);
+          kEl2.style.color = (ent2 && ent2.typed) ? '#0f172a' : '#64748b';
+          kEl2.title = ent2 ? yarnKgPriceWhy(ent2) : '';
+        }
+        if (aEl2) aEl2.textContent = (kg2 == null || !(r.pct > 0)) ? '-' : costMoney(kg2 * r.pct / 100, 0);
+        // 비워 둔 칸에는 실제로 쓰이는 값을 흐리게 보여 준다
+        if (pEl2 && !String(pEl2.value || '').trim()) pEl2.placeholder = ent2 ? costMoney(ent2.price, 0) + ' (단가표)' : '비우면 단가표';
+        if (sEl2 && !String(sEl2.value || '').trim()) sEl2.placeholder = ent2 ? costMoney(yarnShipOf(ent2), 0) : '0';
+        if (lEl2 && !String(lEl2.value || '').trim()) lEl2.placeholder = ent2 ? String(yarnLossOf(ent2)) : '0';
       });
       const sEl = document.getElementById('fs-c-blend-sum');
       if (sEl) {
@@ -26804,8 +26907,88 @@ function validateBlendSum(blends, label) {
         unit: (w.querySelector(`.fs-c-y-unit[data-k="${k}"]`)?.value || 'D'),
         loop: (w.querySelector(`.fs-c-y-loop[data-k="${k}"]`)?.value || '').trim(),
         bmode: bm,
-        pct_manual: (w.querySelector(`.fs-c-y-pctin[data-k="${k}"]`)?.value || '').trim()
+        pct_manual: (w.querySelector(`.fs-c-y-pctin[data-k="${k}"]`)?.value || '').trim(),
+        // hotfix315: 원사업체 · 단가 · 운임 · 로스율
+        vendor: (w.querySelector(`.fs-c-y-vendor[data-k="${k}"]`)?.value || '').trim(),
+        price: unComma(w.querySelector(`.fs-c-y-price[data-k="${k}"]`)?.value || ''),
+        ship: unComma(w.querySelector(`.fs-c-y-ship[data-k="${k}"]`)?.value || ''),
+        loss: unComma(w.querySelector(`.fs-c-y-loss[data-k="${k}"]`)?.value || '')
       }));
+    }
+    // hotfix315: 사종·업체를 고르면 그 자리의 마지막 값을 칸에 채운다.
+    //   대표가 이미 친 값은 건드리지 않는다 (force 를 켠 업체 바꾸기만 덮어쓴다).
+    function fcPullYarnPrice(k, force) {
+      const w = costWrap();
+      if (!w) return;
+      const nm = (w.querySelector(`.fs-c-y-name[data-k="${k}"]`)?.value || '').trim();
+      if (!nm) {
+        ['fs-c-y-price', 'fs-c-y-ship', 'fs-c-y-loss'].forEach(c => {
+          const el = w.querySelector(`.${c}[data-k="${k}"]`); if (el) el.value = '';
+        });
+        return;
+      }
+      const ven = (w.querySelector(`.fs-c-y-vendor[data-k="${k}"]`)?.value || '').trim();
+      const src = yarnEntryFor(nm, ven);
+      if (!src) return;
+      const pEl = w.querySelector(`.fs-c-y-price[data-k="${k}"]`);
+      const sEl = w.querySelector(`.fs-c-y-ship[data-k="${k}"]`);
+      const lEl = w.querySelector(`.fs-c-y-loss[data-k="${k}"]`);
+      const put = (el, v, money) => {
+        if (!el) return;
+        if (!force && String(el.value || '').trim()) return;
+        if (v == null || v === '' || isNaN(parseFloat(v))) { el.value = ''; return; }
+        el.value = money ? moneyInputVal(v) : String(v);
+      };
+      // 그 업체로 친 값이 있을 때만 덮어쓴다. 없으면 마스터 값을 빈 칸에만 채운다
+      const hasVendorVal = !!(ven && src.from === ven);
+      put(pEl, src.price, true);
+      put(sEl, (src.ship == null && !hasVendorVal) ? yarnShipOf({ kind: src.kind }) : src.ship, true);
+      put(lEl, (src.loss == null && !hasVendorVal) ? yarnLossOf({ kind: src.kind }) : src.loss, false);
+    }
+    // hotfix315: 카드에서 친 원사 값을 단가표와 값 이력에 올린다.
+    //   · 값 이력  cost_data/price_history 에 `yarn:사종|업체` 열쇠로 쌓는다 (지우지 않는다)
+    //   · 단가표   그 사종의 현재값을 갈아 끼운다 (다음 원단에서 저절로 따라온다)
+    //   같은 이름을 업체마다 새로 만들지 않는다 — 업체별 값은 이력에서 뽑는다
+    async function fcPushYarnPrices(yarns) {
+      if (!isOwnerUser()) return;
+      if (!state.costPricesLoaded) return;
+      const list = (yarns || []).filter(y => y && String(y.name || '').trim() && !isNaN(parseFloat(y.price)));
+      if (!list.length) return;
+      const P = JSON.parse(JSON.stringify(getCostPrices()));
+      const adds = {};
+      const at = todayYMD();
+      let touched = 0;
+      list.forEach(y => {
+        const nm = String(y.name).trim();
+        const ven = String(y.vendor || '').trim();
+        const price = parseFloat(y.price);
+        const ship = (y.ship == null || y.ship === '' || isNaN(parseFloat(y.ship))) ? null : parseFloat(y.ship);
+        const loss = (y.loss == null || y.loss === '' || isNaN(parseFloat(y.loss))) ? null : parseFloat(y.loss);
+        const key = nm.toLowerCase();
+        const i = P.yarns.findIndex(x => String((x && x.name) || '').trim().toLowerCase() === key);
+        const kind = (i >= 0) ? String(P.yarns[i].kind || '기타') : '기타';
+        // 그 업체로 친 마지막 값과 똑같으면 이력을 새로 쌓지 않는다
+        const prev = lastYarnEntryOf(nm, ven);
+        const same = prev && Number(prev.price) === price
+          && (prev.ship == null ? null : Number(prev.ship)) === ship
+          && (prev.loss == null ? null : Number(prev.loss)) === loss;
+        if (i >= 0) {
+          P.yarns[i].price = price;
+          P.yarns[i].ship = ship;
+          P.yarns[i].loss = loss;
+          P.yarns[i].last_vendor = ven;
+          P.yarns[i].updated_at = at;
+        }
+        if (same) return;
+        adds[priceKeyYarnV(nm, ven)] = {
+          d: at, p: price, ship: ship, loss: loss, vendor: ven,
+          kg: Math.round(yarnKgPrice({ kind: kind, price: price, ship: ship, loss: loss }) || 0),
+          by: (state.user && state.user.email) || ''
+        };
+        touched += 1;
+      });
+      try { await saveCostPrices(P, adds); } catch (e) { }
+      return touched;
     }
     // hotfix313: 비율을 정하는 법 — 이 품목 하나에만 걸린다
     function fcBlendMode() {
@@ -27279,6 +27462,14 @@ function validateBlendSum(blends, label) {
         w.querySelector(`.fs-c-y-loop[data-k="${k}"]`).value = (y.loop != null ? y.loop : '');
         const pin = w.querySelector(`.fs-c-y-pctin[data-k="${k}"]`);
         if (pin) pin.value = (y.pct_manual != null ? y.pct_manual : '');
+        // hotfix315: 원사업체 · 단가 · 운임 · 로스율
+        const vEl = w.querySelector(`.fs-c-y-vendor[data-k="${k}"]`);
+        if (vEl) vEl.innerHTML = vendorOptionsHTML('원사 구매처', y.vendor || '');
+        const setM = (cls, v) => { const el = w.querySelector(`.${cls}[data-k="${k}"]`); if (el) el.value = (v == null || v === '') ? '' : moneyInputVal(v); };
+        setM('fs-c-y-price', y.price);
+        setM('fs-c-y-ship', y.ship);
+        const lEl = w.querySelector(`.fs-c-y-loss[data-k="${k}"]`);
+        if (lEl) lEl.value = (y.loss == null || y.loss === '') ? '' : String(y.loss);
       });
       fcApplyBlendMode();
       fcWriteLoops(fcDraft[fcCurVendor]);   // hotfix307: 공장 칸에 루프장이 있으면 그것이 이긴다
@@ -27290,10 +27481,12 @@ function validateBlendSum(blends, label) {
       const numOrNull = (v) => (v === '' || v == null) ? null : (parseFloat(v));
       const __bm = fcBlendMode();
       const yarns = collectCostYarns()
-        .filter(y => y.name || y.size || y.loop || y.pct_manual)
+        .filter(y => y.name || y.size || y.loop || y.pct_manual || y.price)
         .map(y => ({
           name: y.name, size: numOrNull(y.size), unit: y.unit === '수' ? '수' : 'D', loop: numOrNull(y.loop),
-          bmode: __bm, pct_manual: numOrNull(y.pct_manual)
+          bmode: __bm, pct_manual: numOrNull(y.pct_manual),
+          vendor: String(y.vendor || '').trim(),
+          price: numOrNull(y.price), ship: numOrNull(y.ship), loss: numOrNull(y.loss)
         }));
       // hotfix288: 지금 창의 값을 고른 공장 칸에 담고, 공장별 사양을 통째로 낸다
       fcStashVendor();
@@ -27330,7 +27523,17 @@ function validateBlendSum(blends, label) {
       document.getElementById(id)?.addEventListener('input', repaintCostCalc));
     ['fs-c-org', 'fs-c-knitter', 'fs-c-dyer', 'fs-c-finisher'].forEach(id =>
       document.getElementById(id)?.addEventListener('change', repaintCostCalc));
-    costWrap().querySelectorAll('.fs-c-y-size, .fs-c-y-loop, .fs-c-y-pctin').forEach(el => el.addEventListener('input', repaintCostCalc));
+    costWrap().querySelectorAll('.fs-c-y-size, .fs-c-y-loop, .fs-c-y-pctin, .fs-c-y-loss').forEach(el => el.addEventListener('input', repaintCostCalc));
+    // hotfix315: 원사 단가 · 운임 — 치는 동안 천단위 콤마를 붙인다
+    costWrap().querySelectorAll('.fs-c-y-price, .fs-c-y-ship').forEach(el => el.addEventListener('input', () => {
+      formatMoneyInput(el);
+      repaintCostCalc();
+    }));
+    // hotfix315: 원사업체를 바꾸면 그 업체로 친 마지막 값이 따라온다 (칸을 비워 둔 자리에만)
+    costWrap().querySelectorAll('.fs-c-y-vendor').forEach(el => el.addEventListener('change', () => {
+      fcPullYarnPrice(el.dataset.k, true);
+      repaintCostCalc();
+    }));
     // hotfix313: 비율 정하는 법 갈아타기 · 100%로 맞추기
     costWrap().querySelectorAll('.fs-c-bmode').forEach(el => el.addEventListener('change', () => {
       fcApplyBlendMode();
@@ -27358,6 +27561,7 @@ function validateBlendSum(blends, label) {
         const g = yarnGuessSpec(el.value);
         if (g) { sizeEl.value = g.size; if (unitEl) unitEl.value = g.unit; }
       }
+      fcPullYarnPrice(k, true);
       repaintCostCalc();
       if (el.value && loopEl && !String(loopEl.value || '').trim()) loopEl.focus();
     }));
@@ -33706,6 +33910,8 @@ function validateBlendSum(blends, label) {
         if (!editingCostFid) { toast('품목 코드가 없어 저장하지 못했습니다', 'error'); return false; }
         const ok = await saveFabricCost(editingCostFid, cost);
         if (!ok) return false;
+        // hotfix315: 카드에서 친 원사 값을 단가표·값 이력에 올린다
+        try { await fcPushYarnPrices(cost.yarns); } catch (e) { }
         const raw = (document.getElementById('fs-c-guidegy')?.value || '').trim();
         const gy = raw === '' ? null : parseFloat(raw);
         const specs = JSON.parse(JSON.stringify(getFabricSpecs()));
@@ -36613,7 +36819,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix314';
+  const VERSION = 'v2.53 hotfix315';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
