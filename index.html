@@ -27059,11 +27059,14 @@ function validateBlendSum(blends, label) {
         (getCostPrices().yarns || []).forEach(y => {
           const k = CC_KIND_TO_MOCK[String(y.kind || '기타')] || '기타';
           const g = yarnGuessSpec(y.name) || {};
+          const comp = yarnCompOf(y);
           out[k].push({
             name: String(y.name || ''), thick: (g.size == null ? '' : g.size), tunit: (g.unit === '수' ? '수' : 'D'),
             price: (y.price == null ? '' : y.price),
             ship: (y.ship == null ? yarnShipOf({ kind: y.kind }) : y.ship),
-            loss: (y.loss == null ? yarnLossOf({ kind: y.kind }) : y.loss)
+            loss: (y.loss == null ? yarnLossOf({ kind: y.kind }) : y.loss),
+            // 소재(성분) — 없으면 혼용율을 낼 수 없다
+            comp: comp.length ? comp.map(c => ({ mat: c.mat, pct: c.pct })) : null
           });
         });
         return out;
@@ -27243,13 +27246,20 @@ let YARN_BOOK=BR.yarnBook();
 const LOSS_MEMO=BR.lossMemo();
 const YV_MEMO=BR.yvMemo();
 const MOCK_KIND_TO_REAL={'방적사':'면','포리에스터':'포리','기타':'기타'};
-// 그 종류를 다루는 원사 구매처만. 취급 원사를 하나도 고르지 않은 업체는 늘 나온다
-const yarnVendors=(kindK)=>{
+// 원사 구매처를 두 무리로 가른다 — 그 종류를 다루는 곳 / 아직 취급 원사를 안 정한 곳
+function yarnVendorGroups(kindK){
   const want=MOCK_KIND_TO_REAL[kindK]||'';
-  return VENDORS.filter(v=>v.parts.includes('원사 구매처'))
-    .filter(v=>!want||!(v.kinds||[]).length||v.kinds.includes(want))
-    .map(v=>v.name);
-};
+  const buy=VENDORS.filter(v=>v.parts.includes('원사 구매처'));
+  const hit=[],unset=[];
+  buy.forEach(v=>{
+    const ks=v.kinds||[];
+    if(!ks.length) unset.push(v.name);
+    else if(!want||ks.includes(want)) hit.push(v.name);
+  });
+  const srt=(a,b)=>String(a).localeCompare(String(b),'ko',{numeric:true});
+  return {hit:hit.sort(srt),unset:unset.sort(srt)};
+}
+const yarnVendors=(kindK)=>{const g=yarnVendorGroups(kindK); return g.hit.concat(g.unset);};
 
 function newFin(){
   return { ploss:10, grade:'농색',
@@ -27332,7 +27342,7 @@ const finSum=()=>(F().rows||[]).reduce((a,r)=>a+rowValIn(F(),r),0);
 const postSum=u=>(Q().rows||[]).filter(r=>(r.unit||'kg')===u).reduce((a,r)=>a+rowValIn(Q(),r),0);
 
 function calc(){
-  const K=D.knits[D.knitV]||{},gy=n(D.gy);
+  const K=curKnit(),gy=n(D.gy);
   const yt=yarnTotal();
   const gr=yt/((100-n(K.kloss))/100||1)+n(K.kfee);
   const fs=finSum();
@@ -27396,16 +27406,20 @@ function paintYarnRows(){
     const list=YARN_BOOK[y.kindK]||[];
     const inList=list.some(x=>x.name===y.name);
     return `<tr data-i="${i}">
-      <td><select class="y" data-k="kindK">${Object.keys(KINDS).map(k=>`<option value="${k}" ${y.kindK===k?'selected':''}>${k} (${(YARN_BOOK[k]||[]).length})</option>`).join('')}</select></td>
+      <td><select class="y" data-k="kindK">${Object.keys(KINDS).map(k=>`<option value="${k}" ${y.kindK===k?'selected':''}>${k}</option>`).join('')}</select></td>
       <td><select class="y" data-k="name">${list.length
         ? `<option value="">— 사종을 고르십시오 —</option>`+list.map(x=>`<option ${x.name===y.name?'selected':''}>${x.name}</option>`).join('')+(inList||!y.name?'':`<option selected>${y.name}</option>`)
         : `<option value="">${y.kindK} 로 등록된 사종이 없습니다</option>`+(y.name?`<option selected>${y.name}</option>`:'')}</select></td>
       <td><select class="y" data-k="vendor">${(()=>{
-        const vs=yarnVendors(y.kindK);
+        const g=yarnVendorGroups(y.kindK);
         const cur=String(y.vendor||'');
-        const opts=['<option value="">— 업체 —</option>'].concat(vs.map(v=>`<option ${cur===v?'selected':''}>${v}</option>`));
-        if(cur&&!vs.includes(cur)) opts.push(`<option selected>${cur}</option>`);
-        return opts.join('');
+        const op=v=>`<option ${cur===v?'selected':''}>${v}</option>`;
+        let h=`<option value="" ${cur?'':'selected'}>— 업체 —</option>`;
+        if(g.hit.length) h+=`<optgroup label="${y.kindK} 취급">`+g.hit.map(op).join('')+`</optgroup>`;
+        if(g.unset.length) h+=`<optgroup label="취급 원사 설정 전">`+g.unset.map(op).join('')+`</optgroup>`;
+        if(cur&&!g.hit.includes(cur)&&!g.unset.includes(cur)) h+=`<optgroup label="이 종류를 다루지 않는 곳">`+op(cur)+`</optgroup>`;
+        if(!g.hit.length&&!g.unset.length) h+=`<option value="" disabled>등록된 원사 구매처가 없습니다</option>`;
+        return h;
       })()}</select></td>
       <td><input type="text" inputmode="decimal" class="y num money" data-k="thick" value="${iv(y.thick)}"></td>
       <td><select class="y" data-k="tunit"><option ${y.tunit==='수'?'selected':''}>수</option><option ${y.tunit==='D'?'selected':''}>D</option></select></td>
@@ -27432,14 +27446,15 @@ function paintYarnRows(){
   $('loopFrom').textContent=bmode()==='manual'?'사용량을 손으로 넣는 중입니다':'루프장 = '+D.knitV+' 값';
 }
 // hotfix328: 편직 공장이 없어도 원사 줄을 만질 수 있게 — 늘 그릇 하나는 돌려준다
+const NO_KNIT='(공장 미지정)';
 function curKnit(){
   if(!D.knits) D.knits={};
   if(D.knitV && D.knits[D.knitV]) { const k=D.knits[D.knitV]; k.loops=k.loops||{}; return k; }
   const first=Object.keys(D.knits)[0];
   if(first){ D.knitV=first; const k=D.knits[first]; k.loops=k.loops||{}; return k; }
-  D.__noKnit=D.__noKnit||{inch:'',needle:'',kloss:'',kfee:'',loops:{}};
-  D.__noKnit.loops=D.__noKnit.loops||{};
-  return D.__noKnit;
+  D.knits[NO_KNIT]={inch:'',needle:'',kloss:'',kfee:'',loops:{}};
+  D.knitV=NO_KNIT;
+  return D.knits[NO_KNIT];
 }
 function onYarnChange(e){
   const el=e.target,tr=el.closest('tr'),i=+tr.dataset.i,k=el.dataset.k,y=D.yarns[i];
@@ -27449,7 +27464,7 @@ function onYarnChange(e){
     const bag=YARN_BOOK[y.kindK]||[];
     if(bag.length && !bag.some(x=>x.name===y.name)) applyYarn(y,bag[0],KK);
     const vs2=yarnVendors(y.kindK);
-    if(y.vendor&&!vs2.includes(y.vendor)) y.vendor=vs2[0]||'';
+    if(y.vendor&&!vs2.includes(y.vendor)) y.vendor='';
     paintYarnRows(); recalc(); return;
   }
   if (k==='name'){
@@ -27464,7 +27479,7 @@ function onYarnChange(e){
     else y.name=el.value;
     // 고른 사종을 다루지 않는 업체가 남아 있으면 비운다
     const vs=yarnVendors(y.kindK);
-    if(y.vendor&&!vs.includes(y.vendor)) y.vendor=vs[0]||'';
+    if(y.vendor&&!vs.includes(y.vendor)) y.vendor='';
     paintYarnRows(); recalc(); return;
   }
   if (k==='vendor'){ y.vendor=el.value; if(y.vendor) YV_MEMO[y.name]=y.vendor; recalc(); return; }
@@ -27477,7 +27492,7 @@ function onYarnChange(e){
 function applyYarn(y,src,KK){
   y.name=src.name; y.thick=src.thick; y.tunit=src.tunit; y.price=src.price; y.ship=src.ship;
   y.loss=LOSS_MEMO[src.name]!==undefined?LOSS_MEMO[src.name]:5;
-  y.vendor=YV_MEMO[src.name]||y.vendor||yarnVendors(y.kindK)[0]||'';
+  y.vendor=YV_MEMO[src.name]||y.vendor||'';
   if (KK&&KK.loops&&KK.loops[y.name]===undefined) KK.loops[y.name]='';
 }
 function paintKnitTabs(){
@@ -27490,7 +27505,7 @@ function paintKnitTabs(){
   }));
 }
 function paintKnitFields(){
-  const K=D.knits[D.knitV]||{};
+  const K=curKnit();
   $('k_inch').value=iv(K.inch);
   $('k_needle').value=iv(K.needle);
   $('k_loss').value=iv(K.kloss);
@@ -27611,7 +27626,7 @@ function applyBlendMode(){
 function recalc(){
   D.made=n($('f_made').value);
   D.qPrice=n($('q_price').value);
-  const C=calc(),P=pcts(),K=D.knits[D.knitV]||{},L=K.loops||{};
+  const C=calc(),P=pcts(),K=curKnit(),L=K.loops||{};
   const dg=n(D.gy)-D.made;
   $('f_dg').value=won(dg)+' g · '+(n(D.gy)?pct(dg/n(D.gy)*100,2):'-')+' %';
 
@@ -27750,7 +27765,7 @@ function openVer(){
 
 /* ── 계산근거 ── */
 function openWhy(){
-  const C=calc(),P=pcts(),K=D.knits[D.knitV]||{},L=K.loops||{};
+  const C=calc(),P=pcts(),K=curKnit(),L=K.loops||{};
   const contrib=D.yarns.map(y=>dEq(y)*n(L[y.name])),tot=contrib.reduce((a,b)=>a+b,0);
   let h=`<div class="calcline"><span class="h">비율 · 혼용율 (루프장에서 자동)</span>`+
     D.yarns.map((y,i)=>{
@@ -27944,7 +27959,9 @@ function openProcSet(w){
   const rows=v.rows;
   const has=p=>rows.some(r=>r.proc===p||(r.subs||[]).includes(p));
   let h=`<div class="bset">
-    <div class="f" style="font-size:12.5px;color:var(--deep);">새 가공법 만들기 — <span class="vn" style="color:var(--blue);">${vName(w)}</span> 에만 들어갑니다</div>
+    <div class="f" style="font-size:12.5px;color:var(--deep);">${vName(w)
+      ? `새 가공법 만들기 — <span class="vn" style="color:var(--blue);">${vName(w)}</span> 에만 들어갑니다`
+      : `<span style="color:var(--bad);font-weight:800;">먼저 위 [＋ 업체]로 염색·가공처를 넣어 주십시오. 가공법은 업체마다 따로 담깁니다.</span>`}</div>
     <div class="grid">
       <div style="flex:0.9;"><select id="np_part">${(v.parts||[]).map(p=>`<option>${p}</option>`).join('')}</select></div>
       <div style="flex:1.4;"><input type="text" id="np_name" placeholder="가공법 이름"></div>
@@ -28121,7 +28138,7 @@ function paintSheets(){
       <td><button class="b s" data-load="${i}">이 값으로 다시 계산</button></td></tr>`).join('');
   ROOT().querySelectorAll('[data-load]').forEach(b=>b.addEventListener('click',()=>{
     const k=D.sheets[+b.dataset.load];
-    GHOST={gy:n(D.gy),kloss:n((D.knits[D.knitV]||{}).kloss),kfee:n((D.knits[D.knitV]||{}).kfee),
+    GHOST={gy:n(D.gy),kloss:n(curKnit().kloss),kfee:n(curKnit().kfee),
       ploss:n(F().ploss),qPrice:n(D.qPrice),
       yarns:D.yarns.map(y=>({price:n(y.price),ship:n(y.ship),loss:n(y.loss),loop:(curKnit().loops||{})[y.name]}))};
     Object.assign(D,JSON.parse(JSON.stringify(k.snap)));
@@ -28400,7 +28417,7 @@ bind('pr_proc','change',e=>{D.print.proc=e.target.value;});
 bind('q_base','change',e=>{D.qBase=e.target.value;recalc();});
 bind('btnAddYarn','click',()=>{
   const f=YARN_BOOK.기타[0];
-  D.yarns.push({kindK:'기타',name:f.name,vendor:YV_MEMO[f.name]||yarnVendors('기타')[0]||'',thick:f.thick,tunit:f.tunit,price:f.price,ship:f.ship,loss:0});
+  D.yarns.push({kindK:'기타',name:f.name,vendor:YV_MEMO[f.name]||'',thick:f.thick,tunit:f.tunit,price:f.price,ship:f.ship,loss:0});
   paintYarnRows(); recalc();
 });
 ROOT().querySelectorAll('input[name=bmode]').forEach(r=>r.addEventListener('change',()=>{
@@ -39183,7 +39200,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix328';
+  const VERSION = 'v2.53 hotfix331';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
