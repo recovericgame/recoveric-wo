@@ -11616,6 +11616,37 @@ window.addEventListener('firebase-ready', () => {
     }
     return { rows: out, unknown: unknown, sum: Math.round(out.reduce((a, x) => a + x.pct, 0) * 10) / 10 };
   }
+  // hotfix323: 안내중량에 허용치를 씌워 범위를 낸다. 리프는 리프 전용 허용치를 쓴다.
+  function gyRangeOf(gy, gubun) {
+    const g = parseFloat(String(gy == null ? '' : gy).replace(/,/g, ''));
+    if (isNaN(g) || g <= 0) return null;
+    const T = getSpecTol();
+    const rib = String(gubun || '') === GUBUN_RIB;
+    const mode = rib ? T.rib_weight_mode : T.weight_mode;
+    let lo, hi, how;
+    if (mode === 'gy') {
+      const d = parseFloat(rib ? T.rib_weight_gy : T.weight_gy) || 0;
+      lo = g - d; hi = g + d; how = '±' + costMoney(d, 0) + ' g/y';
+    } else {
+      const pc = parseFloat(rib ? T.rib_weight_pct : T.weight_pct) || 0;
+      lo = g * (1 - pc / 100); hi = g * (1 + pc / 100); how = '±' + (Math.round(pc * 10) / 10) + '%';
+    }
+    return { gy: g, lo: Math.round(lo), hi: Math.round(hi), how: how, rib: rib };
+  }
+  function gyRangeText(gy, gubun) {
+    const r = gyRangeOf(gy, gubun);
+    if (!r) return '';
+    return costMoney(r.lo, 0) + ' ~ ' + costMoney(r.hi, 0) + ' g/y (' + r.how + ')';
+  }
+  // 그 품목의 원가 자료(원사 구성)에서 낸 혼용율. 낼 수 없으면 null
+  function blendFromCost(fid) {
+    const c = getFabricCost(fid);
+    const ys = (c && Array.isArray(c.yarns)) ? c.yarns.filter(y => y && y.name) : [];
+    if (!ys.length) return null;
+    const f = calcFiberBlend(ys);
+    if (!f.rows.length) return null;
+    return { text: f.rows.map(r => `${r.mat} ${r.pct}%`).join(' · '), unknown: f.unknown.slice() };
+  }
   function fiberBlendText(yarns) {
     const f = calcFiberBlend(yarns);
     return f.rows.map(r => `${r.mat} ${r.pct}%`).join(' ');
@@ -23857,7 +23888,13 @@ function validateBlendSum(blends, label) {
         return `
         <tr style="${on ? '' : 'background:#fafafa;'}">
           <td style="font-weight:700;color:${on ? 'var(--ui-text)' : '#9ca3af'};">${escapeHtml(v.name)}${on ? '' : ` <span style="font-size:11px;font-weight:700;color:#b45309;background:#fef3c7;border-radius:9px;padding:1px 8px;">사용 안 함</span>`}</td>
-          <td>${(getVendorTypes(v).length ? getVendorTypes(v).map(t => typeChip(t)).join(' ') : typeChip(''))}</td>
+          <td>${(getVendorTypes(v).length ? getVendorTypes(v).map(t => typeChip(t)).join(' ') : typeChip(''))}${
+            getVendorTypes(v).includes('원사 구매처')
+              ? `<div style="margin-top:3px;font-size:10.5px;color:#64748b;font-weight:700;">${
+                  (Array.isArray(v.yarn_kinds) && v.yarn_kinds.length)
+                    ? v.yarn_kinds.map(k => yarnKindName(k)).join(' · ')
+                    : `<span style="background:#fffbeb;border:1px solid #fcd34d;color:#b45309;border-radius:4px;padding:1px 5px;">취급 원사 설정 전</span>`
+                }</div>` : ''}</td>
           <td style="font-size:12px;color:#374151;">${escapeHtml(v.contact || '') || '<span style="color:#c7cbd1;">-</span>'}</td>
           <td style="font-size:12px;color:#374151;white-space:nowrap;">${escapeHtml(v.phone || '') || '<span style="color:#c7cbd1;">-</span>'}</td>
           <td style="color:#6b7280;font-size:12px;">${(Array.isArray(v.aliases) && v.aliases.length) ? v.aliases.map(a => escapeHtml(a)).join(', ') : '<span style="color:#c7cbd1;">-</span>'}</td>
@@ -23891,6 +23928,13 @@ function validateBlendSum(blends, label) {
             <div id="vendor-f-types" style="display:flex;flex-wrap:wrap;gap:8px 16px;margin-top:6px;">
               ${VENDOR_TYPES.map(t => `<label style="display:inline-flex;align-items:center;gap:5px;font-size:13px;cursor:pointer;color:var(--ui-text);"><input type="checkbox" class="vendor-type-cb" value="${escapeHtml(t)}" style="accent-color:var(--brand);width:15px;height:15px;"> ${escapeHtml(t)}</label>`).join('')}
             </div>
+          </div>
+          <div id="vendor-f-yk-wrap" style="margin-bottom:12px;display:none;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 12px;">
+            <label style="${lblS}">취급 원사 <span style="font-weight:400;color:#9ca3af;">(여러 개 선택 가능 — 원사 구매처일 때만 씁니다)</span></label>
+            <div id="vendor-f-yks" style="display:flex;flex-wrap:wrap;gap:8px 16px;margin-top:6px;">
+              ${YARN_KINDS.map(k => `<label style="display:inline-flex;align-items:center;gap:5px;font-size:13px;cursor:pointer;color:var(--ui-text);"><input type="checkbox" class="vendor-yk-cb" value="${escapeHtml(k)}" style="accent-color:var(--brand);width:15px;height:15px;"> ${escapeHtml(yarnKindName(k))}</label>`).join('')}
+            </div>
+            <div style="font-size:11px;color:#9ca3af;margin-top:5px;line-height:1.6;">원가 계산기의 원사 줄에서 사종을 고르면, 그 사종을 다루는 업체만 [원사업체] 칸에 나옵니다. 하나도 고르지 않으면 모든 사종에 나옵니다.</div>
           </div>
           <div style="margin-bottom:12px;">
             <label style="${lblS}">다른 표기 <span style="font-weight:400;color:#9ca3af;">(같은 업체를 부르는 다른 이름 — 쉼표로 구분. 예: 송원텍스의 다른 표기 → 송원)</span></label>
@@ -24077,7 +24121,7 @@ function validateBlendSum(blends, label) {
     });
     const fsArrow = (k) => fsSortKey === k ? (fsSortDir === 'asc' ? ' ▲' : ' ▼') : ' <span style="color:#cbd5e1;">↕</span>';
     h += `<div class="dash-table-wrap"><table class="dash-table"><thead><tr>
-      <th class="fs-sort-th" data-key="name" style="text-align:left;cursor:pointer;" title="품목명으로 정렬">품목명${fsArrow('name')}</th><th class="fs-sort-th" data-key="gubun" style="cursor:pointer;" title="구분으로 정렬">구분${fsArrow('gubun')}</th><th>${fsGubunFilter === GUBUN_RIB ? '짝 몸판' : (fsGubunFilter === GUBUN_BODY ? '짝 리프' : '짝 연결')}</th>${catOn ? `<th>조직</th>` : ''}<th>기준 폭</th><th>튜브</th><th>중량 g/y</th><th style="text-align:left;">혼용률</th>${costOn ? `<th title="원가 항목이 등록된 품목">원가</th>` : ''}<th>마지막 수정일</th><th>판매</th>${editOn ? `<th>수정</th>` : ''}<th>삭제</th>
+      <th class="fs-sort-th" data-key="name" style="text-align:left;cursor:pointer;" title="품목명으로 정렬">품목명${fsArrow('name')}</th><th class="fs-sort-th" data-key="gubun" style="cursor:pointer;" title="구분으로 정렬">구분${fsArrow('gubun')}</th><th>${fsGubunFilter === GUBUN_RIB ? '짝 몸판' : (fsGubunFilter === GUBUN_BODY ? '짝 리프' : '짝 연결')}</th>${catOn ? `<th>조직</th>` : ''}<th>기준 폭</th><th>튜브</th><th>중량 g/y<div style="font-size:10px;font-weight:400;color:#94a3b8;line-height:1.2;">허용 범위</div></th><th style="text-align:left;">혼용률<div style="font-size:10px;font-weight:400;color:#94a3b8;line-height:1.2;">원가 계산기에서 저절로</div></th>${costOn ? `<th title="원가 항목이 등록된 품목">원가</th>` : ''}<th>마지막 수정일</th><th>판매</th>${editOn ? `<th>수정</th>` : ''}<th>삭제</th>
     </tr></thead><tbody>`;
     if (shown.length === 0) {
       h += `<tr><td colspan="${(costOn ? 13 : 12) - (catOn ? 0 : 1) - (editOn ? 0 : 1)}" style="text-align:center;color:#9ca3af;padding:18px;">${specs.length === 0 ? '등록된 품목이 없습니다. [＋ 새 품목 추가] 또는 [CSV 올려 고치기]' : (fsq ? `"${escapeHtml(fsSearch)}" 검색 결과가 없습니다.` : '이 구분에 등록된 품목이 없습니다.')}</td></tr>`;
@@ -24107,8 +24151,18 @@ function validateBlendSum(blends, label) {
           : `<span style="display:inline-block;background:#fffbeb;border:1px solid #fcd34d;color:#b45309;border-radius:4px;padding:1px 6px;font-size:11px;font-weight:700;" title="조직이 비어 있습니다. [수정]에서 골라 주십시오">조직 없음</span>`}</td>`}
         <td style="text-align:center;">${s.width ? escapeHtml(s.width) + '″' : '-'}</td>
         <td style="text-align:center;">${s.tube ? '✔' : '-'}</td>
-        <td style="text-align:center;">${(s.gy != null && s.gy !== '') ? escapeHtml(String(s.gy)) : '-'}</td>
-        <td style="text-align:left;color:${blendBad ? '#b91c1c' : '#6b7280'};font-size:12px;">${escapeHtml(s.blend || '-')}${blendBad ? ` <span style="font-weight:800;" title="혼용률 합계가 100%가 아닙니다">합 ${Math.round(_bsum * 100) / 100}%</span>` : ''}</td>
+        <td style="text-align:center;">${(() => {
+          const r = gyRangeOf(s.gy, s.gubun);
+          if (!r) return `<span style="display:inline-block;background:#fffbeb;border:1px solid #fcd34d;color:#b45309;border-radius:4px;padding:1px 6px;font-size:11px;font-weight:700;" title="안내중량이 없습니다">설정 전</span>`;
+          return `<strong>${costMoney(r.gy, 0)}</strong><div style="font-size:10.5px;color:#94a3b8;line-height:1.3;">${costMoney(r.lo, 0)} ~ ${costMoney(r.hi, 0)}</div>`;
+        })()}</td>
+        <td style="text-align:left;font-size:12px;">${(() => {
+          const auto = blendFromCost(specFid(s));
+          if (auto && !auto.unknown.length) return `<span style="color:#166534;font-weight:700;">${escapeHtml(auto.text)}</span>`;
+          if (auto && auto.unknown.length) return `<span style="color:#6b7280;">${escapeHtml(s.blend || '-')}</span> <span style="display:inline-block;background:#fffbeb;border:1px solid #fcd34d;color:#b45309;border-radius:4px;padding:1px 6px;font-size:10.5px;font-weight:700;" title="${escapeHtml(auto.unknown.join(' · '))} 의 소재가 [원사 설정]에 없습니다">소재 없음</span>`;
+          if (!String(s.blend || '').trim()) return `<span style="display:inline-block;background:#fffbeb;border:1px solid #fcd34d;color:#b45309;border-radius:4px;padding:1px 6px;font-size:11px;font-weight:700;" title="원가 계산기에서 원사를 넣으면 저절로 채워집니다">설정 전</span>`;
+          return `<span style="color:${blendBad ? '#b91c1c' : '#6b7280'};">${escapeHtml(s.blend)}</span>${blendBad ? ` <span style="font-weight:800;color:#b91c1c;" title="혼용률 합계가 100%가 아닙니다">합 ${Math.round(_bsum * 100) / 100}%</span>` : ''} <span style="display:inline-block;background:#f1f5f9;border:1px solid #e2e8f0;color:#64748b;border-radius:4px;padding:1px 6px;font-size:10.5px;font-weight:700;" title="원가 계산기에 원사 구성이 없어 손으로 적은 값입니다">손으로 적음</span>`;
+        })()}</td>
         ${costOn ? `<td style="text-align:center;font-size:11px;">${fabricCostFilled(specFid(s))
           ? `<span style="display:inline-block;padding:2px 9px;border-radius:10px;background:#ecfdf5;border:1px solid #a7f3d0;color:#047857;font-weight:800;">등록</span>`
           : `<span style="color:#c7cbd1;">-</span>`}</td>` : ''}
@@ -24136,9 +24190,13 @@ function validateBlendSum(blends, label) {
           <div style="display:flex;gap:8px;align-items:flex-end;">
             <div style="flex:1;"><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">기준 폭</label><input type="text" id="fs-f-width" style="${inputStyle}" placeholder="60/62"></div>
             <label style="display:flex;align-items:center;gap:4px;white-space:nowrap;font-size:13px;cursor:pointer;padding-bottom:8px;"><input type="checkbox" id="fs-f-tube"> 튜브(×2)</label>
-            <div style="flex:1;"><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">중량 g/y</label><input type="number" step="1" id="fs-f-gy" style="${inputStyle}" placeholder="380"></div>
+            <div style="flex:1;"><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">중량 g/y <span style="font-weight:400;color:#94a3b8;font-size:11px;">안내중량</span></label>
+              <input type="text" inputmode="numeric" id="fs-f-gy" style="${inputStyle}text-align:right;" placeholder="380">
+              <div id="fs-f-gy-range" style="font-size:11px;color:#475569;font-weight:700;margin-top:4px;min-height:15px;"></div></div>
           </div>
-          <div><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">혼용률</label><input type="text" id="fs-f-blend" style="${inputStyle}" placeholder="예: C55% P45%"></div>
+          <div><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">혼용률 <span style="font-weight:400;color:#94a3b8;font-size:11px;">거래처에 알리는 값</span></label>
+            <input type="text" id="fs-f-blend" style="${inputStyle}" placeholder="예: 면 55% · 폴리에스터 45%">
+            <div id="fs-f-blend-auto" style="font-size:11.5px;line-height:1.7;margin-top:5px;"></div></div>
           <div id="fs-pair-wrap" style="background:#faf5ff;border:1px solid #e9d5ff;border-radius:8px;padding:11px 12px;">
             <label style="font-size:12px;font-weight:800;color:#6b21a8;display:block;margin-bottom:5px;">짝 리프 <span style="font-weight:400;color:#a78bc4;font-size:11px;">— 이 몸판과 늘 함께 나가는 리프. 지정하면 작업의뢰서에서 몸판만 골라도 리프칸이 같이 채워집니다 (없으면 비워두세요)</span></label>
             <select id="fs-f-pair" style="${inputStyle}border-color:#d8b4fe;background:#fff;color:#6b21a8;font-weight:700;"><option value="">— 지정 안 함 —</option>${getRibSpecs().map(s => `<option value="${escapeHtml(s.name)}">${escapeHtml(s.name)}</option>`).join('')}</select>
@@ -26971,7 +27029,10 @@ function validateBlendSum(blends, label) {
       vendors: () => (state.vendors || []).map(v => ({
         name: String((v && v.name) || '').trim(),
         parts: VENDOR_TYPES.filter(t => vendorTypeMatch(v, t)),
-        alias: Array.isArray(v && v.alias) ? v.alias.slice() : []
+        // hotfix324: 원사 구매처가 다루는 원사 구분 ('면' | '포리' | '기타'). 비면 모든 사종에 나온다
+        kinds: (Array.isArray(v && v.yarn_kinds) ? v.yarn_kinds : []).map(k => String(k || '').trim()).filter(Boolean),
+        alias: [].concat(Array.isArray(v && v.aliases) ? v.aliases : [], Array.isArray(v && v.alias) ? v.alias : [])
+          .map(x => String(x || '').trim()).filter(Boolean)
       })).filter(v => v.name),
       yarnBook: () => {
         const out = { 방적사: [], 포리에스터: [], 기타: [] };
@@ -27156,7 +27217,14 @@ const vendorHit=(v,q)=>!q||v.name.includes(q)||(v.alias||[]).some(a=>a.includes(
 const YARN_BOOK=BR.yarnBook();
 const LOSS_MEMO=BR.lossMemo();
 const YV_MEMO=BR.yvMemo();
-const yarnVendors=()=>VENDORS.filter(v=>v.parts.includes('원사 구매처')).map(v=>v.name);
+const MOCK_KIND_TO_REAL={'방적사':'면','포리에스터':'포리','기타':'기타'};
+// 그 종류를 다루는 원사 구매처만. 취급 원사를 하나도 고르지 않은 업체는 늘 나온다
+const yarnVendors=(kindK)=>{
+  const want=MOCK_KIND_TO_REAL[kindK]||'';
+  return VENDORS.filter(v=>v.parts.includes('원사 구매처'))
+    .filter(v=>!want||!(v.kinds||[]).length||v.kinds.includes(want))
+    .map(v=>v.name);
+};
 
 function newFin(){
   return { ploss:10, grade:'농색',
@@ -27291,7 +27359,13 @@ function paintYarnRows(){
     return `<tr data-i="${i}">
       <td><select class="y" data-k="kindK">${Object.keys(KINDS).map(k=>`<option ${y.kindK===k?'selected':''}>${k}</option>`).join('')}</select></td>
       <td><select class="y" data-k="name">${list.map(x=>`<option ${x.name===y.name?'selected':''}>${x.name}</option>`).join('')}${inList?'':`<option selected>${y.name||'(고르십시오)'}</option>`}</select></td>
-      <td><select class="y" data-k="vendor">${yarnVendors().map(v=>`<option ${y.vendor===v?'selected':''}>${v}</option>`).join('')}</select></td>
+      <td><select class="y" data-k="vendor">${(()=>{
+        const vs=yarnVendors(y.kindK);
+        const cur=String(y.vendor||'');
+        const opts=['<option value="">— 업체 —</option>'].concat(vs.map(v=>`<option ${cur===v?'selected':''}>${v}</option>`));
+        if(cur&&!vs.includes(cur)) opts.push(`<option selected>${cur}</option>`);
+        return opts.join('');
+      })()}</select></td>
       <td><input type="text" inputmode="decimal" class="y num money" data-k="thick" value="${iv(y.thick)}"></td>
       <td><select class="y" data-k="tunit"><option ${y.tunit==='수'?'selected':''}>수</option><option ${y.tunit==='D'?'selected':''}>D</option></select></td>
       <td class="colLoop"><input type="text" inputmode="decimal" class="y num money" data-k="loop" value="${iv(L[y.name])}">${g&&g.loop!==undefined?`<div class="ghost">직전 ${iv(g.loop)}</div>`:''}</td>
@@ -27323,22 +27397,26 @@ function onYarnChange(e){
     y.kindK=el.value;
     const bag=YARN_BOOK[y.kindK]||[];
     if(bag.length && !bag.some(x=>x.name===y.name)) applyYarn(y,bag[0],KK);
+    const vs2=yarnVendors(y.kindK);
+    if(y.vendor&&!vs2.includes(y.vendor)) y.vendor=vs2[0]||'';
     paintYarnRows(); recalc(); return;
   }
   if (k==='name'){
-    let pick=(YARN_BOOK[y.kindK]||[]).find(x=>x.name===el.value);
-    if(!pick){
-      Object.keys(YARN_BOOK).forEach(kk=>{
-        const hit=(YARN_BOOK[kk]||[]).find(x=>x.name===el.value);
-        if(hit){ pick=hit; y.kindK=kk; }
-      });
-    }
+    // hotfix324: 사종이 어느 구분에 있든 늘 그 구분으로 종류를 맞춘다
+    let pick=null;
+    Object.keys(YARN_BOOK).forEach(kk=>{
+      const hit=(YARN_BOOK[kk]||[]).find(x=>x.name===el.value);
+      if(hit&&!pick){ pick=hit; y.kindK=kk; }
+    });
     const old=y.name;
     if (pick){const keep=KK.loops[old]; applyYarn(y,pick,KK); if(keep!==undefined){KK.loops[y.name]=keep; delete KK.loops[old];}}
     else y.name=el.value;
+    // 고른 사종을 다루지 않는 업체가 남아 있으면 비운다
+    const vs=yarnVendors(y.kindK);
+    if(y.vendor&&!vs.includes(y.vendor)) y.vendor=vs[0]||'';
     paintYarnRows(); recalc(); return;
   }
-  if (k==='vendor'){ y.vendor=el.value; YV_MEMO[y.name]=y.vendor; recalc(); return; }
+  if (k==='vendor'){ y.vendor=el.value; if(y.vendor) YV_MEMO[y.name]=y.vendor; recalc(); return; }
   if (k==='pctm'){ y.pctm=n(el.value); recalc(); return; }
   if (k==='loop') KK.loops[y.name]=n(el.value);
   else if (k==='tunit') y.tunit=el.value;
@@ -27348,7 +27426,7 @@ function onYarnChange(e){
 function applyYarn(y,src,KK){
   y.name=src.name; y.thick=src.thick; y.tunit=src.tunit; y.price=src.price; y.ship=src.ship;
   y.loss=LOSS_MEMO[src.name]!==undefined?LOSS_MEMO[src.name]:5;
-  y.vendor=YV_MEMO[src.name]||y.vendor||yarnVendors()[0]||'';
+  y.vendor=YV_MEMO[src.name]||y.vendor||yarnVendors(y.kindK)[0]||'';
   if (KK&&KK.loops&&KK.loops[y.name]===undefined) KK.loops[y.name]='';
 }
 function paintKnitTabs(){
@@ -28271,7 +28349,7 @@ bind('pr_proc','change',e=>{D.print.proc=e.target.value;});
 bind('q_base','change',e=>{D.qBase=e.target.value;recalc();});
 bind('btnAddYarn','click',()=>{
   const f=YARN_BOOK.기타[0];
-  D.yarns.push({kindK:'기타',name:f.name,vendor:YV_MEMO[f.name]||yarnVendors()[0]||'',thick:f.thick,tunit:f.tunit,price:f.price,ship:f.ship,loss:0});
+  D.yarns.push({kindK:'기타',name:f.name,vendor:YV_MEMO[f.name]||yarnVendors('기타')[0]||'',thick:f.thick,tunit:f.tunit,price:f.price,ship:f.ship,loss:0});
   paintYarnRows(); recalc();
 });
 ROOT().querySelectorAll('input[name=bmode]').forEach(r=>r.addEventListener('change',()=>{
@@ -34308,7 +34386,22 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
       const setCheckedTypes = (types) => {
         const set = new Set(types || []);
         document.querySelectorAll('#vendor-f-types .vendor-type-cb').forEach(cb => { cb.checked = set.has(cb.value); });
+        syncYkWrap();
       };
+      // hotfix324: 원사 구매처를 골랐을 때만 [취급 원사] 칸을 보여 준다
+      const syncYkWrap = () => {
+        const on = Array.from(document.querySelectorAll('#vendor-f-types .vendor-type-cb'))
+          .some(cb => cb.checked && cb.value === '원사 구매처');
+        const w = document.getElementById('vendor-f-yk-wrap');
+        if (w) w.style.display = on ? '' : 'none';
+      };
+      const getCheckedYks = () => Array.from(document.querySelectorAll('#vendor-f-yks .vendor-yk-cb'))
+        .filter(cb => cb.checked).map(cb => cb.value);
+      const setCheckedYks = (ks) => {
+        const set = new Set(ks || []);
+        document.querySelectorAll('#vendor-f-yks .vendor-yk-cb').forEach(cb => { cb.checked = set.has(cb.value); });
+      };
+      document.querySelectorAll('#vendor-f-types .vendor-type-cb').forEach(cb => cb.addEventListener('change', syncYkWrap));
       const resetForm = () => {
         editingVendorIdx = -1;
         if (nameEl) nameEl.value = '';
@@ -34317,6 +34410,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
         if (contactEl) contactEl.value = '';
         if (phoneEl) phoneEl.value = '';
         setCheckedTypes([]);
+        setCheckedYks([]);
         if (titleEl) titleEl.textContent = '거래처 추가';
         saveBtn.textContent = '추가';
         if (cancelWrap) cancelWrap.style.display = 'none';
@@ -34330,6 +34424,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
         if (contactEl) contactEl.value = v.contact || '';
         if (phoneEl) phoneEl.value = v.phone || '';
         setCheckedTypes(getVendorTypes(v));
+        setCheckedYks(Array.isArray(v.yarn_kinds) ? v.yarn_kinds : []);
         if (titleEl) titleEl.textContent = '거래처 수정';
         saveBtn.textContent = '저장';
         if (cancelWrap) cancelWrap.style.display = 'block';
@@ -34346,6 +34441,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
           phone: (phoneEl?.value || '').trim(),
           active: prev ? (prev.active !== false) : true,
           memo: (memoEl?.value || '').trim(),
+          yarn_kinds: getCheckedTypes().includes('원사 구매처') ? getCheckedYks() : [],
           aliases
         };
         const list = JSON.parse(JSON.stringify(state.vendors || []));
@@ -34460,8 +34556,10 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
         fillFsCatSelect(s.cat || '');
         document.getElementById('fs-f-width').value = s.width || '';
         document.getElementById('fs-f-tube').checked = !!s.tube;
-        document.getElementById('fs-f-gy').value = (s.gy != null ? s.gy : '');
+        document.getElementById('fs-f-gy').value = (s.gy == null || s.gy === '') ? '' : moneyInputVal(s.gy);
         document.getElementById('fs-f-blend').value = s.blend || '';
+        fsPaintGyRange();
+        fsPaintBlendAuto(idx < 0 ? '' : specFid(s));
         const sc = s.cautions || {};
         fillFsCautions('dyeing', sc.dyeing);
         fillFsCautions('processing', sc.processing);
@@ -34607,6 +34705,44 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
           box.lastElementChild.querySelector('.c-label')?.focus();
         });
       });
+      // hotfix323: 안내중량 아래에 허용 범위를 보여 준다
+      function fsPaintGyRange() {
+        const el = document.getElementById('fs-f-gy-range');
+        if (!el) return;
+        const gy = (document.getElementById('fs-f-gy')?.value || '');
+        const gubun = (document.getElementById('fs-f-gubun')?.value || GUBUN_BODY);
+        const r = gyRangeOf(gy, gubun);
+        if (!r) { el.textContent = ''; return; }
+        el.innerHTML = `검수 허용 <strong style="color:#0f172a;">${costMoney(r.lo, 0)} ~ ${costMoney(r.hi, 0)} g/y</strong>`
+          + ` <span style="font-weight:400;color:#94a3b8;">${r.how} · ${r.rib ? '리프' : '몸판'} 허용치</span>`;
+      }
+      // hotfix323: 원가 계산기에서 낸 혼용율을 보여 주고 한 번에 넣는다
+      function fsPaintBlendAuto(fid) {
+        const el = document.getElementById('fs-f-blend-auto');
+        if (!el) return;
+        const auto = fid ? blendFromCost(fid) : null;
+        if (!auto) {
+          el.innerHTML = `<span style="color:#94a3b8;">원가 계산기에 원사 구성을 넣으면 여기서 저절로 나옵니다.</span>`;
+          return;
+        }
+        if (auto.unknown.length) {
+          el.innerHTML = `<span style="color:#b45309;font-weight:700;">혼용율을 낼 수 없습니다 — ${escapeHtml(auto.unknown.join(' · '))} 의 소재가 없습니다.</span>`
+            + ` <span style="color:#94a3b8;">[설정 및 관리] > [원사 설정]에서 소재를 넣어 주십시오.</span>`;
+          return;
+        }
+        el.innerHTML = `<span style="color:#166534;font-weight:800;">원가 계산기에서 낸 값 — ${escapeHtml(auto.text)}</span>`
+          + ` <button type="button" class="dash-action-btn" id="fs-f-blend-use" style="font-size:11px;padding:3px 9px;margin-left:6px;">이 값으로 넣기</button>`;
+        document.getElementById('fs-f-blend-use')?.addEventListener('click', () => {
+          const b = document.getElementById('fs-f-blend');
+          if (b) { b.value = auto.text; toast('원가 계산기에서 낸 혼용율을 넣었습니다', 'success'); }
+        });
+      }
+      document.getElementById('fs-f-gy')?.addEventListener('input', function () {
+        this.value = this.value.replace(/[^0-9,]/g, '');
+        formatMoneyInput(this);
+        fsPaintGyRange();
+      });
+      document.getElementById('fs-f-gubun')?.addEventListener('change', fsPaintGyRange);
       const closeModal = () => { modal.classList.remove('show'); editingSpecIdx = null; };
       document.getElementById('fs-add-btn')?.addEventListener('click', () => {
         if (!isOwnerUser()) { toast('품목을 넣고 고치는 것은 최고관리자만 할 수 있습니다', 'error'); return; }
@@ -34630,7 +34766,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
           cat: document.getElementById('fs-f-cat').value.trim(),
           width: document.getElementById('fs-f-width').value.trim(),
           tube: document.getElementById('fs-f-tube').checked,
-          gy: document.getElementById('fs-f-gy').value.trim(),
+          gy: unComma(document.getElementById('fs-f-gy').value).trim(),
           blend: document.getElementById('fs-f-blend').value.trim(),
           pair_rib: (document.getElementById('fs-f-pair')?.value || '').trim(),
           updated_at: todayYMD()
@@ -38965,7 +39101,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix322';
+  const VERSION = 'v2.53 hotfix324';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
