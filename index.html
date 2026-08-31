@@ -7155,6 +7155,7 @@ const state = {
   ovKnitSearch: '',         // hotfix259: 전체 대시보드 편직 품목 검색
   viewPerms: {},            // hotfix260: settings/permissions — 화면별 최소 등급
   viewDeletes: {},          // hotfix265: 화면별 삭제 최소 등급 (기본 관리자)
+  yarnCompOpen: false,      // hotfix325: 원사 성분(혼용율)을 관리자·직원도 볼 수 있게 할지
   // hotfix262: 최고관리자 잠금
   ownerPinHash: null,
   ownerRecoveryHash: null,   // hotfix300: 복구 코드 해시
@@ -10583,6 +10584,8 @@ window.addEventListener('firebase-ready', () => {
       await setDoc(doc(db, 'settings', 'permissions'), {
         views: clean,
         deletes: cleanDel,
+        // hotfix325: 원사 성분(혼용율)을 관리자·직원에게 보일지 — 최고관리자가 켜고 끈다
+        yarn_comp_open: !!state.yarnCompOpen,
         updated_at: serverTimestamp(),
         updated_by: state.user?.email || 'unknown'
       });
@@ -10816,7 +10819,9 @@ window.addEventListener('firebase-ready', () => {
     onSnapshot(doc(db, 'settings', 'permissions'), snap => {
       state.viewPerms = (snap.exists() && snap.data().views && typeof snap.data().views === 'object') ? snap.data().views : {};
       state.viewDeletes = (snap.exists() && snap.data().deletes && typeof snap.data().deletes === 'object') ? snap.data().deletes : {};
+      state.yarnCompOpen = !!(snap.exists() && snap.data().yarn_comp_open);
       applyMenuPermissions();
+      if (state.uiMode === 'dashboard' && state.dashView === 'yarnSetup') renderDashboard();
       applyDeletePermClass();
       if (state.uiMode === 'dashboard' && !canAccessView(state.dashView)) {
         state.dashView = 'overview';
@@ -25972,14 +25977,24 @@ function validateBlendSum(blends, label) {
   function renderYarnSetupDash() {
     const P = getCostPrices();
     const F = costFilter();
+    // hotfix325: 성분(혼용율)은 최고관리자만. 최고관리자가 열어 두면 관리자·직원도 본다
+    const own = isOwnerUser();
+    const compOn = own || !!state.yarnCompOpen;
     let h = `<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px;margin-bottom:14px;font-size:12.5px;color:#475569;line-height:1.8;">
       여기서는 <strong>사종 이름 · 구분 · 성분(혼용율) · 단위</strong>만 관리합니다.<br>
       <strong>단가 · 운임 · 로스율은 원가 계산기의 원사 줄에서 넣습니다.</strong> 거기서 친 값이 그대로 이력에 쌓입니다.<br>
       성분은 거래처에 알리는 혼용율을 낼 때 쓰는 값입니다. 성분이 없으면 혼용율을 낼 수 없습니다.
     </div>
+    ${own ? `<div style="background:#faf5ff;border:1px solid #e9d5ff;border-radius:8px;padding:10px 13px;margin-bottom:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+      <label style="display:inline-flex;align-items:center;gap:7px;font-size:12.5px;font-weight:800;color:#6b21a8;cursor:pointer;">
+        <input type="checkbox" id="yk-comp-open" ${state.yarnCompOpen ? 'checked' : ''} style="width:16px;height:16px;accent-color:#7c3aed;">
+        성분(혼용율)을 관리자·직원에게도 보이기
+      </label>
+      <span style="font-size:11.5px;color:#a78bc4;">꺼 두면 성분 칸이 관리자·직원 화면에서 통째로 사라집니다. 지금 ${state.yarnCompOpen ? '보입니다' : '가려져 있습니다'}.</span>
+    </div>` : ''}
     <div style="margin-bottom:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-      <button class="dash-action-btn" id="cp-add-yarn" style="background:#1e3a8a;color:#fff;font-weight:700;padding:6px 14px;">＋ 사종 추가</button>
-      <button class="dash-action-btn" id="cp-yarn-guess-all" style="padding:6px 12px;">이름 보고 성분 채우기</button>
+      ${own ? `<button class="dash-action-btn" id="cp-add-yarn" style="background:#1e3a8a;color:#fff;font-weight:700;padding:6px 14px;">＋ 사종 추가</button>
+      <button class="dash-action-btn" id="cp-yarn-guess-all" style="padding:6px 12px;">이름 보고 성분 채우기</button>` : ''}
       <input type="text" id="cp-search" lang="ko" autocomplete="off" placeholder="사종 이름 검색" value="${escapeHtml(state.costSearch || '')}"
         style="margin-left:auto;min-width:200px;max-width:300px;padding:7px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;font-family:inherit;">
       ${state.costSearch ? `<button class="dash-action-btn" id="cp-search-clear" style="font-size:11px;padding:5px 10px;">지우기</button>` : ''}
@@ -26006,17 +26021,17 @@ function validateBlendSum(blends, label) {
     h += cpFilterBar(
       cpFilterText('cp-f-yarnname', '사종 찾기', F.yarnName, '사종 이름') +
       cpFilterSel('cp-f-yarnkind', '구분', YARN_KINDS.map(k => ({ v: k, t: `${yarnKindName(k)} (${YARN_UNIT_LABEL[k]})` })), F.yarnKind) +
-      cpFilterSel('cp-f-yarncomp', '성분', [{ v: 'need', t: `확인 필요 (${needN}건)` }, { v: 'mix', t: '혼방사만' }], F.yarnComp) +
+      (compOn ? cpFilterSel('cp-f-yarncomp', '성분', [{ v: 'need', t: `확인 필요 (${needN}건)` }, { v: 'mix', t: '혼방사만' }], F.yarnComp) : '') +
       ((F.yarnName || F.yarnKind !== 'all' || F.yarnComp !== 'all' || F.yarnSort)
         ? `<button class="dash-action-btn" id="cp-f-yarnreset" style="font-size:11.5px;padding:5px 10px;">거르기 지우기</button>` : ''),
       rows.length, P.yarns.length);
-    if (needN) h += `<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:7px;padding:9px 12px;font-size:12.5px;color:#92400e;line-height:1.75;margin-bottom:11px;">
+    if (needN && own) h += `<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:7px;padding:9px 12px;font-size:12.5px;color:#92400e;line-height:1.75;margin-bottom:11px;">
       성분을 확인해야 할 사종이 <strong>${needN}개</strong> 있습니다. 위 [성분] 칸에서 <strong>확인 필요</strong>를 고르면 그 사종만 볼 수 있습니다.
     </div>`;
     h += `<div class="dash-table-wrap"><table class="dash-table"><thead><tr>
-      ${cpSortTh('name', '사종', 'text-align:left;min-width:170px;')}${cpSortTh('kind', '구분', 'min-width:100px;')}<th style="text-align:left;min-width:230px;">성분 (혼용율)</th><th style="min-width:96px;">단위</th><th style="min-width:56px;">수정</th><th style="min-width:56px;">삭제</th>
+      ${cpSortTh('name', '사종', 'text-align:left;min-width:170px;')}${cpSortTh('kind', '구분', 'min-width:100px;')}${compOn ? `<th style="text-align:left;min-width:230px;">성분 (혼용율)</th>` : ''}<th style="min-width:96px;">단위</th>${own ? `<th style="min-width:56px;">수정</th><th style="min-width:56px;">삭제</th>` : ''}
     </tr></thead><tbody>`;
-    if (!rows.length) h += `<tr><td colspan="6" style="text-align:center;color:#9ca3af;padding:18px;">${P.yarns.length ? '검색 결과가 없습니다.' : '등록된 사종이 없습니다. [＋ 사종 추가]를 눌러 주세요.'}</td></tr>`;
+    if (!rows.length) h += `<tr><td colspan="${3 + (compOn ? 1 : 0) + (own ? 2 : 0)}" style="text-align:center;color:#9ca3af;padding:18px;">${P.yarns.length ? '검색 결과가 없습니다.' : '등록된 사종이 없습니다. [＋ 사종 추가]를 눌러 주세요.'}</td></tr>`;
     rows.forEach(({ y, i }) => {
       const ctxt = yarnCompText(y);
       const cauto = !!(Array.isArray(y.comp) && y.comp.length && y.comp_auto);
@@ -26028,14 +26043,14 @@ function validateBlendSum(blends, label) {
       h += `<tr>
         <td style="text-align:left;font-weight:700;">${escapeHtml(y.name || '-')}</td>
         <td style="text-align:center;">${costBadge(yarnKindName(y.kind), yarnKindColor(y.kind))}</td>
-        <td style="text-align:left;font-size:12px;">${compCell}</td>
+        ${compOn ? `<td style="text-align:left;font-size:12px;">${compCell}</td>` : ''}
         <td style="text-align:center;font-size:11.5px;color:#6b7280;">${escapeHtml(YARN_UNIT_LABEL[y.kind] || 'kg당')}</td>
-        <td class="col-action"><button class="dash-action-btn cp-edit" data-cp-type="yarn" data-idx="${i}">수정</button></td>
-        <td class="col-action col-act-delete"><button class="dash-action-btn danger cp-del" data-cp-type="yarn" data-idx="${i}">삭제</button></td>
+        ${own ? `<td class="col-action"><button class="dash-action-btn cp-edit" data-cp-type="yarn" data-idx="${i}">수정</button></td>
+        <td class="col-action col-act-delete"><button class="dash-action-btn danger cp-del" data-cp-type="yarn" data-idx="${i}">삭제</button></td>` : ''}
       </tr>`;
     });
     h += `</tbody></table></div>`;
-    h += renderCostPriceModal() + renderCostListModal();
+    if (own) h += renderCostPriceModal() + renderCostListModal();
     return h;
   }
   function renderYarnPriceTable(P) {
@@ -27122,7 +27137,12 @@ function validateBlendSum(blends, label) {
         const keys = Object.keys(ITEMS);
         if (!keys.length) return '';
         const want = String(state.ccCardFid || '').trim();
-        return (want && ITEMS[want]) ? want : keys[0];
+        if (want && ITEMS[want]) return want;
+        // hotfix326: 판매 중인 품목 가운데 가나다 첫째
+        const onSale = keys.filter(k => String((ITEMS[k] || {}).state || '') !== '중단');
+        const pool = onSale.length ? onSale : keys;
+        pool.sort((a, b) => String(ITEMS[a].name || '').localeCompare(String(ITEMS[b].name || ''), 'ko', { numeric: true, sensitivity: 'base' }));
+        return pool[0];
       },
       save: async (fid, D, blendTxt) => {
         try {
@@ -27333,19 +27353,34 @@ function paintNames(){
   $('sampleBox').style.display=D.state==='샘플'?'':'none';
   $('lab_gy').textContent=D.state==='샘플'?'예상중량 g/y':'안내중량 g/y';
 }
+// hotfix326: 가나다 · ABC 순으로 세운다
+const ccSort=(a,b)=>String(a||'').localeCompare(String(b||''),'ko',{numeric:true,sensitivity:'base'});
+// 판매 중인 품목만 보여 준다. 지금 펼쳐 놓은 품목은 중단이어도 남긴다
+const ccOnSale=k=>k===CUR||String((ITEMS[k]||{}).state||'')!=='중단';
 function paintOrgSel(){
-  const used=[...new Set(Object.values(ITEMS).map(i=>i.org).filter(Boolean))];
-  const cur=$('orgSel').value||'전체';
-  $('orgSel').innerHTML=['전체'].concat(used).map(o=>`<option ${o===cur?'selected':''}>${o}</option>`).join('');
+  const el=$('orgSel'); if(!el) return;
+  const used=[...new Set([].concat(
+      Object.keys(ITEMS).filter(ccOnSale).map(k=>ITEMS[k].org),
+      (BR.orgs&&BR.orgs())||[]
+    ).map(x=>String(x||'').trim()).filter(Boolean))].sort(ccSort);
+  const cur=el.value||'전체';
+  el.innerHTML=['전체'].concat(used).map(o=>`<option ${o===cur?'selected':''}>${o}</option>`).join('');
+  el.value=cur;
 }
 function paintItemSel(){
-  const q=($('itemFind').value||'').trim();
-  const org=$('orgSel').value||'전체';
-  const keys=Object.keys(ITEMS).filter(k=>(org==='전체'||ITEMS[k].org===org)&&(!q||ITEMS[k].name.includes(q)));
-  $('itemSel').innerHTML=
-    keys.map(k=>`<option value="${k}" ${k===CUR?'selected':''}>${ITEMS[k].name}${ITEMS[k].state==='샘플'?' (샘플)':''}</option>`).join('')
+  const el=$('itemSel'); if(!el) return;
+  const q=(($('itemFind')||{}).value||'').trim();
+  const org=(($('orgSel')||{}).value||'전체')||'전체';
+  const onSale=Object.keys(ITEMS).filter(ccOnSale);
+  const keys=onSale
+    .filter(k=>(org==='전체'||ITEMS[k].org===org)&&(!q||ITEMS[k].name.includes(q)))
+    .sort((a,b)=>ccSort(ITEMS[a].name,ITEMS[b].name));
+  el.innerHTML=
+    keys.map(k=>`<option value="${k}" ${k===CUR?'selected':''}>${ITEMS[k].name}${ITEMS[k].state==='샘플'?' (샘플)':''}${ITEMS[k].state==='중단'?' (판매 종료)':''}</option>`).join('')
     ||'<option value="">찾는 품목이 없습니다</option>';
-  $('pickNote').textContent='총 '+Object.keys(ITEMS).length+'품목 · 보이는 것 '+keys.length;
+  if(keys.includes(CUR)) el.value=CUR;
+  const pn=$('pickNote');
+  if(pn) pn.textContent='판매 중 '+onSale.length+'품목 · 보이는 것 '+keys.length+' (전체 '+Object.keys(ITEMS).length+')';
 }
 const ghostSet=(id,v)=>{const el=$(id); if(el) el.textContent=(GHOST&&isFinite(v))?'직전 '+won(v):'';};
 
@@ -36345,7 +36380,18 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
         setTimeout(() => document.getElementById(type === 'yarn' ? 'cp-f-name' : 'cp-f-price')?.focus(), 50);
       }
       const closeCp = () => { modal.classList.remove('show'); cpIdx = -1; };
-      document.getElementById('cp-add-yarn')?.addEventListener('click', () => openCp('yarn', -1));
+      // hotfix325: 성분(혼용율) 공개 스위치 — 최고관리자만
+      document.getElementById('yk-comp-open')?.addEventListener('change', async (ev) => {
+        if (!isOwnerUser()) return;
+        state.yarnCompOpen = !!ev.target.checked;
+        const ok = await saveViewPerms(state.viewPerms || {}, state.viewDeletes || {});
+        if (ok) toast(state.yarnCompOpen ? '성분을 관리자·직원에게도 보입니다' : '성분을 관리자·직원 화면에서 가렸습니다', 'success');
+        renderDashboard();
+      });
+      document.getElementById('cp-add-yarn')?.addEventListener('click', () => {
+        if (!isOwnerUser()) { toast('원사 자료를 넣고 고치는 것은 최고관리자만 할 수 있습니다', 'error'); return; }
+        openCp('yarn', -1);
+      });
       // hotfix290: 성분이 비어 있는 사종만 이름을 보고 한꺼번에 채운다. 채운 값은 [확인 필요]로 남는다.
       document.getElementById('cp-yarn-guess-all')?.addEventListener('click', async () => {
         const P = JSON.parse(JSON.stringify(getCostPrices()));
@@ -36367,7 +36413,11 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
       document.getElementById('cp-add-proc')?.addEventListener('click', () => openCp('proc', -1));
       document.getElementById('cp-add-bundle')?.addEventListener('click', () => openCp('bundle', -1));
       document.querySelectorAll('#dash-body .cp-edit').forEach(b =>
-        b.addEventListener('click', () => openCp(b.dataset.cpType, parseInt(b.dataset.idx, 10))));
+        b.addEventListener('click', () => {
+          // hotfix325: 원사 자료를 고치는 것은 최고관리자만
+          if (!isOwnerUser()) { toast('최고관리자만 고칠 수 있습니다', 'error'); return; }
+          openCp(b.dataset.cpType, parseInt(b.dataset.idx, 10));
+        }));
       document.getElementById('cp-modal-close')?.addEventListener('click', closeCp);
       document.getElementById('cp-modal-cancel')?.addEventListener('click', closeCp);
       modal.addEventListener('click', e => { if (e.target === modal) closeCp(); });
@@ -36443,6 +36493,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
       });
 
       document.querySelectorAll('#dash-body .cp-del').forEach(b => b.addEventListener('click', async () => {
+        if (!isOwnerUser()) { toast('최고관리자만 지울 수 있습니다', 'error'); return; }
         const t = b.dataset.cpType, i = parseInt(b.dataset.idx, 10);
         const P = JSON.parse(JSON.stringify(getCostPrices()));
         const list = t === 'yarn' ? P.yarns : t === 'knit' ? P.knit : t === 'proc' ? P.proc : P.bundles;
@@ -39101,7 +39152,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix324';
+  const VERSION = 'v2.53 hotfix326';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
