@@ -26698,7 +26698,12 @@ function validateBlendSum(blends, label) {
   }
   function renderCostCardTab() {
     const specs = getFabricSpecs();
-    if (!specs.length) return `<div class="dash-empty">등록된 품목이 없습니다. [원단 스펙 설정]에서 [＋ 새 품목 추가]로 먼저 만들어 주십시오.</div>`;
+    // hotfix327: 단가표·품목·거래처를 다 읽기 전에 카드를 세우면 사종·업체 목록이 빈 채로 굳는다.
+    //   다 읽을 때까지 기다렸다가 세운다.
+    if (!state.costPricesLoaded || !specs.length) {
+      return `<div class="dash-empty" style="line-height:2;">자료를 읽는 중입니다…<br>
+        <span style="font-size:12px;color:#94a3b8;">품목 ${specs.length}개 · 원사 단가표 ${state.costPricesLoaded ? '읽음' : '읽는 중'}</span></div>`;
+    }
     return ccCardHtml();
   }
   function renderCostCardTabOld() {
@@ -27227,14 +27232,14 @@ const MOCK_LOG=[
 const KOLI=181.44;
 const KINDS={방적사:{unit:'/고리',mode:'spun'},포리에스터:{unit:'/파운드',mode:'poly'},기타:{unit:'/kg',mode:'etc'}};
 const GRADE_PROCS=['염색'];
-const ORGS=BR.orgs();
+let ORGS=BR.orgs();
 let ROLE=BR.role(); const isOwner=()=>ROLE==='최고관리자';
 
-const VENDORS=BR.vendors();
+let VENDORS=BR.vendors();
 const vendorsOf=(...ps)=>VENDORS.filter(v=>v.parts.some(p=>ps.includes(p)));
 const vendorHit=(v,q)=>!q||v.name.includes(q)||(v.alias||[]).some(a=>a.includes(q));
 
-const YARN_BOOK=BR.yarnBook();
+let YARN_BOOK=BR.yarnBook();
 const LOSS_MEMO=BR.lossMemo();
 const YV_MEMO=BR.yvMemo();
 const MOCK_KIND_TO_REAL={'방적사':'면','포리에스터':'포리','기타':'기타'};
@@ -27388,12 +27393,13 @@ function paintYarnRows(){
   const P=pcts(),L=(D.knits[D.knitV]||{}).loops||{};
   $('yarnBody').innerHTML=D.yarns.map((y,i)=>{
     const g=GHOST&&GHOST.yarns[i]?GHOST.yarns[i]:null;
-    let list=YARN_BOOK[y.kindK]||[];
-    if(!list.length) list=[].concat(YARN_BOOK.방적사||[],YARN_BOOK.포리에스터||[],YARN_BOOK.기타||[]);
+    const list=YARN_BOOK[y.kindK]||[];
     const inList=list.some(x=>x.name===y.name);
     return `<tr data-i="${i}">
-      <td><select class="y" data-k="kindK">${Object.keys(KINDS).map(k=>`<option ${y.kindK===k?'selected':''}>${k}</option>`).join('')}</select></td>
-      <td><select class="y" data-k="name">${list.map(x=>`<option ${x.name===y.name?'selected':''}>${x.name}</option>`).join('')}${inList?'':`<option selected>${y.name||'(고르십시오)'}</option>`}</select></td>
+      <td><select class="y" data-k="kindK">${Object.keys(KINDS).map(k=>`<option value="${k}" ${y.kindK===k?'selected':''}>${k} (${(YARN_BOOK[k]||[]).length})</option>`).join('')}</select></td>
+      <td><select class="y" data-k="name">${list.length
+        ? `<option value="">— 사종을 고르십시오 —</option>`+list.map(x=>`<option ${x.name===y.name?'selected':''}>${x.name}</option>`).join('')+(inList||!y.name?'':`<option selected>${y.name}</option>`)
+        : `<option value="">${y.kindK} 로 등록된 사종이 없습니다</option>`+(y.name?`<option selected>${y.name}</option>`:'')}</select></td>
       <td><select class="y" data-k="vendor">${(()=>{
         const vs=yarnVendors(y.kindK);
         const cur=String(y.vendor||'');
@@ -28532,6 +28538,17 @@ try { paintOrgSel(); } catch(e){ console.error('[품목 카드] 조직 목록 �
 try { paintItemSel(); } catch(e){ console.error('[품목 카드] 품목 목록 —', e); }
 try { fillAll(); } catch(e){ console.error('[품목 카드] 카드 채우기 —', e); }
 try { paintOrgSel(); paintItemSel(); } catch(e){ console.error('[품목 카드] 다시 그리기 —', e); }
+// hotfix327: 자료가 늦게 도착하면 사종·업체·조직 목록만 새로 채운다 (넣던 값은 그대로 둔다)
+window.__hiwosCardRefresh=()=>{
+  try{
+    const before=(YARN_BOOK.방적사||[]).length+(YARN_BOOK.포리에스터||[]).length+(YARN_BOOK.기타||[]).length;
+    YARN_BOOK=BR.yarnBook(); VENDORS=BR.vendors(); ORGS=BR.orgs();
+    const after=(YARN_BOOK.방적사||[]).length+(YARN_BOOK.포리에스터||[]).length+(YARN_BOOK.기타||[]).length;
+    paintOrgSel(); paintItemSel();
+    if(before!==after) paintYarnRows();
+    recalc();
+  }catch(e){ console.error('[품목 카드] 목록 새로 채우기 —', e); }
+};
 window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
   조직들:[...new Set(Object.values(ITEMS).map(i=>i.org))].slice(0,20),
   원사자료:{방적사:(YARN_BOOK.방적사||[]).length,포리에스터:(YARN_BOOK.포리에스터||[]).length,기타:(YARN_BOOK.기타||[]).length},
@@ -32191,7 +32208,11 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
   }
   function renderCostFromSub() {
     if (!(state.uiMode === 'dashboard' && state.dashView === 'costCalc')) return;
-    if (ccCardIsOpen()) return;   // 카드는 스스로 셈한다. 밖에서 다시 그리면 넣던 값이 날아간다
+    if (ccCardIsOpen()) {
+      // 넣던 값은 그대로 두고 사종·업체·조직 목록만 새로 채운다
+      try { if (typeof window.__hiwosCardRefresh === 'function') window.__hiwosCardRefresh(); } catch (_) {}
+      return;
+    }
     renderDashboard();
   }
   function fcModalIsOpen() {
@@ -39152,7 +39173,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix326';
+  const VERSION = 'v2.53 hotfix327';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
