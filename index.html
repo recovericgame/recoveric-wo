@@ -11251,6 +11251,9 @@ window.addEventListener('firebase-ready', () => {
         phone: String(v.phone || '').trim(),
         active: v.active !== false,
         memo: String(v.memo || '').trim(),
+        // hotfix332: 원사 구매처가 다루는 원사 구분 ('면'·'포리'·'기타')
+        yarn_kinds: Array.from(new Set((Array.isArray(v.yarn_kinds) ? v.yarn_kinds : [])
+          .map(k => String(k || '').trim()).filter(k => YARN_KINDS.includes(k)))),
         aliases
       };
     }).filter(v => v.name);
@@ -26767,6 +26770,12 @@ function validateBlendSum(blends, label) {
       <button class="b" id="btnSpec">원단 제작 사양</button>
       <span class="spacer"></span>
       <span class="small" id="pickNote"></span>
+      <button class="b" id="btnDraft" style="margin-left:8px;">임시저장</button>
+      <button class="b" id="btnClose">닫기</button>
+    </div>
+    <div id="draftBar" style="display:none;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:9px 13px;margin-bottom:11px;font-size:12.5px;color:#92400e;font-weight:700;line-height:1.7;">
+      <span id="draftBarTxt"></span>
+      <button class="b" id="btnDraftDrop" style="margin-left:9px;">원래 자료로 되돌리기</button>
     </div>
 
     <div class="cardhead">
@@ -27141,6 +27150,7 @@ function validateBlendSum(blends, label) {
         });
         return out;
       },
+      close: () => { state.costTab = 'fabric'; renderDashboard(); },
       firstFid: (ITEMS) => {
         const keys = Object.keys(ITEMS);
         if (!keys.length) return '';
@@ -27982,8 +27992,8 @@ function openProcSet(w){
       const inB=rows.some(r=>(r.subs||[]).includes(pr));
       h+=`<div class="bdrow" style="${inB?'opacity:.5;':''}">
         <label class="chk ${has(pr)?'on':''}" style="border:0;background:none;padding:0;">
-          <input type="checkbox" class="pschk" data-p="${pr}" ${has(pr)?'checked':''} ${inB?'disabled':''}></label>
-        <span class="nm">${pr}</span>
+          <input type="checkbox" class="pschk" data-p="${pr}" ${has(pr)?'checked':''} ${inB?'disabled':''} title="${inB?'이미 묶음에 들어 있어 따로 고를 수 없습니다':''}"></label>
+        <span class="nm">${pr}${inB?` <span style="font-size:10.5px;font-weight:400;color:var(--faint);">(묶음에 들어 있음)</span>`:''}</span>
         <input type="text" inputmode="decimal" class="num money psprice" data-p="${pr}" value="${iv(priceIn(v,pr))}">
         ${w==='post'?`<select class="psunit" data-p="${pr}"><option value="kg">원/kg</option><option value="yd">원/야드</option></select>`:''}
         <button class="b x" data-procdel="${p}|${pr}">지우기</button></div>`;
@@ -28168,6 +28178,7 @@ function doSave(){
   D.sheets.unshift(sheet);
   paintItemSel(); paintNames(); paintSheets();
   BR.save(CUR, D, blendText(pcts()));
+  try{ draftDrop(); paintDraftBar(); }catch(_){}
 }
 
 /* ── 품목 추가 · 수정 ── */
@@ -28393,7 +28404,60 @@ bind('f_state','change',e=>{D.state=e.target.value;paintNames();recalc();});
 bind('roleSel','change',e=>{ROLE=e.target.value;});
 bind('orgSel','change',()=>{paintItemSel();const v=$('itemSel').value;if(v){CUR=v;D=ITEMS[CUR];GHOST=null;fillAll();}});
 bind('itemFind','input',paintItemSel);
-bind('itemSel','change',e=>{if(!e.target.value)return;CUR=e.target.value;D=ITEMS[CUR];GHOST=null;fillAll();});
+// hotfix332: 넣던 값이 날아가지 않게 — 임시저장 · 이탈 경고
+const DRAFT_KEY='hiwos.cardDraft';
+let DIRTY=false, DRAFT_T=null, BOOTING=true;
+function draftRead(){ try{ const r=localStorage.getItem(DRAFT_KEY); return r?JSON.parse(r):null; }catch(_){ return null; } }
+function draftWrite(){
+  try{ localStorage.setItem(DRAFT_KEY, JSON.stringify({fid:CUR,at:Date.now(),D:strip(D)})); }catch(_){}
+}
+function draftDrop(){ try{ localStorage.removeItem(DRAFT_KEY); }catch(_){} DIRTY=false; paintDraftBar(); }
+function draftStamp(t){ const d=new Date(t); const p=x=>String(x).padStart(2,'0');
+  return (d.getMonth()+1)+'월 '+d.getDate()+'일 '+p(d.getHours())+':'+p(d.getMinutes()); }
+function paintDraftBar(msg){
+  const bar=$('draftBar'), tx=$('draftBarTxt');
+  if(!bar||!tx) return;
+  if(msg){ tx.textContent=msg; bar.style.display=''; }
+  else bar.style.display='none';
+}
+function markDirty(){
+  if(BOOTING) return;
+  DIRTY=true;
+  if(DRAFT_T) clearTimeout(DRAFT_T);
+  DRAFT_T=setTimeout(()=>{ draftWrite(); paintDraftBar('넣으신 값을 임시로 담아 두었습니다 ('+draftStamp(Date.now())+'). 아직 진짜 저장은 안 됐습니다 — 아래 [저장]을 눌러 주십시오.'); },700);
+}
+ROOT().addEventListener('input',markDirty);
+ROOT().addEventListener('change',markDirty);
+function askLeave(what){
+  if(!DIRTY) return true;
+  return confirm('저장하지 않은 값이 있습니다.\n\n'+what+'\n\n[확인]을 누르면 지금 넣으신 값이 사라집니다.');
+}
+bind('btnDraft','click',()=>{
+  draftWrite(); DIRTY=true;
+  paintDraftBar('임시로 담아 두었습니다 ('+draftStamp(Date.now())+'). 아직 진짜 저장은 안 됐습니다 — 아래 [저장]을 눌러 주십시오.');
+  toast('임시로 담아 두었습니다. 화면을 나갔다 와도 그대로 있습니다.');
+});
+bind('btnDraftDrop','click',()=>{
+  if(!confirm('임시로 담아 둔 값을 버리고 저장된 원래 자료로 되돌릴까요?')) return;
+  draftDrop();
+  D=JSON.parse(JSON.stringify(BASE[CUR]||D)); ITEMS[CUR]=D;
+  BOOTING=true; fillAll(); BOOTING=false;
+  toast('원래 자료로 되돌렸습니다.');
+});
+bind('btnClose','click',()=>{
+  if(!askLeave('카드를 닫습니다.')) return;
+  draftDrop();
+  BR.close();
+});
+bind('itemSel','change',e=>{
+  if(!e.target.value) return;
+  if(!askLeave('다른 품목으로 넘어갑니다.')){ e.target.value=CUR; return; }
+  draftDrop();
+  CUR=e.target.value; D=ITEMS[CUR]; GHOST=null;
+  BOOTING=true; fillAll(); BOOTING=false;
+});
+window.addEventListener('beforeunload',e=>{ if(DIRTY){ e.preventDefault(); e.returnValue=''; } });
+window.__hiwosCardDirty=()=>DIRTY;
 bind('btnEditBase','click',()=>openItemPopup('edit'));
 bind('btnList','click',openList);
 bind('btnNewItem','click',()=>openItemPopup('new'));
@@ -28560,11 +28624,25 @@ function openSpec(){
 bind('btnSpec','click',openSpec);
 
 // (판 표시 줄은 목업 머리띠에만 있던 것 — 카드에는 없다)
+// hotfix332: 저장된 원래 자료를 따로 간직해 둔다 (되돌리기용)
+const BASE=JSON.parse(JSON.stringify(ITEMS));
+// 임시로 담아 둔 값이 있으면 되살린다
+try{
+  const dr=draftRead();
+  if(dr && dr.fid && ITEMS[dr.fid] && dr.D){
+    CUR=dr.fid;
+    ITEMS[CUR]=Object.assign({},ITEMS[CUR],dr.D);
+    D=ITEMS[CUR];
+    DIRTY=true;
+    setTimeout(()=>paintDraftBar('임시로 담아 두었던 값을 되살렸습니다 ('+draftStamp(dr.at)+'). 아직 진짜 저장은 안 됐습니다 — 아래 [저장]을 눌러 주십시오.'),0);
+  }
+}catch(e){ console.error('[품목 카드] 임시본 되살리기 —', e); }
 // hotfix320: 첫 그리기 — 한 곳이 걸려도 나머지는 그린다
 try { paintOrgSel(); } catch(e){ console.error('[품목 카드] 조직 목록 —', e); }
 try { paintItemSel(); } catch(e){ console.error('[품목 카드] 품목 목록 —', e); }
 try { fillAll(); } catch(e){ console.error('[품목 카드] 카드 채우기 —', e); }
 try { paintOrgSel(); paintItemSel(); } catch(e){ console.error('[품목 카드] 다시 그리기 —', e); }
+BOOTING=false;
 // hotfix327: 자료가 늦게 도착하면 사종·업체·조직 목록만 새로 채운다 (넣던 값은 그대로 둔다)
 window.__hiwosCardRefresh=()=>{
   try{
@@ -39200,7 +39278,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix331';
+  const VERSION = 'v2.53 hotfix332';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
