@@ -24147,12 +24147,12 @@ function validateBlendSum(blends, label) {
         <td style="text-align:center;">${s.gubun === GUBUN_RIB
           ? `<span style="display:inline-block;padding:2px 10px;border-radius:10px;background:#f3e8ff;color:#6b21a8;font-size:11px;font-weight:800;">${escapeHtml(GUBUN_RIB)}</span>`
           : `<span style="display:inline-block;padding:2px 10px;border-radius:10px;background:#eef2ff;color:#1e3a8a;font-size:11px;font-weight:700;">${escapeHtml(s.gubun || '-')}</span>`}</td>
-        <td style="text-align:center;font-size:12px;">${s.gubun === GUBUN_RIB
+        <td style="text-align:left;font-size:12px;">${s.gubun === GUBUN_RIB
           ? (bodiesUsingRib(s.name).length
-            ? `<span style="display:inline-block;padding:2px 9px;border-radius:10px;background:#faf5ff;border:1px solid #e9d5ff;color:#7c3aed;font-weight:700;" title="${escapeHtml(bodiesUsingRib(s.name).map(b => b.name).join(', '))}">몸판 ${bodiesUsingRib(s.name).length}</span>`
-            : `<span style="color:#c7cbd1;">몸판 0</span>`)
+            ? bodiesUsingRib(s.name).map(b => `<span style="display:inline-block;padding:2px 9px;margin:1px 3px 1px 0;border-radius:10px;background:#faf5ff;border:1px solid #e9d5ff;color:#7c3aed;font-weight:700;">(몸)${escapeHtml(b.name)}</span>`).join('')
+            : `<span style="color:#c7cbd1;">짝 몸판 없음</span>`)
           : (s.pair_rib
-            ? `<span style="display:inline-block;padding:2px 9px;border-radius:10px;background:${pairOk ? '#faf5ff' : '#fef2f2'};border:1px solid ${pairOk ? '#e9d5ff' : '#fecaca'};color:${pairOk ? '#7c3aed' : '#b91c1c'};font-weight:700;">${escapeHtml(s.pair_rib)}${pairOk ? '' : ' (없음)'}</span>`
+            ? `<span style="display:inline-block;padding:2px 9px;border-radius:10px;background:${pairOk ? '#faf5ff' : '#fef2f2'};border:1px solid ${pairOk ? '#e9d5ff' : '#fecaca'};color:${pairOk ? '#7c3aed' : '#b91c1c'};font-weight:700;">(리)${escapeHtml(s.pair_rib)}${pairOk ? '' : ' (없음)'}</span>`
             : `<span style="color:#c7cbd1;">-</span>`)}</td>
         ${!catOn ? '' : `<td style="text-align:center;">${s.cat
           ? (orgNeedsFix(s.cat)
@@ -27153,6 +27153,30 @@ function validateBlendSum(blends, label) {
         return out;
       },
       close: () => { state.costTab = 'fabric'; renderDashboard(); },
+      // hotfix335: 카드에서 고친 기본 자료를 원단 기본 스펙에 그대로 넣는다
+      saveSpec: async (fid, it) => {
+        try {
+          const specs = JSON.parse(JSON.stringify(getFabricSpecs()));
+          const i = specs.findIndex(x => specFid(x) === fid);
+          if (i < 0) return;
+          specs[i].name = String(it.name || specs[i].name || '').trim();
+          specs[i].gubun = String(it.gubun || specs[i].gubun || '').trim();
+          specs[i].cat = String(it.org || '').trim();
+          specs[i].width = String(it.width || '').trim();
+          specs[i].tube = !!it.tube;
+          specs[i].gy = numOrNull(it.gy);
+          specs[i].pair = String(it.pair || '').trim();
+          await saveFabricSpecs(specs);
+        } catch (e) { toast('기본 스펙 저장 실패: ' + e.message, 'error'); }
+      },
+      // 지금 원단 기본 스펙에 적힌 값 (카드의 회색 칸을 늘 최신으로 맞춘다)
+      specOf: (fid) => {
+        const sp = getFabricSpecs().find(x => specFid(x) === fid);
+        if (!sp) return null;
+        return { name: String(sp.name || ''), gubun: String(sp.gubun || '몸판'), org: normOrg(sp.cat) || '',
+          width: String(sp.width || ''), tube: !!sp.tube, gy: (sp.gy == null ? '' : sp.gy),
+          state: (sp.active === false ? '중단' : '판매 중'), pair: String(sp.pair || '') };
+      },
       // hotfix333: 처음에는 아무 품목도 고르지 않는다. 대표가 골라야 카드가 펼쳐진다
       firstFid: (ITEMS) => {
         const want = String(state.ccCardFid || '').trim();
@@ -28297,7 +28321,6 @@ function openItemPopup(mode,code){
   $('itemBody').innerHTML=h;
   $('itemFoot').innerHTML=
     `<button class="b" data-close="mItem">취소</button>
-     ${isOwner()?'<button class="b" id="it_cost">원가계산하기</button>':''}
      <button class="b p" id="it_save">저장</button>`;
   $('it_save').addEventListener('click',()=>saveItem(false));
   const ic=$('it_cost'); if(ic) ic.addEventListener('click',()=>saveItem(true));
@@ -28374,7 +28397,9 @@ function commitItem(f,goCost){
       it.history.unshift({d:todayYMD()+' '+new Date().toTimeString().slice(0,5),who:isOwner()?'박영균':'관리자',ch}); }
     close('mItem'); CUR=itTarget; D=ITEMS[CUR];
     paintOrgSel(); paintItemSel(); fillAll();
-    toast(ch.length?'고쳤습니다. 수정 이력 '+ch.length+'건이 쌓였습니다.':'바뀐 곳이 없습니다.');
+    // hotfix335: 원단 기본 스펙에도 같이 저장한다 (두 화면이 늘 같은 값을 본다)
+    if (ch.length) BR.saveSpec(CUR, it);
+    toast(ch.length?'고쳤습니다. 원단 기본 스펙에도 같이 들어갔습니다.':'바뀐 곳이 없습니다.');
     return;
   }
   SEQ++; const code='F'+String(SEQ).padStart(4,'0');
@@ -28724,6 +28749,13 @@ window.__hiwosCardRefresh=()=>{
   try{
     const before=(YARN_BOOK.방적사||[]).length+(YARN_BOOK.포리에스터||[]).length+(YARN_BOOK.기타||[]).length;
     YARN_BOOK=BR.yarnBook(); VENDORS=BR.vendors(); ORGS=BR.orgs();
+    // hotfix335: 원단 기본 스펙에서 고친 값을 카드의 회색 칸에 바로 옮긴다
+    if(CUR&&ITEMS[CUR]&&BR.specOf){
+      const sp=BR.specOf(CUR);
+      if(sp){ ['name','gubun','org','width','tube','gy','state','pair'].forEach(k=>{ ITEMS[CUR][k]=sp[k]; });
+        if(BASE[CUR]) Object.assign(BASE[CUR],sp);
+        if(D===ITEMS[CUR]){ D=ITEMS[CUR]; try{ fillAll(); }catch(_){} } }
+    }
     const after=(YARN_BOOK.방적사||[]).length+(YARN_BOOK.포리에스터||[]).length+(YARN_BOOK.기타||[]).length;
     paintOrgSel(); paintItemSel();
     if(before!==after) paintYarnRows();
@@ -36393,14 +36425,14 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
           fillCostFields(spec);
         }
       }
+      // hotfix335: 옛 창을 열지 않고 [품목 카드]로 보낸다
       document.querySelectorAll('#dash-body .fc-edit').forEach(b => b.addEventListener('click', () => {
         const fid = b.dataset.fid || '';
         const spec = getFabricSpecs().find(x => specFid(x) === fid);
         if (!spec) { toast('품목을 찾지 못했습니다', 'error'); return; }
-        const t = document.getElementById('fc-modal-item');
-        if (t) t.textContent = String(spec.name || '') + (spec.cat ? ' · ' + spec.cat : '');
-        fillCostFields(spec);
-        modal.classList.add('show');
+        state.ccCardFid = fid;
+        state.costTab = 'card';
+        renderDashboard();
       }));
       // hotfix297: 안내중량은 품목당 하나 — [원단 기본 스펙]의 중량 칸에 함께 저장한다
       const fcSaveAll = async () => {
@@ -39354,7 +39386,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix334';
+  const VERSION = 'v2.53 hotfix335';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
