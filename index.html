@@ -6206,7 +6206,13 @@
 #hiwos-card .gradetab td{padding:6px 8px;border-bottom:1px solid var(--soft);text-align:right;font-variant-numeric:tabular-nums;}
 #hiwos-card .gradetab td.l{text-align:left;font-weight:700;}
 #hiwos-card .small{font-size:11px;color:var(--faint);}
-#hiwos-card .savebar{position:sticky;bottom:0;background:#fff;border-top:2px solid var(--deep);padding:12px 20px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;z-index:15;}
+/* hotfix360: 저장 단추 — 위쪽 파랑과 다른 초록. 오른쪽에 가로로 길게 */
+#hiwos-card .savebar{position:sticky;bottom:0;background:#fff;border-top:3px solid #047857;padding:11px 20px;display:flex;gap:12px;align-items:center;flex-wrap:wrap;z-index:15;
+  box-shadow:0 -4px 12px rgba(15,23,42,.07);}
+#hiwos-card .savebar .spacer{flex:1;}
+#hiwos-card .savebar #btnSave{background:#047857;border-color:#047857;color:#fff;font-weight:800;font-size:14.5px;
+  padding:11px 20px;min-width:300px;letter-spacing:1px;border-radius:9px;}
+#hiwos-card .savebar #btnSave:hover{background:#065f46;border-color:#065f46;}
 #hiwos-card .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:28px;background:#0f172a;color:#fff;padding:11px 20px;border-radius:9px;font-size:13px;font-weight:700;z-index:80;display:none;}
 #hiwos-card .toast.on{display:block;}
 #hiwos-card .bdrow{display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--soft);}
@@ -28347,8 +28353,9 @@ function validateBlendSum(blends, label) {
     </section>
 
     <div class="savebar">
-      <button class="b p" id="btnSave" style="font-size:13px;padding:9px 22px;">저장</button>
       <span class="small">저장하면 원단 기본 스펙(혼용율 포함)과 원가 계산 장에 함께 들어갑니다.</span>
+      <span class="spacer"></span>
+      <button class="b" id="btnSave">저장</button>
     </div>
   </div>
 <div class="modalbg" id="mWhy"><div class="modal"><h4>계산근거 <span class="spacer"></span><button class="b s" data-close="mWhy">닫기</button></h4><div class="body" id="whyBody"></div></div></div>
@@ -28478,6 +28485,41 @@ function validateBlendSum(blends, label) {
                      subs: (b.procs || []).slice(), base: parseFloat(b.price) || 0, unit: 'kg' }));
       f.rows = ccRowsOf(c.fin_rows, c.procs, f.bundles);
       return f;
+    }
+    // hotfix359: 지금 이 순간의 업체 값 (묶음 · 낱개 단가). 카드가 열려 있어도 다시 받아 올 수 있다
+    function ccFeeNow(vendor, fid) {
+      const offRaw = (getCostPrices().proc_off && typeof getCostPrices().proc_off === 'object') ? getCostPrices().proc_off : {};
+      let off = [];
+      Object.keys(offRaw).forEach(k => { if (normalizeVendorName(k) === normalizeVendorName(vendor)) off = off.concat(offRaw[k] || []); });
+      const procs = getCostProcs().filter(p => !off.map(normProc).includes(normProc(p)));
+      const pmap = {}; const parts = [];
+      procs.forEach(p => {
+        const part = procPartOf(p) || '기타';
+        if (!pmap[part]) { pmap[part] = []; parts.push(part); }
+        pmap[part].push(p);
+      });
+      const prices = {}; const own = {};
+      procs.forEach(p => {
+        const mine = (getCostPrices().proc || []).find(r => r && normalizeVendorName(r.vendor) === normalizeVendorName(vendor)
+          && normProc(r.proc) === normProc(p) && !String(r.item || '').trim());
+        own[p] = !!mine;
+        if (p === '염색') {
+          const g = {};
+          DYE_GRADES.forEach(gr => { const v = procPriceByVendor(vendor, p, fid, {}, gr); g[gr] = (v == null ? 0 : v); });
+          prices[p] = g;
+        } else {
+          const v = procPriceByVendor(vendor, p, fid, {});
+          prices[p] = (v == null ? 0 : v);
+        }
+      });
+      return {
+        parts: parts.length ? parts : ['기타'],
+        procs: pmap, prices: prices, own: own,
+        bundles: (getCostPrices().bundles || [])
+          .filter(b => normalizeVendorName(b.vendor) === normalizeVendorName(vendor))
+          .map(b => ({ name: String(b.name || '').trim() || (b.procs || []).join(' + '),
+                       subs: (b.procs || []).slice(), base: parseFloat(b.price) || 0, unit: 'kg' }))
+      };
     }
     // hotfix345: 후가공도 그 업체의 단가·묶음을 그대로 불러온다 (지금까지는 기본값만 썼다)
     function ccPostFor(vendor, fid, c, H) {
@@ -28647,6 +28689,7 @@ function validateBlendSum(blends, label) {
       },
       // hotfix344: 카드의 [묶음]·[가공법 설정]에서 고친 값을 업체 단가표에 그대로 담는다
       //   (지금까지는 화면에서만 바뀌고 저장되지 않았다)
+      feeNow: (vendor, fid) => { try { return ccFeeNow(vendor, fid); } catch (e) { return null; } },
       // hotfix348: 카드에서 고친 값을 업체 단가표에 담는다.
       //   ★ 절대 지우지 않는다 — 값이 있는 것만 덮어쓴다(합치기).
       //   hotfix344 판은 그 업체 줄을 통째로 지우고 다시 담았다. 카드가 값을 못 읽은 상태에서
@@ -29482,8 +29525,25 @@ function openHist(){
 let bdWhich='fin', bdEdit=-1;
 const vOf=w=>w==='fin'?F():Q();
 const vName=w=>w==='fin'?D.finV:D.postV;
+// hotfix359: [염/가공료 설정]에서 고친 값을 카드가 곧바로 따라온다
+function refreshFee(w){
+  try{
+    const name=(w==='fin'?D.finV:D.postV); if(!name) return;
+    const v=vOf(w); if(!v) return;
+    const fresh=BR.feeNow&&BR.feeNow(name,CUR); if(!fresh) return;
+    if(w==='fin'){ v.parts=fresh.parts; v.procs=fresh.procs; }
+    v.prices=Object.assign({},v.prices||{},fresh.prices);
+    v.own=fresh.own;
+    v.bundles=fresh.bundles;
+    (v.rows||[]).forEach(r=>{
+      if(r.kind!=='묶음') return;
+      const b=fresh.bundles.find(x=>x.name===r.proc);
+      if(b){ r.base=b.base; r.subs=b.subs.slice(); }
+    });
+  }catch(e){}
+}
 function openBundle(w){
-  bdWhich=w; bdEdit=-1;
+  bdWhich=w; bdEdit=-1; refreshFee(w);
   $('bdTitle').innerHTML=
     `<span class="vn">[${vName(w)}]</span> ${w==='fin'?'염색 · 가공':'후가공'} 묶음 <span class="spacer"></span><button class="b s" data-close="mBundle">닫기</button>`;
   paintBundleList();
@@ -29596,7 +29656,7 @@ function saveBundle(){
 /* ── 가공법 설정 (업체별) ── */
 let psWhich='fin';
 function openProcSet(w){
-  psWhich=w;
+  psWhich=w; refreshFee(w);
   const v=vOf(w);
   $('psTitle').innerHTML=
     `<span class="vn">[${vName(w)}]</span> ${w==='fin'?'염색 · 가공':'후가공'} 가공법 설정 <span class="spacer"></span><button class="b s" data-close="mProcSet">닫기</button>`;
@@ -40980,7 +41040,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix358';
+  const VERSION = 'v2.53 hotfix360';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
