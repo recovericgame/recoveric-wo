@@ -28072,8 +28072,8 @@ function validateBlendSum(blends, label) {
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px;">
       <input type="text" id="fc-search" lang="ko" autocomplete="off" placeholder="품목명 · 편직처 검색" value="${escapeHtml(state.fcSearch || '')}" style="${inputStyle}max-width:300px;">
       ${state.fcSearch ? `<button class="dash-action-btn" id="fc-search-clear" style="font-size:11.5px;padding:6px 12px;">지우기</button>` : ''}
-      <label style="display:inline-flex;align-items:center;gap:6px;font-size:12.5px;font-weight:700;color:#475569;cursor:pointer;background:${onlyOn ? '#eef2ff' : '#fff'};border:1px solid ${onlyOn ? '#c7d2fe' : '#e2e8f0'};border-radius:7px;padding:6px 11px;">
-        <input type="checkbox" id="fc-onsale" ${onlyOn ? 'checked' : ''} style="width:14px;height:14px;"> 판매 중인 품목만</label>
+      <label style="display:inline-flex;align-items:center;gap:6px;font-size:12.5px;font-weight:700;color:#475569;cursor:pointer;background:${onlyOn ? '#fff' : '#fffbeb'};border:1px solid ${onlyOn ? '#e2e8f0' : '#fcd34d'};border-radius:7px;padding:6px 11px;">
+        <input type="checkbox" id="fc-onsale" ${onlyOn ? '' : 'checked'} style="width:14px;height:14px;"> 판매 종료된 품목도 보이기</label>
       <div style="margin-left:auto;font-size:12px;color:#64748b;">보이는 품목 <strong style="color:#0f172a;">${rows.length}</strong> · 원가 자료 채운 품목 <strong style="color:#0f172a;">${filled}</strong> / 전체 ${specs.length}</div>
     </div>`;
     h += `<div class="dash-table-wrap fc-fit"><table class="dash-table"><thead><tr>
@@ -28085,6 +28085,10 @@ function validateBlendSum(blends, label) {
     rows.forEach(({ s, fid, c, kg, yd, knitters, usage }) => {
       const yarns = Array.isArray(c.yarns) ? c.yarns.filter(y => y && y.name) : [];
       const procs = Array.isArray(c.procs) ? c.procs.map(normProc).filter(Boolean) : [];
+      // hotfix372: 저장된 줄에서 이름을 그대로 가져온다. 묶음은 묶음 이름으로
+      const procNames = (Array.isArray(c.fin_rows) && c.fin_rows.length)
+        ? c.fin_rows.map(r => r && (r.kind === '묶음' ? String(r.name || '').trim() : normProc(r.proc))).filter(Boolean)
+        : procs;
       const on = fabricCostFilled(fid);
       h += `<tr${s.active === false ? ' style="opacity:.62;"' : ''}>
         <td style="text-align:left;font-weight:700;">${escapeHtml(s.name || '-')}${s.active === false ? ' <span style="font-size:10.5px;font-weight:700;color:#9ca3af;">판매 종료</span>' : ''}</td>
@@ -28092,12 +28096,12 @@ function validateBlendSum(blends, label) {
         <td style="text-align:center;font-size:11px;">${usage
           ? `<span style="display:inline-block;border-radius:9px;padding:1px 8px;font-weight:800;color:${usage.own ? '#fff' : FC_USAGE_COLOR[usage.t] || '#475569'};background:${usage.own ? (FC_USAGE_COLOR[usage.t] || '#475569') : '#f1f5f9'};" title="${usage.own ? '이 품목에 정해 둔 유형입니다' : '최근 염색가공 작지의 생산구분입니다'}">${escapeHtml(usage.t)}</span>`
           : '<span style="color:#c7cbd1;">-</span>'}</td>
-        <td style="text-align:center;">${s.cat ? costBadge(normOrg(s.cat)) : '<span style="color:#c7cbd1;font-size:11px;">-</span>'}</td>
+        <td style="text-align:center;font-size:11.5px;color:#475569;">${s.cat ? escapeHtml(normOrg(s.cat)) : '<span style="color:#c7cbd1;">-</span>'}</td>
         <td style="text-align:left;font-size:12px;">${knitters.length
           ? escapeHtml(knitters.join(' · ')) + (knitters.length > 1 ? ` <span style="font-size:10.5px;font-weight:700;color:#1d4ed8;">공장 ${knitters.length}</span>` : '')
           : `<span style="display:inline-block;background:#fffbeb;border:1px solid #fcd34d;color:#b45309;border-radius:4px;padding:1px 6px;font-size:11px;font-weight:700;" title="편직공장이 비어 있습니다. [채우기]에서 넣어 주십시오">편직공장 확인 필요</span>`}</td>
         <td style="text-align:left;font-size:11.5px;color:#475569;">${yarns.length ? escapeHtml(yarns.map(y => y.name).join(' · ')) : '<span style="color:#c7cbd1;">-</span>'}</td>
-        <td style="text-align:center;font-size:11px;">${procs.length ? procs.map(x => `<span style="display:inline-block;margin:1px 2px;">${costBadge(x)}</span>`).join('') : '<span style="color:#c7cbd1;">기본 가공법</span>'}</td>
+        <td style="text-align:left;font-size:11.5px;color:#475569;">${procNames.length ? escapeHtml(procNames.join(' · ')) : '<span style="color:#c7cbd1;">기본 가공법</span>'}</td>
         <td style="text-align:center;font-size:11.5px;color:#6b7280;">${(c.knit_loss == null ? COST_KNIT_LOSS_DEFAULT : c.knit_loss)} / ${(c.fin_loss == null ? COST_FIN_LOSS_DEFAULT : c.fin_loss)}%</td>
         <td style="text-align:right;font-size:12px;">${kg == null
           ? '<span style="color:#c7cbd1;font-size:11px;">자료 부족</span>'
@@ -28942,7 +28946,8 @@ let ROLE=BR.role(); const isOwner=()=>ROLE==='최고관리자';
 
 let VENDORS=BR.vendors();
 const vendorsOf=(...ps)=>VENDORS.filter(v=>v.parts.some(p=>ps.includes(p)));
-const vendorHit=(v,q)=>!q||v.name.includes(q)||(v.alias||[]).some(a=>a.includes(q));
+const vendorHit=(v,q)=>{ if(!q) return true; const t=String(q).toLowerCase();
+  return String(v.name||'').toLowerCase().includes(t)||(v.alias||[]).some(a=>String(a||'').toLowerCase().includes(t)); };
 
 let YARN_BOOK=BR.yarnBook();
 const LOSS_MEMO=BR.lossMemo();
@@ -29122,11 +29127,11 @@ function paintOrgSel(){
 }
 function paintItemSel(){
   const el=$('itemSel'); if(!el) return;
-  const q=(($('itemFind')||{}).value||'').trim();
+  const q=(($('itemFind')||{}).value||'').trim().toLowerCase();   // hotfix372: 대소문자 안 가림
   const org=(($('orgSel')||{}).value||'전체')||'전체';
   const onSale=Object.keys(ITEMS).filter(ccOnSale);
   const keys=onSale
-    .filter(k=>(org==='전체'||ITEMS[k].org===org)&&(!q||ITEMS[k].name.includes(q)))
+    .filter(k=>(org==='전체'||ITEMS[k].org===org)&&(!q||String(ITEMS[k].name||'').toLowerCase().includes(q)))
     .sort((a,b)=>ccSort(ITEMS[a].name,ITEMS[b].name));
   el.innerHTML=`<option value="" ${CUR?'':'selected'}>— 품목을 고르십시오 —</option>`+
     keys.map(k=>`<option value="${k}" ${k===CUR?'selected':''}>${ITEMS[k].name}${ITEMS[k].state==='샘플'?' (샘플)':''}${ITEMS[k].state==='중단'?' (판매 종료)':''}</option>`).join('');
@@ -29171,7 +29176,8 @@ function paintYarnRows(){
   const P=pcts(),L=curKnit().loops||{};
   $('yarnBody').innerHTML=D.yarns.map((y,i)=>{
     const g=GHOST&&GHOST.yarns[i]?GHOST.yarns[i]:null;
-    const list=YARN_BOOK[y.kindK]||[];
+    // hotfix372: 사종은 늘 '가나다 먼저, 그 다음 ABC' 차례로 보여 준다 (브라우저가 달라도 같게)
+    const list=(YARN_BOOK[y.kindK]||[]).slice().sort(ccNameSort);
     const inList=list.some(x=>x.name===y.name);
     return `<tr data-i="${i}">
       <td><select class="y" data-k="kindK">${Object.keys(KINDS).map(k=>`<option value="${k}" ${y.kindK===k?'selected':''}>${k}</option>`).join('')}</select></td>
@@ -29214,6 +29220,17 @@ function paintYarnRows(){
   $('loopFrom').textContent=bmode()==='manual'?'사용량을 손으로 넣는 중입니다':'루프장 = '+D.knitV+' 값';
 }
 // hotfix328: 편직 공장이 없어도 원사 줄을 만질 수 있게 — 늘 그릇 하나는 돌려준다
+// 이름 줄 세우기 — 한글 먼저, 그 다음 알파벳·숫자 (대소문자 안 가림)
+const ccNameGroup=t=>{const c=String(t||'').trim().charAt(0);
+  if(!c) return 3;
+  if(c>='\uAC00'&&c<='\uD7A3') return 0;          // 한글
+  if(/[A-Za-z]/.test(c)) return 1;                  // 알파벳
+  return 2;};                                        // 숫자·그 밖
+const ccNameSort=(a,b)=>{
+  const an=String((a&&a.name!==undefined?a.name:a)||''), bn=String((b&&b.name!==undefined?b.name:b)||'');
+  const g=ccNameGroup(an)-ccNameGroup(bn);
+  if(g) return g;
+  return an.localeCompare(bn,'ko',{numeric:true,sensitivity:'base'});};
 const NO_KNIT='(공장 미지정)';
 function curKnit(){
   if(!D.knits) D.knits={};
@@ -30258,7 +30275,7 @@ bind('itemFind','input',()=>{
   if(!q) return;
   const org=(($('orgSel')||{}).value||'전체')||'전체';
   const hit=Object.keys(ITEMS).filter(ccOnSale)
-    .filter(k=>(org==='전체'||ITEMS[k].org===org)&&ITEMS[k].name.includes(q));
+    .filter(k=>(org==='전체'||ITEMS[k].org===org)&&String(ITEMS[k].name||'').toLowerCase().includes(String(q||'').toLowerCase()));
   if(hit.length===1&&hit[0]!==CUR) pickItem(hit[0]);
 });
 bind('itemFind','keydown',e=>{
@@ -30396,7 +30413,7 @@ function specList(){
   return Object.values(ITEMS).filter(it=>{
     if (SPECF.sample==='미포함'&&it.state==='샘플') return false;
     if (SPECF.org!=='전체'&&it.org!==SPECF.org) return false;
-    if (SPECF.q&&!it.name.includes(SPECF.q)) return false;
+    if (SPECF.q&&!String(it.name||'').toLowerCase().includes(String(SPECF.q).toLowerCase())) return false;
     if (SPECF.knit!=='전체'&&it.knitV!==SPECF.knit) return false;
     if (SPECF.fin!=='전체'&&it.finV!==SPECF.fin) return false;
     if (SPECF.post!=='전체'&&it.postV!==SPECF.post) return false;
@@ -38147,7 +38164,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
       document.getElementById('fc-search-clear')?.addEventListener('click', () => { state.fcSearch = ''; renderDashboard(); });
       // hotfix298: 판매 중인 품목만 보기 · 머리글 눌러 줄 세우기
       document.getElementById('fc-onsale')?.addEventListener('change', ev => {
-        state.fcOnlyOnSale = !!ev.target.checked;   // 끄면 false 로 남아 판매 종료까지 나온다
+        state.fcOnlyOnSale = !ev.target.checked;    // hotfix372: 체크하면 판매 종료까지 보여 준다
         renderDashboard();
       });
       document.querySelectorAll('#dash-body .fc-sort').forEach(th => th.addEventListener('click', () => {
@@ -41200,7 +41217,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix371';
+  const VERSION = 'v2.53 hotfix372';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
