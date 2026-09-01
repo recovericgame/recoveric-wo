@@ -11312,7 +11312,9 @@ window.addEventListener('firebase-ready', () => {
           knit: (d && Array.isArray(d.knit)) ? d.knit : [],
           proc: (d && Array.isArray(d.proc)) ? d.proc : [],
           bundles: (d && Array.isArray(d.bundles)) ? d.bundles : [],
-          def_procs: (d && Array.isArray(d.def_procs)) ? d.def_procs : []
+          def_procs: (d && Array.isArray(d.def_procs)) ? d.def_procs : [],
+          // hotfix345: 업체마다 "이 가공은 안 함" 목록
+          proc_off: (d && d.proc_off && typeof d.proc_off === 'object') ? d.proc_off : {}
         };
         state.costPricesLoaded = true;
         renderCostFromSub();
@@ -12397,7 +12399,7 @@ window.addEventListener('firebase-ready', () => {
     try {
       await setDoc(doc(db, 'cost_data', 'prices'), {
         yarns: next.yarns || [], knit: next.knit || [], proc: next.proc || [], bundles: next.bundles || [],
-        def_procs: next.def_procs || [],
+        def_procs: next.def_procs || [], proc_off: next.proc_off || {},
         updated_at: serverTimestamp(),
         updated_by: state.user?.email || 'unknown'
       });
@@ -25342,14 +25344,28 @@ function validateBlendSum(blends, label) {
     const D = pfDraft(), V = pfVendor();
     return D.bundles.map((b, i) => ({ b, i })).filter(o => String(o.b.vendor || '').trim() === V);
   }
-  function pfPartsOrdered() {
-    const procs = getCostProcs();
+  // 이 업체가 "안 함"으로 꺼 둔 가공
+  function pfOff() {
+    const D = pfDraft();
+    if (!D.proc_off || typeof D.proc_off !== 'object') D.proc_off = {};
+    const V = pfVendor();
+    if (!Array.isArray(D.proc_off[V])) D.proc_off[V] = [];
+    return D.proc_off[V];
+  }
+  function pfPartsOrdered(withOff) {
+    const off = pfOff();
+    const procs = getCostProcs().filter(p => withOff || !off.includes(normProc(p)));
     const bag = {};
     procs.forEach(p => { const k = procPartOf(p) || '기타'; (bag[k] = bag[k] || []).push(p); });
     const order = COST_PROC_PART_ORDER.slice();
     Object.keys(bag).forEach(k => { if (!order.includes(k)) order.push(k); });
     return order.filter(k => bag[k] && bag[k].length).map(k => ({ part: k, procs: bag[k] }));
   }
+  // 파트마다 옅은 바탕색 — 눈으로 확실히 갈린다
+  const PF_PART_BG = { '선작업': '#eff6ff', '염색/물나염': '#fffbeb', '가공': '#eef2ff',
+    '후가공': '#ecfdf5', '나염': '#fdf2f8', '기타': '#f8fafc' };
+  const PF_PART_LINE = { '선작업': '#bfdbfe', '염색/물나염': '#fde68a', '가공': '#c7d2fe',
+    '후가공': '#a7f3d0', '나염': '#fbcfe8', '기타': '#e2e8f0' };
   function renderProcFeeTab() {
     if (!isOwnerUser()) return `<div class="dash-empty">최고관리자만 볼 수 있는 화면입니다.</div>`;
     if (!state.costPricesLoaded) return `<div class="dash-empty">단가표를 읽는 중입니다…</div>`;
@@ -25377,7 +25393,8 @@ function validateBlendSum(blends, label) {
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
         <strong style="font-size:13.5px;color:#0f172a;">묶음</strong>
         <span style="font-size:11.5px;color:#94a3b8;">여러 공정을 한 값으로 묶어 부릅니다. 이름을 꼭 지어 주십시오.</span>
-        <button class="dash-action-btn" id="pf-badd" style="margin-left:auto;background:#1e3a8a;color:#fff;font-weight:700;padding:6px 13px;">＋ 새 묶음</button>
+        <button class="dash-action-btn" id="pf-goflat" style="margin-left:auto;padding:6px 13px;font-weight:700;">개별 설정</button>
+        <button class="dash-action-btn" id="pf-badd" style="background:#1e3a8a;color:#fff;font-weight:700;padding:6px 13px;">＋ 새 묶음</button>
       </div>`;
     if (!bs.length) h += `<div style="font-size:12.5px;color:#9ca3af;padding:10px 2px;">이 업체에 저장해 둔 묶음이 없습니다.</div>`;
     bs.forEach(({ b, i }) => {
@@ -25411,20 +25428,25 @@ function validateBlendSum(blends, label) {
     h += `</div>`;
 
     // ── 낱개 단가 ──
-    h += `<div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:14px 16px;">
+    h += `<div id="pf-flat" style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:14px 16px;">
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
-        <strong style="font-size:13.5px;color:#0f172a;">낱개 염/가공료</strong>
+        <strong style="font-size:13.5px;color:#0f172a;">개별 설정 — 낱개 염/가공료</strong>
         <span style="font-size:11.5px;color:#94a3b8;">빈 칸은 값을 안 정한 것입니다. ${escapeHtml(COST_COMMON_VENDOR)} 값이 대신 쓰입니다.</span>
       </div>`;
     pfPartsOrdered().forEach(g => {
-      h += `<div style="font-size:12.5px;font-weight:800;color:#1e3a8a;margin:12px 0 6px;padding-left:8px;border-left:3px solid #1e3a8a;">${escapeHtml(g.part)}</div>`;
+      const bg = PF_PART_BG[g.part] || '#f8fafc', ln = PF_PART_LINE[g.part] || '#e2e8f0';
+      const col = COST_PART_COLOR[g.part] || '#334155';
+      h += `<div style="background:${bg};border:1px solid ${ln};border-radius:9px;padding:9px 12px 6px;margin-bottom:10px;">
+        <div style="font-size:12.5px;font-weight:800;color:${col};margin-bottom:7px;padding-left:8px;border-left:4px solid ${col};">${escapeHtml(g.part)}</div>`;
       g.procs.forEach(pr => {
         const pk = normProc(pr);
         const r = pfRow(pk);
+        const del = `<button class="dash-action-btn pf-off" data-pf-p="${escapeHtml(pk)}" title="이 업체는 이 가공을 하지 않습니다" style="font-size:11px;padding:4px 9px;color:#b91c1c;border-color:#fca5a5;">지우기</button>`;
         if (procHasGrades(pk)) {
           const gr = (r && r.grades && typeof r.grades === 'object') ? r.grades : {};
-          h += `<div style="border:1px solid #fde68a;background:#fffbeb;border-radius:8px;padding:9px 11px;margin-bottom:7px;">
-            <div style="font-size:12px;font-weight:800;color:#92400e;margin-bottom:6px;">${escapeHtml(pr)} — 등급마다 값이 다릅니다</div>
+          h += `<div style="border:1px solid #fcd34d;background:#fff;border-radius:8px;padding:9px 11px;margin-bottom:7px;">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:7px;">
+              <strong style="font-size:12px;color:#92400e;flex:1;">${escapeHtml(pr)} — 등급마다 값이 다릅니다</strong>${del}</div>
             <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px 12px;">
               ${DYE_GRADES.map(x => `<label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#334155;">
                 <span style="flex:1;">${escapeHtml(dyeGradeLabel(x))}</span>
@@ -25435,15 +25457,33 @@ function validateBlendSum(blends, label) {
               <input type="text" inputmode="numeric" class="pf-p" data-pf-p="${escapeHtml(pk)}" value="${escapeHtml(moneyInputVal(r && r.price))}" style="${iS}width:110px;">
             </div></div>`;
         } else {
-          h += `<div style="display:flex;align-items:center;gap:10px;padding:5px 2px;border-bottom:1px solid #f1f5f9;">
+          h += `<div style="display:flex;align-items:center;gap:10px;padding:5px 2px;border-bottom:1px solid ${ln};">
             <span style="flex:1;font-size:12.5px;color:#334155;">${escapeHtml(pr)}</span>
             <input type="text" inputmode="numeric" class="pf-p" data-pf-p="${escapeHtml(pk)}" value="${escapeHtml(moneyInputVal(r && r.price))}" style="${iS}width:120px;">
-            <span style="font-size:11px;color:#94a3b8;width:38px;">원/kg</span>
+            <span style="font-size:11px;color:#94a3b8;width:38px;">원/kg</span>${del}
           </div>`;
         }
       });
+      h += `</div>`;
     });
+    const off = pfOff();
+    if (off.length) {
+      h += `<div style="background:#f8fafc;border:1px dashed #cbd5e1;border-radius:9px;padding:10px 12px;margin-top:6px;">
+        <div style="font-size:12px;font-weight:800;color:#64748b;margin-bottom:7px;">이 업체가 하지 않는 가공 ${off.length}개 — 누르면 되살립니다</div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;">
+          ${off.map(x => `<button class="dash-action-btn pf-on" data-pf-p="${escapeHtml(x)}" style="font-size:11.5px;padding:4px 11px;">${escapeHtml(x)} 되살리기</button>`).join('')}
+        </div></div>`;
+    }
     h += `</div>`;
+    // 아래에 늘 따라다니는 저장 띠
+    h += `<div id="pf-savebar" style="position:sticky;bottom:0;z-index:40;margin:14px -20px 0;padding:11px 20px;
+        background:#fff;border-top:2px solid #047857;box-shadow:0 -4px 12px rgba(15,23,42,.07);display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+      <span style="font-size:12.5px;font-weight:800;color:#0f172a;">${escapeHtml(V)}</span>
+      <span style="font-size:11.5px;color:#94a3b8;">고친 값은 [저장]을 눌러야 들어갑니다. 업체를 바꾸기 전에 꼭 눌러 주십시오.</span>
+      <span style="flex:1;"></span>
+      <button class="dash-action-btn" id="pf-reset2" style="padding:6px 13px;">되돌리기</button>
+      <button class="dash-action-btn" id="pf-save2" style="background:#047857;color:#fff;font-weight:800;padding:8px 26px;font-size:13px;">저장</button>
+    </div>`;
     return h;
   }
   function bindProcFeeTab() {
@@ -25492,8 +25532,35 @@ function validateBlendSum(blends, label) {
       pfDraft().bundles.push({ vendor: pfVendor(), name: '', procs: [], price: '' });
       renderDashboard();
     });
+    const go = document.getElementById('pf-goflat');
+    if (go) go.addEventListener('click', () => {
+      const el = document.getElementById('pf-flat');
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+    document.querySelectorAll('#dash-body .pf-off').forEach(el => el.addEventListener('click', () => {
+      const pk = el.dataset.pfP;
+      if (!confirm(pk + ' 을(를) 이 업체 목록에서 뺄까요?\n(나중에 되살릴 수 있습니다)')) return;
+      const off = pfOff();
+      if (!off.includes(pk)) off.push(pk);
+      const D = pfDraft();
+      D.proc = D.proc.filter(r => !(r && String(r.vendor || '').trim() === pfVendor()
+        && normProc(r.proc) === pk && !String(r.item || '').trim()));
+      renderDashboard();
+    }));
+    document.querySelectorAll('#dash-body .pf-on').forEach(el => el.addEventListener('click', () => {
+      const pk = el.dataset.pfP;
+      const D = pfDraft();
+      D.proc_off[pfVendor()] = pfOff().filter(x => x !== pk);
+      renderDashboard();
+    }));
+    const rst2 = document.getElementById('pf-reset2');
+    if (rst2) rst2.addEventListener('click', () => {
+      if (!confirm('넣던 값을 버리고 저장된 자료로 되돌릴까요?')) return;
+      state.pfDraft = null; renderDashboard();
+    });
+    const sv2 = document.getElementById('pf-save2');
     const sv = document.getElementById('pf-save');
-    if (sv) sv.addEventListener('click', async () => {
+    const doSave = async () => {
       const D = pfDraft();
       const bad = D.bundles.find(b => (Array.isArray(b.procs) && b.procs.length) && !String(b.name || '').trim());
       if (bad) { toast('묶음 이름을 넣어 주십시오', 'error'); return; }
@@ -25503,7 +25570,9 @@ function validateBlendSum(blends, label) {
       D.bundles = D.bundles.filter(b => String(b.name || '').trim() || (b.procs || []).length);
       const ok = await saveCostPrices(D);
       if (ok) { state.pfDraft = null; toast('염/가공료를 저장했습니다', 'success'); renderDashboard(); }
-    });
+    };
+    if (sv) sv.addEventListener('click', doSave);
+    if (sv2) sv2.addEventListener('click', doSave);
   }
 
   function renderCostCalcDash() {
@@ -27672,6 +27741,18 @@ function validateBlendSum(blends, label) {
   // ============================================================
   const CC_KIND_TO_MOCK = { '면': '방적사', '포리': '포리에스터', '기타': '기타' };
   const CC_KIND_FROM_MOCK = { '방적사': '면', '포리에스터': '포리', '기타': '기타' };
+  // hotfix345: 카드의 줄(묶음 포함)을 저장 모양으로 바꾼다
+  function ccRowsSave(rows) {
+    return (Array.isArray(rows) ? rows : []).map(r => {
+      if (!r) return null;
+      if (r.kind === '묶음') return { kind: '묶음', name: String(r.proc || '').trim(),
+        base: (parseFloat(r.base) || 0), subs: (Array.isArray(r.subs) ? r.subs.slice() : []),
+        unit: (r.unit === 'yd' ? 'yd' : 'kg'), only: (r.only == null ? '' : r.only) };
+      const pk = normProc(r.proc);
+      return pk ? { kind: '기본', proc: pk, unit: (r.unit === 'yd' ? 'yd' : 'kg'),
+        only: (r.only == null ? '' : r.only) } : null;
+    }).filter(Boolean);
+  }
   function ccBridge() {
     const numOrNull = v => (v === '' || v == null || isNaN(parseFloat(v))) ? null : parseFloat(v);
     function ccKnitsOf(c) {
@@ -27719,9 +27800,45 @@ function validateBlendSum(blends, label) {
         .filter(b => normalizeVendorName(b.vendor) === normalizeVendorName(vendor))
         .map(b => ({ name: String(b.name || '').trim() || (b.procs || []).join(' + '),
                      subs: (b.procs || []).slice(), base: parseFloat(b.price) || 0, unit: 'kg' }));
-      const picked = (Array.isArray(c.procs) ? c.procs : []).map(normProc).filter(Boolean);
-      f.rows = picked.map(p => ({ kind: '기본', proc: p, only: '' }));
+      f.rows = ccRowsOf(c.fin_rows, c.procs, f.bundles);
       return f;
+    }
+    // hotfix345: 후가공도 그 업체의 단가·묶음을 그대로 불러온다 (지금까지는 기본값만 썼다)
+    function ccPostFor(vendor, fid, c, H) {
+      const q = H.newPost();
+      q.ploss = (c.post_loss == null ? 0 : c.post_loss);
+      q.bundles = (getCostPrices().bundles || [])
+        .filter(b => normalizeVendorName(b.vendor) === normalizeVendorName(vendor))
+        .map(b => ({ name: String(b.name || '').trim() || (b.procs || []).join(' + '),
+                     subs: (b.procs || []).slice(), base: parseFloat(b.price) || 0, unit: 'kg' }));
+      Object.keys(q.procs || {}).forEach(part => {
+        (q.procs[part] || []).forEach(pr => {
+          const v = procPriceByVendor(vendor, pr, fid, {});
+          if (v != null) q.prices[pr] = v;
+        });
+      });
+      q.rows = ccRowsOf(c.post_rows, [], q.bundles);
+      return q;
+    }
+    // 저장해 둔 줄(묶음 포함)을 되살린다. 옛 자료(procs 목록만 있는 것)도 그대로 읽는다
+    function ccRowsOf(saved, procs, bundles) {
+      if (Array.isArray(saved) && saved.length) {
+        return saved.map(r => {
+          if (r && r.kind === '묶음') {
+            const nm = String(r.name || r.proc || '').trim();
+            const b = (bundles || []).find(x => x.name === nm);
+            return { kind: '묶음', proc: nm, only: (r.only == null ? '' : r.only),
+                     base: (b ? b.base : (parseFloat(r.base) || 0)),
+                     subs: (b ? b.subs.slice() : (Array.isArray(r.subs) ? r.subs.slice() : [])),
+                     unit: (r.unit === 'yd' ? 'yd' : 'kg') };
+          }
+          const pk = normProc(r && r.proc);
+          return pk ? { kind: '기본', proc: pk, only: (r && r.only != null ? r.only : ''),
+                        unit: (r && r.unit === 'yd' ? 'yd' : 'kg') } : null;
+        }).filter(Boolean);
+      }
+      return (Array.isArray(procs) ? procs : []).map(normProc).filter(Boolean)
+        .map(p => ({ kind: '기본', proc: p, only: '' }));
     }
     return {
       toast: m => toast(m, 'success'),
@@ -27803,7 +27920,7 @@ function validateBlendSum(blends, label) {
           const finV = String(c.finisher || c.dyer || '').trim();
           const fins = {}; if (finV) fins[finV] = ccFinFor(finV, fid, c, H);
           const postV = String(c.post_vendor || '').trim();
-          const posts = {}; if (postV) posts[postV] = H.newPost();
+          const posts = {}; if (postV) posts[postV] = ccPostFor(postV, fid, c, H);
           out[fid] = {
             code: fid, name: String(s.name || ''), state: (s.active === false ? '중단' : '판매 중'),
             gubun: String(s.gubun || '몸판'), org: normOrg(s.cat) || '', width: String(s.width || ''),
@@ -27886,6 +28003,7 @@ function validateBlendSum(blends, label) {
           return ok;
         } catch (e) { toast('염/가공료 저장 실패: ' + e.message, 'error'); return false; }
       },
+      // 화면의 줄을 저장 모양으로 바꾼다
       save: async (fid, D, blendTxt) => {
         try {
           const knits = {};
@@ -27920,6 +28038,10 @@ function validateBlendSum(blends, label) {
             q_price: numOrNull(D.qPrice),
             yarns: yarns, blend_mode: (D.blendMode === 'manual' ? 'manual' : 'loop'),
             procs: ((D.fins[D.finV] || {}).rows || []).filter(r => r.kind !== '묶음').map(r => normProc(r.proc)).filter(Boolean),
+            // hotfix345: 묶음 줄까지 그대로 담는다 (지금까지는 저장할 때 버려졌다)
+            fin_rows: ccRowsSave((D.fins[D.finV] || {}).rows),
+            post_rows: ccRowsSave((D.posts[D.postV] || {}).rows),
+            post_loss: numOrNull((D.posts[D.postV] || {}).ploss),
             updated_at: todayYMD()
           });
           const ok = await saveFabricCost(fid, cost);
@@ -40128,7 +40250,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix344';
+  const VERSION = 'v2.53 hotfix345';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
