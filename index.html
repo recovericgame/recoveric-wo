@@ -28265,33 +28265,51 @@ function validateBlendSum(blends, label) {
       },
       // hotfix344: 카드의 [묶음]·[가공법 설정]에서 고친 값을 업체 단가표에 그대로 담는다
       //   (지금까지는 화면에서만 바뀌고 저장되지 않았다)
+      // hotfix348: 카드에서 고친 값을 업체 단가표에 담는다.
+      //   ★ 절대 지우지 않는다 — 값이 있는 것만 덮어쓴다(합치기).
+      //   hotfix344 판은 그 업체 줄을 통째로 지우고 다시 담았다. 카드가 값을 못 읽은 상태에서
+      //   [저장]을 누르면 그 업체 단가와 묶음이 통째로 사라졌다. 그 길을 막는다.
       saveFee: async (vendor, prices, bundles) => {
         const V = String(vendor || '').trim();
         if (!V) return false;
+        if (!state.costPricesLoaded) return false;          // 다 읽기 전에는 손대지 않는다
         try {
           const next = JSON.parse(JSON.stringify(getCostPrices()));
-          next.proc = (Array.isArray(next.proc) ? next.proc : [])
-            .filter(r => !(r && normalizeVendorName(r.vendor) === normalizeVendorName(V) && !String(r.item || '').trim()));
+          if (!Array.isArray(next.proc)) next.proc = [];
+          if (!Array.isArray(next.bundles)) next.bundles = [];
+          const same = (a, b) => normalizeVendorName(a) === normalizeVendorName(b);
+          let touched = 0;
           Object.keys(prices || {}).forEach(pr => {
             const pk = normProc(pr); if (!pk) return;
             const val = prices[pr];
+            const find = () => next.proc.find(r => r && same(r.vendor, V)
+              && normProc(r.proc) === pk && !String(r.item || '').trim());
             if (val && typeof val === 'object') {
-              const g = {}; let any = false;
-              Object.keys(val).forEach(k => { const x = parseFloat(val[k]); if (!isNaN(x)) { g[k] = x; any = true; } });
-              if (any) next.proc.push({ vendor: V, proc: pk, item: '', price: 0, grades: g });
+              const g = {};
+              Object.keys(val).forEach(k => { const x = parseFloat(val[k]); if (!isNaN(x) && x !== 0) g[k] = x; });
+              if (!Object.keys(g).length) return;           // 값이 하나도 없으면 건드리지 않는다
+              const hit = find();
+              if (hit) { hit.grades = Object.assign({}, hit.grades || {}, g); }
+              else next.proc.push({ vendor: V, proc: pk, item: '', price: 0, grades: g });
+              touched++;
             } else {
               const x = parseFloat(val);
-              if (!isNaN(x) && x !== 0) next.proc.push({ vendor: V, proc: pk, item: '', price: x });
+              if (isNaN(x) || x === 0) return;              // 빈 칸·0 은 건드리지 않는다
+              const hit = find();
+              if (hit) hit.price = x; else next.proc.push({ vendor: V, proc: pk, item: '', price: x });
+              touched++;
             }
           });
-          next.bundles = (Array.isArray(next.bundles) ? next.bundles : [])
-            .filter(b => normalizeVendorName(b && b.vendor) !== normalizeVendorName(V));
           (bundles || []).forEach(b => {
             const nm = String(b.name || '').trim();
             const subs = (b.subs || []).map(normProc).filter(Boolean);
-            if (!nm && !subs.length) return;
-            next.bundles.push({ vendor: V, name: nm, procs: subs, price: parseFloat(b.base) || 0 });
+            if (!nm || !subs.length) return;                // 이름·공정이 없으면 담지 않는다
+            const hit = next.bundles.find(x => x && same(x.vendor, V) && String(x.name || '').trim() === nm);
+            if (hit) { hit.procs = subs; hit.price = parseFloat(b.base) || 0; }
+            else next.bundles.push({ vendor: V, name: nm, procs: subs, price: parseFloat(b.base) || 0 });
+            touched++;
           });
+          if (!touched) return true;                        // 담을 것이 없으면 저장 자체를 안 한다
           const ok = await saveCostPrices(next);
           if (ok) state.pfDraft = null;
           return ok;
@@ -29079,7 +29097,7 @@ function paintBundleList(){
   ROOT().querySelectorAll('[data-buse]').forEach(b=>b.addEventListener('click',()=>useBundle(+b.dataset.buse)));
   ROOT().querySelectorAll('[data-bedit]').forEach(b=>b.addEventListener('click',()=>bundleForm(+b.dataset.bedit)));
   ROOT().querySelectorAll('[data-bdel]').forEach(b=>b.addEventListener('click',()=>{
-    vOf(bdWhich).bundles.splice(+b.dataset.bdel,1); paintBundleList(); pushFee(bdWhich);
+    vOf(bdWhich).bundles.splice(+b.dataset.bdel,1); paintBundleList();
   }));
   $('bdNew').addEventListener('click',()=>bundleForm(-1));
 }
@@ -40544,7 +40562,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix347';
+  const VERSION = 'v2.53 hotfix348';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
