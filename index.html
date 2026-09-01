@@ -25477,6 +25477,19 @@ function validateBlendSum(blends, label) {
   }
   // 이 업체 · 이 공정의 줄 (품목 지정이 없는 줄만 = 업체 기본값)
   const pfSame = (a, b) => normalizeVendorName(a) === normalizeVendorName(b);
+  // 이 업체의 공정 한 개 값 (등급이 있는 공정은 고른 등급 값)
+  function pfUnit(proc, grade) {
+    const pk = normProc(proc);
+    const r = pfRow(pk);
+    if (!r) return 0;
+    if (procHasGrades(pk)) {
+      const g = String(grade || '농색');
+      const x = (r.grades && r.grades[g] != null) ? parseFloat(r.grades[g]) : NaN;
+      if (!isNaN(x)) return x;
+    }
+    const p = parseFloat(r.price);
+    return isNaN(p) ? 0 : p;
+  }
   function pfRow(proc, make) {
     const D = pfDraft(), V = pfVendor(), pk = normProc(proc);
     let hit = D.proc.find(r => r && pfSame(r.vendor, V)
@@ -25646,7 +25659,11 @@ function validateBlendSum(blends, label) {
     if (hit) { hit.vendor = row.vendor; hit.name = row.name; hit.procs = row.procs; hit.price = row.price; }
     else next.bundles.push(row);
     const ok = await saveCostPrices(next);
-    if (ok) { b._sname = nm; toast('묶음 [' + nm + '] 만 담았습니다. 낱개 단가는 아래 [전체 저장] 을 눌러 주십시오', 'success'); }
+    if (ok) {
+      // hotfix354: 담긴 줄은 편집 자리에서 비운다. 아래 [저장된 묶음] 에 쌓인다
+      D.bundles = JSON.parse(JSON.stringify(getCostPrices().bundles || []));
+      toast('묶음 [' + nm + '] 을(를) 담았습니다. 이어서 새 묶음을 만드십시오', 'success');
+    }
     return ok;
   }
   // 묶음 한 개만 지운다
@@ -25662,7 +25679,7 @@ function validateBlendSum(blends, label) {
         .filter(x => !(x && pfSame(x.vendor, ven) && String(x.name || '').trim() === nm));
       await saveCostPrices(next);
     }
-    D.bundles.splice(i, 1);
+    D.bundles = JSON.parse(JSON.stringify(getCostPrices().bundles || []));
     toast('묶음을 지웠습니다', 'success');
     return true;
   }
@@ -25740,7 +25757,13 @@ function validateBlendSum(blends, label) {
         </div></div>`;
     }
     // ── 묶음 ──
-    const bs = pfBundles();
+    const savedNames = (getCostPrices().bundles || [])
+      .filter(b => b && pfSame(b.vendor, V)).map(b => String(b.name || '').trim());
+    const bs = pfBundles().filter(o => {
+      const nm = String(o.b.name || '').trim();
+      if (o.b._sname) return true;                       // 고치는 중인 줄은 남긴다
+      return !nm || !savedNames.includes(nm);            // 이미 담긴 이름은 편집 자리에서 뺀다
+    });
     h += `<div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:14px 16px;margin-bottom:16px;">
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
         <strong style="font-size:13.5px;color:#0f172a;">묶음</strong>
@@ -25750,10 +25773,37 @@ function validateBlendSum(blends, label) {
         <button class="dash-action-btn" id="pf-goflat" style="padding:6px 13px;font-weight:700;">개별 설정</button>
         <button class="dash-action-btn" id="pf-badd" style="background:#1e3a8a;color:#fff;font-weight:700;padding:6px 13px;">＋ 새 묶음</button>
       </div>`;
-    if (!bs.length) h += `<div style="font-size:12.5px;color:#9ca3af;padding:10px 2px;">이 업체에 저장해 둔 묶음이 없습니다.</div>`;
+    // 저장해 둔 묶음 목록 (진짜 담긴 것만)
+    {
+      const saved = (getCostPrices().bundles || []).filter(b => b && pfSame(b.vendor, V)
+        && (String(b.name || '').trim() || (b.procs || []).length));
+      h += `<div style="border:1px solid #d1fae5;background:#f0fdf4;border-radius:9px;padding:10px 12px;margin-bottom:11px;">
+        <div style="font-size:12px;font-weight:800;color:#047857;margin-bottom:${saved.length ? '7px' : '0'};">저장된 묶음 ${saved.length}개</div>`;
+      if (saved.length) {
+        h += `<div class="dash-table-wrap" style="background:#fff;"><table class="dash-table"><thead><tr>
+          <th style="text-align:left;min-width:130px;">묶음 이름</th><th style="text-align:left;min-width:230px;">묶인 가공</th>
+          <th style="min-width:96px;">묶음 단가</th><th style="min-width:70px;">고치기</th><th style="min-width:70px;">지우기</th>
+        </tr></thead><tbody>`;
+        saved.forEach(b => {
+          const nm = String(b.name || '').trim();
+          h += `<tr>
+            <td style="text-align:left;font-weight:800;color:#1e3a8a;">${escapeHtml(nm || '(이름 없음)')}</td>
+            <td style="text-align:left;font-size:11.5px;color:#475569;">${escapeHtml((b.procs || []).join(' · ') || '-')}</td>
+            <td style="text-align:right;font-weight:700;">${costMoney(parseFloat(b.price) || 0, 0)}</td>
+            <td class="col-action"><button class="dash-action-btn pf-bedit" data-pf-n="${escapeHtml(nm)}" style="font-size:11px;padding:4px 9px;">고치기</button></td>
+            <td class="col-action"><button class="dash-action-btn danger pf-bdrop" data-pf-n="${escapeHtml(nm)}" style="font-size:11px;padding:4px 9px;">지우기</button></td>
+          </tr>`;
+        });
+        h += `</tbody></table></div>`;
+      } else {
+        h += `<div style="font-size:12px;color:#94a3b8;">아직 저장한 묶음이 없습니다. 오른쪽 [＋ 새 묶음] 으로 만들어 주십시오.</div>`;
+      }
+      h += `</div>`;
+    }
     bs.forEach(({ b, i }) => {
       const subs = Array.isArray(b.procs) ? b.procs.map(normProc).filter(Boolean) : [];
-      const normal = subs.reduce((a, p) => { const r = pfRow(p); return a + (r ? (parseFloat(r.price) || 0) : 0); }, 0);
+      // hotfix354: 염색처럼 등급이 있는 공정은 고른 등급 값을 쓴다 (지금까지 0으로 셌다)
+      const normal = subs.reduce((a, p) => a + pfUnit(p, b.grade), 0);
       const now = parseFloat(b.price) || 0;
       const gap = normal ? (now - normal) : 0;
       h += `<div style="border:1px solid #e2e8f0;border-radius:9px;padding:11px 13px;margin-bottom:9px;background:#fcfcfd;">
@@ -26075,6 +26125,25 @@ function validateBlendSum(blends, label) {
     if (sv) sv.addEventListener('click', doSave);
     if (sv2) sv2.addEventListener('click', doSave);
     // hotfix352: 묶음마다 [묶음 저장] — 이름이 비면 저절로 지어 담는다
+    document.querySelectorAll('#dash-body .pf-bedit').forEach(el => el.addEventListener('click', () => {
+      const nm = el.dataset.pfN, V = pfVendor(), D = pfDraft();
+      const src = (getCostPrices().bundles || []).find(b => b && pfSame(b.vendor, V) && String(b.name || '').trim() === nm);
+      if (!src) return;
+      if (!Array.isArray(D.bundles)) D.bundles = [];
+      if (D.bundles.some(b => b && pfSame(b.vendor, V) && String(b.name || '').trim() === nm && !b._done)) { toast('이미 아래에서 고치고 있습니다', 'error'); return; }
+      D.bundles.push({ vendor: V, name: nm, procs: (src.procs || []).slice(), price: src.price, grade: '농색', _sname: nm });
+      renderDashboard();
+    }));
+    document.querySelectorAll('#dash-body .pf-bdrop').forEach(el => el.addEventListener('click', async () => {
+      const nm = el.dataset.pfN, V = pfVendor();
+      if (!confirm('저장된 묶음 [' + nm + '] 을(를) 지웁니다.\n\n이 묶음 하나만 지워집니다. 낱개 단가는 그대로입니다.\n\n지울까요?')) return;
+      const next = JSON.parse(JSON.stringify(getCostPrices()));
+      next.bundles = (Array.isArray(next.bundles) ? next.bundles : [])
+        .filter(x => !(x && pfSame(x.vendor, V) && String(x.name || '').trim() === nm));
+      const ok = await saveCostPrices(next);
+      if (ok) { pfDraft().bundles = JSON.parse(JSON.stringify(getCostPrices().bundles || [])); toast('묶음을 지웠습니다', 'success'); }
+      renderDashboard();
+    }));
     document.querySelectorAll('#dash-body .pf-bsave').forEach(el => el.addEventListener('click', async () => {
       const ok = await pfSaveOneBundle(parseInt(el.dataset.pfI, 10));
       if (ok) renderDashboard();
@@ -28011,7 +28080,8 @@ function validateBlendSum(blends, label) {
     <div class="pickbar">
       <div style="flex:0 0 170px;"><label class="f">1. 조직</label><select id="orgSel"></select></div>
       <div style="flex:0 0 210px;"><label class="f">2. 품목명</label><select id="itemSel"></select></div>
-      <div style="flex:0 0 150px;"><label class="f">이름으로 찾기</label><input type="text" id="itemFind" placeholder="글자를 치면 좁혀집니다"></div>
+      <div style="flex:0 0 210px;"><label class="f">이름으로 찾기</label><input type="text" id="itemFind" lang="ko" autocomplete="off" placeholder="글자를 치면 바로 나옵니다">
+        <div id="findHits" style="display:none;margin-top:5px;"></div></div>
       <button class="b" id="btnList">품목 목록</button>
       <button class="b" id="btnSpec">원단 제작 사양</button>
       <span class="spacer"></span>
@@ -28845,6 +28915,33 @@ function paintItemSel(){
   el.value=keys.includes(CUR)?CUR:'';
   const pn=$('pickNote');
   if(pn) pn.textContent='판매 중 '+onSale.length+'품목 · 보이는 것 '+keys.length+' (전체 '+Object.keys(ITEMS).length+')';
+  // hotfix354: 글자를 치면 맞는 품목이 바로 아래에 뜬다. 누르면 그 자리에서 열린다
+  const hb=$('findHits');
+  if(hb){
+    if(!q){ hb.style.display='none'; hb.innerHTML=''; }
+    else if(!keys.length){ hb.style.display=''; hb.innerHTML='<span style="font-size:11px;color:#9ca3af;">맞는 품목이 없습니다</span>'; }
+    else {
+      hb.style.display='';
+      hb.innerHTML=keys.slice(0,12).map(k=>
+        `<button type="button" class="findhit" data-k="${k}" style="display:block;width:100%;text-align:left;border:1px solid ${k===CUR?'#1e3a8a':'#e2e8f0'};background:${k===CUR?'#eef2ff':'#fff'};border-radius:6px;padding:4px 8px;margin-bottom:3px;font-size:12px;font-weight:${k===CUR?'800':'600'};color:#334155;cursor:pointer;font-family:inherit;">${ITEMS[k].name}${ITEMS[k].state==='샘플'?' (샘플)':''}${ITEMS[k].state==='중단'?' (판매 종료)':''}</button>`
+      ).join('')+(keys.length>12?`<span style="font-size:11px;color:#9ca3af;">외 ${keys.length-12}개 — 더 치면 좁혀집니다</span>`:'');
+      ROOT().querySelectorAll('#findHits .findhit').forEach(b=>b.addEventListener('click',()=>pickItem(b.dataset.k)));
+    }
+  }
+}
+// 품목 하나를 고른다 (셀렉트에서 고른 것과 똑같이 움직인다)
+function pickItem(nx){
+  if(!nx||!ITEMS[nx]) return;
+  if(DIRTY) draftWrite();
+  CUR=nx; GHOST=null;
+  D=ITEMS[CUR];
+  const dr=draftRead(CUR);
+  if(dr&&dr.D){ ITEMS[CUR]=Object.assign({},BASE[CUR]||ITEMS[CUR],dr.D); D=ITEMS[CUR]; DIRTY=true; }
+  else DIRTY=false;
+  BOOTING=true; fillAll(); BOOTING=false;
+  paintDraftBar(dr?'이 품목에 임시로 담아 두었던 값을 되살렸습니다 ('+draftStamp(dr.at)+'). 아직 진짜 저장은 안 됐습니다.':'');
+  paintCardShell();
+  const sel=$('itemSel'); if(sel) sel.value=CUR;
 }
 const ghostSet=(id,v)=>{const el=$(id); if(el) el.textContent=(GHOST&&isFinite(v))?'직전 '+won(v):'';};
 
@@ -29900,7 +29997,22 @@ const bind=(id,ev,fn)=>{const el=$(id); if(el) el.addEventListener(ev,fn);};
 bind('f_state','change',e=>{D.state=e.target.value;paintNames();recalc();});
 bind('roleSel','change',e=>{ROLE=e.target.value;});
 bind('orgSel','change',()=>{paintItemSel();const v=$('itemSel').value;if(v){CUR=v;D=ITEMS[CUR];GHOST=null;fillAll();}});
-bind('itemFind','input',paintItemSel);
+bind('itemFind','input',()=>{
+  paintItemSel();
+  // 하나만 남으면 그 자리에서 바로 연다
+  const q=(($('itemFind')||{}).value||'').trim();
+  if(!q) return;
+  const org=(($('orgSel')||{}).value||'전체')||'전체';
+  const hit=Object.keys(ITEMS).filter(ccOnSale)
+    .filter(k=>(org==='전체'||ITEMS[k].org===org)&&ITEMS[k].name.includes(q));
+  if(hit.length===1&&hit[0]!==CUR) pickItem(hit[0]);
+});
+bind('itemFind','keydown',e=>{
+  if(e.key!=='Enter') return;
+  e.preventDefault();
+  const b=ROOT().querySelector('#findHits .findhit');
+  if(b) pickItem(b.dataset.k);
+});
 // hotfix332: 넣던 값이 날아가지 않게 — 임시저장 · 이탈 경고
 const DRAFT_KEY='hiwos.cardDrafts';
 let DIRTY=false, DRAFT_T=null, BOOTING=true;
@@ -29946,19 +30058,7 @@ bind('btnClose','click',()=>{
   draftDrop();
   BR.close();
 });
-bind('itemSel','change',e=>{
-  const nx=e.target.value;
-  if(!nx){ return; }
-  if(DIRTY) draftWrite();          // 보던 품목은 그대로 담아 둔다 — 묻지 않는다
-  CUR=nx; GHOST=null;
-  D=ITEMS[CUR];
-  const dr=draftRead(CUR);
-  if(dr&&dr.D){ ITEMS[CUR]=Object.assign({},BASE[CUR]||ITEMS[CUR],dr.D); D=ITEMS[CUR]; DIRTY=true; }
-  else DIRTY=false;
-  BOOTING=true; fillAll(); BOOTING=false;
-  paintDraftBar(dr?'이 품목에 임시로 담아 두었던 값을 되살렸습니다 ('+draftStamp(dr.at)+'). 아직 진짜 저장은 안 됐습니다.':'');
-  paintCardShell();
-});
+bind('itemSel','change',e=>{ pickItem(e.target.value); });
 window.addEventListener('beforeunload',e=>{ if(DIRTY){ e.preventDefault(); e.returnValue=''; } });
 window.__hiwosCardDirty=()=>DIRTY;
 bind('btnEditBase','click',()=>openItemPopup('edit'));
@@ -40814,7 +40914,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix353';
+  const VERSION = 'v2.53 hotfix355';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
