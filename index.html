@@ -11314,7 +11314,9 @@ window.addEventListener('firebase-ready', () => {
           bundles: (d && Array.isArray(d.bundles)) ? d.bundles : [],
           def_procs: (d && Array.isArray(d.def_procs)) ? d.def_procs : [],
           // hotfix345: 업체마다 "이 가공은 안 함" 목록
-          proc_off: (d && d.proc_off && typeof d.proc_off === 'object') ? d.proc_off : {}
+          proc_off: (d && d.proc_off && typeof d.proc_off === 'object') ? d.proc_off : {},
+          // hotfix346: 묶음 이름을 저절로 지을 때 쓰는 약어
+          proc_abbr: (d && d.proc_abbr && typeof d.proc_abbr === 'object') ? d.proc_abbr : {}
         };
         state.costPricesLoaded = true;
         renderCostFromSub();
@@ -12400,6 +12402,7 @@ window.addEventListener('firebase-ready', () => {
       await setDoc(doc(db, 'cost_data', 'prices'), {
         yarns: next.yarns || [], knit: next.knit || [], proc: next.proc || [], bundles: next.bundles || [],
         def_procs: next.def_procs || [], proc_off: next.proc_off || {},
+        proc_abbr: next.proc_abbr || {},
         updated_at: serverTimestamp(),
         updated_by: state.user?.email || 'unknown'
       });
@@ -25312,6 +25315,65 @@ function validateBlendSum(blends, label) {
   //   여기서 고친 값은 cost_data/prices 의 proc · bundles 에 그대로 들어간다.
   //   품목 카드의 원사 줄과 같은 자리를 쓰므로 카드에도 바로 비친다.
   // ============================================================
+  // ============================================================
+  // hotfix346: 묶음 이름을 저절로 짓는 약어 (대표 확정)
+  //   차례도 여기 적힌 그대로다. [약어 설정]에서 고치고 늘릴 수 있다.
+  // ============================================================
+  const PF_ABBR_DEFAULT = [
+    { part: '선작업',      name: '프리셋팅',   abbr: '프셋' },
+    { part: '선작업',      name: '봉침',       abbr: '봉' },
+    { part: '선작업',      name: '실켓',       abbr: '실켓' },
+    { part: '염색/물나염', name: '선바이오',   abbr: '선바' },
+    { part: '염색/물나염', name: '쇼핑',       abbr: '쇼',   grade: true },
+    { part: '염색/물나염', name: '고압쇼핑',   abbr: '고쇼', grade: true },
+    { part: '염색/물나염', name: '과수',       abbr: '과',   grade: true },
+    { part: '염색/물나염', name: '물나염과수', abbr: '물과' },
+    { part: '염색/물나염', name: '백색',       abbr: '백',   grade: true },
+    { part: '염색/물나염', name: '전주백색',   abbr: '전백', grade: true },
+    { part: '염색/물나염', name: '연색',       abbr: '연염', grade: true },
+    { part: '염색/물나염', name: '중색',       abbr: '중염', grade: true },
+    { part: '염색/물나염', name: '농(진)색',   abbr: '농염', grade: true },
+    { part: '염색/물나염', name: '특염',       abbr: '특염', grade: true },
+    { part: '염색/물나염', name: '물나염',     abbr: '물나' },
+    { part: '가공',        name: '텐타',       abbr: '텐' },
+    { part: '가공',        name: '수지텐타',   abbr: '수지텐' },
+    { part: '가공',        name: '유연제텐타', abbr: '유연텐' },
+    { part: '가공',        name: '덤블',       abbr: '덤' },
+    { part: '가공',        name: '스프레이덤블', abbr: '스덤' },
+    { part: '가공',        name: '침수덤블',   abbr: '침덤' },
+    { part: '후가공',      name: '컴팩',       abbr: '컴' },
+    { part: '후가공',      name: '기모',       abbr: '기' },
+    { part: '후가공',      name: '샤링',       abbr: '샤' },
+    { part: '후가공',      name: '후가공텐타', abbr: '후텐' },
+    { part: '후가공',      name: '후가공덤블', abbr: '후덤' }
+  ];
+  // 저장된 값을 기본값 위에 덮는다
+  function pfAbbrList() {
+    const saved = (getCostPrices().proc_abbr && typeof getCostPrices().proc_abbr === 'object')
+      ? getCostPrices().proc_abbr : {};
+    const rows = PF_ABBR_DEFAULT.map(r => Object.assign({}, r, saved[r.name] ? { abbr: String(saved[r.name]) } : {}));
+    const have = new Set(rows.map(r => r.name));
+    Object.keys(saved).forEach(k => { if (!have.has(k)) rows.push({ part: procPartOf(k) || '기타', name: k, abbr: String(saved[k]) }); });
+    return rows;
+  }
+  function pfAbbrOf(name) {
+    const n = String(name || '').trim();
+    const hit = pfAbbrList().find(r => r.name === n);
+    return hit ? hit.abbr : n;
+  }
+  // 약어 차례 — 목록에 없는 것은 뒤로
+  function pfAbbrRank(name) {
+    const i = pfAbbrList().findIndex(r => r.name === String(name || '').trim());
+    return i < 0 ? 999 : i;
+  }
+  // 고른 공정으로 묶음 이름을 짓는다. 염색은 고른 등급의 약어를 쓴다
+  function pfAutoName(procs, grade) {
+    const list = (Array.isArray(procs) ? procs : []).map(normProc).filter(Boolean);
+    // 염색은 고른 등급 이름으로 바꿔 읽는다 (저장 이름 '농색' → 화면 이름 '농(진)색')
+    const out = list.map(p => (p === '염색') ? dyeGradeLabel(String(grade || '농색')) : p);
+    out.sort((a, b) => pfAbbrRank(a) - pfAbbrRank(b));
+    return out.map(pfAbbrOf).join('');
+  }
   const PF_TYPES = ['염색처', '가공처', '후가공처'];
   function pfVendorList() {
     const names = (state.vendors || [])
@@ -25359,6 +25421,8 @@ function validateBlendSum(blends, label) {
     procs.forEach(p => { const k = procPartOf(p) || '기타'; (bag[k] = bag[k] || []).push(p); });
     const order = COST_PROC_PART_ORDER.slice();
     Object.keys(bag).forEach(k => { if (!order.includes(k)) order.push(k); });
+    // hotfix346: 파트 안 차례도 약어 목록에 적힌 그대로
+    Object.keys(bag).forEach(k => bag[k].sort((a, b) => pfAbbrRank(a) - pfAbbrRank(b)));
     return order.filter(k => bag[k] && bag[k].length).map(k => ({ part: k, procs: bag[k] }));
   }
   // 파트마다 옅은 바탕색 — 눈으로 확실히 갈린다
@@ -25387,13 +25451,45 @@ function validateBlendSum(blends, label) {
     </div>`;
     if (!V) return h + `<div class="dash-empty">염색·가공 업체가 없습니다. [거래처 관리]에서 먼저 넣어 주십시오.</div>`;
 
+    // ── 약어 설정 판 ──
+    if (state.pfAbbrOpen) {
+      const rows = pfAbbrList();
+      h += `<div style="background:#fff;border:2px solid #5b21b6;border-radius:10px;padding:14px 16px;margin-bottom:16px;">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+          <strong style="font-size:13.5px;color:#5b21b6;">약어 설정</strong>
+          <span style="font-size:11.5px;color:#94a3b8;">묶음 이름을 저절로 지을 때 쓰는 짧은 말입니다. 여기 적힌 차례대로 이름이 이어집니다.</span>
+          <span style="flex:1;"></span>
+          <button class="dash-action-btn" id="pf-abbr-add" style="padding:6px 12px;">＋ 가공 추가</button>
+          <button class="dash-action-btn" id="pf-abbr-close" style="padding:6px 12px;">닫기</button>
+        </div>
+        <div class="dash-table-wrap"><table class="dash-table"><thead><tr>
+          <th style="min-width:52px;">차례</th><th style="min-width:100px;">파트</th>
+          <th style="text-align:left;min-width:130px;">가공 이름</th><th style="min-width:100px;">약어</th>
+          <th style="min-width:56px;">지우기</th></tr></thead><tbody>`;
+      rows.forEach((r, i) => {
+        const col = COST_PART_COLOR[r.part] || '#334155';
+        h += `<tr style="background:${PF_PART_BG[r.part] || '#fff'};">
+          <td style="font-size:11.5px;color:#94a3b8;">${i + 1}</td>
+          <td style="font-size:11.5px;font-weight:800;color:${col};">${escapeHtml(r.part)}</td>
+          <td style="text-align:left;font-weight:700;">${escapeHtml(r.name)}${r.grade ? ' <span style="font-size:10.5px;font-weight:700;color:#b45309;">염색 등급</span>' : ''}</td>
+          <td><input type="text" lang="ko" class="pf-ab" data-pf-n="${escapeHtml(r.name)}" value="${escapeHtml(r.abbr)}" style="width:90px;padding:5px 7px;border:1px solid #d1d5db;border-radius:6px;font-size:12.5px;font-family:inherit;text-align:center;font-weight:700;"></td>
+          <td class="col-action">${r.grade ? '<span style="font-size:11px;color:#cbd5e1;">-</span>'
+            : `<button class="dash-action-btn danger pf-ab-del" data-pf-n="${escapeHtml(r.name)}" style="font-size:11px;padding:4px 9px;">지우기</button>`}</td>
+        </tr>`;
+      });
+      h += `</tbody></table></div>
+        <div style="margin-top:9px;font-size:11.5px;color:#64748b;">
+          [＋ 가공 추가] 로 넣은 가공은 낱개 염/가공료 목록에도 함께 생깁니다. 약어를 고치면 [저장] 을 눌러 주십시오.
+        </div></div>`;
+    }
     // ── 묶음 ──
     const bs = pfBundles();
     h += `<div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:14px 16px;margin-bottom:16px;">
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
         <strong style="font-size:13.5px;color:#0f172a;">묶음</strong>
         <span style="font-size:11.5px;color:#94a3b8;">여러 공정을 한 값으로 묶어 부릅니다. 이름을 꼭 지어 주십시오.</span>
-        <button class="dash-action-btn" id="pf-goflat" style="margin-left:auto;padding:6px 13px;font-weight:700;">개별 설정</button>
+        <button class="dash-action-btn" id="pf-abbr" style="margin-left:auto;padding:6px 13px;font-weight:700;">약어 설정</button>
+        <button class="dash-action-btn" id="pf-goflat" style="padding:6px 13px;font-weight:700;">개별 설정</button>
         <button class="dash-action-btn" id="pf-badd" style="background:#1e3a8a;color:#fff;font-weight:700;padding:6px 13px;">＋ 새 묶음</button>
       </div>`;
     if (!bs.length) h += `<div style="font-size:12.5px;color:#9ca3af;padding:10px 2px;">이 업체에 저장해 둔 묶음이 없습니다.</div>`;
@@ -25404,10 +25500,15 @@ function validateBlendSum(blends, label) {
       const gap = normal ? (now - normal) : 0;
       h += `<div style="border:1px solid #e2e8f0;border-radius:9px;padding:11px 13px;margin-bottom:9px;background:#fcfcfd;">
         <div style="display:flex;gap:9px;flex-wrap:wrap;align-items:flex-end;">
-          <div style="flex:1.6;min-width:170px;"><div style="font-size:11px;font-weight:700;color:#64748b;margin-bottom:3px;">묶음 이름</div>
-            <input type="text" lang="ko" class="pf-bf" data-pf-k="name" data-pf-i="${i}" value="${escapeHtml(b.name || '')}" placeholder="예: 기본 3종" style="padding:6px 8px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;font-family:inherit;width:100%;font-weight:700;"></div>
+          <div style="flex:1.6;min-width:170px;"><div style="font-size:11px;font-weight:700;color:#64748b;margin-bottom:3px;">묶음 이름 <span style="font-weight:400;color:#94a3b8;">(공정을 고르면 저절로 지어집니다)</span></div>
+            <input type="text" lang="ko" class="pf-bf" data-pf-k="name" data-pf-i="${i}" value="${escapeHtml(b.name || '')}" placeholder="${escapeHtml(pfAutoName(subs, b.grade) || '예: 프셋봉선바농염텐덤컴')}" style="padding:6px 8px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;font-family:inherit;width:100%;font-weight:700;"></div>
+          ${subs.includes('염색') ? `<div style="width:120px;"><div style="font-size:11px;font-weight:700;color:#64748b;margin-bottom:3px;">염색 등급</div>
+            <select class="pf-bf" data-pf-k="grade" data-pf-i="${i}" style="padding:6px 8px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;font-family:inherit;width:100%;">
+              ${DYE_GRADES.map(x => `<option value="${escapeHtml(x)}"${String(b.grade || '농색') === x ? ' selected' : ''}>${escapeHtml(dyeGradeLabel(x))}</option>`).join('')}
+            </select></div>` : ''}
           <div style="width:130px;"><div style="font-size:11px;font-weight:700;color:#64748b;margin-bottom:3px;">묶음 단가 (원/kg)</div>
             <input type="text" inputmode="numeric" class="pf-bf" data-pf-k="price" data-pf-i="${i}" value="${escapeHtml(moneyInputVal(b.price))}" style="${iS}width:100%;"></div>
+          <button class="dash-action-btn pf-brename" data-pf-i="${i}" style="padding:6px 11px;font-size:11.5px;">이름 다시 짓기</button>
           <button class="dash-action-btn danger pf-bdel" data-pf-i="${i}" style="padding:6px 12px;">지우기</button>
         </div>
         <div style="margin-top:9px;font-size:11px;font-weight:700;color:#64748b;">묶을 공정 고르기</div>
@@ -25419,7 +25520,7 @@ function validateBlendSum(blends, label) {
           }).join('')).join('')}
         </div>
         <div style="margin-top:8px;font-size:11.5px;color:#64748b;">
-          ${subs.length ? `묶음: ${escapeHtml(subs.join(' · '))} · 낱개 합 ${costMoney(normal, 0)}원`
+          ${subs.length ? `저절로 지은 이름 <strong style="color:#1e3a8a;">${escapeHtml(pfAutoName(subs, b.grade))}</strong> · 묶음: ${escapeHtml(subs.join(' · '))} · 낱개 합 ${costMoney(normal, 0)}원`
             + (normal ? ` → <strong style="color:${gap < 0 ? '#047857' : '#b91c1c'};">${gap < 0 ? costMoney(-gap, 0) + '원 깎임' : (gap > 0 ? costMoney(gap, 0) + '원 더함' : '같음')}</strong>` : '')
             : '아직 고른 공정이 없습니다.'}
         </div>
@@ -25509,6 +25610,12 @@ function validateBlendSum(blends, label) {
       const b = pfDraft().bundles[parseInt(el.dataset.pfI, 10)];
       if (!b) return;
       if (el.dataset.pfK === 'name') b.name = el.value;
+      else if (el.dataset.pfK === 'grade') {
+        const was = pfAutoName(b.procs, b.grade);
+        b.grade = el.value;
+        if (!String(b.name || '').trim() || String(b.name).trim() === was) b.name = pfAutoName(b.procs, b.grade);
+        renderDashboard();
+      }
       else { const v = String(el.value || '').replace(/[^0-9.\-]/g, ''); b.price = v === '' ? '' : parseFloat(v); }
     }));
     document.querySelectorAll('#dash-body .pf-bsub').forEach(el => el.addEventListener('change', () => {
@@ -25516,7 +25623,10 @@ function validateBlendSum(blends, label) {
       if (!b) return;
       const p = el.dataset.pfP;
       const cur = Array.isArray(b.procs) ? b.procs.map(normProc).filter(Boolean) : [];
+      const was = pfAutoName(cur, b.grade);
       b.procs = el.checked ? Array.from(new Set(cur.concat([p]))) : cur.filter(x => x !== p);
+      // hotfix346: 손으로 따로 지은 이름이 아니면 저절로 다시 짓는다
+      if (!String(b.name || '').trim() || String(b.name).trim() === was) b.name = pfAutoName(b.procs, b.grade);
       renderDashboard();
     }));
     document.querySelectorAll('#dash-body .pf-bdel').forEach(el => el.addEventListener('click', () => {
@@ -25532,6 +25642,57 @@ function validateBlendSum(blends, label) {
       pfDraft().bundles.push({ vendor: pfVendor(), name: '', procs: [], price: '' });
       renderDashboard();
     });
+    const ab = document.getElementById('pf-abbr');
+    if (ab) ab.addEventListener('click', () => { state.pfAbbrOpen = !state.pfAbbrOpen; renderDashboard(); });
+    const abc = document.getElementById('pf-abbr-close');
+    if (abc) abc.addEventListener('click', () => { state.pfAbbrOpen = false; renderDashboard(); });
+    document.querySelectorAll('#dash-body .pf-ab').forEach(el => el.addEventListener('input', () => {
+      const D = pfDraft();
+      if (!D.proc_abbr || typeof D.proc_abbr !== 'object') D.proc_abbr = {};
+      D.proc_abbr[el.dataset.pfN] = String(el.value || '').trim();
+      if (!state.costPrices.proc_abbr || typeof state.costPrices.proc_abbr !== 'object') state.costPrices.proc_abbr = {};
+      state.costPrices.proc_abbr[el.dataset.pfN] = D.proc_abbr[el.dataset.pfN];
+    }));
+    document.querySelectorAll('#dash-body .pf-ab-del').forEach(el => el.addEventListener('click', async () => {
+      const nm = el.dataset.pfN;
+      if (!confirm(nm + ' 을(를) 가공 목록에서 아주 지울까요?\n(모든 업체에서 사라집니다)')) return;
+      const D = pfDraft();
+      if (D.proc_abbr) delete D.proc_abbr[nm];
+      if (state.costPrices.proc_abbr) delete state.costPrices.proc_abbr[nm];
+      D.proc = (D.proc || []).filter(r => normProc(r && r.proc) !== normProc(nm));
+      const L = JSON.parse(JSON.stringify(costLists()));
+      L.procs = (L.procs || []).filter(x => normProc(x) !== normProc(nm));
+      if (L.proc_part) delete L.proc_part[normProc(nm)];
+      await saveCostLists(L);
+      renderDashboard();
+    }));
+    const abadd = document.getElementById('pf-abbr-add');
+    if (abadd) abadd.addEventListener('click', async () => {
+      const nm = String(prompt('새 가공 이름을 넣어 주십시오') || '').trim();
+      if (!nm) return;
+      if (costLists().procs.some(x => normProc(x) === normProc(nm))) { toast('이미 있는 가공입니다', 'error'); return; }
+      const part = String(prompt('어느 파트입니까\n선작업 / 염색/물나염 / 가공 / 후가공 / 기타', '가공') || '').trim();
+      if (!COST_PROC_PART_ORDER.includes(part)) { toast('파트 이름이 맞지 않습니다', 'error'); return; }
+      const ab2 = String(prompt('약어를 넣어 주십시오 (묶음 이름에 쓰입니다)', nm.slice(0, 2)) || '').trim();
+      const L = JSON.parse(JSON.stringify(costLists()));
+      L.procs = (L.procs || []).concat([nm]);
+      L.proc_part = Object.assign({}, L.proc_part || {}); L.proc_part[nm] = part;
+      const ok = await saveCostLists(L);
+      if (!ok) return;
+      const D = pfDraft();
+      if (!D.proc_abbr || typeof D.proc_abbr !== 'object') D.proc_abbr = {};
+      D.proc_abbr[nm] = ab2 || nm;
+      if (!state.costPrices.proc_abbr) state.costPrices.proc_abbr = {};
+      state.costPrices.proc_abbr[nm] = D.proc_abbr[nm];
+      toast(nm + ' 을(를) 넣었습니다. [저장] 을 눌러 약어까지 담아 주십시오', 'success');
+      renderDashboard();
+    });
+    document.querySelectorAll('#dash-body .pf-brename').forEach(el => el.addEventListener('click', () => {
+      const b = pfDraft().bundles[parseInt(el.dataset.pfI, 10)];
+      if (!b) return;
+      b.name = pfAutoName(b.procs, b.grade);
+      renderDashboard();
+    }));
     const go = document.getElementById('pf-goflat');
     if (go) go.addEventListener('click', () => {
       const el = document.getElementById('pf-flat');
@@ -25562,8 +25723,9 @@ function validateBlendSum(blends, label) {
     const sv = document.getElementById('pf-save');
     const doSave = async () => {
       const D = pfDraft();
-      const bad = D.bundles.find(b => (Array.isArray(b.procs) && b.procs.length) && !String(b.name || '').trim());
-      if (bad) { toast('묶음 이름을 넣어 주십시오', 'error'); return; }
+      D.bundles.forEach(b => {
+        if (!String(b.name || '').trim() && (b.procs || []).length) b.name = pfAutoName(b.procs, b.grade);
+      });
       // 빈 줄은 담지 않는다
       D.proc = D.proc.filter(r => r && (String(r.price) !== '' && r.price != null
         || (r.grades && Object.keys(r.grades).length)));
@@ -40250,7 +40412,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix345';
+  const VERSION = 'v2.53 hotfix346';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
