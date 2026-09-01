@@ -28024,7 +28024,8 @@ function validateBlendSum(blends, label) {
     const inputStyle = 'width:100%;padding:7px 9px;border:1px solid #d1d5db;border-radius:5px;font-size:13px;font-family:inherit;box-sizing:border-box;';
     const specs = getFabricSpecs();
     const q = String(state.fcSearch || '').trim().toLowerCase();
-    const onlyOn = !!state.fcOnlyOnSale;
+    // hotfix371: 처음부터 판매 중인 품목만 보여 준다 (끄면 판매 종료도 함께 나온다)
+    const onlyOn = state.fcOnlyOnSale !== false;
     const uMap = fcUsageFromWorkorders();
     const usageOf = (s, c) => {
       const own = String((c && c.usage) || '').trim();
@@ -30468,7 +30469,13 @@ function openSpec(){
   const fk={sp_org:'org',sp_q:'q',sp_knit:'knit',sp_fin:'fin',sp_post:'post',sp_yarn:'yarn',sp_sample:'sample'};
   Object.keys(fk).forEach(id=>{
     const el=$(id); if(!el) return;
-    el.addEventListener(el.tagName==='INPUT'?'input':'change',()=>{ SPECF[fk[id]]=el.value; openSpec(); });
+    if(el.tagName!=='INPUT'){ el.addEventListener('change',()=>{ SPECF[fk[id]]=el.value; openSpec(); }); return; }
+    // hotfix371: 한글은 자모를 모아 한 글자를 만든다. 만드는 중에 화면을 다시 그리면 글자가 흩어진다.
+    let timer=null, composing=false;
+    const fire=()=>{ SPECF[fk[id]]=el.value; clearTimeout(timer); timer=setTimeout(openSpec,260); };
+    el.addEventListener('compositionstart',()=>{ composing=true; });
+    el.addEventListener('compositionend',()=>{ composing=false; fire(); });
+    el.addEventListener('input',e=>{ if(composing||e.isComposing) return; fire(); });
   });
   const q=$('sp_q'); if(q&&SPECF.q){ q.focus(); q.setSelectionRange(q.value.length,q.value.length); }
 
@@ -38140,7 +38147,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
       document.getElementById('fc-search-clear')?.addEventListener('click', () => { state.fcSearch = ''; renderDashboard(); });
       // hotfix298: 판매 중인 품목만 보기 · 머리글 눌러 줄 세우기
       document.getElementById('fc-onsale')?.addEventListener('change', ev => {
-        state.fcOnlyOnSale = !!ev.target.checked;
+        state.fcOnlyOnSale = !!ev.target.checked;   // 끄면 false 로 남아 판매 종료까지 나온다
         renderDashboard();
       });
       document.querySelectorAll('#dash-body .fc-sort').forEach(th => th.addEventListener('click', () => {
@@ -41193,7 +41200,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix370';
+  const VERSION = 'v2.53 hotfix371';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
