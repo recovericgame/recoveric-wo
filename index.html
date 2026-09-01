@@ -25627,6 +25627,45 @@ function validateBlendSum(blends, label) {
     h += `</div></div></div>`;
     return h;
   }
+  // hotfix353: 묶음 한 개만 담는다 (다른 고친 값은 건드리지 않는다)
+  async function pfSaveOneBundle(i) {
+    const D = pfDraft(), V = pfVendor();
+    const b = D.bundles[i];
+    if (!b) return false;
+    const subs = (b.procs || []).map(normProc).filter(Boolean);
+    if (!subs.length) { toast('묶을 공정을 하나 이상 골라 주십시오', 'error'); return false; }
+    if (!String(b.name || '').trim()) b.name = pfAutoName(subs, b.grade);
+    const nm = String(b.name).trim();
+    if (!(parseFloat(b.price) > 0)) { toast('묶음 단가를 넣어 주십시오', 'error'); return false; }
+    const ven = String(b.vendor || V).trim();
+    const next = JSON.parse(JSON.stringify(getCostPrices()));
+    if (!Array.isArray(next.bundles)) next.bundles = [];
+    const was = String(b._sname || nm).trim();
+    const hit = next.bundles.find(x => x && pfSame(x.vendor, ven) && String(x.name || '').trim() === was);
+    const row = { vendor: ven, name: nm, procs: subs, price: parseFloat(b.price) || 0 };
+    if (hit) { hit.vendor = row.vendor; hit.name = row.name; hit.procs = row.procs; hit.price = row.price; }
+    else next.bundles.push(row);
+    const ok = await saveCostPrices(next);
+    if (ok) { b._sname = nm; toast('묶음 [' + nm + '] 만 담았습니다. 낱개 단가는 아래 [전체 저장] 을 눌러 주십시오', 'success'); }
+    return ok;
+  }
+  // 묶음 한 개만 지운다
+  async function pfDelOneBundle(i) {
+    const D = pfDraft(), V = pfVendor();
+    const b = D.bundles[i];
+    if (!b) return false;
+    const nm = String(b._sname || b.name || '').trim();
+    const ven = String(b.vendor || V).trim();
+    if (nm) {
+      const next = JSON.parse(JSON.stringify(getCostPrices()));
+      next.bundles = (Array.isArray(next.bundles) ? next.bundles : [])
+        .filter(x => !(x && pfSame(x.vendor, ven) && String(x.name || '').trim() === nm));
+      await saveCostPrices(next);
+    }
+    D.bundles.splice(i, 1);
+    toast('묶음을 지웠습니다', 'success');
+    return true;
+  }
   function renderProcFeeTab() {
     if (!isOwnerUser()) return `<div class="dash-empty">최고관리자만 볼 수 있는 화면입니다.</div>`;
     if (!state.costPricesLoaded) return `<div class="dash-empty">단가표를 읽는 중입니다…</div>`;
@@ -25643,7 +25682,7 @@ function validateBlendSum(blends, label) {
         <select id="pf-vendor" style="padding:7px 10px;border:1px solid #d1d5db;border-radius:7px;font-size:13px;font-family:inherit;min-width:190px;">
           ${list.map(v => `<option value="${escapeHtml(v)}"${v === V ? ' selected' : ''}>${escapeHtml(v)}</option>`).join('')}
         </select></label>
-      <span style="font-size:11.5px;color:#94a3b8;">고친 값은 화면 아래 [저장] 을 눌러야 들어갑니다.</span>
+      <span style="font-size:11.5px;color:#94a3b8;">고친 값은 화면 아래 [전체 저장] 을 눌러야 들어갑니다. 묶음은 줄마다 [묶음 저장] 으로 하나만 담을 수 있습니다.</span>
     </div>`;
     if (!V) return h + `<div class="dash-empty">염색·가공 업체가 없습니다. [거래처 관리]에서 먼저 넣어 주십시오.</div>`;
 
@@ -25705,7 +25744,7 @@ function validateBlendSum(blends, label) {
     h += `<div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:14px 16px;margin-bottom:16px;">
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
         <strong style="font-size:13.5px;color:#0f172a;">묶음</strong>
-        <span style="font-size:11.5px;color:#94a3b8;">여러 공정을 한 값으로 묶어 부릅니다. 이름을 꼭 지어 주십시오.</span>
+        <span style="font-size:11.5px;color:#94a3b8;">여러 공정을 한 값으로 묶어 부릅니다. <strong>[묶음 저장]</strong> 은 그 묶음 하나만 담습니다.</span>
         <button class="dash-action-btn" id="pf-cmp" style="margin-left:auto;padding:6px 13px;font-weight:700;background:${state.pfCmpOpen ? '#1e3a8a' : '#fff'};color:${state.pfCmpOpen ? '#fff' : '#334155'};">업체별 단가 한눈에</button>
         <button class="dash-action-btn" id="pf-abbr" style="padding:6px 13px;font-weight:700;">약어 설정</button>
         <button class="dash-action-btn" id="pf-goflat" style="padding:6px 13px;font-weight:700;">개별 설정</button>
@@ -25728,6 +25767,7 @@ function validateBlendSum(blends, label) {
           <div style="width:130px;"><div style="font-size:11px;font-weight:700;color:#64748b;margin-bottom:3px;">묶음 단가 (원/kg)</div>
             <input type="text" inputmode="numeric" class="pf-bf" data-pf-k="price" data-pf-i="${i}" value="${escapeHtml(moneyInputVal(b.price))}" style="${iS}width:100%;"></div>
           <button class="dash-action-btn pf-brename" data-pf-i="${i}" style="padding:6px 11px;font-size:11.5px;">이름 다시 짓기</button>
+          <button class="dash-action-btn pf-bsave" data-pf-i="${i}" style="background:#047857;color:#fff;font-weight:800;padding:6px 16px;">묶음 저장</button>
           <button class="dash-action-btn danger pf-bdel" data-pf-i="${i}" style="padding:6px 12px;">지우기</button>
         </div>
         <div style="margin-top:9px;font-size:11px;font-weight:700;color:#64748b;">묶을 공정 고르기</div>
@@ -25808,10 +25848,10 @@ function validateBlendSum(blends, label) {
     h += `<div id="pf-savebar" style="position:sticky;bottom:0;z-index:40;margin:14px -20px 0;padding:11px 20px;
         background:#fff;border-top:2px solid #047857;box-shadow:0 -4px 12px rgba(15,23,42,.07);display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
       <span style="font-size:12.5px;font-weight:800;color:#0f172a;">${escapeHtml(V)}</span>
-      <span style="font-size:11.5px;color:#94a3b8;">고친 값은 [저장]을 눌러야 들어갑니다. 업체를 바꾸기 전에 꼭 눌러 주십시오.</span>
+      <span style="font-size:11.5px;color:#94a3b8;">[전체 저장] 은 이 화면에서 고친 것을 <strong>모두</strong> 담습니다 — 낱개 단가 · 묶음 · 안 함 목록 · 약어. 업체를 바꾸기 전에 꼭 눌러 주십시오.</span>
       <span style="flex:1;"></span>
       <button class="dash-action-btn" id="pf-reset2" style="padding:6px 13px;">되돌리기</button>
-      <button class="dash-action-btn" id="pf-save2" style="background:#047857;color:#fff;font-weight:800;padding:8px 26px;font-size:13px;">저장</button>
+      <button class="dash-action-btn" id="pf-save2" style="background:#047857;color:#fff;font-weight:800;padding:8px 26px;font-size:13px;">전체 저장</button>
     </div>`;
     return h;
   }
@@ -25857,12 +25897,12 @@ function validateBlendSum(blends, label) {
       if (!String(b.name || '').trim() || String(b.name).trim() === was) b.name = pfAutoName(b.procs, b.grade);
       renderDashboard();
     }));
-    document.querySelectorAll('#dash-body .pf-bdel').forEach(el => el.addEventListener('click', () => {
+    document.querySelectorAll('#dash-body .pf-bdel').forEach(el => el.addEventListener('click', async () => {
       const i = parseInt(el.dataset.pfI, 10);
       const b = pfDraft().bundles[i];
       if (!b) return;
-      if (!confirm(((b.name || '이 묶음')) + ' 을(를) 지울까요?')) return;
-      pfDraft().bundles.splice(i, 1);
+      if (!confirm((b.name || '이 묶음') + ' 을(를) 지웁니다.\n\n이 묶음 하나만 곧바로 지워집니다.\n낱개 단가 등 다른 고친 값은 그대로 남습니다.\n\n지울까요?')) return;
+      await pfDelOneBundle(i);
       renderDashboard();
     }));
     const add = document.getElementById('pf-badd');
@@ -26034,6 +26074,11 @@ function validateBlendSum(blends, label) {
     };
     if (sv) sv.addEventListener('click', doSave);
     if (sv2) sv2.addEventListener('click', doSave);
+    // hotfix352: 묶음마다 [묶음 저장] — 이름이 비면 저절로 지어 담는다
+    document.querySelectorAll('#dash-body .pf-bsave').forEach(el => el.addEventListener('click', async () => {
+      const ok = await pfSaveOneBundle(parseInt(el.dataset.pfI, 10));
+      if (ok) renderDashboard();
+    }));
   }
 
   function renderCostCalcDash() {
@@ -40769,7 +40814,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix351';
+  const VERSION = 'v2.53 hotfix353';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
