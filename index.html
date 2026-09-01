@@ -6077,6 +6077,16 @@
 #hiwos-card .card{background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:visible;box-shadow:0 1px 3px rgba(15,23,42,.05);}
 #hiwos-card .card > .pickbar{border-radius:11px 11px 0 0;}
 #hiwos-card .card > .savebar{border-radius:0 0 11px 11px;}
+/* hotfix362: 이름으로 찾기 — 떠 있는 창. 다른 칸을 밀어내지 않는다 */
+#hiwos-card #findHits{display:none;position:absolute;top:100%;left:0;min-width:100%;width:max-content;max-width:340px;
+  z-index:60;background:#fff;border:1px solid #cbd5e1;border-radius:9px;box-shadow:0 12px 28px rgba(15,23,42,.16);
+  padding:5px;margin-top:5px;max-height:268px;overflow-y:auto;}
+#hiwos-card #findHits.on{display:block;}
+#hiwos-card #findHits .findhit{display:block;width:100%;text-align:left;border:0;background:none;border-radius:6px;
+  padding:6px 9px;font-size:12.5px;font-weight:600;color:#334155;cursor:pointer;font-family:inherit;white-space:nowrap;}
+#hiwos-card #findHits .findhit:hover{background:#f1f5f9;color:var(--deep);}
+#hiwos-card #findHits .findhit.cur{background:#eef2ff;color:var(--deep);font-weight:800;}
+#hiwos-card #findHits .fnote{display:block;padding:5px 9px;font-size:11px;color:#9ca3af;}
 #hiwos-card .pickbar{padding:12px 20px;border-bottom:1px solid var(--line);background:#f8fafc;display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;position:sticky;top:0;z-index:34;box-shadow:0 1px 0 var(--line);}
 #hiwos-card #draftBar{position:sticky;top:76px;z-index:33;}
 /* hotfix340: 품목 이름 줄은 같이 붙어 다니지 않는다 (위 두 줄만 고정) */
@@ -28152,8 +28162,8 @@ function validateBlendSum(blends, label) {
     <div class="pickbar">
       <div style="flex:0 0 170px;"><label class="f">1. 조직</label><select id="orgSel"></select></div>
       <div style="flex:0 0 210px;"><label class="f">2. 품목명</label><select id="itemSel"></select></div>
-      <div style="flex:0 0 210px;"><label class="f">이름으로 찾기</label><input type="text" id="itemFind" lang="ko" autocomplete="off" placeholder="글자를 치면 바로 나옵니다">
-        <div id="findHits" style="display:none;margin-top:5px;"></div></div>
+      <div style="flex:0 0 210px;position:relative;"><label class="f">이름으로 찾기</label><input type="text" id="itemFind" lang="ko" autocomplete="off" placeholder="글자를 치면 바로 나옵니다">
+        <div id="findHits"></div></div>
       <button class="b" id="btnList">품목 목록</button>
       <button class="b" id="btnSpec">원단 제작 사양</button>
       <span class="spacer"></span>
@@ -29080,14 +29090,18 @@ function paintItemSel(){
   // hotfix354: 글자를 치면 맞는 품목이 바로 아래에 뜬다. 누르면 그 자리에서 열린다
   const hb=$('findHits');
   if(hb){
-    if(!q){ hb.style.display='none'; hb.innerHTML=''; }
-    else if(!keys.length){ hb.style.display=''; hb.innerHTML='<span style="font-size:11px;color:#9ca3af;">맞는 품목이 없습니다</span>'; }
+    if(!q){ hb.classList.remove('on'); hb.innerHTML=''; }
+    else if(!keys.length){ hb.classList.add('on'); hb.innerHTML='<span class="fnote">맞는 품목이 없습니다</span>'; }
     else {
-      hb.style.display='';
-      hb.innerHTML=keys.slice(0,12).map(k=>
-        `<button type="button" class="findhit" data-k="${k}" style="display:block;width:100%;text-align:left;border:1px solid ${k===CUR?'#1e3a8a':'#e2e8f0'};background:${k===CUR?'#eef2ff':'#fff'};border-radius:6px;padding:4px 8px;margin-bottom:3px;font-size:12px;font-weight:${k===CUR?'800':'600'};color:#334155;cursor:pointer;font-family:inherit;">${ITEMS[k].name}${ITEMS[k].state==='샘플'?' (샘플)':''}${ITEMS[k].state==='중단'?' (판매 종료)':''}</button>`
-      ).join('')+(keys.length>12?`<span style="font-size:11px;color:#9ca3af;">외 ${keys.length-12}개 — 더 치면 좁혀집니다</span>`:'');
-      ROOT().querySelectorAll('#findHits .findhit').forEach(b=>b.addEventListener('click',()=>pickItem(b.dataset.k)));
+      hb.classList.add('on');
+      hb.innerHTML=keys.slice(0,20).map(k=>
+        `<button type="button" class="findhit${k===CUR?' cur':''}" data-k="${k}">${ITEMS[k].name}${ITEMS[k].state==='샘플'?' (샘플)':''}${ITEMS[k].state==='중단'?' (판매 종료)':''}</button>`
+      ).join('')+(keys.length>20?`<span class="fnote">외 ${keys.length-20}개 — 더 치면 좁혀집니다</span>`:'');
+      ROOT().querySelectorAll('#findHits .findhit').forEach(b=>b.addEventListener('click',e=>{
+        e.stopPropagation(); pickItem(b.dataset.k);
+        const f=$('itemFind'); if(f) f.value='';
+        paintItemSel();
+      }));
     }
   }
 }
@@ -30198,10 +30212,16 @@ bind('itemFind','input',()=>{
   if(hit.length===1&&hit[0]!==CUR) pickItem(hit[0]);
 });
 bind('itemFind','keydown',e=>{
+  if(e.key==='Escape'){ const hb=$('findHits'); if(hb) hb.classList.remove('on'); return; }
   if(e.key!=='Enter') return;
   e.preventDefault();
   const b=ROOT().querySelector('#findHits .findhit');
-  if(b) pickItem(b.dataset.k);
+  if(b){ pickItem(b.dataset.k); const f=$('itemFind'); if(f) f.value=''; paintItemSel(); }
+});
+document.addEventListener('click',e=>{
+  const hb=$('findHits'); if(!hb||!hb.classList.contains('on')) return;
+  if(e.target&&(e.target.id==='itemFind'||hb.contains(e.target))) return;
+  hb.classList.remove('on');
 });
 // hotfix332: 넣던 값이 날아가지 않게 — 임시저장 · 이탈 경고
 const DRAFT_KEY='hiwos.cardDrafts';
@@ -41104,7 +41124,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix361';
+  const VERSION = 'v2.53 hotfix362';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
