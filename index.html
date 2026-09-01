@@ -11315,6 +11315,7 @@ window.addEventListener('firebase-ready', () => {
           def_procs: (d && Array.isArray(d.def_procs)) ? d.def_procs : [],
           // hotfix345: 업체마다 "이 가공은 안 함" 목록
           proc_off: (d && d.proc_off && typeof d.proc_off === 'object') ? d.proc_off : {},
+          grade_off: (d && d.grade_off && typeof d.grade_off === 'object') ? d.grade_off : {},
           // hotfix346: 묶음 이름을 저절로 지을 때 쓰는 약어
           proc_abbr: (d && d.proc_abbr && typeof d.proc_abbr === 'object') ? d.proc_abbr : {}
         };
@@ -12401,7 +12402,7 @@ window.addEventListener('firebase-ready', () => {
     try {
       await setDoc(doc(db, 'cost_data', 'prices'), {
         yarns: next.yarns || [], knit: next.knit || [], proc: next.proc || [], bundles: next.bundles || [],
-        def_procs: next.def_procs || [], proc_off: next.proc_off || {},
+        def_procs: next.def_procs || [], proc_off: next.proc_off || {}, grade_off: next.grade_off || {},
         proc_abbr: next.proc_abbr || {},
         updated_at: serverTimestamp(),
         updated_by: state.user?.email || 'unknown'
@@ -25380,8 +25381,8 @@ function validateBlendSum(blends, label) {
       .filter(v => v && v.name && PF_TYPES.some(t => vendorTypeMatch(v, t)))
       .map(v => String(v.name).trim())
       .filter(Boolean);
-    const uniq = Array.from(new Set(names)).sort((a, b) => a.localeCompare(b, 'ko', { numeric: true }));
-    return [COST_COMMON_VENDOR].concat(uniq);
+    // hotfix349: (공통)은 거래처가 아니다 — 목록에서 뺀다
+    return Array.from(new Set(names)).sort((a, b) => a.localeCompare(b, 'ko', { numeric: true }));
   }
   function pfVendor() {
     const list = pfVendorList();
@@ -25406,6 +25407,21 @@ function validateBlendSum(blends, label) {
   function pfBundles() {
     const D = pfDraft(), V = pfVendor();
     return D.bundles.map((b, i) => ({ b, i })).filter(o => pfSame(o.b.vendor, V));
+  }
+  // 이 업체가 "안 함"으로 꺼 둔 염색 등급
+  function pfGradeOff(v) {
+    const D = pfDraft();
+    if (!D.grade_off || typeof D.grade_off !== 'object') D.grade_off = {};
+    const V = v || pfVendor();
+    let list = Array.isArray(D.grade_off[V]) ? D.grade_off[V].slice() : [];
+    Object.keys(D.grade_off).forEach(k => {
+      if (k === V) return;
+      if (normalizeVendorName(k) !== normalizeVendorName(V)) return;
+      list = list.concat(Array.isArray(D.grade_off[k]) ? D.grade_off[k] : []);
+      delete D.grade_off[k];
+    });
+    D.grade_off[V] = Array.from(new Set(list.filter(Boolean)));
+    return D.grade_off[V];
   }
   // 이 업체가 "안 함"으로 꺼 둔 가공
   function pfOff() {
@@ -25449,6 +25465,12 @@ function validateBlendSum(blends, label) {
       Object.keys(off).forEach(k => { if (normalizeVendorName(k) === normalizeVendorName(v)) a = a.concat(off[k] || []); });
       return a.map(normProc);
     };
+    const goff = (D.grade_off && typeof D.grade_off === 'object') ? D.grade_off : {};
+    const gOffOf = v => {
+      let a = [];
+      Object.keys(goff).forEach(k => { if (normalizeVendorName(k) === normalizeVendorName(v)) a = a.concat(goff[k] || []); });
+      return a;
+    };
     const val = (v, pk, gr) => {
       const r = (D.proc || []).find(x => x && pfSame(x.vendor, v) && normProc(x.proc) === pk && !String(x.item || '').trim());
       if (!r) return null;
@@ -25459,18 +25481,26 @@ function validateBlendSum(blends, label) {
     };
     const cell = x => x == null ? '<span style="color:#cbd5e1;">-</span>' : `<strong>${costMoney(x, 0)}</strong>`;
     const gShow = DYE_GRADES.includes(String(state.pfCmpGrade || '')) ? state.pfCmpGrade : '농색';
-    let h = `<div style="background:#fff;border:2px solid #1e3a8a;border-radius:10px;padding:14px 16px;margin-bottom:16px;">
-      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:9px;">
-        <strong style="font-size:13.5px;color:#1e3a8a;">업체별 단가 한눈에</strong>
-        <span style="font-size:11.5px;color:#94a3b8;">업체 이름을 누르면 그 업체 설정으로 갑니다. 빈 칸은 값을 안 정했거나 그 업체가 하지 않는 가공입니다.</span>
-        <label style="margin-left:auto;font-size:12px;font-weight:700;color:#475569;display:inline-flex;align-items:center;gap:6px;">염색 등급
+    const q = String(state.pfCmpQ || '').trim().toLowerCase();
+    const shown = q ? vs.filter(v => v.toLowerCase().includes(q)) : vs;
+    let h = `<div class="dash-modal-bg show" id="pf-cmp-bg"><div class="dash-modal" style="max-width:1280px;width:97%;">
+      <div style="position:sticky;top:0;z-index:5;background:#fff;border-bottom:2px solid #1e3a8a;padding:13px 17px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        <strong style="font-size:15px;color:#1e3a8a;">업체별 단가 한눈에</strong>
+        <span style="font-size:11.5px;color:#94a3b8;">업체 이름을 누르면 그 업체 설정으로 갑니다. 빈 칸은 값을 안 정한 것입니다.</span>
+        <span style="flex:1;"></span>
+        <input type="text" id="pf-cmp-q" lang="ko" autocomplete="off" placeholder="업체 찾기" value="${escapeHtml(state.pfCmpQ || '')}"
+          style="padding:6px 10px;border:1px solid #d1d5db;border-radius:7px;font-size:12.5px;font-family:inherit;width:150px;">
+        <label style="font-size:12px;font-weight:700;color:#475569;display:inline-flex;align-items:center;gap:6px;">염색 등급
           <select id="pf-cmp-grade" style="padding:5px 8px;border:1px solid #d1d5db;border-radius:6px;font-size:12.5px;font-family:inherit;">
             ${DYE_GRADES.map(x => `<option value="${escapeHtml(x)}"${x === gShow ? ' selected' : ''}>${escapeHtml(dyeGradeLabel(x))}</option>`).join('')}
           </select></label>
+        <button class="dash-action-btn" id="pf-cmp-close" style="padding:6px 16px;font-weight:800;">닫기</button>
       </div>
+      <div style="padding:14px 17px 18px;">
+      <div style="font-size:11.5px;color:#64748b;margin-bottom:8px;">보이는 업체 <strong>${shown.length}</strong> / 전체 ${vs.length}</div>
       <div class="dash-table-wrap"><table class="dash-table"><thead><tr>
         <th style="text-align:left;min-width:104px;">파트</th><th style="text-align:left;min-width:112px;">가공</th>
-        ${vs.map(v => `<th style="min-width:92px;"><button class="dash-action-btn pf-cmp-go" data-pf-v="${escapeHtml(v)}" style="font-size:11.5px;padding:3px 8px;font-weight:800;">${escapeHtml(v)}</button></th>`).join('')}
+        ${shown.map(v => `<th style="min-width:92px;"><button class="dash-action-btn pf-cmp-go" data-pf-v="${escapeHtml(v)}" style="font-size:11.5px;padding:3px 8px;font-weight:800;">${escapeHtml(v)}</button></th>`).join('')}
       </tr></thead><tbody>`;
     pfPartsOrdered(true).forEach(g => {
       const bg = PF_PART_BG[g.part] || '#fff', col = COST_PART_COLOR[g.part] || '#334155';
@@ -25480,7 +25510,7 @@ function validateBlendSum(blends, label) {
         h += `<tr style="background:${bg};">
           <td style="text-align:left;font-size:11.5px;font-weight:800;color:${col};">${k === 0 ? escapeHtml(g.part) : ''}</td>
           <td style="text-align:left;font-weight:700;">${escapeHtml(pr)}${gr ? ` <span style="font-size:10.5px;color:#b45309;">${escapeHtml(dyeGradeLabel(gr))}</span>` : ''}</td>
-          ${vs.map(v => offOf(v).includes(pk)
+          ${shown.map(v => (offOf(v).includes(pk) || (gr && gOffOf(v).includes(gr)))
             ? `<td style="text-align:center;font-size:10.5px;color:#cbd5e1;">안 함</td>`
             : `<td style="text-align:right;">${cell(val(v, pk, gr))}</td>`).join('')}
         </tr>`;
@@ -25514,7 +25544,7 @@ function validateBlendSum(blends, label) {
       });
       h += `</tbody></table></div>`;
     }
-    h += `</div>`;
+    h += `</div></div></div>`;
     return h;
   }
   function renderProcFeeTab() {
@@ -25533,11 +25563,29 @@ function validateBlendSum(blends, label) {
         <select id="pf-vendor" style="padding:7px 10px;border:1px solid #d1d5db;border-radius:7px;font-size:13px;font-family:inherit;min-width:190px;">
           ${list.map(v => `<option value="${escapeHtml(v)}"${v === V ? ' selected' : ''}>${escapeHtml(v)}</option>`).join('')}
         </select></label>
-      <button class="dash-action-btn" id="pf-reset" style="padding:6px 12px;">되돌리기</button>
-      <button class="dash-action-btn" id="pf-save" style="margin-left:auto;background:#047857;color:#fff;font-weight:700;padding:7px 18px;">저장</button>
+      <span style="font-size:11.5px;color:#94a3b8;">고친 값은 화면 아래 [저장] 을 눌러야 들어갑니다.</span>
     </div>`;
     if (!V) return h + `<div class="dash-empty">염색·가공 업체가 없습니다. [거래처 관리]에서 먼저 넣어 주십시오.</div>`;
 
+    // ── (공통) 자료 옮기기 · 지우기 (hotfix349) ──
+    {
+      const D0 = pfDraft();
+      const isC = x => String(x || '').trim() === COST_COMMON_VENDOR;
+      const cp = (D0.proc || []).filter(r => r && isC(r.vendor));
+      const cb = (D0.bundles || []).filter(b => b && isC(b.vendor));
+      if (cp.length || cb.length) {
+        h += `<div style="background:#fffbeb;border:2px solid #fcd34d;border-radius:10px;padding:13px 15px;margin-bottom:16px;">
+          <div style="font-size:13px;font-weight:800;color:#92400e;margin-bottom:6px;">(공통) 자료가 아직 남아 있습니다 — 낱개 ${cp.length}줄 · 묶음 ${cb.length}개</div>
+          <div style="font-size:12.5px;color:#78350f;line-height:1.85;margin-bottom:10px;">
+            (공통)은 거래처가 아니므로 목록에서 뺐습니다. 다만 <strong>지금 품목 카드의 가공비가 이 값으로 돌아가고 있습니다.</strong><br>
+            먼저 <strong>[${escapeHtml(V)} 로 옮기기]</strong> 로 필요한 업체에 옮겨 담으신 뒤에 지우십시오. 옮기기는 <strong>빈 칸만 채우고 이미 넣은 값은 건드리지 않습니다.</strong>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <button class="dash-action-btn" id="pf-com-move" style="background:#1e3a8a;color:#fff;font-weight:700;padding:7px 15px;">${escapeHtml(V)} 로 옮기기</button>
+            <button class="dash-action-btn danger" id="pf-com-del" style="padding:7px 15px;">(공통) 자료 지우기</button>
+          </div></div>`;
+      }
+    }
     // ── 업체별 단가 한눈에 보기 ──
     if (state.pfCmpOpen) h += pfCompareHtml();
     // ── 약어 설정 판 ──
@@ -25636,14 +25684,20 @@ function validateBlendSum(blends, label) {
         const del = `<button class="dash-action-btn pf-off" data-pf-p="${escapeHtml(pk)}" title="이 업체 목록에서만 뺍니다. 다른 업체는 그대로입니다." style="font-size:11px;padding:4px 9px;color:#b45309;border-color:#fcd34d;">이 업체 안 함</button>`;
         if (procHasGrades(pk)) {
           const gr = (r && r.grades && typeof r.grades === 'object') ? r.grades : {};
+          const gOff = pfGradeOff();
           h += `<div style="border:1px solid #fcd34d;background:#fff;border-radius:8px;padding:9px 11px;margin-bottom:7px;">
             <div style="display:flex;align-items:center;gap:8px;margin-bottom:7px;">
               <strong style="font-size:12px;color:#92400e;flex:1;">${escapeHtml(pr)} — 등급마다 값이 다릅니다</strong>${del}</div>
             <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px 12px;">
-              ${DYE_GRADES.map(x => `<label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#334155;">
+              ${DYE_GRADES.filter(x => !gOff.includes(x)).map(x => `<label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#334155;">
                 <span style="flex:1;">${escapeHtml(dyeGradeLabel(x))}</span>
-                <input type="text" inputmode="numeric" class="pf-g" data-pf-p="${escapeHtml(pk)}" data-pf-g="${escapeHtml(x)}" value="${escapeHtml(moneyInputVal(gr[x]))}" style="${iS}width:96px;"></label>`).join('')}
+                <input type="text" inputmode="numeric" class="pf-g" data-pf-p="${escapeHtml(pk)}" data-pf-g="${escapeHtml(x)}" value="${escapeHtml(moneyInputVal(gr[x]))}" style="${iS}width:88px;">
+                <button class="dash-action-btn pf-goff" data-pf-g="${escapeHtml(x)}" title="이 업체는 이 등급을 하지 않습니다" style="font-size:10.5px;padding:3px 7px;color:#b45309;border-color:#fcd34d;">안 함</button></label>`).join('')}
             </div>
+            ${gOff.length ? `<div style="margin-top:8px;padding-top:7px;border-top:1px dashed #fcd34d;font-size:11.5px;color:#92400e;">
+              안 하는 등급 ${gOff.length}개 — 누르면 되살립니다 &nbsp;
+              ${gOff.map(x => `<button class="dash-action-btn pf-gon" data-pf-g="${escapeHtml(x)}" style="font-size:11px;padding:3px 9px;margin:2px 3px;">${escapeHtml(dyeGradeLabel(x))}</button>`).join('')}
+            </div>` : ''}
             <div style="display:flex;align-items:center;gap:8px;margin-top:8px;padding-top:7px;border-top:1px dashed #fcd34d;">
               <span style="font-size:11.5px;color:#92400e;flex:1;">등급을 안 쓸 때 쓰는 값 (옛 자료용)</span>
               <input type="text" inputmode="numeric" class="pf-p" data-pf-p="${escapeHtml(pk)}" value="${escapeHtml(moneyInputVal(r && r.price))}" style="${iS}width:110px;">
@@ -25733,8 +25787,58 @@ function validateBlendSum(blends, label) {
       pfDraft().bundles.push({ vendor: pfVendor(), name: '', procs: [], price: '' });
       renderDashboard();
     });
+    const cmv = document.getElementById('pf-com-move');
+    if (cmv) cmv.addEventListener('click', () => {
+      const D = pfDraft(), V = pfVendor();
+      const isC = x => String(x || '').trim() === COST_COMMON_VENDOR;
+      let n1 = 0, n2 = 0;
+      (D.proc || []).filter(r => r && isC(r.vendor) && !String(r.item || '').trim()).forEach(r => {
+        const pk = normProc(r.proc);
+        let hit = (D.proc || []).find(x => x && pfSame(x.vendor, V) && normProc(x.proc) === pk && !String(x.item || '').trim());
+        if (!hit) { hit = { vendor: V, proc: pk, item: '', price: '', grades: {} }; D.proc.push(hit); }
+        if ((hit.price === '' || hit.price == null) && r.price != null && r.price !== '') { hit.price = r.price; n1++; }
+        if (r.grades && typeof r.grades === 'object') {
+          hit.grades = hit.grades || {};
+          Object.keys(r.grades).forEach(g => { if (hit.grades[g] == null) { hit.grades[g] = r.grades[g]; n1++; } });
+        }
+      });
+      (D.bundles || []).filter(b => b && isC(b.vendor)).forEach(b => {
+        const nm = String(b.name || '').trim();
+        if ((D.bundles || []).some(x => x && pfSame(x.vendor, V) && String(x.name || '').trim() === nm)) return;
+        D.bundles.push({ vendor: V, name: nm, procs: (b.procs || []).slice(), price: b.price });
+        n2++;
+      });
+      toast(V + ' 로 옮겼습니다 — 단가 ' + n1 + '칸 · 묶음 ' + n2 + '개. [저장] 을 눌러 주십시오', 'success');
+      renderDashboard();
+    });
+    const cmd = document.getElementById('pf-com-del');
+    if (cmd) cmd.addEventListener('click', () => {
+      if (!confirm('(공통) 자료를 아주 지웁니다.\n\n업체에 옮겨 담지 않은 값은 되돌릴 수 없습니다.\n품목 카드의 가공비가 0으로 바뀔 수 있습니다.\n\n정말 지울까요?')) return;
+      const D = pfDraft();
+      const isC = x => String(x || '').trim() === COST_COMMON_VENDOR;
+      D.proc = (D.proc || []).filter(r => !(r && isC(r.vendor)));
+      D.bundles = (D.bundles || []).filter(b => !(b && isC(b.vendor)));
+      if (D.proc_off) delete D.proc_off[COST_COMMON_VENDOR];
+      if (D.grade_off) delete D.grade_off[COST_COMMON_VENDOR];
+      toast('(공통) 자료를 지웠습니다. [저장] 을 눌러 주십시오', 'success');
+      renderDashboard();
+    });
     const cmp = document.getElementById('pf-cmp');
-    if (cmp) cmp.addEventListener('click', () => { state.pfCmpOpen = !state.pfCmpOpen; renderDashboard(); });
+    if (cmp) cmp.addEventListener('click', () => { state.pfCmpOpen = true; renderDashboard(); });
+    const cmpX = document.getElementById('pf-cmp-close');
+    if (cmpX) cmpX.addEventListener('click', () => { state.pfCmpOpen = false; state.pfCmpQ = ''; renderDashboard(); });
+    const cmpQ = document.getElementById('pf-cmp-q');
+    if (cmpQ) {
+      cmpQ.addEventListener('input', () => {
+        clearTimeout(bindProcFeeTab._q);
+        bindProcFeeTab._q = setTimeout(() => {
+          state.pfCmpQ = cmpQ.value;
+          renderDashboard();
+          const el = document.getElementById('pf-cmp-q');
+          if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+        }, 260);
+      });
+    }
     document.querySelectorAll('#dash-body .pf-cmp-go').forEach(el => el.addEventListener('click', () => {
       state.pfVendor = el.dataset.pfV; state.pfCmpOpen = false; state.pfDraft = null; renderDashboard();
     }));
@@ -25804,6 +25908,20 @@ function validateBlendSum(blends, label) {
       const D = pfDraft();
       D.proc = D.proc.filter(r => !(r && pfSame(r.vendor, pfVendor())
         && normProc(r.proc) === pk && !String(r.item || '').trim()));
+      renderDashboard();
+    }));
+    document.querySelectorAll('#dash-body .pf-goff').forEach(el => el.addEventListener('click', () => {
+      const g = el.dataset.pfG;
+      if (!confirm(dyeGradeLabel(g) + ' — 이 업체(' + pfVendor() + ')에서만 뺍니다.\n다른 업체는 그대로입니다.\n\n뺄까요?')) return;
+      const list = pfGradeOff();
+      if (!list.includes(g)) list.push(g);
+      const D = pfDraft();
+      (D.proc || []).forEach(r => { if (r && pfSame(r.vendor, pfVendor()) && r.grades) delete r.grades[g]; });
+      renderDashboard();
+    }));
+    document.querySelectorAll('#dash-body .pf-gon').forEach(el => el.addEventListener('click', () => {
+      const D = pfDraft();
+      D.grade_off[pfVendor()] = pfGradeOff().filter(x => x !== el.dataset.pfG);
       renderDashboard();
     }));
     document.querySelectorAll('#dash-body .pf-on').forEach(el => el.addEventListener('click', () => {
@@ -40562,7 +40680,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix348';
+  const VERSION = 'v2.53 hotfix349';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
