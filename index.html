@@ -25527,37 +25527,23 @@ function validateBlendSum(blends, label) {
     const D = pfDraft();
     D.bundles = JSON.parse(JSON.stringify(getCostPrices().bundles || []));
   }
-  // 이 업체가 "안 함"으로 꺼 둔 염색 등급
-  function pfGradeOff(v) {
-    const D = pfDraft();
-    if (!D.grade_off || typeof D.grade_off !== 'object') D.grade_off = {};
-    const V = v || pfVendor();
-    let list = Array.isArray(D.grade_off[V]) ? D.grade_off[V].slice() : [];
-    Object.keys(D.grade_off).forEach(k => {
-      if (k === V) return;
-      if (normalizeVendorName(k) !== normalizeVendorName(V)) return;
-      list = list.concat(Array.isArray(D.grade_off[k]) ? D.grade_off[k] : []);
-      delete D.grade_off[k];
+  // ============================================================
+  // hotfix363: "안 함" 목록은 임시본이 아니라 저장된 자료를 그대로 본다.
+  //   [이 업체 안 함] 은 누르는 즉시 저장되므로, 화면이 임시본을 보면
+  //   저장된 것과 어긋날 수 있었다. 볼 곳을 한 곳으로 못 박는다.
+  // ============================================================
+  function pfOffList(bagName, v) {
+    const bag = (getCostPrices()[bagName] && typeof getCostPrices()[bagName] === 'object')
+      ? getCostPrices()[bagName] : {};
+    let list = [];
+    Object.keys(bag).forEach(k => {
+      if (normalizeVendorName(k) !== normalizeVendorName(v)) return;
+      list = list.concat(Array.isArray(bag[k]) ? bag[k] : []);
     });
-    D.grade_off[V] = Array.from(new Set(list.filter(Boolean)));
-    return D.grade_off[V];
+    return Array.from(new Set(list.map(x => String(x || '').trim()).filter(Boolean)));
   }
-  // 이 업체가 "안 함"으로 꺼 둔 가공
-  function pfOff() {
-    const D = pfDraft();
-    if (!D.proc_off || typeof D.proc_off !== 'object') D.proc_off = {};
-    const V = pfVendor();
-    // hotfix347: 별칭으로 담긴 것도 대표 이름 아래로 모은다
-    let list = Array.isArray(D.proc_off[V]) ? D.proc_off[V].slice() : [];
-    Object.keys(D.proc_off).forEach(k => {
-      if (k === V) return;
-      if (normalizeVendorName(k) !== normalizeVendorName(V)) return;
-      list = list.concat(Array.isArray(D.proc_off[k]) ? D.proc_off[k] : []);
-      delete D.proc_off[k];
-    });
-    D.proc_off[V] = Array.from(new Set(list.map(normProc).filter(Boolean)));
-    return D.proc_off[V];
-  }
+  function pfGradeOff(v) { return pfOffList('grade_off', v || pfVendor()); }
+  function pfOff() { return pfOffList('proc_off', pfVendor()); }
   function pfPartsOrdered(withOff) {
     const off = pfOff();
     const procs = getCostProcs().filter(p => withOff || !off.includes(normProc(p)));
@@ -25739,12 +25725,12 @@ function validateBlendSum(blends, label) {
     }
     const ok = await saveCostPrices(next);
     if (ok) {
-      D.proc_off = JSON.parse(JSON.stringify(next.proc_off));
       if (hide) {
         D.proc = (Array.isArray(D.proc) ? D.proc : [])
           .filter(r => !(r && pfSame(r.vendor, V) && normProc(r.proc) === pk && !String(r.item || '').trim()));
       }
-      toast(hide ? (pk + ' 을(를) ' + V + ' 목록에서 뺐습니다') : (pk + ' 을(를) 되살렸습니다'), 'success');
+      toast(hide ? (pk + ' 을(를) ' + V + ' 목록에서 뺐습니다 (지금까지 ' + pfOff().length + '개)')
+                 : (pk + ' 을(를) 되살렸습니다'), 'success');
     }
     return ok;
   }
@@ -25767,9 +25753,9 @@ function validateBlendSum(blends, label) {
     }
     const ok = await saveCostPrices(next);
     if (ok) {
-      D.grade_off = JSON.parse(JSON.stringify(next.grade_off));
       if (hide) (D.proc || []).forEach(r => { if (r && pfSame(r.vendor, V) && r.grades) delete r.grades[g]; });
-      toast(hide ? (dyeGradeLabel(g) + ' 을(를) ' + V + ' 목록에서 뺐습니다') : (dyeGradeLabel(g) + ' 을(를) 되살렸습니다'), 'success');
+      toast(hide ? (dyeGradeLabel(g) + ' 을(를) ' + V + ' 목록에서 뺐습니다 (지금까지 ' + pfGradeOff().length + '개)')
+                 : (dyeGradeLabel(g) + ' 을(를) 되살렸습니다'), 'success');
     }
     return ok;
   }
@@ -26194,6 +26180,9 @@ function validateBlendSum(blends, label) {
       const D = pfDraft();
       // hotfix357: 묶음은 [묶음 저장] 으로만 담는다. 여기서는 서버 것을 그대로 둔다
       D.bundles = JSON.parse(JSON.stringify(getCostPrices().bundles || []));
+      // hotfix363: "안 함" 목록도 [이 업체 안 함] 으로만 담는다. 여기서 덮어쓰지 않는다
+      D.proc_off = JSON.parse(JSON.stringify(getCostPrices().proc_off || {}));
+      D.grade_off = JSON.parse(JSON.stringify(getCostPrices().grade_off || {}));
       // 빈 줄은 담지 않는다
       D.proc = D.proc.filter(r => r && (String(r.price) !== '' && r.price != null
         || (r.grades && Object.keys(r.grades).length)));
@@ -28413,6 +28402,15 @@ function validateBlendSum(blends, label) {
     }).filter(Boolean);
   }
   // hotfix347: 염/가공료가 어느 업체 이름으로 담겨 있는지 그대로 보여 준다
+  // hotfix363: 지금 "안 함"으로 담겨 있는 것을 그대로 보여 준다
+  window.__hiwosOff = function () {
+    const P = getCostPrices();
+    console.log('%c[안 하는 가공]', 'background:#b45309;color:#fff;padding:2px 8px;border-radius:3px;');
+    console.table(Object.keys(P.proc_off || {}).map(k => ({ 업체: k, 안하는가공: (P.proc_off[k] || []).join(' · ') })));
+    console.log('%c[안 하는 염색 등급]', 'background:#b45309;color:#fff;padding:2px 8px;border-radius:3px;');
+    console.table(Object.keys(P.grade_off || {}).map(k => ({ 업체: k, 안하는등급: (P.grade_off[k] || []).join(' · ') })));
+    return { proc_off: P.proc_off || {}, grade_off: P.grade_off || {} };
+  };
   window.__hiwosFee = function (vendor) {
     const P = getCostPrices();
     const V = vendor == null ? null : String(vendor);
@@ -41124,7 +41122,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix362';
+  const VERSION = 'v2.53 hotfix363';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
