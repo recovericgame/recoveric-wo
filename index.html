@@ -28559,7 +28559,9 @@ function validateBlendSum(blends, label) {
   <div class="body" id="saveBody"></div><div class="foot" id="saveFoot"></div></div></div>
 <div class="modalbg" id="mItem"><div class="modal"><h4 id="itTitle">품목 추가 <span class="spacer"></span><button class="b s" data-close="mItem">닫기</button></h4>
   <div class="body" id="itemBody"></div><div class="foot" id="itemFoot"></div></div></div>
-<div class="modalbg" id="mList"><div class="modal" style="max-width:1040px;"><h4>원단 기본 스펙 — 품목 목록 <span class="spacer"></span><button class="b s" data-close="mList">닫기</button></h4>
+<div class="modalbg" id="mList"><div class="modal" style="max-width:1100px;"><h4>원단 기본 스펙 — 품목 목록 <span class="spacer"></span>
+  <label class="small" style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;margin-right:10px;"><input type="checkbox" id="listShowEnd"> 판매 종료된 품목도 보이기</label>
+  <button class="b s" data-close="mList">닫기</button></h4>
   <div class="body" id="listBody"></div></div></div>
 <div class="modalbg full" id="mSpec"><div class="modal">
   <h4>원단 제작 사양 <span class="small" id="specCount"></span><span class="spacer"></span>
@@ -28871,6 +28873,9 @@ function validateBlendSum(blends, label) {
             gyHow: (function () { const r = specGyRange(s); return r ? r.how : ''; })(),
             gySrc: specGyBase(s).src,
             blendBase: String(s.blend || ''), tags: [], pair: '',
+            // hotfix379: 원단 스펙 설정과 똑같은 혼용율(원가에서 저절로 낸 값)과 짝 리프
+            blendAuto: (function () { try { const a = blendFromCost(fid); return (a && !a.unknown.length) ? a.text : ''; } catch (e) { return ''; } })(),
+            pairRib: String(s.pair_rib || ''), updatedAt: String(s.updated_at || ''),
             notes: { 염색: [], 가공: [], 후가공: [] }, history: [],
             yarns: yarns, blendMode: (String(c.blend_mode || '') === 'manual' ? 'manual' : 'loop'),
             knitV: knitV, knits: knits,
@@ -29821,15 +29826,22 @@ function openWhy(){
   $('whyBody').innerHTML=h; open('mWhy');
 }
 function openHist(){
-  let h='<div class="infobox" style="margin-bottom:12px;">단가 · 운임 · 로스율을 한 줄로 같이 쌓습니다. <b>업체마다 따로 쌓습니다.</b></div>';
+  // hotfix379: 열 때마다 새로 받아 온다 (카드를 연 뒤에 저장한 값도 보인다)
+  let HH=HIST; try{ if(BR.hist) HH=BR.hist()||HIST; }catch(e){}
+  let h='<div class="infobox" style="margin-bottom:12px;">단가 · 운임 · 로스율을 한 줄로 같이 쌓습니다. <b>업체마다 따로 쌓습니다.</b> 이력은 카드 <b>[저장]</b>을 누를 때 한 줄씩 쌓입니다.</div>';
   const seen={};
   D.yarns.forEach(y=>{
-    const keys=Object.keys(HIST).filter(k=>k.split('|')[0]===y.name);
+    const keys=Object.keys(HH).filter(k=>k.split('|')[0]===y.name);
     if (seen[y.name]) return; seen[y.name]=1;
     h+=`<div style="font-weight:800;margin:14px 0 6px;">${y.name}</div>`;
-    if (!keys.length){ h+='<div class="small">쌓인 값이 없습니다.</div>'; return; }
+    // 지금 원사 줄에 넣은 값 — 아직 저장 전이라도 보여 준다
+    if (n(y.price)){
+      const kgNow=r2(kgOf(y));
+      h+=`<div class="small" style="margin-bottom:6px;">지금 넣은 값 <b>${won(y.price)}</b> · 운임 ${won(y.ship)} · 로스 ${dec(n(y.loss))}% → kg 환산 <b>${won(kgNow)}</b> <span style="color:#b45309;">(카드를 [저장]하면 이력에 쌓입니다)</span></div>`;
+    }
+    if (!keys.length){ h+='<div class="small">쌓인 값이 아직 없습니다. [저장]을 누른 적이 없는 사종입니다.</div>'; return; }
     keys.forEach(k=>{
-      const vd=k.split('|')[1], rows=HIST[k], mine=(vd===y.vendor);
+      const vd=k.split('|')[1], rows=HH[k], mine=(vd===y.vendor);
       h+=`<div style="font-size:12px;font-weight:700;margin:9px 0 4px;color:${mine?'var(--deep)':'var(--mute)'};">
         ${vd}${mine?' <span class="small" style="color:var(--ok);">지금 고른 업체</span>':''}</div>`;
       h+='<table class="t"><thead><tr><th style="width:80px;">날짜</th><th>단가</th><th>운임</th><th>로스율</th><th>kg 환산</th><th>전보다</th></tr></thead><tbody>';
@@ -30395,12 +30407,16 @@ function commitItem(f,goCost){
 
 /* ── 품목 목록 ── */
 function openList(){
-  const rows=Object.values(ITEMS).map(it=>`<tr>
-    <td class="l" style="font-weight:700;">${it.name}${it.state==='샘플'?' <span class="pill sample" style="font-size:10px;">샘플</span>':''}</td>
-    <td>${it.gubun}</td><td>${it.pair||'-'}</td><td>${it.org||'-'}</td>
-    <td>${it.width||'-'}</td><td>${it.tube?'있음':'-'}</td><td class="r">${won(it.gy)}</td>
-    <td class="l small">${it.blendBase||'-'}</td>
-    <td class="small">${(it.history&&it.history[0])?it.history[0].d.slice(0,10):'-'}</td>
+  // hotfix379: 판매 중만 먼저, 판매 종료는 체크하면
+  const _ck=$('listShowEnd'); const showEnd=!!(_ck&&_ck.checked);
+  const rows=Object.values(ITEMS).filter(it=>showEnd||it.state!=='중단').map(it=>`<tr>
+    <td class="l" style="font-weight:700;">${it.name}${it.state==='샘플'?' <span class="pill sample" style="font-size:10px;">샘플</span>':''}${it.state==='중단'?' <span class="small" style="color:#b45309;">판매 종료</span>':''}</td>
+    <td>${it.gubun}</td><td>${it.pairRib||it.pair||'-'}</td><td>${it.org||'-'}</td>
+    <td>${it.width||'-'}</td><td>${it.tube?'있음':'-'}</td>
+    <td class="r">${it.gySrc==='make'?won(it.made):'<span class="small" style="color:#b45309;">없음</span>'}</td>
+    <td class="r small" style="white-space:nowrap;">${(it.gyLo!==''&&it.gyLo!=null&&n(it.gy))?(won(it.gyLo)+' ~ '+won(it.gy)):'-'}</td>
+    <td class="l small">${it.blendAuto?`<span style="color:#166534;font-weight:700;">${it.blendAuto}</span>`:(it.blendBase?`<span style="color:#6b7280;">${it.blendBase}</span> <span class="small" style="color:#94a3b8;">손으로 적음</span>`:'-')}</td>
+    <td class="small">${it.updatedAt||((it.history&&it.history[0])?it.history[0].d.slice(0,10):'-')}</td>
     <td style="white-space:nowrap;padding-top:8px;">
       <button class="b s" data-sell="${it.code}">${it.state==='중단'?'판매 재개':'판매 종료'}</button>
       ${isOwner()?`<button class="b s" data-copy="${it.code}">복사</button>`:''}
@@ -30410,7 +30426,7 @@ function openList(){
     `<div class="infobox" style="margin-bottom:12px;">지금 권한은 <b>${ROLE}</b> 입니다.
       ${isOwner()?'복사하면 원가 값이 전부 딸려 갑니다(지난 계산은 최근 한 장만).':'복사 단추는 최고관리자에게만 보입니다.'}</div>
      <table class="t"><thead><tr><th style="text-align:left;">품목명</th><th>구분</th><th>짝 리프</th><th>조직</th>
-       <th>기준 폭</th><th>튜브</th><th>중량 g/y</th><th style="text-align:left;">혼용율</th><th>마지막 수정</th><th></th>
+       <th>기준 폭</th><th>튜브</th><th>제작 g/y</th><th>안내 g/y<div class="small" style="font-weight:400;">최저 ~ 최고</div></th><th style="text-align:left;">혼용율<div class="small" style="font-weight:400;">원가에서 저절로</div></th><th>마지막 수정</th><th></th>
      </tr></thead><tbody>${rows}</tbody></table>`;
   ROOT().querySelectorAll('[data-edit]').forEach(b=>b.addEventListener('click',()=>{close('mList');openItemPopup('edit',b.dataset.edit);}));
   ROOT().querySelectorAll('[data-copy]').forEach(b=>b.addEventListener('click',()=>openCopy(b.dataset.copy)));
@@ -30555,6 +30571,7 @@ window.addEventListener('beforeunload',e=>{ if(DIRTY){ e.preventDefault(); e.ret
 window.__hiwosCardDirty=()=>DIRTY;
 bind('btnEditBase','click',()=>openItemPopup('edit'));
 bind('btnList','click',openList);
+bind('listShowEnd','change',openList);   // hotfix379
 bind('btnNewItem','click',()=>openItemPopup('new'));
 bind('btnUp','click',()=>{D.state='판매 중';$('f_state').value='판매 중';paintNames();toast('판매 중으로 올렸습니다.');});
 ['k_inch','k_needle','k_loss','k_fee'].forEach(id=>bind(id,'input',()=>{
@@ -30602,7 +30619,7 @@ bind('btnProcSet','click',()=>openProcSet('fin')); bind('btnProcSet2','click',()
 bind('btnGrade','click',openGradeSet);
 
 /* ── 원단 제작 사양 (권한에 따라 열이 가려짐) ── */
-const SPECF={org:'전체',q:'',knit:'전체',fin:'전체',post:'전체',yarn:'전체',sample:'포함'};
+const SPECF={org:'전체',q:'',knit:'전체',fin:'전체',post:'전체',yarn:'전체',sample:'포함',ended:'숨김'};
 function specRowData(it){
   const K=it.knits[it.knitV]||{}, L=K.loops||{};
   const f=it.fins[it.finV]||{}, q=it.posts[it.postV]||{};
@@ -30620,6 +30637,7 @@ function specRowData(it){
 function specList(){
   return Object.values(ITEMS).filter(it=>{
     if (SPECF.sample==='미포함'&&it.state==='샘플') return false;
+    if (SPECF.ended!=='보임'&&it.state==='중단') return false;   // hotfix379: 판매 종료는 골라야 나온다
     if (SPECF.org!=='전체'&&it.org!==SPECF.org) return false;
     if (SPECF.q&&!String(it.name||'').toLowerCase().includes(String(SPECF.q).toLowerCase())) return false;
     if (SPECF.knit!=='전체'&&it.knitV!==SPECF.knit) return false;
@@ -30645,6 +30663,7 @@ function openSpec(){
     <div><label class="f">후가공</label>${sel('sp_post',posts,SPECF.post)}</div>
     ${isOwner()?`<div><label class="f">사종으로 찾기</label>${sel('sp_yarn',yarns,SPECF.yarn)}</div>`:''}
     <div><label class="f">샘플</label><select id="sp_sample">${['포함','미포함'].map(o=>`<option ${o===SPECF.sample?'selected':''}>${o}</option>`).join('')}</select></div>
+    <div><label class="f">판매 종료</label><select id="sp_ended">${['숨김','보임'].map(o=>`<option ${o===SPECF.ended?'selected':''}>${o}</option>`).join('')}</select></div>
     <div style="flex:1;"></div>
     <div style="flex:0 0 auto;"><span class="small">권한 <b>${ROLE}</b>${isOwner()?'':' — 사종 · 루프장 · 게이지 · 로스 열은 최고관리자만 봅니다'}</span></div>
   </div>`;
@@ -30691,7 +30710,7 @@ function openSpec(){
   $('specBody').innerHTML=h;
   $('specCount').textContent='모두 '+list.length+'품목';
 
-  const fk={sp_org:'org',sp_q:'q',sp_knit:'knit',sp_fin:'fin',sp_post:'post',sp_yarn:'yarn',sp_sample:'sample'};
+  const fk={sp_org:'org',sp_q:'q',sp_knit:'knit',sp_fin:'fin',sp_post:'post',sp_yarn:'yarn',sp_sample:'sample',sp_ended:'ended'};
   Object.keys(fk).forEach(id=>{
     const el=$(id); if(!el) return;
     if(el.tagName!=='INPUT'){ el.addEventListener('change',()=>{ SPECF[fk[id]]=el.value; openSpec(); }); return; }
@@ -41483,7 +41502,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix378';
+  const VERSION = 'v2.53 hotfix379';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
