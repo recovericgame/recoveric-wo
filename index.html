@@ -6929,7 +6929,7 @@
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
-import { getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, addDoc, updateDoc, deleteDoc, doc, getDoc, getDocs, setDoc, query, orderBy, onSnapshot, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, addDoc, updateDoc, deleteDoc, doc, getDoc, getDocs, setDoc, deleteField, query, orderBy, onSnapshot, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAIaNFZozda5sp4Qjs7LEn-aXYLX1JZi10",
@@ -12622,10 +12622,10 @@ window.addEventListener('firebase-ready', () => {
   function knitFeeOf(fid) {
     const key = String(fid || '').trim(); if (!key) return {};
     const m = (state.knitFee && typeof state.knitFee === 'object') ? state.knitFee[key] : null;
-    if (m && typeof m === 'object' && Object.keys(m).length) return JSON.parse(JSON.stringify(m));
+    if (m && typeof m === 'object') return JSON.parse(JSON.stringify(m));   // hotfix387: 빈 것도 마스터 값
     return knitFeeFromCost(getFabricCost(key));
   }
-  function knitFeeHas(fid) { const m = (state.knitFee || {})[String(fid || '').trim()]; return !!(m && Object.keys(m).length); }
+  function knitFeeHas(fid) { const m = (state.knitFee || {})[String(fid || '').trim()]; return !!(m && typeof m === 'object'); }
   // 처음 한 번 — 마스터 문서가 아예 없을 때만 카드 값을 옮겨 담는다. 옛 칸은 손대지 않는다
   async function knitFeeMigrate() {
     if (!isOwnerUser() || !state.fabricCostLoaded || !state.knitFeeLoaded || state.knitFeeDocExists || state._kfMigrating) return;
@@ -12647,9 +12647,33 @@ window.addEventListener('firebase-ready', () => {
     const g = kfGauge(inch, needles);
     return g == null ? '' : String((sp && sp.cat) || '') + Math.round(g) + 'G';
   }
-  function kfYarnNames(fid) {
+  function kfCardYarnNames(fid) {
     const c = getFabricCost(fid) || {};
     return (Array.isArray(c.yarns) ? c.yarns : []).filter(y => y && y.name).map(y => String(y.name));
+  }
+  // hotfix387: 카드 [원사] 줄 + 마스터 루프장에만 있는 사종 (팝업에서 [＋ 사종]으로 넣은 것)
+  function kfYarnNames(fid) {
+    const a = kfCardYarnNames(fid);
+    const K = knitFeeOf(fid);
+    Object.keys(K).forEach(v => Object.keys((K[v] && K[v].loops) || {}).forEach(nm => { if (nm && !a.includes(nm)) a.push(nm); }));
+    return a;
+  }
+  // 복사본(이름 미정)을 통째로 지운다 — 원단 스펙 · 원가 · 편직 마스터. 이력은 남긴다
+  async function deleteCopiedItem(fid) {
+    if (!isOwnerUser()) return false;
+    const key = String(fid || '').trim();
+    const specs = JSON.parse(JSON.stringify(getFabricSpecs()));
+    const it = specs.find(x => specFid(x) === key); if (!it) return false;
+    const list = specs.filter(x => specFid(x) !== key);
+    const ok = await saveFabricSpecs(list, state.fabricGubuns || []);
+    if (!ok) return false;
+    try {
+      const up = { updated_at: serverTimestamp(), updated_by: state.user?.email || '' }; up['items.' + key] = deleteField();
+      if (state.fabricCost && state.fabricCost[key] !== undefined) { await updateDoc(doc(db, 'cost_data', 'fabric_cost'), up); delete state.fabricCost[key]; }
+      if (state.knitFee && state.knitFee[key] !== undefined) { await updateDoc(doc(db, 'cost_data', 'knit_fee'), up); delete state.knitFee[key]; }
+      await kfHistAdd(key, '', ['복사본 품목 삭제: ' + String(it.name || '')]);
+    } catch (e) { toast('원가 자료 지우기 실패 (품목은 지워졌습니다): ' + e.message, 'error'); }
+    return true;
   }
   function kfDiff(fid, factory, before, after, yarnNames) {
     const ch = [];
@@ -12703,18 +12727,22 @@ window.addEventListener('firebase-ready', () => {
     const next = knitFeeOf(key); if (!next[V]) return true;
     delete next[V];
     try {
-      await setDoc(doc(db, 'cost_data', 'knit_fee'), { items: { [key]: next }, updated_at: serverTimestamp(), updated_by: state.user?.email || '' }, { merge: true });
+      // hotfix387: merge 로는 빠진 줄이 서버에 그대로 남는다 → 이 품목 칸을 통째로 바꿔 쓴다
+      await updateDoc(doc(db, 'cost_data', 'knit_fee'), { ['items.' + key]: next, updated_at: serverTimestamp(), updated_by: state.user?.email || '' });
+      if (!state.knitFee || typeof state.knitFee !== 'object') state.knitFee = {};
       state.knitFee[key] = next;
       await kfHistAdd(key, V, ['편직공장 줄 삭제']);
       return true;
     } catch (e) { toast('삭제 실패: ' + e.message, 'error'); return false; }
   }
+  // hotfix387: 거래처에 [편직처]로 등록된(쓰는 중) 이름만. 옛 카드에서 손으로 적은 이름은 목록에 안 나오고 표에 "(거래처 미등록)"으로만 보인다
   function knitFactoryList() {
-    const a = (state.vendors || []).filter(v => v && v.name && (typeof vendorTypeMatch === 'function' ? vendorTypeMatch(v, '편직처') : true)).map(v => String(v.name).trim());
-    const b = [];
-    Object.keys(state.knitFee || {}).forEach(fid => Object.keys(state.knitFee[fid] || {}).forEach(v => b.push(v)));
-    return Array.from(new Set(a.concat(b).filter(Boolean))).sort((x, y) => x.localeCompare(y, 'ko'));
+    const a = (state.vendors || []).filter(v => v && v.name && vendorIsActive(v)
+      && (Array.isArray(v.types) ? v.types : (v.type ? [v.type] : [])).includes('편직처')).map(v => String(v.name).trim());
+    return Array.from(new Set(a.filter(Boolean))).sort((x, y) => x.localeCompare(y, 'ko'));
   }
+  function knitFactoryKnown(name) { return knitFactoryList().includes(String(name || '').trim()); }
+  const KF_UNREG = '__unreg';
   function fabricCostFilled(fid) {
     const c = getFabricCost(fid);
     if (!c) return false;
@@ -27034,10 +27062,11 @@ function validateBlendSum(blends, label) {
     const fv = String(state.kfFactory || '').trim();
     getFabricSpecs().slice().sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'ko', { numeric: true })).forEach(sp => {
       const fid = specFid(sp); if (!fid) return;
+      if (!state.kfClosed && sp.active === false && !/\(복사\)$/.test(String(sp.name || ''))) return;   // hotfix387: 판매 중만 (복사본은 늘 보임)
       if (q && String(sp.name || '').toLowerCase().indexOf(q) < 0 && fid.toLowerCase() !== q) return;
       const K = knitFeeOf(fid);
       const yarns = kfYarnNames(fid);
-      const fs = Object.keys(K).filter(v => !fv || v === fv);
+      const fs = Object.keys(K).filter(v => !fv || (fv === KF_UNREG ? !knitFactoryKnown(v) : v === fv));
       if (!fs.length) { if (!fv) out.push({ sp, fid, factory: '', k: null, yarns }); return; }
       fs.forEach(v => out.push({ sp, fid, factory: v, k: K[v], yarns, fromCard: !knitFeeHas(fid) }));
     });
@@ -27056,7 +27085,8 @@ function validateBlendSum(blends, label) {
     </div>
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px;">
       <input type="text" lang="ko" id="kf-q" value="${escapeHtml(q)}" placeholder="품목 찾기 (이름 일부 · 코드)" style="${iS}min-width:230px;">
-      <select id="kf-factory" style="${iS}"><option value="">편직공장 전체</option>${knitFactoryList().map(v => `<option value="${escapeHtml(v)}"${v === state.kfFactory ? ' selected' : ''}>${escapeHtml(v)}</option>`).join('')}</select>
+      <select id="kf-factory" style="${iS}"><option value="">편직공장 전체</option>${knitFactoryList().map(v => `<option value="${escapeHtml(v)}"${v === state.kfFactory ? ' selected' : ''}>${escapeHtml(v)}</option>`).join('')}<option value="${KF_UNREG}"${state.kfFactory === KF_UNREG ? ' selected' : ''}>(거래처 미등록 이름만)</option></select>
+      <label style="display:flex;align-items:center;gap:5px;font-size:12.5px;color:#475569;cursor:pointer;"><input type="checkbox" id="kf-closed"${state.kfClosed ? ' checked' : ''} style="width:15px;height:15px;">판매 종료도 보기</label>
       <span style="font-size:11.5px;color:#94a3b8;">${rows.length}줄</span>
       <span style="flex:1;"></span>
       <button class="dash-action-btn" id="kf-csv-out" style="font-weight:700;padding:6px 14px;">CSV 내려받기${state.kfFactory ? ' (' + escapeHtml(state.kfFactory) + ')' : ''}</button>
@@ -27080,7 +27110,7 @@ function validateBlendSum(blends, label) {
         ${copyName ? '<span style="display:inline-block;margin-top:3px;font-size:10.5px;font-weight:800;color:#b45309;border:1px solid #fcd34d;background:#fffbeb;border-radius:9px;padding:1px 6px;">복사본 · 이름 미정</span>' : ''}</td>`;
       const g = kfGauge(k.inch, k.needles);
       const fac = r.factory
-        ? `<td rowspan="${n}" style="text-align:center;font-weight:700;vertical-align:top;">${escapeHtml(r.factory)}${r.fromCard ? '<div style="font-size:10px;color:#94a3b8;font-weight:400;">카드 값</div>' : ''}</td>
+        ? `<td rowspan="${n}" style="text-align:center;font-weight:700;vertical-align:top;">${escapeHtml(r.factory)}${knitFactoryKnown(r.factory) ? '' : '<div style="font-size:10px;color:#b45309;font-weight:700;">(거래처 미등록)</div>'}${r.fromCard ? '<div style="font-size:10px;color:#94a3b8;font-weight:400;">카드 값</div>' : ''}</td>
            <td rowspan="${n}" style="text-align:right;vertical-align:top;">${kfNumTxt(k.inch)}</td>
            <td rowspan="${n}" style="text-align:right;vertical-align:top;">${kfMoney(k.needles)}</td>
            <td rowspan="${n}" style="text-align:right;vertical-align:top;color:#1e3a8a;font-weight:700;">${g == null ? '-' : (Math.trunc(g * 100) / 100).toFixed(2)}</td>
@@ -27092,7 +27122,9 @@ function validateBlendSum(blends, label) {
         : `<td rowspan="${n}" colspan="9" style="text-align:center;vertical-align:top;color:#b45309;font-weight:700;">편직 값이 없습니다 — [수정]으로 공장과 값을 넣어 주십시오</td>`;
       const act = `<td rowspan="${n}" class="col-action" style="vertical-align:top;"><button class="dash-action-btn kf-copy" data-kf-fid="${escapeHtml(r.fid)}" title="이 품목을 통째로 복사해 새 품목을 만듭니다" style="font-size:11px;padding:4px 9px;">복사</button></td>
         <td rowspan="${n}" class="col-action" style="vertical-align:top;"><button class="dash-action-btn kf-edit" data-kf-fid="${escapeHtml(r.fid)}" data-kf-v="${escapeHtml(r.factory)}" style="font-size:11px;padding:4px 9px;font-weight:800;color:#1e3a8a;border-color:#c7d2fe;">수정</button></td>
-        <td rowspan="${n}" class="col-action" style="vertical-align:top;">${r.factory ? `<button class="dash-action-btn danger kf-del" data-kf-fid="${escapeHtml(r.fid)}" data-kf-v="${escapeHtml(r.factory)}" style="font-size:11px;padding:4px 9px;">삭제</button>` : ''}</td>`;
+        <td rowspan="${n}" class="col-action" style="vertical-align:top;">${copyName
+          ? `<button class="dash-action-btn danger kf-delitem" data-kf-fid="${escapeHtml(r.fid)}" title="복사본 품목을 통째로 지웁니다" style="font-size:11px;padding:4px 9px;">품목 삭제</button>`
+          : (r.factory ? `<button class="dash-action-btn danger kf-del" data-kf-fid="${escapeHtml(r.fid)}" data-kf-v="${escapeHtml(r.factory)}" style="font-size:11px;padding:4px 9px;">삭제</button>` : '')}</td>`;
       yarns.forEach((y, i) => {
         h += `<tr>${i === 0 ? nameCell : ''}
           <td style="text-align:left;">${y ? escapeHtml(y) : '<span style="color:#cbd5e1;">원사 없음</span>'}</td>
@@ -27129,8 +27161,10 @@ function validateBlendSum(blends, label) {
     const K = knitFeeOf(key);
     let V = String(factory || '').trim();
     if (!V || !K[V]) V = K[V] ? V : (V || '');
-    const yarns = (Array.isArray(yarnNames) && yarnNames.length) ? yarnNames.slice() : kfYarnNames(key);
+    let yarns = (Array.isArray(yarnNames) && yarnNames.length) ? yarnNames.slice() : kfYarnNames(key);
+    const cardYarns = kfCardYarnNames(key);   // hotfix387: 카드 [원사]에 있는 사종은 여기서 못 뺀다
     const facs = knitFactoryList();
+    let touched = false;   // hotfix387: 사종을 넣거나 빼면 저장 전까지 "고친 상태"
     const wrap = document.createElement('div');
     wrap.id = 'kf-popup';
     wrap.style.cssText = 'position:fixed;inset:0;z-index:650;background:rgba(15,23,42,.5);display:flex;align-items:flex-start;justify-content:center;padding:40px 16px;';
@@ -27147,7 +27181,7 @@ function validateBlendSum(blends, label) {
         <div style="padding:14px 18px;overflow:auto;">
           <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px;">
             <span style="font-size:12px;font-weight:800;color:#334155;">편직공장</span>
-            ${Object.keys(K).map(v => `<button class="dash-action-btn kf-tab" data-v="${escapeHtml(v)}" style="padding:5px 12px;font-weight:800;${v === V ? 'background:#1e3a8a;color:#fff;border-color:#1e3a8a;' : ''}">${escapeHtml(v)}</button>`).join('')}
+            ${Object.keys(K).map(v => `<span style="display:inline-flex;align-items:stretch;"><button class="dash-action-btn kf-tab" data-v="${escapeHtml(v)}" style="padding:5px 12px;font-weight:800;border-radius:7px 0 0 7px;${v === V ? 'background:#1e3a8a;color:#fff;border-color:#1e3a8a;' : ''}">${escapeHtml(v)}${knitFactoryKnown(v) ? '' : ' <span style="font-size:10px;font-weight:400;">(미등록)</span>'}</button><button class="dash-action-btn danger kf-fdel" data-v="${escapeHtml(v)}" title="이 공장 줄을 지웁니다" style="padding:5px 8px;border-radius:0 7px 7px 0;border-left:0;font-weight:800;">x</button></span>`).join('')}
             <select id="kf-newfac" style="${iS}width:auto;min-width:160px;"><option value="">＋ 편직공장 …</option>${facs.filter(v => !K[v]).map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('')}</select>
           </div>
           ${V ? `<div style="border:1px solid #e2e8f0;border-radius:9px;padding:12px 14px;background:#f8fafc;">
@@ -27162,9 +27196,13 @@ function validateBlendSum(blends, label) {
             </div>
             <div style="margin-top:10px;"><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px;">비고</label><input id="kf-memo" lang="ko" value="${escapeHtml(k.memo || '')}" style="${iS}"></div>
             <div style="margin-top:12px;font-size:12px;font-weight:800;color:#334155;">루프장 (사종마다 · 이 공장 값)</div>
-            <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:6px 14px;margin-top:6px;">
-              ${yarns.length ? yarns.map(y => `<label style="display:flex;align-items:center;gap:8px;font-size:12.5px;"><span style="flex:1;font-weight:700;">${escapeHtml(y)}</span><input class="kf-loop" data-y="${escapeHtml(y)}" inputmode="decimal" value="${(k.loops || {})[y] == null ? '' : k.loops[y]}" style="${nS}width:100px;flex:0 0 100px;"></label>`).join('')
-                : '<span style="font-size:12px;color:#94a3b8;">이 품목에 원사가 없습니다. 품목 카드 [원사]에서 먼저 넣어 주십시오.</span>'}
+            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px 14px;margin-top:6px;">
+              ${yarns.length ? yarns.map(y => `<label style="display:flex;align-items:center;gap:6px;font-size:12.5px;"><span style="flex:1;font-weight:700;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(y)}${cardYarns.includes(y) ? '' : ' — 카드 [원사]에는 아직 없는 사종'}">${escapeHtml(y)}${cardYarns.includes(y) ? '' : ' <span style="font-size:10px;color:#b45309;font-weight:400;">(카드에 없음)</span>'}</span><input class="kf-loop" data-y="${escapeHtml(y)}" inputmode="decimal" value="${(k.loops || {})[y] == null ? '' : k.loops[y]}" style="${nS}width:84px;flex:0 0 84px;">${cardYarns.includes(y) ? `<span style="width:22px;flex:0 0 22px;"></span>` : `<button class="dash-action-btn danger kf-ydel" data-y="${escapeHtml(y)}" title="이 사종 줄을 뺍니다" style="padding:3px 6px;font-size:11px;flex:0 0 auto;">x</button>`}</label>`).join('')
+                : '<span style="font-size:12px;color:#94a3b8;">이 품목에 원사가 없습니다. 아래 [＋ 사종]으로 넣거나 품목 카드 [원사]에서 넣어 주십시오.</span>'}
+            </div>
+            <div style="display:flex;gap:8px;align-items:center;margin-top:8px;">
+              <select id="kf-newyarn" style="${iS}width:auto;min-width:200px;"><option value="">＋ 사종 …</option>${(getCostPrices().yarns || []).map(y => String((y && y.name) || '').trim()).filter(nm => nm && !yarns.includes(nm)).sort((a, b) => a.localeCompare(b, 'ko')).map(nm => `<option value="${escapeHtml(nm)}">${escapeHtml(nm)}</option>`).join('')}</select>
+              <span style="font-size:11.5px;color:#94a3b8;">사종은 원사 설정 목록에서 고릅니다. 카드 [원사]에 있는 사종은 카드에서 지웁니다.</span>
             </div>
             <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px;">
               <button class="dash-action-btn" id="kf-save" style="background:#047857;color:#fff;font-weight:800;padding:8px 24px;">저장</button>
@@ -27187,6 +27225,7 @@ function validateBlendSum(blends, label) {
       };
       const dirty = () => {
         if (!V || !wrap.querySelector('#kf-inch')) return false;
+        if (touched) return true;
         const c = collect();
         const now = { inch: kfNum(c.inch), needles: kfNum(c.needles), knit_loss: kfNum(c.knit_loss), knit_fee: kfNum(c.knit_fee), loops: {}, memo: String(c.memo || '').trim() };
         Object.keys(c.loops).forEach(y => { const x = kfNum(c.loops[y]); if (x != null) now.loops[y] = x; });
@@ -27198,6 +27237,30 @@ function validateBlendSum(blends, label) {
       const askLeave = () => !dirty() || confirm('고친 값이 아직 저장되지 않았습니다.\n[저장]을 누르지 않고 옮기면 사라집니다.\n\n그래도 옮길까요?');
       wrap.querySelector('#kf-close').addEventListener('click', () => { if (!askLeave()) return; wrap.remove(); if (typeof onClose === 'function') { try { onClose(); } catch (e) {} } });
       wrap.querySelectorAll('.kf-tab').forEach(b => b.addEventListener('click', () => { if (!askLeave()) return; V = b.dataset.v; paint(); }));
+      wrap.querySelectorAll('.kf-fdel').forEach(b => b.addEventListener('click', async () => {
+        const v = b.dataset.v;
+        if (K[v] && K[v]._new) { delete K[v]; if (V === v) V = Object.keys(K)[0] || ''; paint(); return; }
+        if (!confirm('[' + v + '] 공장 줄을 이 품목에서 뺍니다.\n다른 공장 줄과 다른 품목은 그대로입니다. 이력에는 남습니다.\n\n지울까요?')) return;
+        const ok = await deleteKnitFeeRow(key, v);
+        if (!ok) return;
+        delete K[v]; if (V === v) V = Object.keys(K)[0] || '';
+        toast('[' + v + '] 줄을 지웠습니다', 'success'); paint();
+        if (state.uiMode === 'dashboard' && (state.costTab || '') === 'knitfee') renderDashboard();
+      }));
+      wrap.querySelectorAll('.kf-ydel').forEach(b => b.addEventListener('click', () => {
+        const y = b.dataset.y;
+        if (!confirm('[' + y + '] 사종 줄을 이 공장에서 뺍니다. [저장]을 눌러야 서버에 담깁니다.\n\n뺄까요?')) return;
+        const cur = collect(); yarns = yarns.filter(x => x !== y); touched = true;
+        if (K[V]) { K[V].loops = Object.assign({}, K[V].loops || {}); delete K[V].loops[y]; }
+        Object.keys(cur.loops).forEach(nm => { if (nm !== y && K[V]) K[V].loops[nm] = cur.loops[nm]; });
+        paint();
+      }));
+      wrap.querySelector('#kf-newyarn')?.addEventListener('change', ev => {
+        const nm = String(ev.target.value || '').trim(); if (!nm) return;
+        const cur = collect(); if (!yarns.includes(nm)) yarns.push(nm); touched = true;
+        if (K[V]) { K[V].loops = Object.assign({}, K[V].loops || {}, cur.loops); if (K[V].loops[nm] === undefined) K[V].loops[nm] = ''; }
+        paint();
+      });
       wrap.querySelector('#kf-newfac').addEventListener('change', ev => {
         const v = String(ev.target.value || '').trim(); if (!v) return;
         if (!askLeave()) { ev.target.value = ''; return; }
@@ -27210,7 +27273,7 @@ function validateBlendSum(blends, label) {
         const btn = wrap.querySelector('#kf-save'); btn.disabled = true; btn.textContent = '저장 중...';
         const ok = await saveKnitFeeRow(key, V, collect(), { yarnNames: yarns });
         btn.disabled = false; btn.textContent = '저장';
-        if (ok) { Object.assign(K, knitFeeOf(key)); toast('[' + V + '] 편직 값을 저장했습니다', 'success'); paint(); if (state.uiMode === 'dashboard' && (state.costTab || '') === 'knitfee') renderDashboard(); }
+        if (ok) { Object.assign(K, knitFeeOf(key)); yarns = kfYarnNames(key); touched = false; toast('[' + V + '] 편직 값을 저장했습니다', 'success'); paint(); if (state.uiMode === 'dashboard' && (state.costTab || '') === 'knitfee') renderDashboard(); }
       });
     };
     document.body.appendChild(wrap);
@@ -27331,6 +27394,16 @@ function validateBlendSum(blends, label) {
       bindKnitFeeTab._t = setTimeout(() => { state.kfQ = q.value; renderDashboard(); const el = document.getElementById('kf-q'); if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); } }, 260);
     });
     document.getElementById('kf-factory')?.addEventListener('change', ev => { state.kfFactory = ev.target.value; renderDashboard(); });
+    document.getElementById('kf-closed')?.addEventListener('change', ev => { state.kfClosed = !!ev.target.checked; renderDashboard(); });
+    document.querySelectorAll('#dash-body .kf-delitem').forEach(b => b.addEventListener('click', async () => {
+      const sp = getFabricSpecs().find(x => specFid(x) === b.dataset.kfFid);
+      const nm = sp ? sp.name : '이 품목';
+      if (!confirm('[' + nm + '] 복사본을 통째로 지웁니다.\n원단 스펙 · 원사/편직/염색/가공 원가 · 편직 마스터가 전부 지워집니다. 되돌릴 수 없습니다.\n\n지울까요?')) return;
+      if (!confirm('한 번 더 확인합니다. [' + nm + '] 을(를) 정말 지울까요?')) return;
+      const ok = await deleteCopiedItem(b.dataset.kfFid);
+      if (ok) toast(nm + ' 을(를) 지웠습니다', 'success');
+      renderDashboard();
+    }));
     document.querySelectorAll('#dash-body .kf-edit').forEach(b => b.addEventListener('click', () => openKnitFeePopup(b.dataset.kfFid, b.dataset.kfV, null, () => renderDashboard())));
     document.querySelectorAll('#dash-body .kf-del').forEach(b => b.addEventListener('click', async () => {
       if (!confirm('[' + b.dataset.kfV + '] 줄을 이 품목에서 뺍니다.\n다른 공장 줄과 다른 품목은 그대로입니다. 이력에는 남습니다.\n\n지울까요?')) return;
@@ -42601,7 +42674,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix386';
+  const VERSION = 'v2.53 hotfix387';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
