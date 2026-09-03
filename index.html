@@ -11638,6 +11638,7 @@ window.addEventListener('firebase-ready', () => {
         procs: Array.isArray(d.procs) ? d.procs : [],
         proc_alias: (d.proc_alias && typeof d.proc_alias === 'object') ? d.proc_alias : {},
         proc_part: (d.proc_part && typeof d.proc_part === 'object') ? d.proc_part : {},
+        proc_hidden: Array.isArray(d.proc_hidden) ? d.proc_hidden : [],   // hotfix384: 전체에서 사용 안 함으로 접어 둔 가공
         org_alias: (d.org_alias && typeof d.org_alias === 'object') ? d.org_alias : {}
       } : null;
       if (state.uiMode === 'dashboard' && (state.dashView === 'fabricSpecs' || state.dashView === 'costCalc')) renderDashboard();
@@ -12311,11 +12312,15 @@ window.addEventListener('firebase-ready', () => {
       procs: pick('procs', COST_PROCS_DEFAULT),
       proc_alias: mrg('proc_alias'),
       proc_part: mrg('proc_part'),
+      proc_hidden: Array.isArray(U.proc_hidden) ? U.proc_hidden.slice() : (Array.isArray(L.proc_hidden) ? L.proc_hidden.slice() : []),
       org_alias: mrg('org_alias')
     };
   }
   function getKnitOrgs() { return costLists().orgs; }
-  function getCostProcs() { return costLists().procs; }
+  // hotfix384: 전체 설정에서 [사용 안 함]으로 접어 둔 가공은 업체 화면·카드·묶음 어디에도 안 나온다 (값은 남는다)
+  function procHiddenList() { return (costLists().proc_hidden || []).map(normProc).filter(Boolean); }
+  function getCostProcsAll() { return costLists().procs; }
+  function getCostProcs() { const hid = procHiddenList(); return costLists().procs.filter(p => !hid.includes(normProc(p))); }
   function normProc(p) {
     let t = String(p == null ? '' : p).trim();
     if (COST_PROC_ALIAS[t]) t = COST_PROC_ALIAS[t];
@@ -12363,6 +12368,7 @@ window.addEventListener('firebase-ready', () => {
         orgs: next.orgs || [], procs: next.procs || [], mats: next.mats || [],
         proc_alias: next.proc_alias || {}, org_alias: next.org_alias || {},
         proc_part: next.proc_part || {},
+        proc_hidden: Array.isArray(next.proc_hidden) ? next.proc_hidden : [],   // hotfix384
         updated_at: serverTimestamp(),
         updated_by: state.user?.email || 'unknown'
       });
@@ -25873,7 +25879,7 @@ function validateBlendSum(blends, label) {
   function pfVendor() {
     const list = pfVendorList();
     const v = String(state.pfVendor || '');
-    return list.includes(v) ? v : (list[0] || '');
+    return list.includes(v) ? v : '';     // hotfix384: 업체를 고르기 전에는 아무것도 안 열린다
   }
   function pfDraft() {
     if (!state.pfDraft) state.pfDraft = JSON.parse(JSON.stringify(getCostPrices()));
@@ -26149,25 +26155,292 @@ function validateBlendSum(blends, label) {
     }
     return ok;
   }
+  // ============================================================
+  // hotfix384: 염/가공료 설정을 두 층으로 갈랐다 (대표 확정)
+  //   [전체 설정]  가공 이름 · 파트 · 약어 · 다른 표기 · 사용 안 함 — 가공은 여기서만 생기고 없어진다
+  //   [업체별 설정] 업체를 고른 뒤에만 열린다 — 낱개 단가 · 이 업체 안 함 · 등급 안 함 · 묶음
+  //   업체 화면·품목 카드에는 가공을 새로 만드는 단추가 없다.
+  // ============================================================
+  const PF_ALL_KEY = 'hiwos.pfAllDraft';
+  const PF_VEN_KEY = 'hiwos.pfVendorDraft';
+  function pfAllRows() {
+    const L = costLists();
+    const alias = L.proc_alias || {};
+    const aliasOf = n => Object.keys(alias).filter(k => normProc(alias[k]) === n && String(k).trim() !== n);
+    return getCostProcsAll().map(normProc).filter(Boolean).map(n => ({
+      key: n, name: n, part: procPartOf(n), abbr: pfAbbrOf(n), aliases: aliasOf(n)
+    }));
+  }
+  function pfAllDraft() {
+    if (!state.pfAllDraft) {
+      state.pfAllDraft = { rows: pfAllRows(), gabbr: {} };
+      PF_ABBR_DEFAULT.filter(r => r.grade).forEach(r => { state.pfAllDraft.gabbr[r.name] = pfAbbrOf(r.name); });
+    }
+    return state.pfAllDraft;
+  }
+  function pfAllDirty() {
+    const D = state.pfAllDraft; if (!D) return false;
+    const base = pfAllRows();
+    if (D.rows.length !== base.length) return true;
+    if (D.rows.some((r, i) => !base[i] || r.key !== base[i].key || r.name !== base[i].name || r.part !== base[i].part
+      || r.abbr !== base[i].abbr || r.aliases.join('|') !== base[i].aliases.join('|'))) return true;
+    return Object.keys(D.gabbr || {}).some(g => D.gabbr[g] !== pfAbbrOf(g));
+  }
+  // 이 가공을 어디서 쓰고 있는가 — 지우기 전에 보여 준다
+  function pfProcUsage(n) {
+    const P = getCostPrices();
+    const vs = new Set(); let bn = 0, items = 0;
+    (P.proc || []).forEach(r => { if (r && normProc(r.proc) === n && (String(r.price) !== '' && r.price != null || (r.grades && Object.keys(r.grades).length))) vs.add(String(r.vendor || '').trim()); });
+    (P.bundles || []).forEach(b => { if (b && (b.procs || []).some(x => normProc(x) === n)) bn++; });
+    const FC = (state.fabricCost && typeof state.fabricCost === 'object') ? state.fabricCost : {};
+    Object.keys(FC).forEach(k => {
+      const c = FC[k] || {};
+      const rows = [].concat(c.fin_rows || [], c.post_rows || []);
+      const hit = rows.some(r => r && (normProc(r.proc) === n || (r.subs || []).some(x => normProc(x) === n)))
+        || (c.procs || []).some(x => normProc(x) === n);
+      if (hit) items++;
+    });
+    return { vendors: vs.size, bundles: bn, items };
+  }
+  // [전체 저장] — 이름 · 파트 · 약어 · 다른 표기 · 새 가공을 한 번에 담는다
+  async function pfAllSave() {
+    const D = pfAllDraft();
+    const L = JSON.parse(JSON.stringify(costLists()));
+    const names = D.rows.map(r => normProc(r.name)).filter(Boolean);
+    if (names.length !== D.rows.length) { toast('이름이 빈 가공이 있습니다', 'error'); return false; }
+    if (new Set(names).size !== names.length) { toast('같은 이름의 가공이 둘 있습니다', 'error'); return false; }
+    const renames = {};   // 옛 이름 → 새 이름
+    D.rows.forEach(r => { if (r.key && r.key !== normProc(r.name)) renames[r.key] = normProc(r.name); });
+    // 이름표 상자
+    L.procs = names.slice();
+    L.proc_part = {};
+    L.proc_alias = Object.assign({}, L.proc_alias || {});
+    Object.keys(L.proc_alias).forEach(k => { if (renames[L.proc_alias[k]]) L.proc_alias[k] = renames[L.proc_alias[k]]; });
+    D.rows.forEach(r => {
+      const n = normProc(r.name);
+      L.proc_part[n] = COST_PROC_PART_ORDER.includes(r.part) ? r.part : '기타';
+      Object.keys(L.proc_alias).forEach(k => { if (L.proc_alias[k] === n) delete L.proc_alias[k]; });
+      (r.aliases || []).map(a => String(a || '').trim()).filter(a => a && a !== n).forEach(a => { L.proc_alias[a] = n; });
+      if (r.key && renames[r.key]) L.proc_alias[r.key] = n;     // 옛 이름은 다른 표기로 남겨 옛 자료가 끊기지 않게
+    });
+    L.proc_hidden = (L.proc_hidden || []).map(x => renames[x] || x);
+    const ok1 = await saveCostLists(L);
+    if (!ok1) return false;
+    // 단가표 쪽 — 약어 · 이름 바꾼 것 따라가기
+    const P = JSON.parse(JSON.stringify(getCostPrices()));
+    P.proc_abbr = Object.assign({}, P.proc_abbr || {});
+    Object.keys(renames).forEach(o => { if (P.proc_abbr[o] != null) { P.proc_abbr[renames[o]] = P.proc_abbr[o]; delete P.proc_abbr[o]; } });
+    D.rows.forEach(r => { const n = normProc(r.name), a = String(r.abbr || '').trim(); if (a) P.proc_abbr[n] = a; else delete P.proc_abbr[n]; });
+    Object.keys(D.gabbr || {}).forEach(g => { const a = String(D.gabbr[g] || '').trim(); if (a) P.proc_abbr[g] = a; else delete P.proc_abbr[g]; });
+    const rn = x => renames[String(x || '').trim()] || x;
+    (P.proc || []).forEach(r => { if (r) r.proc = rn(r.proc); });
+    (P.bundles || []).forEach(b => { if (b && Array.isArray(b.procs)) b.procs = b.procs.map(rn); });
+    Object.keys(P.proc_off || {}).forEach(v => { P.proc_off[v] = (P.proc_off[v] || []).map(rn); });
+    const ok2 = await saveCostPrices(P);
+    if (!ok2) return false;
+    state.pfAllDraft = null;
+    try { localStorage.removeItem(PF_ALL_KEY); } catch (e) {}
+    state.pfDraft = null;
+    return true;
+  }
+  async function pfAllHide(n, hide) {
+    const L = JSON.parse(JSON.stringify(costLists()));
+    let list = (L.proc_hidden || []).map(normProc).filter(Boolean);
+    if (hide) { if (!list.includes(n)) list.push(n); } else list = list.filter(x => x !== n);
+    L.proc_hidden = list;
+    const ok = await saveCostLists(L);
+    if (ok) { state.pfAllDraft = null; state.pfDraft = null; toast(hide ? n + ' 을(를) 사용 안 함으로 접었습니다. 값은 남아 있습니다' : n + ' 을(를) 되살렸습니다', 'success'); }
+    return ok;
+  }
+  async function pfAllDelete(n) {
+    const L = JSON.parse(JSON.stringify(costLists()));
+    L.procs = (L.procs || []).filter(x => normProc(x) !== n);
+    if (L.proc_part) delete L.proc_part[n];
+    L.proc_hidden = (L.proc_hidden || []).filter(x => normProc(x) !== n);
+    Object.keys(L.proc_alias || {}).forEach(k => { if (normProc(L.proc_alias[k]) === n) delete L.proc_alias[k]; });
+    const ok1 = await saveCostLists(L);
+    if (!ok1) return false;
+    const P = JSON.parse(JSON.stringify(getCostPrices()));
+    if (P.proc_abbr) delete P.proc_abbr[n];
+    P.proc = (P.proc || []).filter(r => !(r && normProc(r.proc) === n));
+    Object.keys(P.proc_off || {}).forEach(v => { P.proc_off[v] = (P.proc_off[v] || []).filter(x => normProc(x) !== n); });
+    const ok2 = await saveCostPrices(P);
+    if (ok2) { state.pfAllDraft = null; state.pfDraft = null; }
+    return ok2;
+  }
+  // 임시저장 — 이 컴퓨터에 담아 두고, 다음에 이 화면을 열면 되살린다
+  function pfAllStash() { try { localStorage.setItem(PF_ALL_KEY, JSON.stringify({ at: Date.now(), D: pfAllDraft() })); } catch (e) {} }
+  function pfAllStashRead() { try { const o = JSON.parse(localStorage.getItem(PF_ALL_KEY) || 'null'); return (o && o.D && Array.isArray(o.D.rows)) ? o : null; } catch (e) { return null; } }
+  function pfVenStash() {
+    const V = pfVendor(); if (!V) return;
+    const D = pfDraft();
+    const rows = (D.proc || []).filter(r => r && pfSame(r.vendor, V) && !String(r.item || '').trim());
+    try { localStorage.setItem(PF_VEN_KEY, JSON.stringify({ at: Date.now(), vendor: V, rows, newB: pfNewB() })); } catch (e) {}
+  }
+  function pfVenStashRead() { try { const o = JSON.parse(localStorage.getItem(PF_VEN_KEY) || 'null'); return (o && o.vendor) ? o : null; } catch (e) { return null; } }
+  function pfStampOf(t) { const d = new Date(t), p = x => String(x).padStart(2, '0'); return p(d.getMonth() + 1) + '/' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes()); }
+  function pfAllHtml() {
+    const D = pfAllDraft();
+    const hid = procHiddenList();
+    const iS = 'padding:5px 7px;border:1px solid #d1d5db;border-radius:6px;font-size:12.5px;font-family:inherit;';
+    const st = pfAllStashRead();
+    let h = `<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px;margin-bottom:12px;font-size:12.5px;color:#475569;line-height:1.8;">
+      가공은 <strong>여기서만</strong> 생기고 없어집니다. 이름 · 파트 · 약어(묶음 이름에 쓰임) · 다른 표기를 한 줄에서 고칩니다.<br>
+      이름을 바꾸면 모든 업체 단가 · 묶음 · 품목 카드가 새 이름을 따라갑니다. 옛 이름은 다른 표기로 저절로 남습니다.<br>
+      <strong>[사용 안 함]</strong> 은 업체 화면과 카드에서 감추되 넣어 둔 값은 남깁니다. <strong>[삭제]</strong> 는 값까지 아주 없앱니다.
+      글자를 고친 것은 아래 <strong>[전체 저장]</strong> 으로 담깁니다.
+    </div>`;
+    if (st && !state.pfAllDraft._fromStash) {
+      h += `<div style="background:#fffbeb;border:1px solid #fcd34d;border-radius:8px;padding:9px 13px;margin-bottom:12px;font-size:12.5px;color:#92400e;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        ${pfStampOf(st.at)} 에 임시저장한 값이 있습니다.
+        <button class="dash-action-btn" id="pfa-stash-use" style="font-size:12px;padding:4px 11px;font-weight:800;">되살리기</button>
+        <button class="dash-action-btn" id="pfa-stash-drop" style="font-size:12px;padding:4px 11px;">버리기</button></div>`;
+    }
+    const bag = {};
+    D.rows.forEach((r, i) => { const k = COST_PROC_PART_ORDER.includes(r.part) ? r.part : '기타'; (bag[k] = bag[k] || []).push({ r, i }); });
+    COST_PROC_PART_ORDER.forEach(part => {
+      const rows = bag[part] || [];
+      const bg = PF_PART_BG[part] || '#f8fafc', ln = PF_PART_LINE[part] || '#e2e8f0', col = COST_PART_COLOR[part] || '#334155';
+      h += `<div style="background:${bg};border:1px solid ${ln};border-radius:9px;padding:9px 12px 8px;margin-bottom:10px;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+          <span style="font-size:12.5px;font-weight:800;color:${col};padding-left:8px;border-left:4px solid ${col};">${escapeHtml(part)}</span>
+          <span style="font-size:11px;color:#94a3b8;">${part === '나염' ? '원/야드' : '원/kg'} · ${rows.length}개</span>
+          <span style="flex:1;"></span>
+          <button class="dash-action-btn pfa-add" data-pfa-part="${escapeHtml(part)}" style="font-size:11.5px;padding:4px 10px;font-weight:700;">＋ ${escapeHtml(part)}에 가공 추가</button>
+        </div>
+        <div class="dash-table-wrap" style="background:#fff;"><table class="dash-table"><thead><tr>
+          <th style="text-align:left;min-width:150px;">가공 이름</th><th style="min-width:110px;">파트</th><th style="min-width:80px;">약어</th>
+          <th style="text-align:left;min-width:190px;">다른 표기 <span style="font-weight:400;color:#94a3b8;">(쉼표로)</span></th>
+          <th style="min-width:96px;">쓰는 곳</th><th style="min-width:86px;">사용</th><th style="min-width:60px;">삭제</th>
+        </tr></thead><tbody>`;
+      if (!rows.length) h += `<tr><td colspan="7" style="text-align:center;color:#9ca3af;padding:10px;">이 파트에 가공이 없습니다.</td></tr>`;
+      rows.forEach(({ r, i }) => {
+        const n = normProc(r.name), isNew = !r.key, off = !isNew && hid.includes(r.key);
+        const u = isNew ? null : pfProcUsage(r.key);
+        const grade = !isNew && procHasGrades(r.key);
+        h += `<tr style="${off ? 'opacity:.55;' : ''}${isNew ? 'background:#fefce8;' : ''}">
+          <td style="text-align:left;"><input type="text" lang="ko" class="pfa-f" data-pfa-k="name" data-pfa-i="${i}" value="${escapeHtml(r.name)}" placeholder="가공 이름" style="${iS}width:100%;font-weight:700;">${grade ? '<div style="font-size:10.5px;color:#b45309;font-weight:700;margin-top:2px;">등급마다 값이 다릅니다 · 등급 약어는 아래</div>' : ''}</td>
+          <td><select class="pfa-f" data-pfa-k="part" data-pfa-i="${i}" style="${iS}width:100%;">${COST_PROC_PART_ORDER.map(x => `<option${x === r.part ? ' selected' : ''}>${escapeHtml(x)}</option>`).join('')}</select></td>
+          <td><input type="text" lang="ko" class="pfa-f" data-pfa-k="abbr" data-pfa-i="${i}" value="${escapeHtml(r.abbr)}" style="${iS}width:70px;text-align:center;font-weight:700;"></td>
+          <td><input type="text" lang="ko" class="pfa-f" data-pfa-k="aliases" data-pfa-i="${i}" value="${escapeHtml((r.aliases || []).join(', '))}" placeholder="예: 프리세팅, 셋팅" style="${iS}width:100%;"></td>
+          <td style="text-align:center;font-size:11px;color:#64748b;white-space:nowrap;">${u ? (u.vendors || u.bundles || u.items ? `업체 ${u.vendors} · 묶음 ${u.bundles} · 품목 ${u.items}` : '<span style="color:#cbd5e1;">없음</span>') : '<span style="color:#b45309;font-weight:700;">새 가공</span>'}</td>
+          <td style="text-align:center;">${isNew ? `<button class="dash-action-btn pfa-drop" data-pfa-i="${i}" style="font-size:11px;padding:3px 8px;">줄 빼기</button>`
+            : (off ? `<button class="dash-action-btn pfa-on" data-pfa-n="${escapeHtml(r.key)}" style="font-size:11px;padding:3px 9px;font-weight:800;color:#047857;border-color:#a7f3d0;">되살리기</button>`
+                   : `<button class="dash-action-btn pfa-off" data-pfa-n="${escapeHtml(r.key)}" style="font-size:11px;padding:3px 9px;color:#b45309;border-color:#fcd34d;">사용 안 함</button>`)}</td>
+          <td class="col-action">${isNew || grade ? '<span style="font-size:11px;color:#cbd5e1;">-</span>' : `<button class="dash-action-btn danger pfa-del" data-pfa-n="${escapeHtml(r.key)}" style="font-size:11px;padding:3px 8px;">삭제</button>`}</td>
+        </tr>`;
+      });
+      h += `</tbody></table></div>`;
+      if (part === '염색/물나염') {
+        h += `<div style="margin-top:8px;background:#fff;border:1px solid #fcd34d;border-radius:8px;padding:8px 11px;">
+          <div style="font-size:12px;font-weight:800;color:#92400e;margin-bottom:6px;">염색 등급 약어 — 묶음 이름에 염색 대신 들어갑니다</div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px 16px;">
+            ${DYE_GRADES.map(g => `<label style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:#334155;"><span style="min-width:60px;text-align:right;font-weight:700;">${escapeHtml(dyeGradeLabel(g))}</span>
+              <input type="text" lang="ko" class="pfa-g" data-pfa-g="${escapeHtml(dyeGradeLabel(g))}" value="${escapeHtml(D.gabbr[dyeGradeLabel(g)] != null ? D.gabbr[dyeGradeLabel(g)] : pfAbbrOf(dyeGradeLabel(g)))}" style="${iS}width:64px;text-align:center;font-weight:700;"></label>`).join('')}
+          </div></div>`;
+      }
+      h += `</div>`;
+    });
+    h += `<div id="pf-savebar" style="position:sticky;bottom:0;z-index:40;margin:14px -20px 0;padding:11px 20px;
+        background:#fff;border-top:2px solid #047857;box-shadow:0 -4px 12px rgba(15,23,42,.07);display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+      <span style="font-size:12.5px;font-weight:800;color:#0f172a;">전체 설정</span>
+      <span style="font-size:11.5px;color:#94a3b8;">[전체 저장] 은 이 화면에서 고친 글자(이름 · 파트 · 약어 · 다른 표기 · 새 가공)를 모두 담습니다. [임시저장] 은 이 컴퓨터에만 담아 두었다가 다음에 되살립니다.</span>
+      <span style="flex:1;"></span>
+      <button class="dash-action-btn" id="pfa-stash" style="padding:6px 13px;">임시저장</button>
+      <button class="dash-action-btn" id="pfa-save" style="background:#047857;color:#fff;font-weight:800;padding:8px 26px;font-size:13px;">전체 저장</button>
+    </div>`;
+    return h;
+  }
+  function bindPfAll(pfOn) {
+    const D = pfAllDraft();
+    document.querySelectorAll('#dash-body .pfa-f').forEach(el => pfOn(el, el.dataset.pfaK === 'part' ? 'change' : 'input', () => {
+      const r = D.rows[parseInt(el.dataset.pfaI, 10)]; if (!r) return;
+      const k = el.dataset.pfaK;
+      if (k === 'aliases') r.aliases = String(el.value || '').split(',').map(x => x.trim()).filter(Boolean);
+      else r[k] = el.value;
+      if (k === 'part') renderDashboard();
+    }));
+    document.querySelectorAll('#dash-body .pfa-g').forEach(el => pfOn(el, 'input', () => { D.gabbr[el.dataset.pfaG] = String(el.value || '').trim(); }));
+    document.querySelectorAll('#dash-body .pfa-add').forEach(el => pfOn(el, 'click', () => {
+      D.rows.push({ key: '', name: '', part: el.dataset.pfaPart, abbr: '', aliases: [] });
+      renderDashboard();
+      const last = document.querySelectorAll('#dash-body .pfa-f[data-pfa-k="name"]');
+      const f = Array.from(last).find(x => x.value === ''); if (f) f.focus();
+    }));
+    document.querySelectorAll('#dash-body .pfa-drop').forEach(el => pfOn(el, 'click', () => { D.rows.splice(parseInt(el.dataset.pfaI, 10), 1); renderDashboard(); }));
+    document.querySelectorAll('#dash-body .pfa-off').forEach(el => pfOn(el, 'click', async () => {
+      const n = el.dataset.pfaN, u = pfProcUsage(n);
+      if (!confirm(n + ' 을(를) 사용 안 함으로 접습니다.\n\n업체 화면 · 묶음 고르기 · 품목 카드에서 안 보입니다.\n지금 쓰는 곳: 업체 ' + u.vendors + ' · 묶음 ' + u.bundles + ' · 품목 ' + u.items + ' — 넣어 둔 값은 그대로 남고, 되살리면 다시 보입니다.\n\n접을까요?')) return;
+      await pfAllHide(n, true); renderDashboard();
+    }));
+    document.querySelectorAll('#dash-body .pfa-on').forEach(el => pfOn(el, 'click', async () => { await pfAllHide(el.dataset.pfaN, false); renderDashboard(); }));
+    document.querySelectorAll('#dash-body .pfa-del').forEach(el => pfOn(el, 'click', async () => {
+      const n = el.dataset.pfaN, u = pfProcUsage(n);
+      if (u.vendors || u.bundles || u.items) {
+        if (!confirm('[삭제] ' + n + '\n\n지금 쓰는 곳: 업체 단가 ' + u.vendors + ' · 묶음 ' + u.bundles + ' · 품목 카드 ' + u.items + '\n업체 단가와 안 함 목록에서 아주 지워집니다. 묶음과 품목 카드에 남은 이름은 그대로라 값이 어긋날 수 있습니다.\n\n쓰는 곳이 있으면 [사용 안 함]을 권합니다. 그래도 지울까요?')) return;
+        if (!confirm('한 번 더 확인합니다. 되돌릴 수 없습니다. 정말 지울까요?')) return;
+      } else if (!confirm(n + ' 을(를) 모든 업체에서 아주 지웁니다. 되돌릴 수 없습니다.\n\n지울까요?')) return;
+      const ok = await pfAllDelete(n);
+      if (ok) toast(n + ' 을(를) 지웠습니다', 'success');
+      renderDashboard();
+    }));
+    const sv = document.getElementById('pfa-save');
+    if (sv) pfOn(sv, 'click', async () => {
+      sv.disabled = true; sv.textContent = '저장 중...';
+      const ok = await pfAllSave();
+      sv.disabled = false; sv.textContent = '전체 저장';
+      if (ok) { toast('전체 설정을 저장했습니다', 'success'); renderDashboard(); }
+    });
+    const stash = document.getElementById('pfa-stash');
+    if (stash) pfOn(stash, 'click', () => { pfAllStash(); toast('이 컴퓨터에 임시저장했습니다. 다음에 이 화면을 열면 되살릴 수 있습니다', 'success'); });
+    const su = document.getElementById('pfa-stash-use');
+    if (su) pfOn(su, 'click', () => { const o = pfAllStashRead(); if (o) { state.pfAllDraft = Object.assign({}, o.D, { _fromStash: true }); } renderDashboard(); });
+    const sd = document.getElementById('pfa-stash-drop');
+    if (sd) pfOn(sd, 'click', () => { try { localStorage.removeItem(PF_ALL_KEY); } catch (e) {} renderDashboard(); });
+  }
   function renderProcFeeTab() {
     if (!isOwnerUser()) return `<div class="dash-empty">최고관리자만 볼 수 있는 화면입니다.</div>`;
     if (!state.costPricesLoaded) return `<div class="dash-empty">단가표를 읽는 중입니다…</div>`;
+    const sub = state.pfSub || 'all';
+    const tb = on => `padding:6px 16px;border:1px solid #1e3a8a;border-radius:8px;font-size:12.5px;font-weight:800;cursor:pointer;background:${on ? '#1e3a8a' : '#fff'};color:${on ? '#fff' : '#1e3a8a'};`;
+    let h = `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+      <button class="pf-sub" data-pf-sub="all" style="${tb(sub === 'all')}">전체 설정</button>
+      <span style="color:#cbd5e1;">›</span>
+      <button class="pf-sub" data-pf-sub="vendor" style="${tb(sub === 'vendor')}">업체별 설정</button>
+      <span style="font-size:11.5px;color:#94a3b8;margin-left:4px;">가공은 [전체 설정]에서 만들고, 값과 묶음은 [업체별 설정]에서 넣습니다.</span>
+      <span style="flex:1;"></span>
+      ${sub === 'vendor' ? `<button class="dash-action-btn" id="pf-cmp" style="padding:6px 13px;font-weight:700;background:${state.pfCmpOpen ? '#1e3a8a' : '#fff'};color:${state.pfCmpOpen ? '#fff' : '#334155'};">업체별 단가 한눈에</button>
+      <button class="dash-action-btn" id="pf-goflat" style="padding:6px 13px;font-weight:700;">개별 설정으로</button>` : ''}
+    </div>`;
+    return h + (sub === 'vendor' ? pfVendorHtml() : pfAllHtml());
+  }
+  function pfVendorHtml() {
     const V = pfVendor();
     const list = pfVendorList();
+    const stV = pfVenStashRead();
     const iS = 'padding:6px 8px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;font-family:inherit;text-align:right;';
     let h = `<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px;margin-bottom:14px;font-size:12.5px;color:#475569;line-height:1.8;">
-      업체를 고르고 그 업체의 <strong>묶음</strong>과 <strong>낱개 염/가공료</strong>를 여기서 정합니다.
+      업체를 고른 뒤 그 업체가 <strong>하는 가공</strong>을 남기고 <strong>낱개 단가</strong>를 넣은 다음, 그 가공들로 <strong>묶음</strong>을 만듭니다.
       여기서 정한 값이 품목 카드의 기본값이 됩니다. 품목마다 다르게 줄 값은 카드 안에서 그 품목만 따로 넣으십시오.<br>
-      <strong>${escapeHtml(COST_COMMON_VENDOR)}</strong> 는 업체를 안 정했을 때 쓰는 값입니다. 업체 값이 없으면 이 값이 쓰입니다.
+      가공 이름 자체를 넣고 빼는 것은 <strong>[전체 설정]</strong>에서만 합니다. 여기서는 <strong>[이 업체 안 함]</strong>으로 이 업체 목록에서만 뺍니다.
     </div>
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:14px;">
       <label style="display:inline-flex;align-items:center;gap:7px;font-size:12.5px;font-weight:800;color:#334155;">업체
         <select id="pf-vendor" style="padding:7px 10px;border:1px solid #d1d5db;border-radius:7px;font-size:13px;font-family:inherit;min-width:190px;">
+          <option value=""${V ? '' : ' selected'}>— 업체를 고르십시오 —</option>
           ${list.map(v => `<option value="${escapeHtml(v)}"${v === V ? ' selected' : ''}>${escapeHtml(v)}</option>`).join('')}
         </select></label>
-      <span style="font-size:11.5px;color:#94a3b8;">고친 값은 화면 아래 [전체 저장] 을 눌러야 들어갑니다. 묶음은 줄마다 [묶음 저장] 으로 하나만 담을 수 있습니다.</span>
+      <span style="font-size:11.5px;color:#94a3b8;">숫자는 화면 아래 [전체 저장] 을 눌러야 들어갑니다. 묶음은 줄마다 [묶음 저장] 으로 하나씩 담깁니다.</span>
     </div>`;
-    if (!V) return h + `<div class="dash-empty">염색·가공 업체가 없습니다. [거래처 관리]에서 먼저 넣어 주십시오.</div>`;
+    if (!list.length) return h + `<div class="dash-empty">염색·가공 업체가 없습니다. [거래처 관리]에서 먼저 넣어 주십시오.</div>`;
+    if (state.pfCmpOpen) return h + pfCompareHtml();
+    if (!V) return h + `<div class="dash-empty">위에서 업체를 고르면 그 업체의 가공 · 단가 · 묶음이 열립니다.</div>`;
+    if (stV && pfSame(stV.vendor, V) && !state.pfVenStashUsed) {
+      h += `<div style="background:#fffbeb;border:1px solid #fcd34d;border-radius:8px;padding:9px 13px;margin-bottom:12px;font-size:12.5px;color:#92400e;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        ${pfStampOf(stV.at)} 에 ${escapeHtml(V)} 값을 임시저장해 두었습니다 (낱개 단가 ${(stV.rows || []).length}줄 · 만들던 묶음 ${(stV.newB || []).length}개).
+        <button class="dash-action-btn" id="pfv-stash-use" style="font-size:12px;padding:4px 11px;font-weight:800;">되살리기</button>
+        <button class="dash-action-btn" id="pfv-stash-drop" style="font-size:12px;padding:4px 11px;">버리기</button></div>`;
+    }
 
     // ── (공통) 자료 옮기기 · 지우기 (hotfix349) ──
     {
@@ -26188,50 +26461,14 @@ function validateBlendSum(blends, label) {
           </div></div>`;
       }
     }
-    // ── 업체별 단가 한눈에 보기 ──
-    if (state.pfCmpOpen) h += pfCompareHtml();
-    // ── 약어 설정 판 ──
-    if (state.pfAbbrOpen) {
-      const rows = pfAbbrList();
-      h += `<div style="background:#fff;border:2px solid #5b21b6;border-radius:10px;padding:14px 16px;margin-bottom:16px;">
-        <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
-          <strong style="font-size:13.5px;color:#5b21b6;">약어 설정</strong>
-          <span style="font-size:11.5px;color:#94a3b8;">묶음 이름을 저절로 지을 때 쓰는 짧은 말입니다. 여기 적힌 차례대로 이름이 이어집니다.</span>
-          <span style="flex:1;"></span>
-          <button class="dash-action-btn" id="pf-abbr-add" style="padding:6px 12px;">＋ 가공 추가</button>
-          <button class="dash-action-btn" id="pf-abbr-close" style="padding:6px 12px;">닫기</button>
-        </div>
-        <div class="dash-table-wrap"><table class="dash-table"><thead><tr>
-          <th style="min-width:52px;">차례</th><th style="min-width:100px;">파트</th>
-          <th style="text-align:left;min-width:130px;">가공 이름</th><th style="min-width:100px;">약어</th>
-          <th style="min-width:56px;">지우기</th></tr></thead><tbody>`;
-      rows.forEach((r, i) => {
-        const col = COST_PART_COLOR[r.part] || '#334155';
-        h += `<tr style="background:${PF_PART_BG[r.part] || '#fff'};">
-          <td style="font-size:11.5px;color:#94a3b8;">${i + 1}</td>
-          <td style="font-size:11.5px;font-weight:800;color:${col};">${escapeHtml(r.part)}</td>
-          <td style="text-align:left;font-weight:700;">${escapeHtml(r.name)}${r.grade ? ' <span style="font-size:10.5px;font-weight:700;color:#b45309;">염색 등급</span>' : ''}</td>
-          <td><input type="text" lang="ko" class="pf-ab" data-pf-n="${escapeHtml(r.name)}" value="${escapeHtml(r.abbr)}" style="width:90px;padding:5px 7px;border:1px solid #d1d5db;border-radius:6px;font-size:12.5px;font-family:inherit;text-align:center;font-weight:700;"></td>
-          <td class="col-action">${r.grade ? '<span style="font-size:11px;color:#cbd5e1;">-</span>'
-            : `<button class="dash-action-btn danger pf-ab-del" data-pf-n="${escapeHtml(r.name)}" title="모든 업체에서 아주 사라집니다" style="font-size:11px;padding:4px 9px;">전체 삭제</button>`}</td>
-        </tr>`;
-      });
-      h += `</tbody></table></div>
-        <div style="margin-top:9px;font-size:11.5px;color:#64748b;">
-          [＋ 가공 추가] 로 넣은 가공은 낱개 염/가공료 목록에도 함께 생깁니다. 약어를 고치면 [저장] 을 눌러 주십시오.<br>
-          <strong style="color:#b91c1c;">[전체 삭제]는 모든 업체에서 아주 없앱니다.</strong> 한 업체에서만 빼시려면 [개별 설정]의 <strong>[이 업체 안 함]</strong>을 쓰십시오.
-        </div></div>`;
-    }
+    // hotfix384: 약어 설정 판은 [전체 설정]으로 갔다
     // ── 묶음 ──
     const bs = pfBundles();
     h += `<div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:14px 16px;margin-bottom:16px;">
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
         <strong style="font-size:13.5px;color:#0f172a;">묶음</strong>
-        <span style="font-size:11.5px;color:#94a3b8;">여러 공정을 한 값으로 묶어 부릅니다. <strong>[묶음 저장]</strong> 은 그 묶음 하나만 담습니다.</span>
-        <button class="dash-action-btn" id="pf-cmp" style="margin-left:auto;padding:6px 13px;font-weight:700;background:${state.pfCmpOpen ? '#1e3a8a' : '#fff'};color:${state.pfCmpOpen ? '#fff' : '#334155'};">업체별 단가 한눈에</button>
-        <button class="dash-action-btn" id="pf-abbr" style="padding:6px 13px;font-weight:700;">약어 설정</button>
-        <button class="dash-action-btn" id="pf-goflat" style="padding:6px 13px;font-weight:700;">개별 설정</button>
-        <button class="dash-action-btn" id="pf-badd" style="background:#1e3a8a;color:#fff;font-weight:700;padding:6px 13px;">＋ 새 묶음</button>
+        <span style="font-size:11.5px;color:#94a3b8;">이 업체가 하는 가공(아래 개별 설정에 남긴 것) 중에서 골라 한 값으로 묶습니다. <strong>[묶음 저장]</strong> 은 그 묶음 하나만 담습니다.</span>
+        <button class="dash-action-btn" id="pf-badd" style="margin-left:auto;background:#1e3a8a;color:#fff;font-weight:700;padding:6px 13px;">＋ 새 묶음</button>
       </div>`;
     // 저장해 둔 묶음 목록 (진짜 담긴 것만)
     {
@@ -26272,7 +26509,7 @@ function validateBlendSum(blends, label) {
             <input type="text" lang="ko" class="pf-bf" data-pf-k="name" data-pf-i="${i}" value="${escapeHtml(b.name || '')}" placeholder="${escapeHtml(pfAutoName(subs, b.grade) || '예: 프셋봉선바농염텐덤컴')}" style="padding:6px 8px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;font-family:inherit;width:100%;font-weight:700;"></div>
           ${subs.includes('염색') ? `<div style="width:120px;"><div style="font-size:11px;font-weight:700;color:#64748b;margin-bottom:3px;">염색 등급</div>
             <select class="pf-bf" data-pf-k="grade" data-pf-i="${i}" style="padding:6px 8px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;font-family:inherit;width:100%;">
-              ${DYE_GRADES.map(x => `<option value="${escapeHtml(x)}"${String(b.grade || '농색') === x ? ' selected' : ''}>${escapeHtml(dyeGradeLabel(x))}</option>`).join('')}
+              ${DYE_GRADES.filter(x => !pfGradeOff().includes(x)).map(x => `<option value="${escapeHtml(x)}"${String(b.grade || '농색') === x ? ' selected' : ''}>${escapeHtml(dyeGradeLabel(x))}</option>`).join('')}
             </select></div>` : ''}
           <div style="width:130px;"><div style="font-size:11px;font-weight:700;color:#64748b;margin-bottom:3px;">묶음 단가 (원/kg)</div>
             <input type="text" inputmode="numeric" class="pf-bf" data-pf-k="price" data-pf-i="${i}" value="${escapeHtml(moneyInputVal(b.price))}" style="${iS}width:100%;"></div>
@@ -26301,8 +26538,7 @@ function validateBlendSum(blends, label) {
     h += `<div id="pf-flat" style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:14px 16px;">
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
         <strong style="font-size:13.5px;color:#0f172a;">개별 설정 — 낱개 염/가공료</strong>
-        <span style="font-size:11.5px;color:#94a3b8;">숫자는 아래 <strong>[전체 저장]</strong> 을 눌러야 담깁니다. <strong>[이 업체 안 함]</strong> 은 누르는 즉시 담깁니다.</span>
-        <button class="dash-action-btn" id="pf-proc-add" style="margin-left:auto;background:#1e3a8a;color:#fff;font-weight:700;padding:6px 13px;">＋ 가공 추가</button>
+        <span style="font-size:11.5px;color:#94a3b8;">숫자는 아래 <strong>[전체 저장]</strong> 을 눌러야 담깁니다. <strong>[이 업체 안 함]</strong> 은 누르는 즉시 담깁니다. 새 가공은 [전체 설정]에서 넣습니다.</span>
       </div>`;
     pfPartsOrdered().forEach(g => {
       const bg = PF_PART_BG[g.part] || '#f8fafc', ln = PF_PART_LINE[g.part] || '#e2e8f0';
@@ -26359,9 +26595,9 @@ function validateBlendSum(blends, label) {
     h += `<div id="pf-savebar" style="position:sticky;bottom:0;z-index:40;margin:14px -20px 0;padding:11px 20px;
         background:#fff;border-top:2px solid #047857;box-shadow:0 -4px 12px rgba(15,23,42,.07);display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
       <span style="font-size:12.5px;font-weight:800;color:#0f172a;">${escapeHtml(V)}</span>
-      <span style="font-size:11.5px;color:#94a3b8;">[전체 저장] 은 이 화면에서 고친 것을 <strong>모두</strong> 담습니다 — 낱개 단가 · 묶음 · 안 함 목록 · 약어. 업체를 바꾸기 전에 꼭 눌러 주십시오.</span>
+      <span style="font-size:11.5px;color:#94a3b8;">[전체 저장] 은 이 업체의 낱개 단가를 담습니다. [임시저장] 은 이 컴퓨터에만 담아 두었다가 다음에 되살립니다. 업체를 바꾸기 전에 둘 중 하나를 눌러 주십시오.</span>
       <span style="flex:1;"></span>
-      <button class="dash-action-btn" id="pf-reset2" style="padding:6px 13px;">되돌리기</button>
+      <button class="dash-action-btn" id="pf-stash" style="padding:6px 13px;">임시저장</button>
       <button class="dash-action-btn" id="pf-save2" style="background:#047857;color:#fff;font-weight:800;padding:8px 26px;font-size:13px;">전체 저장</button>
     </div>`;
     return h;
@@ -26375,18 +26611,34 @@ function validateBlendSum(blends, label) {
       el.dataset[k] = '1';
       el.addEventListener(ev, fn);
     };
+    // hotfix384: 층 고르기
+    document.querySelectorAll('#dash-body .pf-sub').forEach(el => pfOn(el, 'click', () => {
+      if (state.pfSub === 'all' && el.dataset.pfSub !== 'all' && pfAllDirty() && !confirm('전체 설정에서 고친 글자가 아직 저장되지 않았습니다.\n[전체 저장] 또는 [임시저장]을 누르지 않고 옮기면 사라집니다.\n\n그래도 옮길까요?')) return;
+      if (el.dataset.pfSub !== 'all') state.pfAllDraft = null;
+      state.pfSub = el.dataset.pfSub; state.pfCmpOpen = false; renderDashboard();
+    }));
+    if ((state.pfSub || 'all') === 'all') { bindPfAll(pfOn); return; }
+    const su = document.getElementById('pfv-stash-use');
+    if (su) pfOn(su, 'click', () => {
+      const o = pfVenStashRead(); if (!o) return;
+      const D = pfDraft(), V = pfVendor();
+      D.proc = (D.proc || []).filter(r => !(r && pfSame(r.vendor, V) && !String(r.item || '').trim())).concat(o.rows || []);
+      state.pfNewB = Array.isArray(o.newB) ? o.newB : [];
+      state.pfVenStashUsed = true;
+      renderDashboard();
+    });
+    const sd = document.getElementById('pfv-stash-drop');
+    if (sd) pfOn(sd, 'click', () => { try { localStorage.removeItem(PF_VEN_KEY); } catch (e) {} renderDashboard(); });
+    const stash = document.getElementById('pf-stash');
+    if (stash) pfOn(stash, 'click', () => { pfVenStash(); state.pfVenStashUsed = true; toast('이 컴퓨터에 임시저장했습니다', 'success'); });
     const sel = document.getElementById('pf-vendor');
     if (sel) pfOn(sel, 'change', () => {
       const left = pfNewB().filter(b => b && ((b.procs || []).length || String(b.name || '').trim()));
       if (left.length && !confirm('만들고 계신 묶음 ' + left.length + '개가 아직 담기지 않았습니다.\n업체를 바꾸면 사라집니다.\n\n그래도 바꿀까요?')) { sel.value = pfVendor(); return; }
       state.pfNewB = [];
       state.pfVendor = sel.value;
+      state.pfVenStashUsed = false;
       renderDashboard();
-    });
-    const rst = document.getElementById('pf-reset');
-    if (rst) pfOn(rst, 'click', () => {
-      if (!confirm('넣던 값을 버리고 저장된 자료로 되돌릴까요?')) return;
-      state.pfDraft = null; state.pfNewB = []; renderDashboard();
     });
     document.querySelectorAll('#dash-body .pf-p').forEach(el => pfOn(el, 'input', () => {
       const r = pfRow(el.dataset.pfP, true);
@@ -26494,34 +26746,9 @@ function validateBlendSum(blends, label) {
     document.querySelectorAll('#dash-body .pf-cmp-go').forEach(el => pfOn(el, 'click', () => {
       state.pfVendor = el.dataset.pfV; state.pfCmpOpen = false; state.pfDraft = null; renderDashboard();
     }));
-    const ab = document.getElementById('pf-abbr');
-    if (ab) pfOn(ab, 'click', () => { state.pfAbbrOpen = !state.pfAbbrOpen; renderDashboard(); });
-    const abc = document.getElementById('pf-abbr-close');
-    if (abc) pfOn(abc, 'click', () => { state.pfAbbrOpen = false; renderDashboard(); });
     const cg = document.getElementById('pf-cmp-grade');
     if (cg) pfOn(cg, 'change', () => { state.pfCmpGrade = cg.value; renderDashboard(); });
-    document.querySelectorAll('#dash-body .pf-ab').forEach(el => pfOn(el, 'input', () => {
-      const D = pfDraft();
-      if (!D.proc_abbr || typeof D.proc_abbr !== 'object') D.proc_abbr = {};
-      D.proc_abbr[el.dataset.pfN] = String(el.value || '').trim();
-      if (!state.costPrices.proc_abbr || typeof state.costPrices.proc_abbr !== 'object') state.costPrices.proc_abbr = {};
-      state.costPrices.proc_abbr[el.dataset.pfN] = D.proc_abbr[el.dataset.pfN];
-    }));
-    document.querySelectorAll('#dash-body .pf-ab-del').forEach(el => pfOn(el, 'click', async () => {
-      const nm = el.dataset.pfN;
-      if (!confirm('[전체 삭제] ' + nm + '\n\n모든 업체에서 아주 사라집니다. 되돌릴 수 없습니다.\n한 업체에서만 빼시려면 [개별 설정]의 [이 업체 안 함]을 쓰십시오.\n\n정말 지울까요?')) return;
-      const D = pfDraft();
-      if (D.proc_abbr) delete D.proc_abbr[nm];
-      if (state.costPrices.proc_abbr) delete state.costPrices.proc_abbr[nm];
-      D.proc = (D.proc || []).filter(r => normProc(r && r.proc) !== normProc(nm));
-      const L = JSON.parse(JSON.stringify(costLists()));
-      L.procs = (L.procs || []).filter(x => normProc(x) !== normProc(nm));
-      if (L.proc_part) delete L.proc_part[normProc(nm)];
-      await saveCostLists(L);
-      renderDashboard();
-    }));
-    const abadd = document.getElementById('pf-abbr-add');
-    if (abadd) pfOn(abadd, 'click', () => openProcAddModal(pfVendor()));   // hotfix381: 한 창으로
+    // hotfix384: 약어 · 전체 삭제 · 가공 추가는 [전체 설정]으로 갔다
     document.querySelectorAll('#dash-body .pf-brename').forEach(el => pfOn(el, 'click', () => {
       const b = pfNewB()[parseInt(el.dataset.pfI, 10)];
       if (!b) return;
@@ -26534,8 +26761,6 @@ function validateBlendSum(blends, label) {
       b._custom = !!(nm && nm !== auto);             // 손으로 지은 이름은 지킨다
       renderDashboard();
     }));
-    const pa = document.getElementById('pf-proc-add');
-    if (pa) pfOn(pa, 'click', () => openProcAddModal(pfVendor()));   // hotfix381: 한 창으로
     const go = document.getElementById('pf-goflat');
     if (go) pfOn(go, 'click', () => {
       const el = document.getElementById('pf-flat');
@@ -26561,11 +26786,6 @@ function validateBlendSum(blends, label) {
       await pfOffSave(el.dataset.pfP, false);
       renderDashboard();
     }));
-    const rst2 = document.getElementById('pf-reset2');
-    if (rst2) pfOn(rst2, 'click', () => {
-      if (!confirm('넣던 값을 버리고 저장된 자료로 되돌릴까요?')) return;
-      state.pfDraft = null; state.pfNewB = []; renderDashboard();
-    });
     const sv2 = document.getElementById('pf-save2');
     const sv = document.getElementById('pf-save');
     const doSave = async () => {
@@ -26580,7 +26800,7 @@ function validateBlendSum(blends, label) {
         || (r.grades && Object.keys(r.grades).length)));
       D.bundles = D.bundles.filter(b => String(b.name || '').trim() || (b.procs || []).length);
       const ok = await saveCostPrices(D);
-      if (ok) { state.pfDraft = null; toast('낱개 단가와 약어를 저장했습니다', 'success'); renderDashboard(); }
+      if (ok) { state.pfDraft = null; try { localStorage.removeItem(PF_VEN_KEY); } catch (e) {} toast('낱개 단가를 저장했습니다', 'success'); renderDashboard(); }
     };
     if (sv) pfOn(sv, 'click', doSave);
     if (sv2) pfOn(sv2, 'click', doSave);
@@ -30322,21 +30542,12 @@ function openProcSet(w){
     `<span class="vn">[${vName(w)}]</span> ${w==='fin'?'염색 · 가공':'후가공'} 가공법 설정 <span class="spacer"></span><button class="b s" data-close="mProcSet">닫기</button>`;
   const rows=v.rows;
   const has=p=>rows.some(r=>r.proc===p||(r.subs||[]).includes(p));
+  // hotfix384 (대표 확정): 카드에서는 가공을 새로 만들지 않는다. 이름은 [염/가공료 설정] › [전체 설정]에서만 생긴다
   let h=`<div class="bset">
     <div class="f" style="font-size:12.5px;color:var(--deep);">${vName(w)
-      ? `새 가공법 만들기 — <span class="vn" style="color:var(--blue);">${vName(w)}</span> 에만 들어갑니다`
-      : `<span style="color:var(--bad);font-weight:800;">먼저 위 [＋ 업체]로 염색·가공처를 넣어 주십시오. 가공법은 업체마다 따로 담깁니다.</span>`}</div>
-    <div class="grid">
-      <div style="flex:0.9;"><select id="np_part">${partsOf(v).map(p=>`<option>${p}</option>`).join('')}</select></div>
-      <div style="flex:1.4;"><input type="text" id="np_name" placeholder="가공법 이름"></div>
-      <div style="flex:0.9;"><input type="text" inputmode="decimal" class="num money" id="np_price" placeholder="단가"></div>
-      <div style="flex:0 0 74px;"><button class="b" id="np_add" style="width:100%;">＋ 넣기</button></div>
-    </div>
-    <div style="display:flex;gap:8px;margin-top:10px;align-items:center;">
-      <input type="text" id="np_partname" placeholder="새 파트 이름 (예: 특수가공)" style="flex:1;">
-      <button class="b" id="np_partadd">＋ 파트 추가</button>
-    </div>
-    <div class="footnote">업체마다 하는 가공이 다릅니다. 없는 가공은 [지우기]로 이 업체 목록에서 빼십시오.</div>
+      ? `<span class="vn" style="color:var(--blue);">${vName(w)}</span> 가 하는 가공에 이 품목 값을 넣습니다. 새 가공은 <b>[염/가공료 설정] › [전체 설정]</b>에서 넣으십시오.`
+      : `<span style="color:var(--bad);font-weight:800;">먼저 위 [＋ 업체]로 염색·가공처를 넣어 주십시오.</span>`}</div>
+    <div class="footnote">업체마다 하는 가공이 다릅니다. 이 업체가 안 하는 가공은 [지우기]로 이 업체 목록에서 빼십시오.</div>
   </div>`;
   partsOf(v).forEach(p=>{
     h+=`<div class="parthead"><span class="vn">[${vName(w)}]</span> ${p}
@@ -30368,25 +30579,7 @@ function openProcSet(w){
   $('procSetBody').innerHTML=h;
   if (w==='post') rows.forEach(r=>{ const s=ROOT().querySelector('.psunit[data-p="'+r.proc+'"]'); if(s) s.value=r.unit||'kg'; });
   ROOT().querySelectorAll('.pschk').forEach(c=>c.addEventListener('change',()=>c.closest('.bdrow').querySelector('.chk').classList.toggle('on',c.checked)));
-  $('np_add').addEventListener('click',async()=>{
-    const part=$('np_part').value;
-    const nm=($('np_name').value||'').trim();
-    const pv=n($('np_price').value);
-    if (!nm) return;
-    // hotfix378: 가공 목록·파트·이 업체 단가를 진짜 자료에 담는다. 그래야 창을 다시 열어도 남는다
-    if (BR.addProc){ const ok=await BR.addProc(nm,part,vName(w),pv); if(!ok){ toast('가공을 담지 못했습니다'); return; } }
-    v.procs[part]=v.procs[part]||[];
-    if (!v.procs[part].includes(nm)) v.procs[part].push(nm);
-    v.prices[nm]=pv;
-    openProcSet(psWhich); toast('['+vName(w)+'] '+part+' 에 '+nm+' 을(를) 넣었습니다. [염/가공료 설정] 에도 함께 들어갔습니다.');
-  });
-  $('np_partadd').addEventListener('click',()=>{
-    const nm=($('np_partname').value||'').trim();
-    if (!nm) return;
-    v.parts=v.parts||[];
-    if (!v.parts.includes(nm)){ v.parts.push(nm); v.procs[nm]=[]; }
-    openProcSet(psWhich); toast('파트 '+nm+' 을(를) 만들었습니다.');
-  });
+  // hotfix384: 새 가공법 · 새 파트 만들기는 카드에서 뺐다
   ROOT().querySelectorAll('[data-partdel]').forEach(b=>b.addEventListener('click',()=>{
     const p=b.dataset.partdel;
     const used=(v.procs[p]||[]).filter(pr=>rows.some(r=>r.proc===pr||(r.subs||[]).includes(pr)));
@@ -34984,6 +35177,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
       _tKey = ({ '원사': 'yarn', '편직': 'knit', '염색가공': 'finish', 'BT': 'bt' })[state.overviewTypeFilter] || '';
     }
     if (_tKey && VIEW_LABELS[_tKey]) title = VIEW_LABELS[_tKey] + (_TITLE_SUF[_tKey] || '');
+    { const rf = document.getElementById('dash-refresh'); if (rf) rf.style.display = state.dashView === 'costCalc' ? 'none' : ''; }   // hotfix384
     titleEl.textContent = title;
     bodyEl.innerHTML = body;
     pinDashTop();
@@ -41846,7 +42040,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix383';
+  const VERSION = 'v2.53 hotfix384';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
