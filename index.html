@@ -6314,6 +6314,8 @@
   .hwchk.d { background: #fffbeb; border-color: #fde68a; color: #b45309; }
   .hwchk.c { background: #f0fdf4; border-color: #bbf7d0; color: #15803d; }
   .hwchk.b { background: #fef2f2; border-color: #fecaca; color: #b91c1c; }
+  .hwchk.e { background: #eef2ff; border-color: #c7d2fe; color: #3730a3; }
+  .hwchk.e .n { background: #4f46e5; }
   .hwchk .n { background: #dc2626; color: #fff; border-radius: 9px; min-width: 17px; height: 17px; display: inline-flex; align-items: center; justify-content: center; font-size: 10.5px; padding: 0 4px; }
   .hwchk.c .n { background: #16a34a; }
   .hwchk.d .n { background: #d97706; }
@@ -7346,6 +7348,11 @@ const state = {
   ovKnitSearch: '',         // hotfix259: 전체 대시보드 편직 품목 검색
   viewPerms: {},            // hotfix260: settings/permissions — 화면별 최소 등급
   viewDeletes: {},          // hotfix265: 화면별 삭제 최소 등급 (기본 관리자)
+  viewEdits: {},            // hotfix383: 화면별 [고치기] 최소 등급 (원단 스펙 · 거래처)
+  editLog: [],              // hotfix383: settings/edit_log — 관리자·직원이 설정을 고친 이력 (최고관리자만 읽는다)
+  editLogLoaded: false,
+  editLogOnlyNew: false,
+  editLogTyping: false,
   yarnCompOpen: false,      // hotfix325: 원사 성분(혼용율)을 관리자·직원도 볼 수 있게 할지
   // hotfix262: 최고관리자 잠금
   ownerPinHash: null,
@@ -10569,7 +10576,7 @@ window.addEventListener('firebase-ready', () => {
     stampSettings: 'owner', specTol: 'owner',
     fabricSpecs: 'admin', vendors: 'admin', yarnSetup: 'admin',
     costCalc: 'owner', permissions: 'owner',
-    users: 'owner', backup: 'owner'
+    users: 'owner', backup: 'owner', editLog: 'owner'
   };
   const VIEW_LABELS = {
     yarn: '원사 구매', knit: '생지생산 및 재고', finish: '염색/가공 현황', print: '나염/가공 현황', bt: 'B/T 현황',
@@ -10579,11 +10586,11 @@ window.addEventListener('firebase-ready', () => {
     stampSettings: '작지 스템프 설정', fabricSpecs: '원단 스펙 설정', vendors: '거래처 관리', specTol: '규격 허용치 설정',
     yarnSetup: '원사 설정',
     costCalc: '원가 계산기', permissions: '권한 설정',
-    users: '사용자 관리', backup: '백업 내려받기'
+    users: '사용자 관리', backup: '백업 내려받기', editLog: '수정 이력'
   };
   // 등급을 낮출 수 없는 화면 — 경영 자료
   // hotfix312: [최고관리자 영역] 안의 화면은 전부 최고관리자만 본다
-  const OWNER_LOCKED_VIEWS = ['costCalc', 'permissions', 'stampSettings', 'specTol', 'trash', 'users', 'backup'];
+  const OWNER_LOCKED_VIEWS = ['costCalc', 'permissions', 'stampSettings', 'specTol', 'trash', 'users', 'backup', 'editLog'];
   // hotfix270: 비밀번호 잠금이 걸리는 화면 — 사이드바 [경영 전용] 다섯 화면 전부
   //   (등급 조정 가능 여부와는 별개다. 스탬프 설정·규격 허용치·휴지통은
   //    [권한 관리]에서 관리자까지 열 수 있지만, 대표 화면에서는 잠금 대상이다)
@@ -10717,6 +10724,7 @@ window.addEventListener('firebase-ready', () => {
   // 화면별 삭제 최소 등급 (기본 관리자). 대표는 언제나 가능.
   function deleteMinRole(view) {
     const v = view || currentDeleteScope();
+    if (EDIT_VIEWS.includes(v)) return 'owner';   // hotfix383: 설정 화면의 삭제는 최고관리자 고정 (대표 확정)
     const saved = (state.viewDeletes || {})[v];
     if (saved && ROLE_RANK[saved] !== undefined) return saved;
     return 'admin';
@@ -10727,6 +10735,25 @@ window.addEventListener('firebase-ready', () => {
   }
   // 작성 화면은 의뢰서 유형으로 판정한다
   function canDeleteWo(wo) { return canDeleteHere(deleteScopeForType(wo && wo.type)); }
+  // ============================================================
+  // hotfix383: [고치기] 권한 — 설정 화면(원단 스펙 · 거래처)을 누가 고칠 수 있는가
+  //   [권한 설정]에서 화면마다 대표만 / 관리자까지 / 직원까지 를 고른다.
+  //   삭제는 이 화면들에서는 최고관리자 고정이다.
+  //   ★ 직원까지 주려면 Firestore 규칙(settings 쓰기)도 함께 열어야 저장된다.
+  // ============================================================
+  const EDIT_VIEWS = ['fabricSpecs', 'vendors'];
+  const EDIT_PERMS_DEFAULT = { fabricSpecs: 'owner', vendors: 'admin' };
+  function editMinRole(view) {
+    if (!EDIT_VIEWS.includes(view)) return 'owner';
+    const saved = (state.viewEdits || {})[view];
+    if (saved && ROLE_RANK[saved] !== undefined) return saved;
+    return EDIT_PERMS_DEFAULT[view] || 'owner';
+  }
+  function canEditView(view) {
+    if (!state.user) return false;
+    if (isOwnerUser()) return true;
+    return ROLE_RANK[userRole()] >= ROLE_RANK[editMinRole(view)];
+  }
   // 영구 삭제·휴지통 복구는 등급 그대로 (Firestore 규칙이 관리자만 허용)
   function canPurge() { return isAdminEmail(); }
   // 현재 화면의 삭제 권한을 body 클래스로 반영 (CSS 일괄 숨김)
@@ -10803,7 +10830,7 @@ window.addEventListener('firebase-ready', () => {
     { key: 'view', name: '조회',         items: ['of', 'gs', 'claims', 'samples', 'completed'] }
   ];
   // hotfix341: [사용자 관리]는 최고관리자 영역([≡])과 계정 메뉴에만 둔다
-  const HW_OWNER_ITEMS = ['users', 'permissions', 'backup', 'stampSettings', 'specTol', 'trash'];
+  const HW_OWNER_ITEMS = ['users', 'permissions', 'editLog', 'backup', 'stampSettings', 'specTol', 'trash'];
   const HW_BADGE = {
     finish: 'menu-count-finish', print: 'menu-count-print', bt: 'menu-count-bt',
     claims: 'claims-menu-badge', 'daily-report': 'menu-count-daily',
@@ -10915,6 +10942,12 @@ window.addEventListener('firebase-ready', () => {
       const n = hwCount('ceoReports');
       r += '<button type="button" class="hwchk b" data-hwview="ceoReports"><span>불량</span>'
         + (n ? '<span class="n">' + escapeHtml(n) + '</span>' : '') + '</button>';
+    }
+    if (isOwnerUser()) {   // hotfix383: [수정 발생 N] — 관리자·직원이 설정을 고친 것 중 확인 안 한 건수
+      const n = editLogUnseen();
+      r += '<button type="button" class="hwchk e' + (cur === 'editLog' ? ' cur' : '') + '" data-hwview="editLog" title="관리자·직원이 원단 스펙·거래처를 고친 이력"><span>'
+        + (nw ? '수정' : '수정 발생') + '</span>'
+        + (n ? '<span class="n">' + n + '</span>' : '') + '</button>';
     }
     if (isOwnerUser()) {
       if (!ownerPinIsSet()) {
@@ -11038,6 +11071,158 @@ window.addEventListener('firebase-ready', () => {
   function hwUsersDraft() {
     if (!Array.isArray(state.hwUsersDraft)) state.hwUsersDraft = hwUsers().map(u => Object.assign({}, u));
     return state.hwUsersDraft;
+  }
+
+  // ============================================================
+  // hotfix383: 수정 이력 (settings/edit_log)
+  //   관리자·직원이 원단 스펙 · 거래처를 고치면 한 줄씩 남는다 (최근 500건).
+  //   달라진 칸만 적는다. 최고관리자 본인이 고친 것은 처음부터 읽음이다.
+  // ============================================================
+  const EDIT_LOG_MAX = 500;
+  const EDIT_LOG_FIELDS = {
+    fabricSpecs: { name: '품목명', gubun: '구분', cat: '조직', width: '기준 폭', tube: '튜브', gy: '안내 g/y', make_gy: '제작 g/y', blend: '혼용률', pair_rib: '짝 리프', active: '판매', cautions: '주의사항' },
+    vendors: { name: '업체명', types: '구분', contact: '담당자', phone: '연락처', memo: '메모', active: '사용', yarn_kinds: '취급 원사', aliases: '다른 표기' }
+  };
+  function editLogNow() {
+    const d = new Date(), p = x => String(x).padStart(2, '0');
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+  }
+  function editLogScreen(view) {
+    if (state.uiMode !== 'dashboard') return '작성 화면';
+    const v = state.dashView || '';
+    if (v === 'costCalc') return '원가 계산기';
+    return VIEW_LABELS[v] || VIEW_LABELS[view] || v;
+  }
+  function editLogVal(v) {
+    if (v == null || v === '') return '(없음)';
+    if (v === true) return '예';
+    if (v === false) return '아니오';
+    if (Array.isArray(v)) return v.length ? v.map(x => (typeof x === 'object' ? JSON.stringify(x) : String(x))).join(' · ') : '(없음)';
+    if (typeof v === 'object') return JSON.stringify(v);
+    return String(v);
+  }
+  // 옛 목록과 새 목록을 견줘 달라진 것만 뽑는다
+  function editLogDiff(view, before, after, keyOf) {
+    const labels = EDIT_LOG_FIELDS[view] || {};
+    const keys = Object.keys(labels);
+    const bm = new Map(); (before || []).forEach(x => { const k = keyOf(x); if (k) bm.set(k, x); });
+    const am = new Map(); (after || []).forEach(x => { const k = keyOf(x); if (k) am.set(k, x); });
+    const out = [];
+    am.forEach((a, k) => {
+      const b = bm.get(k);
+      if (!b) { out.push({ target: a.name || k, action: '추가', changes: [] }); return; }
+      const ch = [];
+      keys.forEach(f => {
+        const bv = editLogVal(b[f]), av = editLogVal(a[f]);
+        if (bv !== av) ch.push(labels[f] + ': ' + bv + ' → ' + av);
+      });
+      if (!ch.length) return;
+      let action = '수정';
+      if (ch.length === 1 && labels.active && (b.active !== false) !== (a.active !== false)) {
+        action = a.active === false ? (view === 'vendors' ? '사용 중지' : '판매 종료') : (view === 'vendors' ? '다시 사용' : '판매 재개');
+      }
+      out.push({ target: a.name || k, action, changes: ch });
+    });
+    bm.forEach((b, k) => { if (!am.has(k)) out.push({ target: b.name || k, action: '삭제', changes: [] }); });
+    return out;
+  }
+  async function logEdits(view, entries) {
+    if (!state.user || !Array.isArray(entries) || !entries.length) return;
+    let list = entries;
+    if (entries.length > 8) {   // CSV 같은 일괄 수정은 한 줄로 묶는다
+      const cnt = a => entries.filter(e => e.action === a).length;
+      const parts = [];
+      if (cnt('추가')) parts.push('추가 ' + cnt('추가'));
+      if (cnt('삭제')) parts.push('삭제 ' + cnt('삭제'));
+      const mod = entries.length - cnt('추가') - cnt('삭제');
+      if (mod) parts.push('수정 ' + mod);
+      list = [{ target: entries.length + '건', action: '일괄 수정',
+        changes: [parts.join(' · '), entries.slice(0, 12).map(e => e.target + '(' + e.action + ')').join(', ') + (entries.length > 12 ? ' …' : '')] }];
+    }
+    const base = { at: editLogNow(), by: hwMyEmail(), name: hwMyName(), role: roleLabel(userRole()), screen: editLogScreen(view), view, seen: isOwnerUser(), memo: '' };
+    const items = list.map((e, i) => Object.assign({ id: Date.now() + '_' + i + '_' + Math.random().toString(36).slice(2, 7) }, base,
+      { target: String(e.target || ''), action: e.action, content: (e.changes || []).join(' / ') }));
+    try {
+      const ref = doc(db, 'settings', 'edit_log');
+      const snap = await getDoc(ref);
+      const old = (snap.exists() && Array.isArray(snap.data().items)) ? snap.data().items : [];
+      await setDoc(ref, { items: items.concat(old).slice(0, EDIT_LOG_MAX), updated_at: serverTimestamp(), updated_by: hwMyEmail() });
+    } catch (e) { console.warn('[edit_log]', e.message); }
+  }
+  function editLogUnseen() { return (state.editLog || []).filter(x => x && !x.seen).length; }
+  // 최고관리자만 — [확인] · [전부 읽음] · 비고
+  async function editLogUpdate(mut) {
+    if (!isOwnerUser()) return false;
+    try {
+      const ref = doc(db, 'settings', 'edit_log');
+      const snap = await getDoc(ref);
+      const items = (snap.exists() && Array.isArray(snap.data().items)) ? snap.data().items.map(x => Object.assign({}, x)) : [];
+      mut(items);
+      await setDoc(ref, { items: items.slice(0, EDIT_LOG_MAX), updated_at: serverTimestamp(), updated_by: hwMyEmail() });
+      state.editLog = items;
+      return true;
+    } catch (e) { toast('이력 저장 실패: ' + e.message, 'error'); return false; }
+  }
+  function renderEditLogDash() {
+    if (!isOwnerUser()) return '<div class="dash-empty">최고관리자만 볼 수 있는 화면입니다.</div>';
+    const all = (state.editLog || []).filter(Boolean);
+    const unseen = editLogUnseen();
+    const onlyNew = !!state.editLogOnlyNew;
+    const list = onlyNew ? all.filter(x => !x.seen) : all;
+    let h = `<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:9px;padding:12px 15px;margin-bottom:12px;font-size:12.5px;color:#475569;line-height:1.8;">
+      관리자·직원이 <strong>원단 스펙 · 거래처</strong>를 고치면 여기에 한 줄씩 남습니다. <strong>달라진 칸만</strong> 적습니다.
+      최고관리자가 직접 고친 것은 처음부터 읽음으로 남습니다. 최근 ${EDIT_LOG_MAX}건까지 보관합니다.<br>
+      비고 칸에 메모를 적고 다른 칸을 누르면 저절로 저장됩니다.
+    </div>
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px;">
+      <span style="font-size:13px;font-weight:800;color:${unseen ? '#3730a3' : '#6b7280'};">확인 안 한 것 ${unseen}건 / 전체 ${all.length}건</span>
+      <label style="display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:700;color:#374151;cursor:pointer;"><input type="checkbox" id="el-only-new" ${onlyNew ? 'checked' : ''} style="width:15px;height:15px;"> 확인 안 한 것만 보기</label>
+      <button class="dash-action-btn" id="el-seen-all" ${unseen ? '' : 'disabled'} style="margin-left:auto;background:#4f46e5;color:#fff;border-color:#4338ca;font-weight:800;padding:7px 16px;">전부 읽음</button>
+    </div>
+    <div class="dash-table-wrap"><table class="dash-table"><thead><tr>
+      <th style="min-width:118px;">수정일</th><th style="min-width:70px;">이름</th><th style="min-width:64px;">직책</th><th style="min-width:96px;">화면</th>
+      <th style="min-width:110px;">대상</th><th style="min-width:66px;">한 일</th><th style="min-width:280px;">내용</th><th style="min-width:160px;">비고</th><th style="min-width:64px;">확인</th>
+    </tr></thead><tbody>`;
+    if (!list.length) {
+      h += `<tr><td colspan="9" style="text-align:center;color:#9ca3af;padding:22px;">${all.length ? '확인 안 한 이력이 없습니다.' : '아직 남은 이력이 없습니다.'}</td></tr>`;
+    }
+    list.forEach(x => {
+      const actColor = { '추가': '#065f46', '삭제': '#b91c1c', '일괄 수정': '#92400e' }[x.action] || '#1e3a8a';
+      h += `<tr style="${x.seen ? '' : 'background:#eef2ff;'}">
+        <td style="text-align:center;white-space:nowrap;font-size:12px;">${escapeHtml(x.at || '')}</td>
+        <td style="text-align:center;font-weight:700;">${escapeHtml(x.name || '')}</td>
+        <td style="text-align:center;font-size:12px;color:#6b7280;">${escapeHtml(x.role || '')}</td>
+        <td style="text-align:center;font-size:12px;">${escapeHtml(x.screen || '')}</td>
+        <td style="font-weight:700;">${escapeHtml(x.target || '')}</td>
+        <td style="text-align:center;font-weight:800;color:${actColor};white-space:nowrap;">${escapeHtml(x.action || '')}</td>
+        <td style="font-size:12px;line-height:1.6;white-space:pre-wrap;word-break:break-all;">${escapeHtml(String(x.content || '').split(' / ').join('\n'))}</td>
+        <td><input type="text" class="el-memo" data-el-id="${escapeHtml(x.id || '')}" lang="ko" value="${escapeHtml(x.memo || '')}" placeholder="메모" style="width:100%;box-sizing:border-box;padding:5px 7px;border:1px solid #d1d5db;border-radius:5px;font-size:12px;font-family:inherit;"></td>
+        <td style="text-align:center;">${x.seen ? '<span style="font-size:11.5px;color:#9ca3af;">읽음</span>' : `<button class="dash-action-btn el-seen" data-el-id="${escapeHtml(x.id || '')}" style="font-size:11.5px;padding:4px 10px;font-weight:800;color:#3730a3;border-color:#c7d2fe;">확인</button>`}</td>
+      </tr>`;
+    });
+    h += `</tbody></table></div>`;
+    return h;
+  }
+  function bindEditLogDash() {
+    document.getElementById('el-only-new')?.addEventListener('change', ev => { state.editLogOnlyNew = !!ev.target.checked; renderDashboard(); });
+    document.getElementById('el-seen-all')?.addEventListener('click', async () => {
+      const ok = await editLogUpdate(items => items.forEach(x => { x.seen = true; }));
+      if (ok) { toast('전부 읽음으로 표시했습니다', 'success'); renderDashboard(); hwTopPaint(); }
+    });
+    document.querySelectorAll('#dash-body .el-seen').forEach(b => b.addEventListener('click', async () => {
+      const id = b.dataset.elId;
+      const ok = await editLogUpdate(items => { const x = items.find(y => y.id === id); if (x) x.seen = true; });
+      if (ok) { renderDashboard(); hwTopPaint(); }
+    }));
+    document.querySelectorAll('#dash-body .el-memo').forEach(inp => {
+      inp.addEventListener('focus', () => { state.editLogTyping = true; });
+      inp.addEventListener('blur', () => { state.editLogTyping = false; });
+      inp.addEventListener('change', async () => {
+        const id = inp.dataset.elId, memo = String(inp.value || '').trim();
+        const ok = await editLogUpdate(items => { const x = items.find(y => y.id === id); if (x) x.memo = memo; });
+        if (ok) toast('비고를 저장했습니다', 'success');
+      });
+    });
   }
 
   // ============================================================
@@ -11224,7 +11409,7 @@ window.addEventListener('firebase-ready', () => {
     }
   }
 
-  async function saveViewPerms(obj, delObj) {
+  async function saveViewPerms(obj, delObj, editObj) {
     if (!isOwnerUser()) { toast('최고관리자만 바꿀 수 있습니다', 'error'); return false; }
     const clean = {};
     const cleanDel = {};
@@ -11235,10 +11420,15 @@ window.addEventListener('firebase-ready', () => {
       const d = (delObj || {})[k];
       if (d && ROLE_RANK[d] !== undefined) cleanDel[k] = d;
     });
+    // hotfix383: [고치기] 권한 — 인자를 안 주면 지금 값을 그대로 둔다
+    const cleanEdit = {};
+    const src = (editObj && typeof editObj === 'object') ? editObj : (state.viewEdits || {});
+    EDIT_VIEWS.forEach(k => { const e = src[k]; if (e && ROLE_RANK[e] !== undefined) cleanEdit[k] = e; });
     try {
       await setDoc(doc(db, 'settings', 'permissions'), {
         views: clean,
         deletes: cleanDel,
+        edits: cleanEdit,
         // hotfix325: 원사 성분(혼용율)을 관리자·직원에게 보일지 — 최고관리자가 켜고 끈다
         yarn_comp_open: !!state.yarnCompOpen,
         updated_at: serverTimestamp(),
@@ -11246,6 +11436,7 @@ window.addEventListener('firebase-ready', () => {
       });
       state.viewPerms = clean;
       state.viewDeletes = cleanDel;
+      state.viewEdits = cleanEdit;
       return true;
     } catch (e) {
       toast('권한 저장 실패: ' + e.message, 'error');
@@ -11478,10 +11669,20 @@ window.addEventListener('firebase-ready', () => {
       if (typeof hwTopPaint === 'function') hwTopPaint();
       if (state.uiMode === 'dashboard' && state.dashView === 'users') renderDashboard();
     }, err => console.warn('[users sub]', err.message));
+    // hotfix383: 수정 이력 구독 — 최고관리자만 (배지와 화면에 쓴다)
+    if (isOwnerUser()) {
+      onSnapshot(doc(db, 'settings', 'edit_log'), snap => {
+        state.editLog = (snap.exists() && Array.isArray(snap.data().items)) ? snap.data().items : [];
+        state.editLogLoaded = true;
+        if (typeof hwTopPaint === 'function') hwTopPaint();
+        if (state.uiMode === 'dashboard' && state.dashView === 'editLog' && !state.editLogTyping) renderDashboard();
+      }, err => console.warn('[editLog sub]', err.message));
+    }
     // hotfix260: 화면별 권한 구독
     onSnapshot(doc(db, 'settings', 'permissions'), snap => {
       state.viewPerms = (snap.exists() && snap.data().views && typeof snap.data().views === 'object') ? snap.data().views : {};
       state.viewDeletes = (snap.exists() && snap.data().deletes && typeof snap.data().deletes === 'object') ? snap.data().deletes : {};
+      state.viewEdits = (snap.exists() && snap.data().edits && typeof snap.data().edits === 'object') ? snap.data().edits : {};   // hotfix383
       state.yarnCompOpen = !!(snap.exists() && snap.data().yarn_comp_open);
       applyMenuPermissions();
       if (state.uiMode === 'dashboard' && state.dashView === 'yarnSetup') renderDashboard();
@@ -11602,6 +11803,8 @@ window.addEventListener('firebase-ready', () => {
 
   // hotfix66: 원단 기본 스펙 저장 (관리자만) — settings/fabric_specs
   async function saveFabricSpecs(items, gubuns) {
+    if (!canEditView('fabricSpecs')) { toast('원단 스펙을 고치는 권한이 없습니다', 'error'); return false; }   // hotfix383
+    const prevSpecs = Array.isArray(state.fabricSpecs) ? state.fabricSpecs : [];   // hotfix383: 수정 이력용 옛 목록
     const cleaned = (items || []).map(it => ({
       name: String(it.name || '').trim(),
       // hotfix264: 품목 고정 코드 — 이름이 바뀌어도 원가 자료가 끊기지 않게 하는 열쇠
@@ -11639,6 +11842,9 @@ window.addEventListener('firebase-ready', () => {
     });
     state.fabricSpecs = cleaned;
     state.fabricGubuns = gClean;
+    // hotfix383: 달라진 것만 이력에 남긴다 (코드가 있으면 코드로, 없으면 이름으로 짝을 맞춘다)
+    logEdits('fabricSpecs', editLogDiff('fabricSpecs', prevSpecs, cleaned,
+      x => String(x.fid || '').trim() || ('n:' + String(x.name || '').trim().toLowerCase())));
     return true;
   }
   // ===== hotfix283: 품목 자료 CSV 내려받기 / 올려 고치기 =====
@@ -11907,7 +12113,8 @@ window.addEventListener('firebase-ready', () => {
   }
   // hotfix158: 거래처(업체) 저장 (관리자만) — settings/vendors
   async function saveVendors(items) {
-    if (!isAdminEmail()) { toast('관리자만 변경할 수 있습니다', 'error'); return false; }
+    if (!canEditView('vendors')) { toast('거래처를 고치는 권한이 없습니다', 'error'); return false; }   // hotfix383
+    const prevVendors = Array.isArray(state.vendors) ? state.vendors : [];   // hotfix383: 수정 이력용 옛 목록
     const cleaned = (items || []).map(v => {
       const types = Array.isArray(v.types) ? v.types.filter(Boolean) : (v.type ? [String(v.type).trim()] : []);
       // hotfix166: 다른 표기(별칭) 보존 — 대표명과 중복·빈값 제거
@@ -11936,6 +12143,7 @@ window.addEventListener('firebase-ready', () => {
       updated_by: state.user?.email || 'unknown'
     });
     state.vendors = cleaned;
+    logEdits('vendors', editLogDiff('vendors', prevVendors, cleaned, x => String(x.name || '').trim().toLowerCase()));   // hotfix383
     return true;
   }
   // hotfix83: 규격 허용치 저장 (관리자만) — settings/spec_tolerance
@@ -24569,7 +24777,9 @@ function validateBlendSum(blends, label) {
   let vdSortDir = 'asc';
   let vdShowOff = false;
   function renderVendors() {
-    if (!isAdminEmail()) return `<div class="dash-empty">관리자 전용 화면입니다.</div>`;
+    if (!canAccessView('vendors')) return `<div class="dash-empty">이 화면을 볼 권한이 없습니다.</div>`;
+    const vEditOn = canEditView('vendors');   // hotfix383: 고치기는 [권한 설정]의 [고치기] 칸을 따른다 (기본 관리자까지)
+    const vDelOn = isOwnerUser();             // hotfix383: 삭제는 최고관리자만
     const vs = state.vendors || [];
     const offCnt = vs.filter(v => !vendorIsActive(v)).length;
     const lblS = 'font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:4px;';
@@ -24610,10 +24820,10 @@ function validateBlendSum(blends, label) {
           <td style="color:#6b7280;font-size:12px;">${(Array.isArray(v.aliases) && v.aliases.length) ? v.aliases.map(a => escapeHtml(a)).join(', ') : '<span style="color:#c7cbd1;">-</span>'}</td>
           <td style="color:#6b7280;">${escapeHtml(v.memo || '')}</td>
           <td style="text-align:right;white-space:nowrap;">
-            <button class="dash-action-btn vendor-toggle-btn" data-idx="${i}" title="${on ? '선택 목록에서 숨깁니다 (기존 의뢰서는 그대로)' : '다시 선택 목록에 보이게 합니다'}">${on ? '사용 중지' : '다시 사용'}</button>
+            ${vEditOn ? `<button class="dash-action-btn vendor-toggle-btn" data-idx="${i}" title="${on ? '선택 목록에서 숨깁니다 (기존 의뢰서는 그대로)' : '다시 선택 목록에 보이게 합니다'}">${on ? '사용 중지' : '다시 사용'}</button>
             <button class="dash-action-btn vendor-edit-btn" data-idx="${i}">수정</button>
-            <button class="dash-action-btn vendor-merge-btn" data-name="${escapeHtml(v.name)}" title="이 거래처를 다른 거래처로 합치기">합치기</button>
-            <button class="dash-action-btn vendor-del-btn" data-idx="${i}" style="color:#b91c1c;border-color:#fecaca;">삭제</button>
+            <button class="dash-action-btn vendor-merge-btn" data-name="${escapeHtml(v.name)}" title="이 거래처를 다른 거래처로 합치기">합치기</button>` : '<span style="font-size:11.5px;color:#9ca3af;">보기만</span>'}
+            ${vDelOn ? `<button class="dash-action-btn vendor-del-btn" data-idx="${i}" style="color:#b91c1c;border-color:#fecaca;">삭제</button>` : ''}
           </td>
         </tr>`; }).join('')
       : `<tr><td colspan="7" style="text-align:center;color:#9ca3af;padding:26px;">${vs.length === 0 ? '등록된 거래처가 없습니다. 아래 양식에서 추가해 주세요.' : (vq ? `"${escapeHtml(vdSearch)}" 검색 결과가 없습니다.` : '보여줄 거래처가 없습니다.')}</td></tr>`;
@@ -24621,9 +24831,9 @@ function validateBlendSum(blends, label) {
       <div style="max-width:980px;margin:0 auto;">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:12px;">
           <div style="font-size:12px;color:#6b7280;line-height:1.7;">작업지시서에서 선택할 거래처(업체)를 미리 등록·관리하는 곳입니다. 여기 등록한 업체는 앞으로 작지 작성 시 목록에서 바로 고를 수 있습니다.<br>거래가 끊긴 업체는 <strong>[사용 중지]</strong>를 누르면 선택 목록에서 사라집니다. <strong>기존 의뢰서는 그대로 남습니다.</strong>${offCnt ? ` <span style="color:#b45309;font-weight:700;">(현재 사용 안 함 ${offCnt}곳)</span>` : ''}</div>
-          <button id="vendor-alias-helper-btn" class="dash-action-btn" style="white-space:nowrap;background:var(--brand-soft);color:var(--brand-deep);border-color:var(--brand-light);font-weight:700;">표기 통일 도우미</button>
+          <button id="vendor-alias-helper-btn" class="dash-action-btn" style="white-space:nowrap;background:var(--brand-soft);color:var(--brand-deep);border-color:var(--brand-light);font-weight:700;${vEditOn ? '' : 'display:none;'}">표기 통일 도우미</button>
         </div>
-        <div style="margin-bottom:10px;"><button id="vendor-form-toggle" class="dash-action-btn" style="background:var(--brand-deep);color:#fff;font-weight:800;padding:7px 14px;">＋ 거래처 추가</button>
+        <div style="margin-bottom:10px;${vEditOn ? '' : 'display:none;'}"><button id="vendor-form-toggle" class="dash-action-btn" style="background:var(--brand-deep);color:#fff;font-weight:800;padding:7px 14px;">＋ 거래처 추가</button>
           <span style="font-size:11.5px;color:#94a3b8;margin-left:8px;">누르면 입력 칸이 펼쳐집니다</span></div>
         <div id="vendor-form-box" style="display:${state.vendorFormOpen ? 'block' : 'none'};background:#fff;border:1px solid var(--ui-line);border-radius:12px;padding:16px 18px;margin-bottom:16px;box-shadow:var(--ui-shadow-sm);">
           <div style="font-weight:800;font-size:13px;color:var(--brand-deep);margin-bottom:12px;" id="vendor-form-title">거래처 추가</div>
@@ -24786,7 +24996,7 @@ function validateBlendSum(blends, label) {
   let fsSortDir = 'asc';
   let fsShowOff = false;
   function renderFabricSpecs() {
-    if (!isAdminEmail()) return `<div class="dash-empty">관리자 전용 화면입니다.</div>`;
+    if (!canAccessView('fabricSpecs')) return `<div class="dash-empty">이 화면을 볼 권한이 없습니다.</div>`;
     const specs = getFabricSpecs();
     const gubuns = getFabricGubuns();
     // hotfix264: 원가 항목은 최고관리자에게만, 그것도 경영 자료가 풀려 있을 때만 보인다
@@ -24794,8 +25004,8 @@ function validateBlendSum(blends, label) {
     // hotfix322 (대표 확정): 조직 열은 이 화면에서 뺀다.
     //   조직은 [원가 계산기] > [품목 카드]에서 고르고 본다. 관리자·직원은 볼 일이 없다.
     const catOn = false;
-    // 수정은 최고관리자만. 관리자·직원은 보기만 한다.
-    const editOn = isOwnerUser();
+    // hotfix383: 수정은 [권한 설정]의 [고치기] 칸을 따른다 (기본 최고관리자만)
+    const editOn = canEditView('fabricSpecs');
     const inputStyle = 'width:100%;padding:7px 9px;border:1px solid #d1d5db;border-radius:5px;font-size:13px;font-family:inherit;box-sizing:border-box;';
     let h = `<div style="font-size:12px;color:#555;margin:4px 0 12px;line-height:1.6;">
       품목별 표준 작업 스펙입니다. 작업의뢰서에서 품목을 고르면 <strong>기준 폭·중량</strong>이 자동으로 채워지고,
@@ -24807,7 +25017,7 @@ function validateBlendSum(blends, label) {
       <button class="dash-action-btn" id="fs-gubun-btn" style="font-weight:700;padding:6px 14px;" title="몸판·리프 외에 스와치·문방구 같은 구분을 직접 추가·삭제합니다">구분 관리</button>` : ''}
       <span style="font-size:12px;color:#6b7280;font-weight:700;">총 ${specs.length}품목</span>
       <button class="dash-action-btn" id="fs-csv-out" style="margin-left:auto;font-weight:700;padding:6px 14px;" title="지금 품목 전부를 엑셀(CSV) 파일로 내려받습니다">CSV 내려받기</button>
-      <button class="dash-action-btn" id="fs-csv-in" style="font-weight:700;padding:6px 14px;" title="내려받아 고친 CSV 파일을 올려 품목 자료를 한꺼번에 고칩니다">CSV 올려 고치기</button>
+      ${editOn ? `<button class="dash-action-btn" id="fs-csv-in" style="font-weight:700;padding:6px 14px;" title="내려받아 고친 CSV 파일을 올려 품목 자료를 한꺼번에 고칩니다">CSV 올려 고치기</button>` : ''}
       <input type="file" id="fs-csv-file" accept=".csv,text/csv" style="display:none;">
     </div>`;
     // hotfix244: 구분 탭 / hotfix246: 판매 종료 탭
@@ -24902,7 +25112,7 @@ function validateBlendSum(blends, label) {
           ? `<span style="display:inline-block;padding:2px 9px;border-radius:10px;background:#ecfdf5;border:1px solid #a7f3d0;color:#047857;font-weight:800;">등록</span>`
           : `<span style="color:#c7cbd1;">-</span>`}</td>` : ''}
         <td style="text-align:center;color:#6b7280;font-size:12px;">${escapeHtml(s.updated_at || '-')}</td>
-        <td class="col-action" style="text-align:center;"><button class="dash-action-btn fs-sale-btn" data-idx="${i}" style="font-size:11px;${onSale ? '' : 'color:#b45309;border-color:#fcd34d;'}" title="${onSale ? '작지 품목칸 목록에서 숨깁니다 (기존 의뢰서는 그대로)' : '다시 품목칸 목록에 보이게 합니다'}">${onSale ? '판매 종료' : '판매 재개'}</button></td>
+        <td class="col-action" style="text-align:center;">${editOn ? `<button class="dash-action-btn fs-sale-btn" data-idx="${i}" style="font-size:11px;${onSale ? '' : 'color:#b45309;border-color:#fcd34d;'}" title="${onSale ? '작지 품목칸 목록에서 숨깁니다 (기존 의뢰서는 그대로)' : '다시 품목칸 목록에 보이게 합니다'}">${onSale ? '판매 종료' : '판매 재개'}</button>` : `<span style="font-size:11.5px;color:${onSale ? '#065f46' : '#b45309'};font-weight:700;">${onSale ? '판매 중' : '판매 종료'}</span>`}</td>
         ${editOn ? `<td class="col-action col-act-edit"><button class="dash-action-btn fs-edit-btn" data-idx="${i}">수정</button></td>` : ''}
         <td class="col-action col-act-delete"><button class="dash-action-btn danger fs-del-btn" data-idx="${i}">삭제</button></td>
       </tr>`;
@@ -25314,6 +25524,9 @@ function validateBlendSum(blends, label) {
       <strong>관리자</strong> 체크를 풀면 그 화면은 최고관리자만 보게 됩니다. <strong>직원</strong> 체크를 풀면 관리자까지만 봅니다.<br>
       <strong>화면을 열어주면 그 화면은 대표가 보는 것과 똑같이 보입니다.</strong> 수정·복사·완료·부족·재염 같은 작업 버튼이 전부 나옵니다.<br>
       <strong>삭제만은 따로</strong>입니다. 오른쪽 [삭제] 칸에서 화면마다 누구까지 지울 수 있는지 정하십시오. 기본은 관리자까지입니다.<br>
+      <strong>[고치기]</strong>는 설정 화면(원단 스펙 · 거래처)을 누구까지 고칠 수 있는지입니다. 이 두 화면의 삭제는 최고관리자만 합니다.
+      관리자·직원이 고친 것은 <strong>[수정 이력]</strong>에 남고 위쪽 [수정 발생] 배지로 알려 드립니다.<br>
+      <span style="color:#b45309;">[고치기]를 직원까지 주려면 Firestore 규칙(settings 쓰기)도 함께 열어야 저장이 됩니다.</span><br>
       바꾼 뒤 <strong>[저장]</strong>을 눌러야 반영되고, 그 사람이 화면을 새로 고치면 바로 적용됩니다.
     </div>`;
     h += `<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:11px 14px;margin-bottom:16px;font-size:12px;color:#b91c1c;line-height:1.7;">
@@ -25336,8 +25549,8 @@ function validateBlendSum(blends, label) {
 
     groups.forEach(([title, views]) => {
       h += `<div style="font-size:13px;font-weight:800;color:#1f2937;margin:14px 0 6px;">${title}</div>`;
-      h += `<div class="dash-table-wrap" style="max-width:640px;"><table class="dash-table"><thead><tr>
-        <th>화면</th><th style="width:96px;text-align:center;">관리자</th><th style="width:88px;text-align:center;">직원</th><th style="width:150px;text-align:center;">삭제</th><th>지금 보이는 사람</th>
+      h += `<div class="dash-table-wrap" style="max-width:780px;"><table class="dash-table"><thead><tr>
+        <th>화면</th><th style="width:96px;text-align:center;">관리자</th><th style="width:88px;text-align:center;">직원</th><th style="width:140px;text-align:center;">고치기</th><th style="width:150px;text-align:center;">삭제</th><th>지금 보이는 사람</th>
       </tr></thead><tbody>`;
       views.forEach(v => {
         const cur = viewMinRole(v);
@@ -25346,13 +25559,23 @@ function validateBlendSum(blends, label) {
         const stfOk = cur === 'staff';
         const who = cur === 'owner' ? '최고관리자만' : (cur === 'admin' ? '최고관리자 · 관리자' : '전원');
         const delCur = deleteMinRole(v);   // hotfix265: 화면별 삭제 권한
+        const editable = EDIT_VIEWS.includes(v);   // hotfix383: [고치기] 칸이 있는 화면
+        const editCur = editMinRole(v);
         h += `<tr>
           <td style="font-weight:700;">${escapeHtml(VIEW_LABELS[v] || v)}</td>
           <td style="text-align:center;">${locked ? '<span style="font-size:11.5px;color:#9ca3af;">불가</span>'
             : `<input type="checkbox" class="perm-adm" data-perm-view="${v}" ${admOk ? 'checked' : ''} style="width:16px;height:16px;cursor:pointer;">`}</td>
           <td style="text-align:center;">${locked ? '<span style="font-size:11.5px;color:#9ca3af;">불가</span>'
             : `<input type="checkbox" class="perm-stf" data-perm-view="${v}" ${stfOk ? 'checked' : ''} ${admOk ? '' : 'disabled'} style="width:16px;height:16px;cursor:pointer;">`}</td>
-          <td style="text-align:center;">${(locked || v === 'daily-report') ? '<span style="font-size:11.5px;color:#9ca3af;">해당 없음</span>'
+          <td style="text-align:center;">${editable
+            ? `<select class="perm-edit" data-perm-view="${v}" style="width:100%;padding:4px 6px;border:1px solid #d1d5db;border-radius:5px;font-size:12px;font-family:inherit;">
+                <option value="owner"${editCur === 'owner' ? ' selected' : ''}>대표만</option>
+                <option value="admin"${editCur === 'admin' ? ' selected' : ''}>관리자까지</option>
+                <option value="staff"${editCur === 'staff' ? ' selected' : ''}>직원까지</option>
+              </select>`
+            : '<span style="font-size:11.5px;color:#9ca3af;">해당 없음</span>'}</td>
+          <td style="text-align:center;">${editable ? '<span style="font-size:11.5px;color:#6b7280;font-weight:700;">대표만 (고정)</span>'
+            : (locked || v === 'daily-report') ? '<span style="font-size:11.5px;color:#9ca3af;">해당 없음</span>'
             : `<select class="perm-del" data-perm-view="${v}" style="width:100%;padding:4px 6px;border:1px solid #d1d5db;border-radius:5px;font-size:12px;font-family:inherit;">
                 <option value="owner"${delCur === 'owner' ? ' selected' : ''}>대표만</option>
                 <option value="admin"${delCur === 'admin' ? ' selected' : ''}>관리자까지</option>
@@ -25379,6 +25602,15 @@ function validateBlendSum(blends, label) {
       if (!adm.checked) next[v] = 'owner';
       else if (stf && stf.checked) next[v] = 'staff';
       else next[v] = 'admin';
+    });
+    return next;
+  }
+  // hotfix383: 화면별 [고치기] 권한 수집
+  function permCollectEditsFromScreen() {
+    const next = {};
+    document.querySelectorAll('#dash-body .perm-edit').forEach(sel => {
+      const v = sel.dataset.permView;
+      if (v && ROLE_RANK[sel.value] !== undefined) next[v] = sel.value;
     });
     return next;
   }
@@ -34727,6 +34959,10 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
       title = '사용자 관리 (최고관리자 전용)';
       body = renderUsersDash();
       addBtn.style.display = 'none';
+    } else if (state.dashView === 'editLog') {
+      title = '수정 이력 (최고관리자 전용)';
+      body = renderEditLogDash();
+      addBtn.style.display = 'none';
     } else if (state.dashView === 'backup') {
       title = '백업 내려받기 (최고관리자 전용)';
       body = renderBackupDash();
@@ -35324,6 +35560,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
   function attachDashHandlers() {
     // hotfix336: 사용자 관리 화면
     if (state.dashView === 'users') bindUsersDash();
+    if (state.dashView === 'editLog') bindEditLogDash();   // hotfix383
     // hotfix343: 염/가공료 설정
     if (state.dashView === 'costCalc' && (state.costTab || 'card') === 'procfee') bindProcFeeTab();
     // hotfix380: [＋ 거래처 추가] 펼치기 · 접기
@@ -36984,6 +37221,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
       });
       document.querySelectorAll('#dash-body .vendor-del-btn').forEach(btn => {
         btn.addEventListener('click', async () => {
+          if (!isOwnerUser()) { toast('거래처 삭제는 최고관리자만 할 수 있습니다', 'error'); return; }   // hotfix383
           const idx = parseInt(btn.dataset.idx, 10);
           const v = (state.vendors || [])[idx];
           if (!v) return;
@@ -37232,11 +37470,11 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
       document.getElementById('fs-f-gubun')?.addEventListener('change', fsPaintGyRange);
       const closeModal = () => { modal.classList.remove('show'); editingSpecIdx = null; };
       document.getElementById('fs-add-btn')?.addEventListener('click', () => {
-        if (!isOwnerUser()) { toast('품목을 넣고 고치는 것은 최고관리자만 할 수 있습니다', 'error'); return; }
+        if (!canEditView('fabricSpecs')) { toast('품목을 넣고 고치는 권한이 없습니다 — [권한 설정]의 [고치기] 칸에서 받을 수 있습니다', 'error'); return; }
         openModal(-1);
       });
       document.querySelectorAll('.fs-edit-btn').forEach(b => b.addEventListener('click', () => {
-        if (!isOwnerUser()) { toast('품목을 고치는 것은 최고관리자만 할 수 있습니다', 'error'); return; }
+        if (!canEditView('fabricSpecs')) { toast('품목을 고치는 권한이 없습니다 — [권한 설정]의 [고치기] 칸에서 받을 수 있습니다', 'error'); return; }
         openModal(parseInt(b.dataset.idx, 10));
       }));
       document.getElementById('fs-modal-close')?.addEventListener('click', closeModal);
@@ -37315,6 +37553,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
       });
 
       document.querySelectorAll('.fs-del-btn').forEach(b => b.addEventListener('click', async () => {
+        if (!isOwnerUser()) { toast('품목 삭제는 최고관리자만 할 수 있습니다', 'error'); return; }   // hotfix383
         const idx = parseInt(b.dataset.idx, 10);
         const specs = getFabricSpecs();
         const s = specs[idx]; if (!s) return;
@@ -38975,8 +39214,9 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
     if (permSaveEl) permSaveEl.addEventListener('click', async () => {
       const next = permCollectFromScreen();
       const nextDel = permCollectDeletesFromScreen();   // hotfix265
+      const nextEdit = permCollectEditsFromScreen();    // hotfix383
       permSaveEl.disabled = true; permSaveEl.textContent = '저장 중...';
-      const ok = await saveViewPerms(next, nextDel);
+      const ok = await saveViewPerms(next, nextDel, nextEdit);
       permSaveEl.disabled = false; permSaveEl.textContent = '저장';
       if (ok) { toast('권한을 저장했습니다', 'success'); renderDashboard(); }
     });
@@ -38985,7 +39225,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
     const permResetEl = document.getElementById('perm-reset');
     if (permResetEl) permResetEl.addEventListener('click', async () => {
       if (!confirm('모든 화면의 권한을 기본값으로 되돌립니다.\n삭제 권한도 전부 [관리자까지]로 돌아갑니다. 계속할까요?')) return;
-      const ok = await saveViewPerms(Object.assign({}, VIEW_PERMS_DEFAULT), {});
+      const ok = await saveViewPerms(Object.assign({}, VIEW_PERMS_DEFAULT), {}, {});
       if (ok) { toast('기본값으로 되돌렸습니다', 'success'); renderDashboard(); }
     });
 
@@ -41606,7 +41846,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix382';
+  const VERSION = 'v2.53 hotfix383';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
