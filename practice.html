@@ -3548,6 +3548,8 @@
     padding: 12px 16px;
     background: #000;
     color: #fff;
+    cursor: move;   /* hotfix398: 머리띠를 잡고 끌어 옮긴다 */
+    user-select: none;
     font-weight: 700;
     gap: 12px;
   }
@@ -4858,6 +4860,18 @@
   }
   body.is-no-purge [data-restore],
   body.is-no-purge [data-purge] {
+    display: none !important;
+  }
+  /* hotfix398: 의뢰서 작성 · 복사 · 수정 권한이 없는 사람 — 새 의뢰서 · 복사 · 수정 · 저장 단추를 감춘다 */
+  body.is-no-write #new-btn,
+  body.is-no-write #dash-add-btn,
+  body.is-no-write #save-btn,
+  body.is-no-write .item-copy-btn,
+  body.is-no-write .item-edit-btn,
+  body.is-no-write .dash-copy-btn,
+  body.is-no-write .dash-edit-btn,
+  body.is-no-write th.col-act-copy,
+  body.is-no-write td.col-act-copy {
     display: none !important;
   }
   
@@ -7422,6 +7436,7 @@ const state = {
   gsPart: 'all',            // 'all' | '몸판' | '리프'
   ovKnitSearch: '',         // hotfix259: 전체 대시보드 편직 품목 검색
   viewPerms: {},            // hotfix260: settings/permissions — 화면별 최소 등급
+  viewPeople: {},           // hotfix398: settings/permissions.people — 사람별 허용/차단
   viewDeletes: {},          // hotfix265: 화면별 삭제 최소 등급 (기본 관리자)
   viewEdits: {},            // hotfix383: 화면별 [고치기] 최소 등급 (원단 스펙 · 거래처)
   editLog: [],              // hotfix383: settings/edit_log — 관리자·직원이 설정을 고친 이력 (최고관리자만 읽는다)
@@ -9112,9 +9127,46 @@ const MODAL_BG_SEL = '.dash-modal-bg, .color-picker-modal-bg, .hiwos-modal-bg';
 function modalOverlayOf(el) {
   return (el && el.closest) ? el.closest(MODAL_BG_SEL) : null;
 }
-function modalIsDirty(modal) { return !!(modal && modal.__hiwosDirty); }
-function modalMarkClean(modal) { if (modal) { modal.__hiwosDirty = false; modal.__downOnBackdrop = undefined; } }
-function modalMarkDirty(modal) { if (modal) modal.__hiwosDirty = true; }
+// hotfix398: "실제로 달라진 칸이 있을 때만" 묻는다.
+//   · 팝업이 열릴 때 값을 찍어 둔다(스냅샷). 사람이 손대기 전에 프로그램이 채운 값은 첫 클릭·포커스 때 다시 찍는다
+//   · 닫을 때 지금 값과 스냅샷이 다르면 묻고, 고쳤다가 되돌렸으면 안 묻는다
+//   · 찾기·거르기 칸(data-nodirty · type=search · id 에 search/filter/-q)은 비교에서 뺀다
+const MODAL_NODIRTY_RE = /(search|filter|-q$|-q-|nodirty)/i;
+function modalFieldSkip(el) {
+  if (!el || el.disabled) return true;
+  if (el.closest && el.closest('[data-nodirty]')) return true;
+  if (el.type === 'search' || el.type === 'button' || el.type === 'submit' || el.type === 'hidden') return true;
+  return MODAL_NODIRTY_RE.test(String(el.id || '') + ' ' + String(el.name || '') + ' ' + String(el.className || ''));
+}
+function modalSnapshot(modal) {
+  if (!modal || !modal.querySelectorAll) return '';
+  const out = [];
+  modal.querySelectorAll('input, select, textarea').forEach(function (el, i) {
+    if (modalFieldSkip(el)) return;
+    const v = (el.type === 'checkbox' || el.type === 'radio') ? (el.checked ? '1' : '0') : String(el.value == null ? '' : el.value);
+    out.push((el.id || el.name || el.type || 'f') + '#' + i + '=' + v);
+  });
+  return out.join('\u0001');
+}
+function modalIsDirty(modal) {
+  if (!modal || !modal.__hiwosDirty) return false;
+  if (modal.__hiwosSnap == null) return true;   // 스냅샷이 없으면 옛 방식(손댔으면 묻기)
+  return modalSnapshot(modal) !== modal.__hiwosSnap;
+}
+function modalMarkClean(modal) { if (modal) { modal.__hiwosDirty = false; modal.__downOnBackdrop = undefined; modal.__hiwosSnap = null; } }
+function modalMarkDirty(modal) { if (modal) { if (!modal.__hiwosDirty && modal.__hiwosSnap == null) modal.__hiwosSnap = ''; modal.__hiwosDirty = true; } }
+function modalTakeSnap(modal) { if (modal && !modal.__hiwosDirty) modal.__hiwosSnap = modalSnapshot(modal); }
+// hotfix398: 팝업 드래그 이동 — 머리띠를 잡고 끈다 (단추·입력칸 위에서는 안 끌린다)
+const MODAL_DRAG_HEAD_SEL = '.dash-modal-head, .claim-modal-header, .redye-modal-header, .shortage-modal-header, .qc-modal-header-info';
+function modalPanelOf(overlay, el) {
+  let p = el;
+  while (p && p.parentElement && p.parentElement !== overlay) p = p.parentElement;
+  return (p && p.parentElement === overlay) ? p : null;
+}
+function modalResetDrag(overlay) {
+  if (!overlay || !overlay.children) return;
+  Array.prototype.forEach.call(overlay.children, function (c) { if (c.__hiwosDrag) { c.style.transform = ''; c.__hiwosDrag = null; } });
+}
 function modalConfirmClose(modal) {
   if (!modalIsDirty(modal)) return true;
   return confirm('입력하던 내용이 있습니다.\n저장하지 않고 닫을까요?');
@@ -9137,7 +9189,48 @@ function installModalGuards() {
   document.addEventListener('mousedown', function (e) {
     const m = modalOverlayOf(e.target);
     if (m) m.__downOnBackdrop = (e.target === m);
+    if (m && e.isTrusted) modalTakeSnap(m);   // hotfix398: 사람이 손대기 직전 값을 찍어 둔다
   }, true);
+  document.addEventListener('focusin', function (e) {
+    const m = modalOverlayOf(e.target);
+    if (m && e.isTrusted) modalTakeSnap(m);
+  }, true);
+  document.addEventListener('keydown', function (e) {
+    const m = modalOverlayOf(e.target);
+    if (m && e.isTrusted) modalTakeSnap(m);
+  }, true);
+
+  // hotfix398: 머리띠 드래그로 팝업 옮기기
+  function dragStart(e, x, y) {
+    if (e.target.closest && e.target.closest('button, input, select, textarea, a, label, [contenteditable]')) return null;
+    const head = e.target.closest ? e.target.closest(MODAL_DRAG_HEAD_SEL) : null;
+    if (!head) return null;
+    const m = modalOverlayOf(head); if (!m) return null;
+    const panel = modalPanelOf(m, head); if (!panel) return null;
+    const cur = panel.__hiwosDrag || { dx: 0, dy: 0 };
+    return { panel, sx: x, sy: y, ox: cur.dx, oy: cur.dy };
+  }
+  function dragMove(d, x, y) {
+    const dx = d.ox + (x - d.sx), dy = d.oy + (y - d.sy);
+    d.panel.__hiwosDrag = { dx, dy };
+    d.panel.style.transform = 'translate(' + dx + 'px,' + dy + 'px)';
+  }
+  let drag = null;
+  document.addEventListener('mousedown', function (e) {
+    if (e.button !== 0) return;
+    drag = dragStart(e, e.clientX, e.clientY);
+    if (drag) { e.preventDefault(); document.body.style.userSelect = 'none'; }
+  });
+  document.addEventListener('mousemove', function (e) { if (drag) dragMove(drag, e.clientX, e.clientY); });
+  document.addEventListener('mouseup', function () { if (drag) { drag = null; document.body.style.userSelect = ''; } });
+  document.addEventListener('touchstart', function (e) {
+    const t = e.touches && e.touches[0]; if (!t) return;
+    drag = dragStart(e, t.clientX, t.clientY);
+  }, { passive: true });
+  document.addEventListener('touchmove', function (e) {
+    const t = e.touches && e.touches[0]; if (drag && t) { dragMove(drag, t.clientX, t.clientY); e.preventDefault(); }
+  }, { passive: false });
+  document.addEventListener('touchend', function () { drag = null; });
 
   // 닫기 시도를 캡처 단계에서 먼저 가로챈다
   document.addEventListener('click', function (e) {
@@ -9168,7 +9261,8 @@ function installModalGuards() {
         if (r.type !== 'attributes' || !t || !t.matches || !t.matches(MODAL_BG_SEL)) continue;
         const nowShown = t.classList.contains('show');
         const wasShown = /(^|\s)show(\s|$)/.test(r.oldValue || '');
-        if (!nowShown || !wasShown) modalMarkClean(t);
+        if (!nowShown || !wasShown) { modalMarkClean(t); modalResetDrag(t); }   // hotfix398: 열고 닫을 때 위치도 제자리로
+        if (nowShown && !wasShown) modalTakeSnap(t);
       }
     });
     mo.observe(document.documentElement, {
@@ -10993,7 +11087,8 @@ window.addEventListener('firebase-ready', () => {
     of: 'staff', gs: 'staff', claims: 'staff', 'daily-report': 'staff',
     samples: 'staff', completed: 'staff', trash: 'owner',
     stampSettings: 'owner', specTol: 'owner',
-    fabricSpecs: 'admin', vendors: 'admin', yarnSetup: 'admin',
+    fabricSpecs: 'owner', vendors: 'owner', yarnSetup: 'owner', knitSetup: 'owner', procSetup: 'owner',   // hotfix398: [설정 및 관리]는 최고관리자 + 사람별로 허용한 관리자만
+    write: 'admin',   // hotfix398: 의뢰서 작성 · 복사 · 수정 (화면이 아니라 작업 항목)
     costCalc: 'owner', permissions: 'owner',
     users: 'owner', backup: 'owner', editLog: 'owner'
   };
@@ -11003,7 +11098,8 @@ window.addEventListener('firebase-ready', () => {
     of: '공문조회', gs: '생지출고조회', claims: '클레임(땡처리)조회', 'daily-report': '가공소 일일 체크',
     samples: '샘플 조회', completed: '완료의뢰서 조회', trash: '휴지통',
     stampSettings: '작지 스템프 설정', fabricSpecs: '품목 설정', vendors: '거래처 설정', specTol: '규격 허용치 설정',
-    yarnSetup: '원사 설정', knitSetup: '편직 설정', procSetup: '염/가공 설정',   // hotfix397: 편직 · 염/가공 설정은 원가 계산기의 그 탭을 연다
+    yarnSetup: '원사 설정', knitSetup: '편직 설정', procSetup: '염/가공 설정',   // hotfix398: 편직 · 염/가공 설정은 독립 화면 (원가 계산기 탭에도 그대로 있다)
+    write: '의뢰서 작성 · 복사 · 수정',   // hotfix398
     costCalc: '원가 계산기', permissions: '권한 설정',
     users: '사용자 관리', backup: '백업 내려받기', editLog: '수정 이력'
   };
@@ -11013,7 +11109,8 @@ window.addEventListener('firebase-ready', () => {
   // hotfix270: 비밀번호 잠금이 걸리는 화면 — 사이드바 [경영 전용] 다섯 화면 전부
   //   (등급 조정 가능 여부와는 별개다. 스탬프 설정·규격 허용치·휴지통은
   //    [권한 관리]에서 관리자까지 열 수 있지만, 대표 화면에서는 잠금 대상이다)
-  const OWNER_LOCK_SCREENS = ['stampSettings', 'specTol', 'trash', 'costCalc', 'permissions'];
+  const OWNER_LOCK_SCREENS = ['stampSettings', 'specTol', 'trash', 'costCalc', 'permissions',
+    'vendors', 'fabricSpecs', 'yarnSetup', 'knitSetup', 'procSetup'];   // hotfix398: [설정 및 관리]도 비밀번호 잠금
 
   // ============================================================
   // hotfix262: 최고관리자 잠금
@@ -11106,8 +11203,16 @@ window.addEventListener('firebase-ready', () => {
     if (typeof hwTopPaint === 'function') hwTopPaint();   // hotfix336: 자물쇠는 상단바에도 있다
   }
 
+  // hotfix398: 사람별 허용/차단 — settings/permissions.people = { 이메일키: { 화면: 'allow'|'deny' } } (이메일의 . 은 , 로 저장)
+  function permEmailKey(email) { return String(email || '').trim().toLowerCase().replace(/\./g, ','); }
+  function personRule(view, email) {
+    const em = email != null ? email : (state.user && state.user.email);
+    if (!em || !view) return '';
+    const p = (state.viewPeople || {})[permEmailKey(em)];
+    const r = p && p[view];
+    return (r === 'allow' || r === 'deny') ? r : '';
+  }
   function viewMinRole(view) {
-    if (view === 'knitSetup' || view === 'procSetup') view = 'costCalc';   // hotfix397: 원가 계산기 탭이므로 그 권한을 따른다
     if (OWNER_LOCKED_VIEWS.includes(view)) return 'owner';
     const saved = (state.viewPerms || {})[view];
     if (saved && ROLE_RANK[saved] !== undefined) return saved;
@@ -11115,8 +11220,18 @@ window.addEventListener('firebase-ready', () => {
   }
   function canAccessView(view) {
     if (!view) return true;
+    if (isOwnerUser()) return true;
+    if (!OWNER_LOCKED_VIEWS.includes(view)) {   // hotfix398: 사람별 예외 (경영 전용 화면은 예외 없음)
+      const r = personRule(view);
+      if (r === 'allow') return true;
+      if (r === 'deny') return false;
+    }
     return ROLE_RANK[userRole()] >= ROLE_RANK[viewMinRole(view)];
   }
+  // hotfix398: 의뢰서 작성 · 복사 · 수정 권한 (기본 관리자까지, 사람별 허용/차단)
+  function canWriteWo() { return !!state.user && canAccessView('write'); }
+  // hotfix398: 설정 화면의 코드(V · F · Y · P) 표시 = 최고관리자 + 그 화면을 허용받은 사람
+  function codeVisible(view) { return isOwnerUser() || personRule(view) === 'allow'; }
   // ============================================================
   // hotfix265: "권한을 준 화면은 대표와 똑같이 보인다"
   // ------------------------------------------------------------
@@ -11172,6 +11287,9 @@ window.addEventListener('firebase-ready', () => {
   function canEditView(view) {
     if (!state.user) return false;
     if (isOwnerUser()) return true;
+    const r = personRule(view);   // hotfix398: 화면을 사람별로 허용받았으면 고치기도 된다, 차단이면 안 된다
+    if (r === 'allow') return true;
+    if (r === 'deny') return false;
     return ROLE_RANK[userRole()] >= ROLE_RANK[editMinRole(view)];
   }
   // 영구 삭제·휴지통 복구는 등급 그대로 (Firestore 규칙이 관리자만 허용)
@@ -11180,6 +11298,7 @@ window.addEventListener('firebase-ready', () => {
   function applyDeletePermClass() {
     document.body.classList.toggle('is-no-delete', !canDeleteHere());
     document.body.classList.toggle('is-no-purge', !canPurge());
+    document.body.classList.toggle('is-no-write', !canWriteWo());   // hotfix398
   }
   // 사이드바 메뉴에서 권한 없는 항목을 감춘다
   function applyMenuPermissions() {
@@ -11904,7 +12023,7 @@ window.addEventListener('firebase-ready', () => {
     }
   }
 
-  async function saveViewPerms(obj, delObj, editObj) {
+  async function saveViewPerms(obj, delObj, editObj, peopleObj) {
     if (!isOwnerUser()) { toast('최고관리자만 바꿀 수 있습니다', 'error'); return false; }
     const clean = {};
     const cleanDel = {};
@@ -11919,11 +12038,20 @@ window.addEventListener('firebase-ready', () => {
     const cleanEdit = {};
     const src = (editObj && typeof editObj === 'object') ? editObj : (state.viewEdits || {});
     EDIT_VIEWS.forEach(k => { const e = src[k]; if (e && ROLE_RANK[e] !== undefined) cleanEdit[k] = e; });
+    // hotfix398: 사람별 허용/차단 — 인자를 안 주면 지금 값을 그대로 둔다. 빈 사람은 뺀다
+    const cleanPeople = {};
+    const psrc = (peopleObj && typeof peopleObj === 'object') ? peopleObj : (state.viewPeople || {});
+    Object.keys(psrc).forEach(em => {
+      const row = psrc[em]; if (!row || typeof row !== 'object') return;
+      const o = {}; Object.keys(row).forEach(v => { if ((row[v] === 'allow' || row[v] === 'deny') && VIEW_PERMS_DEFAULT[v] !== undefined && !OWNER_LOCKED_VIEWS.includes(v)) o[v] = row[v]; });
+      if (Object.keys(o).length) cleanPeople[em] = o;
+    });
     try {
       await setDoc(doc(db, C('settings'), 'permissions'), {
         views: clean,
         deletes: cleanDel,
         edits: cleanEdit,
+        people: cleanPeople,
         // hotfix325: 원사 성분(혼용율)을 관리자·직원에게 보일지 — 최고관리자가 켜고 끈다
         yarn_comp_open: !!state.yarnCompOpen,
         updated_at: serverTimestamp(),
@@ -11932,6 +12060,7 @@ window.addEventListener('firebase-ready', () => {
       state.viewPerms = clean;
       state.viewDeletes = cleanDel;
       state.viewEdits = cleanEdit;
+      state.viewPeople = cleanPeople;
       return true;
     } catch (e) {
       toast('권한 저장 실패: ' + e.message, 'error');
@@ -12202,6 +12331,8 @@ window.addEventListener('firebase-ready', () => {
       state.viewPerms = (snap.exists() && snap.data().views && typeof snap.data().views === 'object') ? snap.data().views : {};
       state.viewDeletes = (snap.exists() && snap.data().deletes && typeof snap.data().deletes === 'object') ? snap.data().deletes : {};
       state.viewEdits = (snap.exists() && snap.data().edits && typeof snap.data().edits === 'object') ? snap.data().edits : {};   // hotfix383
+      state.viewPeople = (snap.exists() && snap.data().people && typeof snap.data().people === 'object') ? snap.data().people : {};   // hotfix398
+      if (typeof hwTopPaint === 'function') hwTopPaint();   // hotfix398: 사람별 권한이 바뀌면 상단 메뉴도 다시
       state.yarnCompOpen = !!(snap.exists() && snap.data().yarn_comp_open);
       applyMenuPermissions();
       if (state.uiMode === 'dashboard' && state.dashView === 'yarnSetup') renderDashboard();
@@ -15115,8 +15246,9 @@ function validateBlendSum(blends, label) {
     //  [원사/편직/염색가공/B/T 진행] 클릭 = 전체 대시보드에서 해당 필터 누른 것과 완전히 동일하게.
     //  [전체 대시보드] 클릭 시 유형 필터는 전체로 초기화.
     // hotfix397: [설정 및 관리] > 편직 설정 · 염/가공 설정 = 원가 계산기의 편직 · 염/가공 탭 (화면은 하나, 길만 둘)
+    // hotfix398: 독립 화면으로. costTab 도 같이 맞춰 두어 표 안의 다시 그리기 판정이 그대로 돌게 한다
     const _SETUP_TAB = { knitSetup: 'knitfee', procSetup: 'procfee' };
-    if (_SETUP_TAB[view]) { state.costTab = _SETUP_TAB[view]; view = 'costCalc'; }
+    if (_SETUP_TAB[view]) { state.costTab = _SETUP_TAB[view]; if (view === 'procSetup') state.pfDraft = null; }
     const _TYPE_VIEW_MAP = { yarn: '원사', knit: '편직', finish: '염색가공', bt: 'BT' };
     if (_TYPE_VIEW_MAP[view]) {
       state.overviewTypeFilter = _TYPE_VIEW_MAP[view];
@@ -26224,7 +26356,7 @@ function validateBlendSum(blends, label) {
     const typeChip = (t) => t
       ? `<span style="display:inline-block;padding:2px 9px;border-radius:10px;background:${(TYPE_COLOR[t] || TYPE_COLOR['기타'])[0]};color:${(TYPE_COLOR[t] || TYPE_COLOR['기타'])[1]};font-size:11px;font-weight:700;margin:1px 2px 1px 0;">${escapeHtml(t)}</span>`
       : `<span style="color:#9ca3af;">-</span>`;
-    const codeOn = isOwnerUser();   // hotfix397: 코드는 설정 화면 안에서 최고관리자에게만
+    const codeOn = codeVisible('vendors');   // hotfix397/398: 코드는 최고관리자 + 이 화면을 허용받은 사람에게만
     // 원래 순번(i)을 유지한 채 거르고 정렬한다 — 수정·삭제 버튼이 이 순번을 쓴다
     let list = vs.map((v, i) => ({ v, i })).filter(o => vendorIsActive(o.v) || vdShowOff);
     const vq = vdSearch.trim().toLowerCase();
@@ -26962,7 +27094,8 @@ function validateBlendSum(blends, label) {
       ['진행 상황', ['yarn', 'knit', 'finish', 'print', 'bt', 'kpiboard']],
       ['보고', ['completeReports', 'ceoReports', 'daily-report']],
       ['목록', ['of', 'gs', 'claims', 'samples', 'completed']],
-      ['설정', ['fabricSpecs', 'vendors']],
+      ['작성', ['write']],   // hotfix398: 의뢰서 작성 · 복사 · 수정 (기본 관리자까지)
+      ['설정 및 관리 (기본 최고관리자 — 아래 사람별 표에서 관리자를 지정)', ['vendors', 'fabricSpecs', 'yarnSetup', 'knitSetup', 'procSetup']],
       ['경영 전용 (최고관리자)', ['stampSettings', 'specTol', 'trash', 'costCalc', 'permissions']]
     ];
     const allViews = groups.reduce((a, g) => a.concat(g[1]), []).filter(v => !OWNER_LOCKED_VIEWS.includes(v));
@@ -27036,12 +27169,44 @@ function validateBlendSum(blends, label) {
       });
       h += `</tbody></table></div>`;
     });
+    // hotfix398: 사람별 예외 — 등급 기본값 위에 사람마다 허용/차단을 얹는다
+    h += renderPermPeopleTable(groups);
     h += `<div style="margin-top:18px;display:flex;gap:8px;flex-wrap:wrap;">
       <button class="dash-action-btn" id="perm-save" style="background:#2563eb;color:#fff;font-weight:800;padding:9px 22px;">저장</button>
       <button class="dash-action-btn" id="perm-reset" style="padding:9px 18px;">기본값으로</button>
       <button class="dash-action-btn" id="perm-pin" style="margin-left:auto;padding:9px 18px;">경영 자료 비밀번호 ${ownerPinIsSet() ? '바꾸기' : '만들기'}</button>
     </div>`;
     return h;
+  }
+  // hotfix398: 사람별 허용/차단 표 — 줄 = 화면(항목), 칸 = 사람(최고관리자 제외). 값 = 등급대로 / 허용 / 차단
+  function renderPermPeopleTable(groups) {
+    const people = hwUsers().filter(u => u && u.email && u.active !== false && !OWNER_EMAILS.includes(String(u.email).toLowerCase()) && u.role !== 'owner');
+    const views = groups.reduce((a, g) => a.concat(g[1]), []).filter(v => !OWNER_LOCKED_VIEWS.includes(v));
+    let h = `<div style="font-size:13px;font-weight:800;color:#1f2937;margin:22px 0 6px;">사람별 예외</div>
+    <div style="font-size:12px;color:#6b7280;line-height:1.7;margin-bottom:8px;">위 등급 기본값 위에 <strong>사람마다</strong> 따로 얹습니다. <strong>허용</strong> = 등급이 낮아도 열림 (설정 화면이면 고치기 · 코드까지) · <strong>차단</strong> = 등급이 되어도 닫힘 · <strong>등급대로</strong> = 위 표 그대로.
+      [설정 및 관리]는 여기서 <strong>허용</strong>한 사람만 봅니다. 사람 목록은 [사용자 관리]에서 옵니다.</div>`;
+    if (!people.length) return h + `<div class="dash-empty" style="padding:14px;">[사용자 관리]에 등록된 사람이 없습니다.</div>`;
+    const sel = 'padding:3px 4px;border:1px solid #d1d5db;border-radius:5px;font-size:11.5px;font-family:inherit;width:100%;';
+    h += `<div class="dash-table-wrap" style="max-width:${Math.min(1100, 260 + people.length * 120)}px;"><table class="dash-table"><thead><tr><th>화면 · 항목</th>${people.map(u => `<th style="text-align:center;min-width:104px;">${escapeHtml(u.name || u.email)}<div style="font-size:10.5px;font-weight:400;color:#94a3b8;">${escapeHtml(roleLabel(u.role))}</div></th>`).join('')}</tr></thead><tbody>`;
+    views.forEach(v => {
+      h += `<tr><td style="font-weight:700;">${escapeHtml(VIEW_LABELS[v] || v)}</td>`;
+      people.forEach(u => {
+        const cur = personRule(v, u.email);
+        h += `<td style="text-align:center;"><select class="perm-person" data-perm-email="${escapeHtml(permEmailKey(u.email))}" data-perm-view="${v}" style="${sel}${cur === 'allow' ? 'background:#dcfce7;' : cur === 'deny' ? 'background:#fee2e2;' : ''}">
+          <option value=""${cur ? '' : ' selected'}>등급대로</option><option value="allow"${cur === 'allow' ? ' selected' : ''}>허용</option><option value="deny"${cur === 'deny' ? ' selected' : ''}>차단</option></select></td>`;
+      });
+      h += `</tr>`;
+    });
+    return h + `</tbody></table></div>`;
+  }
+  function permCollectPeopleFromScreen() {
+    const next = {};
+    document.querySelectorAll('#dash-body .perm-person').forEach(sel => {
+      const em = sel.dataset.permEmail, v = sel.dataset.permView;
+      if (!em || !v || !sel.value) return;
+      (next[em] = next[em] || {})[v] = sel.value;
+    });
+    return next;
   }
   // 체크 상태 → 최소 등급
   function permCollectFromScreen() {
@@ -27899,7 +28064,7 @@ function validateBlendSum(blends, label) {
     pfRepaint();
   }
   function renderProcFeeTab() {
-    if (!isOwnerUser()) return `<div class="dash-empty">최고관리자만 볼 수 있는 화면입니다.</div>`;
+    if (!canAccessView('procSetup')) return `<div class="dash-empty">최고관리자와 [권한 설정]에서 허용한 사람만 볼 수 있는 화면입니다.</div>`;   // hotfix398
     if (!state.costPricesLoaded) return `<div class="dash-empty">단가표를 읽는 중입니다…</div>`;
     const sub = state.pfSub || 'all';
     const tb = on => `padding:6px 16px;border:1px solid #1e3a8a;border-radius:8px;font-size:12.5px;font-weight:800;cursor:pointer;background:${on ? '#1e3a8a' : '#fff'};color:${on ? '#fff' : '#1e3a8a'};`;
@@ -28356,7 +28521,7 @@ function validateBlendSum(blends, label) {
     return out;
   }
   function renderKnitFeeTab() {
-    if (!isOwnerUser()) return `<div class="dash-empty">최고관리자만 볼 수 있는 화면입니다.</div>`;
+    if (!canAccessView('knitSetup')) return `<div class="dash-empty">최고관리자와 [권한 설정]에서 허용한 사람만 볼 수 있는 화면입니다.</div>`;   // hotfix398
     if (!state.fabricCostLoaded || !state.knitFeeLoaded) return `<div class="dash-empty">편직료 자료를 읽는 중입니다…</div>`;
     const rows = kfRowsAll();
     const q = String(state.kfQ || '').trim();
@@ -28436,7 +28601,7 @@ function validateBlendSum(blends, label) {
   }
   // 팝업 — 품목 × 공장 한 줄을 고친다. 카드에서도 같은 팝업이 열린다
   function openKnitFeePopup(fid, factory, yarnNames, onClose) {
-    if (!isOwnerUser()) { toast('최고관리자만 고칠 수 있습니다', 'error'); return; }
+    if (!canAccessView('knitSetup')) { toast('편직 설정 권한이 없습니다', 'error'); return; }   // hotfix398
     const key = String(fid || '').trim();
     const sp = getFabricSpecs().find(x => specFid(x) === key);
     if (!sp) { toast('품목을 찾지 못했습니다', 'error'); return; }
@@ -29916,7 +30081,7 @@ function validateBlendSum(blends, label) {
       const pt = yarnParts(y);   // hotfix393: 사종 · 컬러 · 브랜드 칸
       const colorTxt = yarnColorIsLW(pt.color) ? YARN_LW : pt.color;
       h += `<tr>
-        <td style="text-align:left;font-weight:700;">${escapeHtml(pt.base || y.name || '-')}${(y.yid && isOwnerUser()) ? `<span style="font-size:10.5px;color:#94a3b8;font-weight:400;margin-left:6px;">${escapeHtml(y.yid)}</span>` : ''}${(Array.isArray(y.aliases) && y.aliases.length) ? `<div style="font-size:10.5px;color:#6b7280;font-weight:400;">다른 표기: ${escapeHtml(y.aliases.join(', '))}</div>` : ''}</td>
+        <td style="text-align:left;font-weight:700;">${escapeHtml(pt.base || y.name || '-')}${(y.yid && codeVisible('yarnSetup')) ? `<span style="font-size:10.5px;color:#94a3b8;font-weight:400;margin-left:6px;">${escapeHtml(y.yid)}</span>` : ''}${(Array.isArray(y.aliases) && y.aliases.length) ? `<div style="font-size:10.5px;color:#6b7280;font-weight:400;">다른 표기: ${escapeHtml(y.aliases.join(', '))}</div>` : ''}</td>
         <td style="text-align:center;font-weight:700;color:${yarnColorIsLW(pt.color) ? '#9ca3af' : '#7c2d12'};">${escapeHtml(colorTxt)}</td>
         <td style="text-align:center;font-size:12px;color:#374151;">${escapeHtml(pt.brand || '-')}</td>
         <td style="text-align:center;">${costBadge(yarnKindName(y.kind), yarnKindColor(y.kind))}</td>
@@ -29986,7 +30151,7 @@ function validateBlendSum(blends, label) {
           + (cauto ? ` <span style="font-size:10.5px;font-weight:800;color:#92400e;background:#fef3c7;border:1px solid #fcd34d;border-radius:4px;padding:1px 5px;">확인 필요</span>` : '')
           + ((!Array.isArray(y.comp) || !y.comp.length) ? ` <span style="font-size:11px;color:#94a3b8;">(종류로 잡음)</span>` : '');
       h += `<tr>
-        <td style="text-align:left;font-weight:700;">${escapeHtml(y.name || '-')}${(y.yid && isOwnerUser()) ? `<span style="font-size:10.5px;color:#94a3b8;font-weight:400;margin-left:6px;">${escapeHtml(y.yid)}</span>` : ''}${(Array.isArray(y.aliases) && y.aliases.length) ? `<div style="font-size:10.5px;color:#6b7280;font-weight:400;">다른 표기: ${escapeHtml(y.aliases.join(', '))}</div>` : ''}</td>
+        <td style="text-align:left;font-weight:700;">${escapeHtml(y.name || '-')}${(y.yid && codeVisible('yarnSetup')) ? `<span style="font-size:10.5px;color:#94a3b8;font-weight:400;margin-left:6px;">${escapeHtml(y.yid)}</span>` : ''}${(Array.isArray(y.aliases) && y.aliases.length) ? `<div style="font-size:10.5px;color:#6b7280;font-weight:400;">다른 표기: ${escapeHtml(y.aliases.join(', '))}</div>` : ''}</td>
         <td style="text-align:center;">${costBadge(yarnKindName(y.kind), yarnKindColor(y.kind))}</td>
         <td style="text-align:left;font-size:12px;">${compCell}</td>
         <td style="text-align:right;">${costMoney(parseFloat(y.price), 0)}</td>
@@ -34541,6 +34706,15 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
       if (ok) toast('품목 혼용률을 바꿨습니다', 'success');
     });
   }
+  // hotfix398: 사종 창 컬러 고르개 ↔ 직접 입력 칸 맞추기. 읽을 때는 그대로 #cp-f-color.value
+  function cpColorSet(color) {
+    const sel = document.getElementById('cp-f-color-sel'), inp = document.getElementById('cp-f-color'); if (!sel || !inp) return;
+    const c = yarnColorIsLW(color) ? YARN_LW : String(color || '').trim();
+    const has = [...sel.options].some(o => o.value === c);
+    sel.value = has ? c : '__custom';
+    inp.value = c; inp.style.display = has ? 'none' : '';
+    sel.onchange = () => { if (sel.value === '__custom') { inp.value = ''; inp.style.display = ''; inp.focus(); } else { inp.value = sel.value; inp.style.display = 'none'; } inp.dispatchEvent(new Event('input')); };
+  }
   function renderCostPriceModal() {
     const st = 'width:100%;padding:8px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;font-family:inherit;box-sizing:border-box;';
     return `<div class="dash-modal-bg" id="cp-modal">
@@ -34551,7 +34725,8 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
             <input type="text" id="cp-f-name" autocomplete="off" style="${st}" placeholder="예: CM30수 · DTY 150/48">
             <div style="display:flex;gap:8px;margin-top:8px;">
               <div style="flex:1;"><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">컬러 <span style="font-weight:400;color:#9ca3af;font-size:11px;">— 비우면 L/W</span></label>
-                <input type="text" id="cp-f-color" autocomplete="off" list="cp-f-color-list" style="${st}" placeholder="L/W · 1% · 8%"><datalist id="cp-f-color-list"><option value="L/W"></option><option value="1%"></option><option value="8%"></option><option value="13%"></option></datalist></div>
+                <select id="cp-f-color-sel" style="${st}"><option value="L/W">L/W (로화이트)</option><option value="1%">1%</option><option value="8%">8%</option><option value="13%">13%</option><option value="__custom">직접 입력…</option></select>
+                <input type="text" id="cp-f-color" autocomplete="off" style="${st}margin-top:6px;display:none;" placeholder="컬러 직접 입력 (예: 5%)"></div>
               <div style="flex:1;"><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">브랜드 <span style="font-weight:400;color:#9ca3af;font-size:11px;">— 원사 메이커</span></label>
                 <select id="cp-f-brand" style="${st}" title="거래처 관리의 원사 구매처에서 고릅니다 (가나다·ABC 순)"><option value="">— 선택 —</option></select></div>
             </div>
@@ -37122,6 +37297,11 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
       title = '원가 계산기 (최고관리자 전용)';
       body = viewIsLocked('costCalc') ? renderOwnerLockScreen('원가 계산기') : renderCostCalcDash();
       addBtn.style.display = 'none';
+    } else if (state.dashView === 'knitSetup' || state.dashView === 'procSetup') {   // hotfix398: 독립 화면 (원가 계산기 탭과 같은 표)
+      const isK = state.dashView === 'knitSetup';
+      title = isK ? '편직 설정' : '염/가공 설정';
+      body = viewIsLocked(state.dashView) ? renderOwnerLockScreen(title) : (isK ? renderKnitFeeTab() : renderProcFeeTab());
+      addBtn.style.display = 'none';
     } else if (state.dashView === 'samples') {
       title = '샘플 보관함';
       body = renderSamplesDash();
@@ -37175,7 +37355,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
     const _TITLE_SUF = {
       costCalc: ' (최고관리자 전용)', permissions: ' (최고관리자 전용)', users: ' (최고관리자 전용)',
       trash: ' (최고관리자 전용)', stampSettings: ' (최고관리자 전용)', specTol: ' (최고관리자 전용)',
-      fabricSpecs: ' (관리자 전용)', vendors: ' (관리자 전용)', yarnSetup: ' (관리자 전용)'
+      fabricSpecs: ' (설정 및 관리)', vendors: ' (설정 및 관리)', yarnSetup: ' (설정 및 관리)', knitSetup: ' (설정 및 관리)', procSetup: ' (설정 및 관리)'   // hotfix398
     };
     let _tKey = state.dashView;
     if (_tKey === 'overview') {
@@ -37761,8 +37941,8 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
     if (state.dashView === 'users') bindUsersDash();
     if (state.dashView === 'editLog') bindEditLogDash();   // hotfix383
     // hotfix343: 염/가공료 설정
-    if (state.dashView === 'costCalc' && (state.costTab || 'card') === 'procfee') bindProcFeeTab();
-    if (state.dashView === 'costCalc' && (state.costTab || 'card') === 'knitfee') bindKnitFeeTab();   // hotfix386
+    if ((state.dashView === 'costCalc' && (state.costTab || 'card') === 'procfee') || state.dashView === 'procSetup') bindProcFeeTab();
+    if ((state.dashView === 'costCalc' && (state.costTab || 'card') === 'knitfee') || state.dashView === 'knitSetup') bindKnitFeeTab();   // hotfix386 · hotfix398 독립 화면
     // hotfix380: [＋ 거래처 추가] 펼치기 · 접기
     { const tg = document.getElementById('vendor-form-toggle');
       if (tg) tg.addEventListener('click', () => {
@@ -41262,7 +41442,8 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
         document.getElementById('cp-f-price-label').textContent =
           type === 'yarn' ? '단가' : (type === 'bundle' ? '묶음 단가 (kg당)' : 'kg당 단가');
         { const pt = yarnParts(cur); document.getElementById('cp-f-name').value = isNew ? '' : pt.base;   // hotfix393
-          document.getElementById('cp-f-color').value = isNew ? '' : pt.color;
+          // hotfix398: 컬러 칸 = 고르개(L/W · 1% · 8% · 13% · 직접 입력). datalist 가 제대로 안 내려오던 문제
+          cpColorSet(isNew ? '' : pt.color);
           // hotfix396: 브랜드는 거래처 관리의 [원사 구매처] 목록에서 고른다 (가나다·ABC 순). 옛 값이 명단에 없으면 "(거래처 미등록)" 으로 붙여 보여 준다
           document.getElementById('cp-f-brand').innerHTML = vendorOptionsHTML('원사 구매처', isNew ? '' : pt.brand);
           const paintFull = () => { const el = document.getElementById('cp-f-fullname'); if (el) { const nm = yarnFullName(document.getElementById('cp-f-name').value, document.getElementById('cp-f-color').value, document.getElementById('cp-f-brand').value); el.textContent = nm ? '저장 이름: ' + nm : ''; } };
@@ -41441,8 +41622,9 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
       const next = permCollectFromScreen();
       const nextDel = permCollectDeletesFromScreen();   // hotfix265
       const nextEdit = permCollectEditsFromScreen();    // hotfix383
+      const nextPeople = permCollectPeopleFromScreen(); // hotfix398
       permSaveEl.disabled = true; permSaveEl.textContent = '저장 중...';
-      const ok = await saveViewPerms(next, nextDel, nextEdit);
+      const ok = await saveViewPerms(next, nextDel, nextEdit, nextPeople);
       permSaveEl.disabled = false; permSaveEl.textContent = '저장';
       if (ok) { toast('권한을 저장했습니다', 'success'); renderDashboard(); }
     });
@@ -41451,7 +41633,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
     const permResetEl = document.getElementById('perm-reset');
     if (permResetEl) permResetEl.addEventListener('click', async () => {
       if (!confirm('모든 화면의 권한을 기본값으로 되돌립니다.\n삭제 권한도 전부 [관리자까지]로 돌아갑니다. 계속할까요?')) return;
-      const ok = await saveViewPerms(Object.assign({}, VIEW_PERMS_DEFAULT), {}, {});
+      const ok = await saveViewPerms(Object.assign({}, VIEW_PERMS_DEFAULT), {}, {}, {});
       if (ok) { toast('기본값으로 되돌렸습니다', 'success'); renderDashboard(); }
     });
 
@@ -44106,7 +44288,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix397';
+  const VERSION = 'v2.53 hotfix398';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
