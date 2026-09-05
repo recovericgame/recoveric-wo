@@ -567,7 +567,7 @@
   .item-row { display: grid; gap: 6px; margin-bottom: 4px; align-items: center; }
   .item-row input, .item-row select { padding: 4px 6px; font-size: 12px; font-family: inherit; min-width: 0; box-sizing: border-box; width: 100%; }
   .color-row { grid-template-columns: 1fr 70px 70px 30px; }
-  .yarn-row { grid-template-columns: 1fr 55px 55px 60px 90px 1fr 30px; }
+  .yarn-row { grid-template-columns: 1fr 120px 55px 55px 60px 90px 1fr 30px; }   /* hotfix393: 컬러 칸 */
   /* hotfix252: 원사 출고처 2단 선택 (구분 → 출고처) */
   .y-dest-wrap { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
   .y-dest-wrap select { width: 100%; font-family: inherit; min-width: 0; }
@@ -4458,7 +4458,7 @@
       gap: 6px;
     }
     .yarn-row > :nth-child(1) { grid-column: 1 / -1; }
-    .yarn-row > :nth-child(7) { grid-column: 1 / -1; justify-self: end; }
+    .yarn-row > :nth-child(8) { grid-column: 1 / -1; justify-self: end; }
     .yarn-row input, .yarn-row select { font-size: 14px; padding: 8px; min-height: 38px; }
     
     .knit-row {
@@ -6464,7 +6464,7 @@
         <!-- hotfix312: 사이드바 묶음 정리 · 제목 눌러 늘이기/줄이기 -->
         <button type="button" class="dash-grp-head admin-only" data-grp="set">설정 및 관리</button>
         <div class="dash-grp" data-grp="set">
-          <button class="dash-menu-btn admin-only" data-view="fabricSpecs">원단 스펙 설정</button>
+          <button class="dash-menu-btn admin-only" data-view="fabricSpecs">품목 관리</button>
           <button class="dash-menu-btn admin-only" data-view="yarnSetup">원사 설정</button>
           <button class="dash-menu-btn admin-only" data-view="vendors">거래처 관리</button>
         </div>
@@ -6556,7 +6556,7 @@
       <div class="section">
         <div class="section-title">원사 내역 (박스는 박스수×kg/박스로 자동계산)</div>
         <div class="item-row yarn-row" style="font-size:10px; color:#666;">
-          <div>사종</div><div>수량</div><div>단위</div><div>kg/박스</div><div>총 kg</div><div>출고처 (구분 → 선택)</div><div></div>
+          <div>사종</div><div>컬러 (브랜드)</div><div>수량</div><div>단위</div><div>kg/박스</div><div>총 kg</div><div>출고처 (구분 → 선택)</div><div></div>
         </div>
         <div id="yarn-items"></div>
         <button class="btn-add" id="add-yarn">+ 사종 추가</button>
@@ -6932,7 +6932,7 @@
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
-import { getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, addDoc, updateDoc, deleteDoc, doc, getDoc, getDocs, setDoc, deleteField, writeBatch, query, orderBy, onSnapshot, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, addDoc, updateDoc, deleteDoc, doc, getDoc, getDocs, setDoc, deleteField, writeBatch, query, orderBy, onSnapshot, serverTimestamp, arrayUnion } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAIaNFZozda5sp4Qjs7LEn-aXYLX1JZi10",
@@ -7008,8 +7008,45 @@ function __withWriteTimeout(fn) {
     return Promise.race([p, timeout]);
   };
 }
-const __wrappedAddDoc = __withWriteTimeout(addDoc);
-const __wrappedUpdateDoc = __withWriteTimeout(updateDoc);
+// hotfix394: 의뢰서(workorders) 이력 — 모든 저장이 이 문(updateDoc/addDoc)을 지나므로 여기서 한 번에 history[] 를 남긴다.
+//   한 줄 = { at(ISO) · by(계정) · fields(달라진 칸 이름) · chg("칸: 전→후", 글자·숫자 칸만) }. 이력 칸 자체는 절대 지우지 않는다.
+//   전 값은 본체가 window.__hiwosWoCache(id) 로 준 화면 사본에서 본다 (없으면 칸 이름만).
+const __HIST_SKIP = new Set(['history', 'updated_at', 'updated_by', 'created_at', 'created_by', 'wo_number']);
+function __histLine(fields, chg, kind) {
+  const line = { at: new Date().toISOString(), by: (auth.currentUser && auth.currentUser.email) || 'unknown', fields: fields };
+  if (chg.length) line.chg = chg.slice(0, 12);
+  if (kind) line.kind = kind;
+  return line;
+}
+function __scalarStr(v) { return (v == null) ? '' : (typeof v === 'object' ? null : String(v)); }
+function __histForUpdate(ref, updates) {
+  try {
+    if (!ref || !ref.parent || ref.parent.id !== C('workorders') || !updates || typeof updates !== 'object' || 'history' in updates) return null;
+    const fields = Object.keys(updates).filter(k => !__HIST_SKIP.has(k));
+    if (!fields.length) return null;
+    const prev = (typeof window.__hiwosWoCache === 'function') ? window.__hiwosWoCache(ref.id) : null;
+    const chg = [];
+    fields.forEach(k => {
+      const a = prev ? __scalarStr(prev[k]) : null, b = __scalarStr(updates[k]);
+      if (a != null && b != null && a !== b) chg.push(k + ': ' + (a || '(빈 칸)') + ' → ' + (b || '(빈 칸)'));
+    });
+    return __histLine(fields, chg, null);
+  } catch (e) { return null; }
+}
+const __wrappedAddDoc = __withWriteTimeout(function (colRef, data) {
+  try {
+    if (colRef && colRef.id === C('workorders') && data && typeof data === 'object') {
+      // 새 문서는 새 이력 — 복사해 온 옛 이력은 따라오지 않는다
+      data = Object.assign({}, data, { history: [__histLine(['만듦'], [], '만듦')] });
+    }
+  } catch (e) {}
+  return addDoc(colRef, data);
+});
+const __wrappedUpdateDoc = __withWriteTimeout(function (ref, updates) {
+  const line = __histForUpdate(ref, updates);
+  if (line) updates = Object.assign({}, updates, { history: arrayUnion(line) });
+  return updateDoc(ref, updates);
+});
 const __wrappedSetDoc = __withWriteTimeout(setDoc);
 const __wrappedDeleteDoc = __withWriteTimeout(deleteDoc);
 
@@ -7580,12 +7617,29 @@ function addBlendRow(containerId) {
 }
 
 // ===== 원사 행 =====
+// hotfix393: 원사 의뢰서 컬러 칸 글자 ↔ {color, brand}. "8% (효성)" 꼴.
+function yarnColorLabel(d) {
+  if (!d) return '';
+  const c = String(d.color || '').trim(), b = String(d.brand || '').trim();
+  if (!c && !b) return '';
+  return (c || YARN_LW) + (b ? ' (' + b + ')' : '');
+}
+function yarnColorParse(text) {
+  const t = String(text || '').trim();
+  const m = t.match(/^(.*?)\s*\(([^()]*)\)\s*$/);
+  const color = (m ? m[1] : t).trim(), brand = (m ? m[2] : '').trim();
+  return { color: yarnColorIsLW(color) ? (color || brand ? YARN_LW : '') : color, brand };
+}
+let __yColorSeq = 0;
 function addYarnRow(data={}) {
   const container = document.getElementById('yarn-items');
   const row = document.createElement('div');
   row.className = 'item-row yarn-row';
+  const yColorListId = 'y-color-list-' + (++__yColorSeq);
   row.innerHTML = `
     <input type="text" lang="ko" class="y-type" list="yarn-name-datalist" autocomplete="off" autocorrect="off" spellcheck="false" placeholder="CM20/1" value="${escapeHtml(data.type || '')}">
+    <input type="text" lang="ko" class="y-color" list="${yColorListId}" autocomplete="off" autocorrect="off" spellcheck="false" placeholder="L/W" title="사종을 고르면 그 사종에 등록된 컬러(브랜드)만 뜹니다. 직접 입력도 됩니다" value="${escapeHtml(yarnColorLabel(data))}">
+    <datalist id="${yColorListId}"></datalist>
     <input type="number" class="y-qty" placeholder="1" value="${data.qty ?? ''}" step="0.01">
     <select class="y-unit">
       <option value="고리" ${data.unit === '고리' ? 'selected' : ''}>고리</option>
@@ -7600,6 +7654,19 @@ function addYarnRow(data={}) {
     </div>
     <button class="btn-del">X</button>
   `;
+  // hotfix393: 사종에 맞는 컬러 목록
+  const fillColorList = () => {
+    const dl = row.querySelector('#' + yColorListId); if (!dl) return;
+    const rows = yarnColorRows(row.querySelector('.y-type').value);
+    dl.innerHTML = rows.map(r => `<option value="${escapeHtml(r.label)}"></option>`).join('');
+    const cEl = row.querySelector('.y-color');
+    if (cEl) cEl.placeholder = rows.length ? (rows.length === 1 ? rows[0].label : rows.length + '개 컬러') : 'L/W';
+    if (cEl && rows.length === 1 && !cEl.value) cEl.value = rows[0].label;
+  };
+  row.querySelector('.y-type').addEventListener('input', fillColorList);
+  row.querySelector('.y-type').addEventListener('change', fillColorList);
+  row.querySelector('.y-color').addEventListener('focus', fillColorList);
+  fillColorList();
   const catSel = row.querySelector('.y-dest-cat');
   catSel.addEventListener('change', () => {
     const destSel = row.querySelector('.y-dest');
@@ -7844,6 +7911,30 @@ function greigeNosOf(name, fid, exceptWoId) {
   });
   return Array.from(nos).sort((a, b) => b.localeCompare(a));
 }
+// hotfix392: 그 품목의 편직 생지 목록 (번호·컬러·남은 절·공장) — 남은 절 = 의뢰 + 입고 − 출고 (예상재고 공식 그대로)
+function greigeStockList(name, fid) {
+  const id = String(fid || '').trim() || itemFidOf(name);
+  const k = vendorKey(greigeSplit(name).name || name);
+  const list = (typeof state !== 'undefined' && Array.isArray(state.allWorkOrders)) ? state.allWorkOrders : [];
+  const out = [];
+  list.forEach(wo => {
+    if (!wo || wo.deleted || wo.type !== '편직') return;
+    const sh = Array.isArray(wo.greige_shipments) ? wo.greige_shipments : [];
+    (Array.isArray(wo.items) ? wo.items : []).forEach((it, idx) => {
+      if (!it) return;
+      const same = (id && String(it.item_fid || '') === id) || (!id && k && vendorKey(greigeSplit(it.item).name) === k)
+        || (id && !it.item_fid && k && vendorKey(greigeSplit(it.item).name) === k);
+      if (!same) return;
+      const no = greigeNoClean(it.greige_no) || greigeSplit(it.item).no;
+      const mine = sh.filter(x => x && ((x.item_idx != null ? x.item_idx : 0) === idx));
+      const outJ = mine.reduce((a, x) => a + (x.dir === 'in' ? 0 : (parseFloat(x.jul) || 0)), 0);
+      const inJ = mine.reduce((a, x) => a + (x.dir === 'in' ? (parseFloat(x.jul) || 0) : 0), 0);
+      const rem = (parseFloat(it.jul) || 0) + inJ - outJ;
+      out.push({ no, color: String(it.color || '').trim(), rem, vendor: String(wo.recipient || '').trim(), date: wo.date || '', woId: wo.id, woNo: wo.wo_number || '' });
+    });
+  });
+  return out.sort((a, b) => (b.no || '').localeCompare(a.no || '') || (b.date || '').localeCompare(a.date || ''));
+}
 // 다음 생지 번호 — 그 품목의 마지막 번호 + 1 (없으면 001)
 function greigeNextNo(name, fid, exceptWoId) {
   const nos = greigeNosOf(name, fid, exceptWoId);
@@ -7890,10 +7981,58 @@ function yarnShow(name, yid) {
   const y = yarnByYid(yid);
   return y ? String(y.name || '').trim() : raw;
 }
+// hotfix393: 사종 한 줄 = 사종(base) + 컬러 + 브랜드. 저장 이름(name)은 세 개를 합친 글자라 옛 이름 찾기(yarnEntryByName 등)가 그대로 돈다.
+//   컬러 L/W(로화이트)는 이름·표시에서 생략. 예) CM30수 / CM30수 8% (효성) / CM30수 (일신)
+const YARN_LW = 'L/W';
+function yarnColorIsLW(c) { const t = String(c || '').trim().toUpperCase().replace(/\s+/g, ''); return !t || t === 'L/W' || t === 'LW' || t === '로화이트'; }
+function yarnFullName(base, color, brand) {
+  const b = String(base || '').trim(), c = String(color || '').trim(), br = String(brand || '').trim();
+  return b + (yarnColorIsLW(c) ? '' : ' ' + c) + (br ? ' (' + br + ')' : '');
+}
+function yarnParts(y) {
+  if (!y) return { base: '', color: '', brand: '' };
+  if (y.base != null) return { base: String(y.base || '').trim(), color: String(y.color || '').trim(), brand: String(y.brand || '').trim() };
+  return { base: String(y.name || '').trim(), color: '', brand: '' };
+}
+// 사종(base)만 모아 준다 — 원사 의뢰서 사종 칸 목록용
+function yarnBaseList() {
+  const seen = new Set(); const out = [];
+  yarnNameList().forEach(y => { const b = yarnParts(y).base; const k = vendorKey(b); if (b && !seen.has(k)) { seen.add(k); out.push(b); } });
+  return out;
+}
+// 그 사종(base)의 컬러 줄들 — [{yid, color, brand, label}] (컬러 칸 목록용)
+function yarnColorRows(base) {
+  const k = vendorKey(base);
+  if (!k) return [];
+  return yarnNameList().filter(y => y && vendorKey(yarnParts(y).base) === k).map(y => {
+    const pt = yarnParts(y);
+    const c = yarnColorIsLW(pt.color) ? YARN_LW : pt.color;
+    return { yid: String(y.yid || ''), color: c, brand: pt.brand, label: c + (pt.brand ? ' (' + pt.brand + ')' : ''), name: String(y.name || '') };
+  });
+}
+// 원사 의뢰서 줄 → 사종 코드. 사종+컬러+브랜드가 정확히 맞는 줄 하나일 때만.
+function yarnLineYid(line) {
+  if (!line) return '';
+  const rows = yarnColorRows(line.type);
+  if (!rows.length) return yarnYidOf(line.type);   // 옛 글자(컬러가 사종 글자에 붙은 것)
+  const c = yarnColorIsLW(line.color) ? YARN_LW : String(line.color || '').trim();
+  const br = String(line.brand || '').trim();
+  let hits = rows.filter(r => vendorKey(r.color) === vendorKey(c) && (!br || vendorKey(r.brand) === vendorKey(br)));
+  if (hits.length > 1 && !br) hits = hits.filter(r => !r.brand);
+  return hits.length === 1 ? hits[0].yid : '';
+}
+// 원사 의뢰서 줄 표시 — "CM30수 8% (효성)"
+function yarnLineShow(line) {
+  if (!line) return '';
+  const y = codesOn() ? yarnByYid(line.type_yid) : null;
+  if (line.color == null && line.brand == null) return y ? String(y.name || '') : String(line.type || '').trim();   // 옛 줄: 글자(코드 켜면 마스터 이름)
+  const base = y ? (yarnParts(y).base || String(y.name || '')) : String(line.type || '').trim();
+  return y ? String(y.name || '') : yarnFullName(base, line.color, line.brand);   // 코드가 잡히면 마스터 이름 그대로, 아니면 칸 값으로 합침
+}
 // 원사 의뢰서 저장 자료에 사종 코드 병기 — yarns[].type 옆에 type_yid
 function attachYarnYids(d) {
   if (!d || d.type !== '원사' || !Array.isArray(d.yarns)) return d;
-  d.yarns.forEach(y => { if (y) y.type_yid = yarnYidOf(y.type); });
+  d.yarns.forEach(y => { if (y) y.type_yid = yarnLineYid(y); });   // hotfix393: 사종+컬러+브랜드로 찾는다
   return d;
 }
 function vendorTypeMatch(v, vtype) {
@@ -8172,48 +8311,56 @@ function setStampsData(stamps) {
 // ===== 품목/컬러 코드 매핑 (localStorage 영속화) =====
 const CODE_MAP_KEY = 'hiwos_code_map_v1';
 
+// hotfix392: 코드 매핑은 settings/code_map (모든 계정이 같은 표를 봄). localStorage 는 옛 자료 이어받기·오프라인 예비용.
+//   팝업으로 묻지 않는다 — 품목: 매핑 → 품목 마스터 줄임말(abbr) → 품목 코드(F0001) → 이름 정리 / 컬러: 매핑 → 이름 정리(8% → 8%, 로화이트 → 로화이트)
+//   관리자(설정 쓰기 가능)면 자동으로 정한 값을 매핑에 적어 둔다. 직원은 정리값을 그대로 쓴다(저장 안 함).
 function loadCodeMap() {
-  try {
-    const raw = localStorage.getItem(CODE_MAP_KEY);
-    if (!raw) return { items: {}, colors: {} };
-    return JSON.parse(raw);
-  } catch (e) { return { items: {}, colors: {} }; }
+  let local = { items: {}, colors: {} };
+  try { const raw = localStorage.getItem(CODE_MAP_KEY); if (raw) local = JSON.parse(raw) || local; } catch (e) {}
+  const fs = (typeof state !== 'undefined' && state.codeMap && typeof state.codeMap === 'object') ? state.codeMap : null;
+  return {
+    items: Object.assign({}, local.items || {}, fs ? (fs.items || {}) : {}),
+    colors: Object.assign({}, local.colors || {}, fs ? (fs.colors || {}) : {})
+  };
 }
 
 function saveCodeMap(map) {
   try { localStorage.setItem(CODE_MAP_KEY, JSON.stringify(map)); }
   catch (e) { console.error('코드 매핑 저장 실패', e); }
+  try { if (typeof window.__saveCodeMapFS === 'function') window.__saveCodeMapFS(map); } catch (e) {}
 }
 
-// 품목명 → 코드 조회 (없으면 사용자에게 물음)
+// 코드에 못 들어가는 글자 정리: 공백·'-' 제거, 영문은 대문자. (공유코드는 '-' 로 쪼개므로 '-' 금지)
+function codeClean(t) { return String(t || '').trim().replace(/[\s\-]+/g, '').toUpperCase(); }
+function codeMapCanWrite() { return !!(typeof state !== 'undefined' && state.codeMapWritable); }
+
+// 품목명 → 코드 (팝업 없음)
 function getOrPromptItemCode(itemName) {
   if (!itemName) return '';
   const map = loadCodeMap();
-  const trimmed = itemName.trim();
+  const trimmed = greigeSplit(String(itemName)).name || String(itemName).trim();
   if (map.items[trimmed]) return map.items[trimmed];
-  // 등록 안 됨 → 프롬프트
-  const code = prompt(`"${trimmed}"의 품목 코드를 입력하세요 (예: US, PS, RT)\n\n* 한 번 등록하면 자동으로 기억됩니다`);
+  let code = '';
+  const fid = itemFidOf(trimmed);
+  const sp = fid ? itemByFid(fid) : null;
+  if (sp && String(sp.abbr || '').trim()) code = codeClean(sp.abbr);
+  else if (fid) code = fid;
+  else code = codeClean(trimmed);
   if (!code) return '';
-  const upper = code.trim().toUpperCase();
-  map.items[trimmed] = upper;
-  saveCodeMap(map);
-  toast(`품목 코드 등록: ${trimmed} → ${upper}`, 'success');
-  return upper;
+  if (codeMapCanWrite()) { map.items[trimmed] = code; saveCodeMap(map); }
+  return code;
 }
 
-// 컬러명 → 코드 조회
+// 컬러명 → 코드 (팝업 없음)
 function getOrPromptColorCode(colorName) {
   if (!colorName) return '';
   const map = loadCodeMap();
-  const trimmed = colorName.trim();
+  const trimmed = String(colorName).trim();
   if (map.colors[trimmed]) return map.colors[trimmed];
-  const code = prompt(`"${trimmed}"의 컬러 코드를 입력하세요 (예: LW, BK, 8%)\n\n* 한 번 등록하면 자동으로 기억됩니다`);
+  const code = codeClean(trimmed);
   if (!code) return '';
-  const upper = code.trim().toUpperCase();
-  map.colors[trimmed] = upper;
-  saveCodeMap(map);
-  toast(`컬러 코드 등록: ${trimmed} → ${upper}`, 'success');
-  return upper;
+  if (codeMapCanWrite()) { map.colors[trimmed] = code; saveCodeMap(map); }
+  return code;
 }
 
 // 같은 품목+컬러 조합의 마지막 투입회차 검색 (전체 의뢰서 스캔)
@@ -8511,12 +8658,13 @@ function getFormData() {
     const yarns = [];
     document.querySelectorAll('#yarn-items .yarn-row').forEach(row => {
       const type = row.querySelector('.y-type').value.trim();
+      const cb = yarnColorParse(row.querySelector('.y-color')?.value);   // hotfix393: 컬러·브랜드
       const qty = parseFloat(row.querySelector('.y-qty').value) || 0;
       const unit = row.querySelector('.y-unit').value;
       const kg_per_box = parseFloat(row.querySelector('.y-kgbox').value) || 0;
       const dest = row.querySelector('.y-dest').value.trim();
       const total_kg = calcYarnKg(qty, unit, kg_per_box);
-      if (type || qty || dest) yarns.push({ type, qty, unit, kg_per_box, total_kg, dest });
+      if (type || qty || dest) yarns.push({ type, color: cb.color, brand: cb.brand, qty, unit, kg_per_box, total_kg, dest });
     });
     return {
       type: '원사',
@@ -9603,7 +9751,7 @@ function renderYarnOrder(d) {
       if (y.unit === '박스' && y.kg_per_box) qtyDisplay += ` × ${y.kg_per_box}kg`;
       const kgDisplay = y.total_kg ? y.total_kg.toFixed(2) + 'kg' : '-';
       html += `<tr>
-        <td class="nowrap">${escapeHtml(yarnShow(y.type, y.type_yid)) || '-'}</td>
+        <td class="nowrap">${escapeHtml(yarnLineShow(y)) || '-'}</td>
         <td class="center nowrap">${qtyDisplay}</td>
         <td class="center nowrap">${kgDisplay}</td>
         <td class="nowrap">${escapeHtml(y.dest) || '-'}</td>
@@ -10668,10 +10816,35 @@ window.addEventListener('firebase-ready', () => {
     // 직원 추가 시 위 형식으로 콤마 구분하여 한 줄씩 추가
   ];
   
-  onAuthStateChanged(auth, user => {
+  // hotfix395: 계정 명단은 settings/users 가 으뜸. 코드 안 목록(ALLOWED_EMAILS · ADMIN_EMAILS)은 문서가 없거나 못 읽을 때의 예비.
+  //   users.items[] = { name, email, role(owner/admin/staff), active }. 최고관리자(OWNER_EMAILS)는 코드에 고정.
+  //   보안규칙 isAllowed()/isAdmin() 도 이 문서(emails[] · admins[])를 보게 바꿔야 새 계정이 코드 수정 없이 들어온다.
+  function usersDocEmails() {
+    const items = Array.isArray(state.hwUsers) ? state.hwUsers : [];
+    const lc = e => String(e || '').trim().toLowerCase();
+    return {
+      all: items.filter(u => u && u.email && u.active !== false).map(u => lc(u.email)),
+      admins: items.filter(u => u && u.email && u.active !== false && (u.role === 'admin' || u.role === 'owner')).map(u => lc(u.email))
+    };
+  }
+  function loginAllowed(email) {
+    const e = String(email || '').trim().toLowerCase();
+    if (OWNER_EMAILS.map(x => x.toLowerCase()).includes(e)) return true;
+    if (state.hwUsersLoaded && Array.isArray(state.hwUsers) && state.hwUsers.length) return usersDocEmails().all.includes(e);
+    return ALLOWED_EMAILS.map(x => x.toLowerCase()).includes(e);
+  }
+  async function preloadUsersDoc() {
+    try {
+      const snap = await getDoc(doc(db, C('settings'), 'users'));
+      state.hwUsers = (snap.exists() && Array.isArray(snap.data().items)) ? snap.data().items.filter(u => u && (u.name || u.email)) : [];
+      state.hwUsersLoaded = true;
+    } catch (e) { state.hwUsersLoaded = false; console.warn('[users preload]', e.message); }
+  }
+  onAuthStateChanged(auth, async user => {
     if (user) {
-      // 화이트리스트 검증: 등록 안 된 이메일은 즉시 강제 로그아웃
-      if (!ALLOWED_EMAILS.includes(user.email)) {
+      await preloadUsersDoc();
+      // 명단 검증: 등록 안 된 이메일은 즉시 강제 로그아웃
+      if (!loginAllowed(user.email)) {
         alert('⚠ 접근 권한이 없습니다.\n\n등록된 이메일로만 접속 가능합니다.\n관리자(박영균 대표)에게 문의해 주세요.\n\n로그인된 계정: ' + user.email);
         signOut(auth).then(() => {
           // 로그인 화면으로 자동 복귀
@@ -10683,6 +10856,8 @@ window.addEventListener('firebase-ready', () => {
       
       // 정상 로그인
       state.user = user;
+      state.codeMapWritable = isAdminEmail();   // hotfix392: settings/code_map 은 관리자 이상만 씀 (보안규칙과 같음)
+      window.__hiwosWoCache = (id) => (Array.isArray(state.allWorkOrders) ? state.allWorkOrders.find(w => w && w.id === id) : null) || null;   // hotfix394: 이력용 전 값
       document.getElementById('login-screen').style.display = 'none';
       document.getElementById('main-app').style.display = 'grid';
       renderUserInfo();
@@ -10737,7 +10912,9 @@ window.addEventListener('firebase-ready', () => {
   const ADMIN_EMAIL = ADMIN_EMAILS[0];
   // hotfix265: 계정 등급 그 자체 (설정 저장·Firestore 규칙과 맞춰야 하는 곳에서 쓴다)
   function isAdminEmail() {
-    return !!(state.user && ADMIN_EMAILS.includes(state.user.email));
+    if (!state.user) return false;
+    if (ADMIN_EMAILS.includes(state.user.email)) return true;
+    return usersDocEmails().admins.includes(String(state.user.email || '').toLowerCase());   // hotfix395: settings/users 의 관리자
   }
   // hotfix265: 화면 안 작업 버튼 판정.
   //   대표가 [권한 관리]에서 화면을 열어준 사람은 그 화면에서 대표와 똑같은 화면을 본다.
@@ -10789,7 +10966,7 @@ window.addEventListener('firebase-ready', () => {
     kpiboard: '현황판', completeReports: '생산 완료 체크', ceoReports: '불량 체크',
     of: '공문조회', gs: '생지출고조회', claims: '클레임(땡처리)조회', 'daily-report': '가공소 일일 체크',
     samples: '샘플 조회', completed: '완료의뢰서 조회', trash: '휴지통',
-    stampSettings: '작지 스템프 설정', fabricSpecs: '원단 스펙 설정', vendors: '거래처 관리', specTol: '규격 허용치 설정',
+    stampSettings: '작지 스템프 설정', fabricSpecs: '품목 관리', vendors: '거래처 관리', specTol: '규격 허용치 설정',
     yarnSetup: '원사 설정',
     costCalc: '원가 계산기', permissions: '권한 설정',
     users: '사용자 관리', backup: '백업 내려받기', editLog: '수정 이력'
@@ -11579,14 +11756,14 @@ window.addEventListener('firebase-ready', () => {
     if (!isOwnerUser()) return '<div class="dash-empty">최고관리자만 볼 수 있는 화면입니다.</div>';
     const rows = hwUsersDraft();
     let h = '<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px;margin-bottom:14px;font-size:12.5px;color:#475569;line-height:1.8;">'
-      + '여기에 넣은 <strong>이름과 등급</strong>이 화면 오른쪽 위 계정 자리에 나옵니다.<br>'
-      + '<strong>여기서 등급을 바꾸어도 실제 권한은 바뀌지 않습니다.</strong> 보이는 이름표만 정하는 곳입니다. '
-      + '실제 권한을 늘리고 줄이는 것은 [권한 설정]과 로그인 허용 목록에서 합니다.<br>'
-      + '메일 주소는 로그인에 쓰는 주소와 똑같이 적어 주십시오. 달라지면 이름이 안 나옵니다.'
+      + '<strong>이 목록이 로그인 명단입니다.</strong> 여기에 있고 [쓰는 중]인 메일 주소만 들어올 수 있고, 등급(관리자/직원)도 여기서 정해집니다. 최고관리자는 코드에 고정입니다.<br>'
+      + '메일 주소는 로그인에 쓰는 구글 주소와 똑같이 적어 주십시오. 저장하면 그 사람이 다음에 새로 고칠 때부터 적용됩니다.<br>'
+      + '<span style="color:#b45309;">Firestore 보안규칙도 이 문서(emails · admins)를 보게 바꿔야 새 계정이 자료를 읽을 수 있습니다. 규칙은 인수인계 문서의 규칙 파일로 배포하십시오.</span>'
       + '</div>';
     h += '<div style="margin-bottom:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">'
       + '<button class="dash-action-btn" id="hu-add" style="background:#1e3a8a;color:#fff;font-weight:700;padding:6px 14px;">＋ 사람 추가</button>'
       + '<button class="dash-action-btn" id="hu-reset" style="padding:6px 12px;">되돌리기</button>'
+      + (rows.length ? '' : '<button class="dash-action-btn" id="hu-seed" style="padding:6px 12px;" title="코드 안에 있던 로그인 허용 목록을 표로 옮깁니다">코드 안 명단 불러오기</button>')
       + '<button class="dash-action-btn" id="hu-save" style="margin-left:auto;background:#047857;color:#fff;font-weight:700;padding:6px 16px;">저장</button>'
       + '</div>';
     h += '<div class="dash-table-wrap"><table class="dash-table"><thead><tr>'
@@ -11632,6 +11809,12 @@ window.addEventListener('firebase-ready', () => {
       rows.push({ name: '', email: '', role: 'staff', active: true, memo: '' });
       renderDashboard();
     });
+    const seed = document.getElementById('hu-seed');
+    if (seed) seed.addEventListener('click', () => {   // hotfix395
+      const have = new Set(rows.map(u => String(u.email || '').toLowerCase()));
+      ALLOWED_EMAILS.forEach(e => { if (have.has(e.toLowerCase())) return; rows.push({ name: e.split('@')[0], email: e, role: OWNER_EMAILS.includes(e) ? 'owner' : (ADMIN_EMAILS.includes(e) ? 'admin' : 'staff'), active: true, memo: '코드 안 명단에서 옮김' }); });
+      renderDashboard();
+    });
     const rst = document.getElementById('hu-reset');
     if (rst) rst.addEventListener('click', () => {
       if (!confirm('넣던 내용을 버리고 저장된 자료로 되돌릴까요?')) return;
@@ -11666,13 +11849,17 @@ window.addEventListener('firebase-ready', () => {
       seen[k] = 1;
     }
     try {
+      const lc = e => String(e || '').trim().toLowerCase();
+      const emails = Array.from(new Set(items.filter(u => u.active !== false).map(u => lc(u.email)).concat(OWNER_EMAILS.map(lc))));
+      const admins = Array.from(new Set(items.filter(u => u.active !== false && (u.role === 'admin' || u.role === 'owner')).map(u => lc(u.email)).concat(OWNER_EMAILS.map(lc))));
       await setDoc(doc(db, C('settings'), 'users'), {
-        items,
+        items, emails, admins,   // hotfix395: emails/admins 는 보안규칙이 읽는 칸
         updated_at: serverTimestamp(),
         updated_by: (state.user && state.user.email) || 'unknown'
       });
       state.hwUsersDraft = null;
-      toast('사용자 목록을 저장했습니다', 'success');
+      state.hwUsers = items; state.hwUsersLoaded = true;
+      toast('계정 목록을 저장했습니다 — 지금부터 이 목록으로 로그인·등급이 정해집니다', 'success');
       return true;
     } catch (e) {
       toast('저장 실패: ' + e.message, 'error');
@@ -11919,6 +12106,18 @@ window.addEventListener('firebase-ready', () => {
       state.features = snap.exists() ? (snap.data() || {}) : {};
       if (state.uiMode === 'dashboard') renderDashboard();
     }, err => console.warn('[features sub]', err.message));
+    // hotfix392: 공유코드 매핑 구독 (settings/code_map — 품목·컬러 줄임말, 모든 계정 공통)
+    onSnapshot(doc(db, C('settings'), 'code_map'), snap => {
+      const d = snap.exists() ? (snap.data() || {}) : {};
+      state.codeMap = { items: (d.items && typeof d.items === 'object') ? d.items : {}, colors: (d.colors && typeof d.colors === 'object') ? d.colors : {} };
+    }, err => console.warn('[code_map sub]', err.message));
+    window.__saveCodeMapFS = async function (map) {
+      if (!state.codeMapWritable) return false;
+      try {
+        await setDoc(doc(db, C('settings'), 'code_map'), { items: map.items || {}, colors: map.colors || {}, updated_at: serverTimestamp(), updated_by: state.user?.email || 'unknown' });
+        return true;
+      } catch (e) { console.warn('[code_map save]', e.message); return false; }
+    };
     // hotfix391: 사종 이름·코드 사본 구독 (settings/yarn_names — 단가 없음, 직원도 읽음)
     onSnapshot(doc(db, C('settings'), 'yarn_names'), snap => {
       state.yarnNames = (snap.exists() && Array.isArray(snap.data().items)) ? snap.data().items.filter(y => y && y.name) : [];
@@ -12113,6 +12312,7 @@ window.addEventListener('firebase-ready', () => {
       make_gy: (it.make_gy === '' || it.make_gy == null) ? null : (parseFloat(String(it.make_gy).replace(/,/g, '')) || null),   // hotfix378: 제작 g/y
       blend: String(it.blend || '').trim(),
       pair_rib: String(it.pair_rib || '').trim(),
+      ...(String(it.abbr || '').trim() ? { abbr: String(it.abbr).trim().toUpperCase() } : {}),   // hotfix392: 공유코드용 줄임말
       active: it.active !== false,
       // hotfix390: 다른 표기 — 옛 의뢰서에 적힌 글자를 이 품목으로 잇는 열쇠 (옛 자료 맞추기에서 고르면 자동 등록)
       ...(Array.isArray(it.aliases) && it.aliases.map(a => String(a || '').trim()).filter(Boolean).length ? { aliases: Array.from(new Set(it.aliases.map(a => String(a || '').trim()).filter(Boolean))) } : {}),
@@ -12385,16 +12585,7 @@ window.addEventListener('firebase-ready', () => {
       state.fcBackup = { at: new Date().toISOString(), knits: snap };
       const items = {};
       fids.forEach(f => { items[f] = { knits: nextMap[f] }; });
-      await setDoc(doc(db, C('cost_data'), 'fabric_cost'), {
-        items: items,
-        updated_at: serverTimestamp(),
-        updated_by: state.user?.email || 'unknown'
-      }, { merge: true });
-      if (!state.fabricCost || typeof state.fabricCost !== 'object') state.fabricCost = {};
-      fids.forEach(f => {
-        if (!state.fabricCost[f]) state.fabricCost[f] = {};
-        state.fabricCost[f].knits = JSON.parse(JSON.stringify(nextMap[f]));
-      });
+      if (!(await saveFabricCostItems(items))) return false;   // hotfix394: 저장 문 하나로
       // 공장별 혼용율 — 직원도 읽어야 하므로 이름표 쪽 상자에 따로 담는다
       if (blendMap && Object.keys(blendMap).length) {
         await setDoc(doc(db, C('settings'), 'fabric_blend'), {
@@ -12554,7 +12745,7 @@ window.addEventListener('firebase-ready', () => {
   // ============================================================
   // hotfix264: 원가 계산기 1단계 — 원단별 원가 항목
   // ------------------------------------------------------------
-  //  · 직원이 읽어야 하는 [원단 기본 스펙]과 저장을 완전히 분리한다.
+  //  · 직원이 읽어야 하는 [품목 관리]과 저장을 완전히 분리한다.
   //    Firestore 규칙은 문서 단위로만 막히므로, 같은 문서에 두면 감출 수 없다.
   //  · 이어 붙이는 열쇠는 품목명이 아니라 품목마다 한 번 붙는 고정 코드(fid).
   //    품목명을 바꿔도 원가 자료가 끊기지 않는다.
@@ -13345,6 +13536,7 @@ window.addEventListener('firebase-ready', () => {
       state.costPrices = JSON.parse(JSON.stringify(next));
       // hotfix391: 사종 이름·코드·구분·다른 표기만 떼어 직원도 읽는 사본에 적는다 (단가·운임·로스 없음)
       const names = (next.yarns || []).filter(y => y && y.name).map(y => Object.assign({ yid: y.yid || '', name: y.name, kind: y.kind || '기타' },
+        (y.base != null) ? { base: String(y.base || ''), color: String(y.color || ''), brand: String(y.brand || '') } : {},   // hotfix393
         (Array.isArray(y.aliases) && y.aliases.length) ? { aliases: y.aliases.slice() } : {}));
       await setDoc(doc(db, C('settings'), 'yarn_names'), { items: names, updated_at: serverTimestamp(), updated_by: state.user?.email || 'unknown' });
       state.yarnNames = names;
@@ -13763,23 +13955,40 @@ window.addEventListener('firebase-ready', () => {
     return opts;
   }
 
-  // 원가 항목 저장 — 최고관리자만. 한 품목만 병합해 쓴다(다른 품목 자료를 건드리지 않음).
-  async function saveFabricCost(fid, obj) {    const key = String(fid || '').trim();
-    if (!key) { toast('품목 코드가 없어 원가 자료를 저장하지 못했습니다', 'error'); return false; }
+  // hotfix394: cost_data/fabric_cost 저장 문은 이 하나뿐 (통합기획서 원칙 4 — 상자 하나 = 저장 문 하나).
+  //   itemsMap = { fid: {칸...} } 를 병합(merge)해 쓴다. Firestore 병합은 안쪽 칸까지 합치므로 화면 사본(state.fabricCost)도 똑같이 합친다.
+  //   다른 곳에서 setDoc(fabric_cost) 직접 호출 금지.
+  function fcDeepMerge(dst, src) {
+    Object.keys(src || {}).forEach(k => {
+      const v = src[k];
+      if (v && typeof v === 'object' && !Array.isArray(v) && dst[k] && typeof dst[k] === 'object' && !Array.isArray(dst[k])) fcDeepMerge(dst[k], v);
+      else dst[k] = (v && typeof v === 'object') ? JSON.parse(JSON.stringify(v)) : v;
+    });
+    return dst;
+  }
+  async function saveFabricCostItems(itemsMap, failMsg) {
+    const fids = Object.keys(itemsMap || {}).map(f => String(f || '').trim()).filter(Boolean);
+    if (!fids.length) { toast('품목 코드가 없어 원가 자료를 저장하지 못했습니다', 'error'); return false; }
     if (!isOwnerUser()) { toast('최고관리자만 저장할 수 있습니다', 'error'); return false; }
     try {
       await setDoc(doc(db, C('cost_data'), 'fabric_cost'), {
-        items: { [key]: obj },
+        items: itemsMap,
         updated_at: serverTimestamp(),
         updated_by: state.user?.email || 'unknown'
       }, { merge: true });
       if (!state.fabricCost || typeof state.fabricCost !== 'object') state.fabricCost = {};
-      state.fabricCost[key] = JSON.parse(JSON.stringify(obj));
+      fids.forEach(f => { if (!state.fabricCost[f] || typeof state.fabricCost[f] !== 'object') state.fabricCost[f] = {}; fcDeepMerge(state.fabricCost[f], itemsMap[f]); });
       return true;
     } catch (e) {
-      toast('원가 자료 저장 실패: ' + e.message, 'error');
+      toast((failMsg || '원가 자료 저장 실패') + ': ' + e.message, 'error');
       return false;
     }
+  }
+  // 원가 항목 저장 — 한 품목. (저장은 saveFabricCostItems 로)
+  async function saveFabricCost(fid, obj) {
+    const key = String(fid || '').trim();
+    if (!key) { toast('품목 코드가 없어 원가 자료를 저장하지 못했습니다', 'error'); return false; }
+    return saveFabricCostItems({ [key]: obj });
   }
   // 작성 화면 품목 자동완성 datalist 갱신
   function refreshFabricSpecDatalist() {
@@ -13794,7 +14003,7 @@ window.addEventListener('firebase-ready', () => {
   // hotfix391: 원사 의뢰서 사종 고르개 — settings/yarn_names 사본 (직원도 봄)
   function refreshYarnNameDatalist() {
     const dl = document.getElementById('yarn-name-datalist');
-    if (dl) dl.innerHTML = yarnNameList().map(y => `<option value="${escapeHtml(y.name)}"></option>`).join('');
+    if (dl) dl.innerHTML = yarnBaseList().map(b => `<option value="${escapeHtml(b)}"></option>`).join('');   // hotfix393: 사종(base)만, 컬러는 컬러 칸
   }
   // hotfix244: 리프 품목 자동완성 목록 (구분=리프인 품목만)
   function refreshRibSpecDatalist() {
@@ -13899,7 +14108,7 @@ window.addEventListener('firebase-ready', () => {
       if (ask) {
         const declared = String(spec.pair_rib || '').trim();
         if (declared) { try { toast(`"${spec.name}"의 짝 리프 "${declared}"를 품목 사전에서 찾지 못했습니다`, 'warning'); } catch (_) {} }
-        else if (!curName) { try { toast(`"${spec.name}"에 짝 리프가 지정되어 있지 않습니다 ([원단 기본 스펙]에서 지정)`, 'info'); } catch (_) {} }
+        else if (!curName) { try { toast(`"${spec.name}"에 짝 리프가 지정되어 있지 않습니다 ([품목 관리]에서 지정)`, 'info'); } catch (_) {} }
       }
       return false;
     }
@@ -13939,7 +14148,8 @@ window.addEventListener('firebase-ready', () => {
       const fillGnoList = (itemId) => {
         const listId = GNO_PAIRS[itemId]; const el = document.getElementById(itemId); const dl = document.getElementById(listId);
         if (!el || !dl) return;
-        dl.innerHTML = greigeNosOf(el.value, itemFidOf(el.value)).map(n => `<option value="${n}"></option>`).join('');
+        // hotfix392: 남은 절이 있는 생지만, 컬러·남은 절·공장을 같이 보인다
+        dl.innerHTML = greigeStockList(el.value, itemFidOf(el.value)).filter(r => r.no && r.rem > 0).map(r => `<option value="${escapeHtml(r.no)}">${escapeHtml(r.color || '-')} · 남은 ${r.rem}절 · ${escapeHtml(r.vendor || '-')}</option>`).join('');
       };
       window.__fillGnoLists = () => Object.keys(GNO_PAIRS).forEach(fillGnoList);
       ['change', 'input', 'focus'].forEach(ev => fp.addEventListener(ev, (e) => {
@@ -13958,7 +14168,7 @@ window.addEventListener('firebase-ready', () => {
         if (!btn) return;
         const el = document.getElementById('f_body_item');
         const spec = el ? findFabricSpec(el.value) : null;
-        if (!spec) { try { toast('등록된 품목이 아닙니다. 목록에서 고르거나 [원단 기본 스펙]에 먼저 등록하세요.', 'warning'); } catch (_) {} return; }
+        if (!spec) { try { toast('등록된 품목이 아닙니다. 목록에서 고르거나 [품목 관리]에 먼저 등록하세요.', 'warning'); } catch (_) {} return; }
         const wEl = document.getElementById('f_body_spec_width');
         const gEl = document.getElementById('f_body_spec_gy');
         const hasExisting = (wEl && wEl.value.trim()) || (gEl && gEl.value.trim()) || getBlendData('body_blends').some(b => b.value);
@@ -13972,7 +14182,7 @@ window.addEventListener('firebase-ready', () => {
           try {
             toast(declared
               ? `짝 리프 "${declared}"를 품목 사전에서 찾지 못했습니다`
-              : `"${spec.name}"에 짝 리프가 지정되어 있지 않습니다 ([원단 기본 스펙]에서 지정)`, declared ? 'warning' : 'info');
+              : `"${spec.name}"에 짝 리프가 지정되어 있지 않습니다 ([품목 관리]에서 지정)`, declared ? 'warning' : 'info');
           } catch (_) {}
         }
       });
@@ -14212,7 +14422,7 @@ window.addEventListener('firebase-ready', () => {
     const out = [];
     const push = v => { const s = String(v || '').trim(); if (s) out.push(s); };
     if (!wo) return out;
-    if (wo.type === '원사') (wo.yarns || []).forEach(y => push(y.type));
+    if (wo.type === '원사') (wo.yarns || []).forEach(y => { push(y.type); push(yarnLineShow(y)); });
     else if (wo.type === '편직') (wo.items || []).forEach(it => push(it.item));
     else if (wo.type === '염색가공') { push(wo.body && wo.body.item); push(wo.rib && wo.rib.item); }
     else if (wo.type === 'BT') push(wo.item);
@@ -14263,7 +14473,7 @@ window.addEventListener('firebase-ready', () => {
           haystack.push(wo.supplier || '');
           haystack.push(wo.purpose || '');
           (wo.yarns || []).forEach(y => {
-            haystack.push(y.type || '');
+            haystack.push(y.type || ''); haystack.push(yarnLineShow(y));
             haystack.push(y.dest || '');
           });
         } else if (wo.type === '편직') {
@@ -14340,7 +14550,7 @@ window.addEventListener('firebase-ready', () => {
     list.innerHTML = visible.map(wo => {
       const d = wo.date ? new Date(wo.date).toLocaleDateString('ko-KR', {month:'short', day:'numeric'}) : '-';
       let title = '-', sub = '';
-      if (wo.type === '원사') { title = wo.yarns?.[0]?.type || '-'; sub = wo.supplier || ''; }
+      if (wo.type === '원사') { title = yarnLineShow(wo.yarns?.[0]) || '-'; sub = wo.supplier || ''; }
       else if (wo.type === '편직') { title = wo.items?.[0]?.item || '-'; sub = wo.recipient || ''; }
       else if (wo.type === 'BT') { title = wo.item || '-'; sub = wo.recipient || ''; }
       else if (wo.type === '공문') { title = wo.title || '-'; sub = wo.recipient || ''; }
@@ -15344,7 +15554,7 @@ function validateBlendSum(blends, label) {
       }
       case 'item': {
         // 품목/사종 정렬: 유형별로 적절한 품목 필드 사용
-        if (wo.type === '원사') return wo.yarns?.[0]?.type || '~';
+        if (wo.type === '원사') return yarnLineShow(wo.yarns?.[0]) || '~';
         if (wo.type === '편직') return wo.items?.[0]?.item || '~';
         if (wo.type === '염색가공') return woDisplayItem(wo) || '~';
         if (wo.type === 'BT') return wo.item || '~';
@@ -16565,7 +16775,7 @@ function validateBlendSum(blends, label) {
     reports.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
     return reports.concat(collectPrintDefectReports());
   }
-  // hotfix285: 나염 보고 카드의 폭·중량·축률 줄 — [원단 기본 스펙] 기준과 맞대어 이상 여부를 보인다
+  // hotfix285: 나염 보고 카드의 폭·중량·축률 줄 — [품목 관리] 기준과 맞대어 이상 여부를 보인다
   function printDevRows(rep) {
     const d = rep.dev, q = rep.qc || {};
     const L = [];
@@ -16593,7 +16803,7 @@ function validateBlendSum(blends, label) {
     return L.join('');
   }
   // hotfix285: 나염 줄의 QC 검수값은 그 차수(receipt) 안에 들어 있다.
-  //   [원단 기본 스펙]의 기준 폭·중량과 맞대어 규격 이상을 판정한다(염색가공과 같은 기준).
+  //   [품목 관리]의 기준 폭·중량과 맞대어 규격 이상을 판정한다(염색가공과 같은 기준).
   function printRowQcInfo(wo, r) {
     const ar = (typeof printRowActiveReceipt === 'function') ? printRowActiveReceipt(r) : null;
     const qc = (ar && ar.qc && typeof ar.qc === 'object') ? ar.qc
@@ -22449,7 +22659,7 @@ function validateBlendSum(blends, label) {
         let item = '-', colorHtml = '-', sizeHtml = '-', vendorHtml = '-';
         
         if (wo.type === '원사') {
-          item = wo.yarns?.[0]?.type || '-';
+          item = yarnLineShow(wo.yarns?.[0]) || '-';
           if (wo.yarns?.length > 1) item += ` 외 ${wo.yarns.length - 1}`;
           const totalKg = (wo.yarns || []).reduce((s,y) => s + (parseFloat(y.total_kg) || 0), 0);
           sizeHtml = totalKg > 0 ? `${totalKg.toLocaleString()} kg` : '-';
@@ -22734,6 +22944,7 @@ function validateBlendSum(blends, label) {
       <th>상태</th>
       <th class="col-date">발주일</th>
       <th>품목 / 사종</th>
+      <th class="col-num" title="생지 번호 (품목마다 001부터)">넘버</th>
       <th>컬러</th>
       <th class="col-num">수량</th>
       <th class="col-action">입·출고</th>
@@ -22756,8 +22967,12 @@ function validateBlendSum(blends, label) {
       const elapsed = daysSince(wo.date);
       // 재고(stock)는 납기 개념 없음 → 빨간 경과선 제외 (편직 진행 화면과 동일)
       const overdueClass = (!wo.completed && kind !== 'stock' && kind !== 'done' && elapsed >= 5) ? 'overdue' : '';
+      // hotfix392: 품목 칸은 이름만, 생지 번호는 [넘버] 칸에 따로
       const itemLines = items.length > 0
-        ? items.map(i => `<div class="color-line">${escapeHtml(i.item || '-')}</div>`).join('')
+        ? items.map(i => `<div class="color-line">${escapeHtml(greigeSplit(i.item || '').name || i.item || '-')}</div>`).join('')
+        : '-';
+      const gnoLines = items.length > 0
+        ? items.map(i => { const no = greigeNoClean(i.greige_no) || greigeSplit(i.item || '').no; return `<div class="color-line" style="text-align:center;font-family:var(--font-gothic);font-weight:700;color:${no ? '#1e3a8a' : '#c7cbd1'};">${no ? escapeHtml(no) : '-'}</div>`; }).join('')
         : '-';
       const colorLines = items.length > 0
         ? items.map(i => `<div class="color-line">${escapeHtml(i.color || '-')}</div>`).join('')
@@ -22795,6 +23010,7 @@ function validateBlendSum(blends, label) {
         <td><span class="kind-badge" style="background:${kMeta.bg};color:${kMeta.text};">●${kMeta.label}</span></td>
         <td class="col-date">${formatYMD(wo.date)}</td>
         <td>${itemLines}</td>
+        <td class="col-num">${gnoLines}</td>
         <td>${colorLines}</td>
         <td class="col-num" style="text-align:right;" title="예상 재고 절 = 의뢰 ${totalJul}절${inJ > 0 ? ' + 입고 ' + inJ + '절' : ''} − 출고 ${shJul}절">${qtyCol}</td>
         <td class="col-action ov-knit-ship-cell">${shipCol}</td>
@@ -22893,7 +23109,7 @@ function validateBlendSum(blends, label) {
         <td class="col-stamps">${renderStampMini(wo.stamps) || '-'}</td>
         <td class="col-date">${formatYMD(wo.date)}</td>
         <td>${escapeHtml(wo.supplier || '-')}</td>
-        <td>${escapeHtml((yarnShow(firstYarn.type, firstYarn.type_yid) || '-') + moreYarns)}</td>
+        <td>${escapeHtml((yarnLineShow(firstYarn) || '-') + moreYarns)}</td>
         <td class="col-num">${firstYarn.qty || 0} ${escapeHtml(firstYarn.unit || '')}</td>
         <td class="col-num">${totalKg.toFixed(1)}kg</td>
         <td>${escapeHtml(firstYarn.dest || '-')}</td>
@@ -23933,12 +24149,19 @@ function validateBlendSum(blends, label) {
     // 독립 카드 — 각 카드가 한 업체용 완결된 의뢰서. 카드별 [만들기] 버튼.
     const partCard = (part, item, recv, qty, prev, gno) => {   // hotfix390: gno = 염색작지의 생지 번호
       const accent = part === 'body' ? '#2563eb' : '#7c3aed';
+      // hotfix392: 생지 번호 — 같은 품목의 편직 생지 중 남은 절이 1 이상인 것만 고르개에 보인다 (번호 · 컬러 · 남은 절 · 공장). 직접 입력도 됨.
+      const stockRows = greigeStockList(item, itemFidOf(item)).filter(r => r.no && r.rem > 0);
+      const gnoOpts = stockRows.map(r => `<option value="${escapeHtml(r.no)}"${(gno && r.no === greigeNoClean(gno)) ? ' selected' : ''}>${escapeHtml(r.no)} · ${escapeHtml(r.color || '-')} · 남은 ${r.rem}절 · ${escapeHtml(r.vendor || '-')}</option>`).join('');
       const gnoField = `
       <div style="margin-bottom:9px;">
-        <label style="display:block;font-size:11.5px;font-weight:700;color:#374151;margin-bottom:3px;">생지 번호 <span style="font-weight:400;color:#9ca3af;">(편직 번호에서 고르거나 직접 입력)</span></label>
-        <input type="text" id="gs-gno-${part}" list="gs-gno-${part}-list" value="${escapeHtml(gno || '')}" placeholder="001" maxlength="3" inputmode="numeric" lang="ko" autocomplete="off"
-          style="width:120px;box-sizing:border-box;padding:8px 10px;border:1px solid #d1d5db;border-radius:5px;font-size:13px;font-family:var(--font-gothic);font-weight:700;text-align:center;">
-        <datalist id="gs-gno-${part}-list">${greigeNosOf(item, itemFidOf(item)).map(n => `<option value="${n}"></option>`).join('')}</datalist>
+        <label style="display:block;font-size:11.5px;font-weight:700;color:#374151;margin-bottom:3px;">생지 번호 <span style="font-weight:400;color:#9ca3af;">(재고 있는 편직 생지에서 고르거나 직접 입력)</span></label>
+        <div style="display:flex;gap:6px;align-items:center;">
+          <input type="text" id="gs-gno-${part}" value="${escapeHtml(gno || '')}" placeholder="001" maxlength="3" inputmode="numeric" lang="ko" autocomplete="off"
+            style="width:90px;box-sizing:border-box;padding:8px 10px;border:1px solid #d1d5db;border-radius:5px;font-size:13px;font-family:var(--font-gothic);font-weight:700;text-align:center;">
+          <select id="gs-gno-${part}-pick" style="flex:1;box-sizing:border-box;padding:8px 10px;border:1px solid #d1d5db;border-radius:5px;font-size:12.5px;font-family:inherit;${stockRows.length ? '' : 'color:#9ca3af;'}">
+            <option value="">${stockRows.length ? '— 재고 있는 생지 고르기 —' : '이 품목은 남은 생지가 없습니다 (직접 입력)'}</option>${gnoOpts}
+          </select>
+        </div>
       </div>`;
       const prevInv  = prev ? (prev.gs_invoice_no || '') : '';
       const prevNote = prev ? (prev.gs_note || '') : '';
@@ -23991,6 +24214,12 @@ function validateBlendSum(blends, label) {
         </div>
       </div>`;
 
+    // hotfix392: 생지 고르개 → 번호 칸에 넣기
+    ['body', 'rib'].forEach(part => {
+      const pk = document.getElementById(`gs-gno-${part}-pick`);
+      const inp = document.getElementById(`gs-gno-${part}`);
+      if (pk && inp) pk.addEventListener('change', () => { if (pk.value) inp.value = pk.value; });
+    });
     // 닫기 → 만든 게 있으면 생지출고 목록으로 이동
     document.getElementById('gs-close').addEventListener('click', () => {
       modal.classList.remove('show');
@@ -24160,7 +24389,7 @@ function validateBlendSum(blends, label) {
             <label style="display:block;font-size:11.5px;font-weight:700;color:#374151;margin-bottom:3px;">생지 번호 <span style="font-weight:400;color:#9ca3af;">(편직 번호에서 고르거나 직접 입력)</span></label>
             <input type="text" id="gse-gno" list="gse-gno-list" value="${escapeHtml(wo.gs_greige_no || '')}" placeholder="001" maxlength="3" inputmode="numeric" lang="ko" autocomplete="off"
               style="width:120px;box-sizing:border-box;padding:8px 10px;border:1px solid #d1d5db;border-radius:5px;font-size:13px;font-family:var(--font-gothic);font-weight:700;text-align:center;">
-            <datalist id="gse-gno-list">${greigeNosOf(wo.gs_item, wo.gs_item_fid || itemFidOf(wo.gs_item)).map(n => `<option value="${n}"></option>`).join('')}</datalist>
+            <datalist id="gse-gno-list">${greigeStockList(wo.gs_item, wo.gs_item_fid || itemFidOf(wo.gs_item)).filter(r => r.no && r.rem > 0).map(r => `<option value="${escapeHtml(r.no)}">${escapeHtml(r.color || '-')} · 남은 ${r.rem}절 · ${escapeHtml(r.vendor || '-')}</option>`).join('')}</datalist>
           </div>
           ${fld('수신처 (편직공장)', 'gse-recv', wo.recipient, '')}
           ${fld('출고처 (염색·가공처)', 'gse-dest', wo.gs_dest, '')}
@@ -25076,7 +25305,7 @@ function validateBlendSum(blends, label) {
     
     list.forEach(wo => {
       let summary = '-';
-      if (wo.type === '원사') summary = `${wo.supplier || '-'} / ${wo.yarns?.[0]?.type || '-'}`;
+      if (wo.type === '원사') summary = `${wo.supplier || '-'} / ${yarnLineShow(wo.yarns?.[0]) || '-'}`;
       else if (wo.type === '편직') summary = `${wo.recipient || '-'} / ${wo.items?.[0]?.item || '-'}`;
       else if (wo.type === 'BT') summary = `${wo.recipient || '-'} / ${wo.item || '-'}`;
       else if (wo.type === '공문') summary = `${wo.recipient || '-'} / ${wo.title || '-'}`;
@@ -25107,7 +25336,7 @@ function validateBlendSum(blends, label) {
   // - 액션: [보기] 모달 / [복사] 새 의뢰서로 복제 / [수정] 작성모드 / [완료해제] 진행 복귀 / [삭제] 관리자만
   // v2.31: 완료된 의뢰서 — 품목·거래처 추출 + 필터 적용
   function getCompletedItemName(wo) {
-    if (wo.type === '원사') return wo.yarns?.[0]?.type || '';
+    if (wo.type === '원사') return yarnLineShow(wo.yarns?.[0]) || '';
     if (wo.type === '편직') return wo.items?.[0]?.item || '';
     if (wo.type === '염색가공') return wo.body?.item || '';
     if (wo.type === 'BT') return wo.item || '';
@@ -25284,6 +25513,32 @@ function validateBlendSum(blends, label) {
   }
 
   // ============================================================
+  // hotfix392: 옛 자료 맞추기 공용 — 고르개 위에 검색 칸. 글자를 치면 목록이 좁혀지고, 하나만 남으면 바로 골라진다.
+  function cmPickHTML(cls, text, optionsHTML) {
+    return `<div style="display:flex;flex-direction:column;gap:3px;">
+      <input type="text" class="cm-filter" data-for="${cls}" placeholder="찾기 — 이름 일부를 치세요" lang="ko" autocomplete="off" style="width:100%;box-sizing:border-box;padding:4px 7px;border:1px solid #d1d5db;border-radius:6px;font-size:11.5px;font-family:inherit;">
+      <select class="${cls}" data-text="${escapeHtml(text)}" style="width:100%;padding:5px;border:1px solid var(--ui-line);border-radius:6px;font-size:12px;font-family:inherit;">${optionsHTML}</select>
+    </div>`;
+  }
+  function cmAttachFilter(cls) {
+    const norm = t => String(t || '').replace(/\s+/g, '').toLowerCase();
+    document.querySelectorAll(`#dash-modal-body .cm-filter[data-for="${cls}"]`).forEach(inp => {
+      const sel = inp.parentElement.querySelector('select.' + cls);
+      if (!sel) return;
+      inp.addEventListener('input', () => {
+        const q = norm(inp.value);
+        let shown = [];
+        Array.from(sel.options).forEach(o => {
+          const keep = !o.value || !q || norm(o.textContent).includes(q);
+          o.hidden = !keep;
+          if (keep && o.value) shown.push(o);
+        });
+        if (q && shown.length === 1 && sel.value !== shown[0].value) { sel.value = shown[0].value; sel.dispatchEvent(new Event('change')); }
+        else if (q && shown.length && (!sel.value || sel.selectedOptions[0]?.hidden)) { sel.value = shown[0].value; sel.dispatchEvent(new Event('change')); }
+      });
+      inp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); sel.focus(); } });
+    });
+  }
   // hotfix389: [옛 자료 맞추기] — 저장된 의뢰서의 거래처 글자 옆에 코드(vid)를 붙인다 (최고관리자)
   //   글자는 절대 지우지 않는다. 코드 칸(*_vid)만 옆에 붙이고 vid_migrated_at 을 남긴다.
   //   몸판/리프 생지 입고처(body/rib.receiving)는 자유 글자 → 대상 아님.
@@ -25342,7 +25597,7 @@ function validateBlendSum(blends, label) {
         <td style="text-align:center;color:#6b7280;">${m.count}</td>
         <td style="font-size:11px;color:#6b7280;">${Object.keys(m.fields).map(k => k + ' ' + m.fields[k]).join(' · ')}</td>
         <td style="text-align:center;font-weight:700;color:${jc(m.judge)};">${m.judge}</td>
-        <td><select class="vcm-pick" data-text="${escapeHtml(m.text)}" style="width:100%;padding:5px;border:1px solid var(--ui-line);border-radius:6px;font-size:12px;font-family:inherit;">${opt(choiceOf(m))}</select></td>
+        <td>${cmPickHTML('vcm-pick', m.text, opt(choiceOf(m)))}</td>
       </tr>`).join('')}</tbody></table>` : `<div style="text-align:center;color:#9ca3af;padding:20px;">거래처가 적힌 의뢰서가 없습니다.</div>`;
     const before = { docs: vcmDocs().length, fp: vcmFingerprint() };
     const r = state.vcm.result;
@@ -25381,6 +25636,7 @@ function validateBlendSum(blends, label) {
     ['dash-modal-image', 'dash-modal-copy', 'dash-modal-print', 'dash-modal-kakao'].forEach(id => { const b = document.getElementById(id); if (b) b.style.display = 'none'; });
     modal.classList.add('show');
     document.querySelectorAll('#dash-modal-body .vcm-pick').forEach(sel => sel.addEventListener('change', () => { state.vcm.choices[sel.dataset.text] = sel.value; }));
+    cmAttachFilter('vcm-pick');   // hotfix392: 글자 치면 좁혀지는 검색 칸
     document.getElementById('vcm-run').addEventListener('click', () => vcmRun(rows, before));
     document.getElementById('vcm-check').addEventListener('click', () => { document.getElementById('vcm-check-box').innerHTML = vcmCheckHTML(); });
     document.getElementById('vcm-clear').addEventListener('click', () => vcmClear());
@@ -25527,7 +25783,7 @@ function validateBlendSum(blends, label) {
         <td style="text-align:center;color:#6b7280;">${m.withNo}</td>
         <td style="font-size:11px;color:#6b7280;">${Object.keys(m.fields).map(k => k + ' ' + m.fields[k]).join(' · ')}</td>
         <td style="text-align:center;font-weight:700;color:${jc(m.judge)};">${m.judge}</td>
-        <td><select class="fcm-pick" data-text="${escapeHtml(m.text)}" style="width:100%;padding:5px;border:1px solid var(--ui-line);border-radius:6px;font-size:12px;font-family:inherit;">${opt(choiceOf(m))}</select></td>
+        <td>${cmPickHTML('fcm-pick', m.text, opt(choiceOf(m)))}</td>
       </tr>`).join('')}</tbody></table>` : `<div style="text-align:center;color:#9ca3af;padding:20px;">품목이 적힌 의뢰서가 없습니다.</div>`;
     const before = { docs: fcmDocs().length, fp: fcmFingerprint() };
     const r = state.fcm.result;
@@ -25566,6 +25822,7 @@ function validateBlendSum(blends, label) {
     ['dash-modal-image', 'dash-modal-copy', 'dash-modal-print', 'dash-modal-kakao'].forEach(id => { const b = document.getElementById(id); if (b) b.style.display = 'none'; });
     modal.classList.add('show');
     document.querySelectorAll('#dash-modal-body .fcm-pick').forEach(sel => sel.addEventListener('change', () => { state.fcm.choices[sel.dataset.text] = sel.value; }));
+    cmAttachFilter('fcm-pick');   // hotfix392: 글자 치면 좁혀지는 검색 칸
     document.getElementById('fcm-run').addEventListener('click', () => fcmRun(rows, before));
     document.getElementById('fcm-check').addEventListener('click', () => { document.getElementById('fcm-check-box').innerHTML = fcmCheckHTML(); });
     document.getElementById('fcm-clear').addEventListener('click', () => fcmClear());
@@ -25741,7 +25998,7 @@ function validateBlendSum(blends, label) {
         <td style="font-weight:700;">${escapeHtml(m.text)}${m.hasYid ? `<div style="font-size:10.5px;color:#6b7280;font-weight:400;">코드 있음 ${m.hasYid}</div>` : ''}</td>
         <td style="text-align:center;color:#6b7280;">${m.count}</td>
         <td style="text-align:center;font-weight:700;color:${jc(m.judge)};">${m.judge}</td>
-        <td><select class="ycm-pick" data-text="${escapeHtml(m.text)}" style="width:100%;padding:5px;border:1px solid var(--ui-line);border-radius:6px;font-size:12px;font-family:inherit;">${opt(choiceOf(m))}</select></td>
+        <td>${cmPickHTML('ycm-pick', m.text, opt(choiceOf(m)))}</td>
       </tr>`).join('')}</tbody></table>` : `<div style="text-align:center;color:#9ca3af;padding:20px;">사종이 적힌 원사 의뢰서가 없습니다.</div>`;
     const before = { docs: ycmDocs().length, fp: ycmFingerprint() };
     const r = state.ycm.result;
@@ -25780,6 +26037,7 @@ function validateBlendSum(blends, label) {
     ['dash-modal-image', 'dash-modal-copy', 'dash-modal-print', 'dash-modal-kakao'].forEach(id => { const b = document.getElementById(id); if (b) b.style.display = 'none'; });
     modal.classList.add('show');
     document.querySelectorAll('#dash-modal-body .ycm-pick').forEach(sel => sel.addEventListener('change', () => { state.ycm.choices[sel.dataset.text] = sel.value; }));
+    cmAttachFilter('ycm-pick');   // hotfix392: 글자 치면 좁혀지는 검색 칸
     document.getElementById('ycm-run').addEventListener('click', () => ycmRun(rows, before));
     document.getElementById('ycm-check').addEventListener('click', () => { document.getElementById('ycm-check-box').innerHTML = ycmCheckHTML(); });
     document.getElementById('ycm-clear').addEventListener('click', () => ycmClear());
@@ -26265,7 +26523,10 @@ function validateBlendSum(blends, label) {
       <div class="dash-modal" style="max-width:${costOn ? '780px' : '460px'};">
         <div class="dash-modal-head"><span id="fs-modal-title">품목 추가</span><button class="dash-modal-close" id="fs-modal-close">✕</button></div>
         <div style="padding:16px;display:flex;flex-direction:column;gap:11px;">
-          <div><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">품목명</label><input type="text" id="fs-f-name" style="${inputStyle}" placeholder="예: 슈퍼싱글"></div>
+          <div style="display:flex;gap:8px;">
+            <div style="flex:1;"><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">품목명</label><input type="text" id="fs-f-name" style="${inputStyle}" placeholder="예: 슈퍼싱글"></div>
+            <div style="width:120px;"><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">줄임말 <span style="font-weight:400;color:#9ca3af;">(공유코드용)</span></label><input type="text" id="fs-f-abbr" style="${inputStyle}text-transform:uppercase;text-align:center;font-weight:700;" placeholder="예: US" maxlength="6" title="편직 공유코드(PL-US-LW-001)에 들어가는 품목 약자. 비우면 품목 코드(F0001)를 씁니다"></div>
+          </div>
           <div style="display:flex;gap:8px;">
             <div style="flex:1;"><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">구분</label><select id="fs-f-gubun" style="${inputStyle}">${gubuns.map(g => `<option value="${escapeHtml(g)}">${escapeHtml(g)}</option>`).join('')}</select></div>
             <div style="flex:1;${isOwnerUser() ? '' : 'display:none;'}"><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">조직</label>
@@ -28956,7 +29217,7 @@ function validateBlendSum(blends, label) {
     if (!listAll.length) {
       return ccWrap(h + `<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:14px 16px;font-size:13px;color:#92400e;line-height:1.8;">
         아직 원가 자료가 등록된 품목이 없습니다.<br>
-        [원단 기본 스펙]에서 품목을 열고 <strong>원가 자료</strong> 칸에 원사 구성·가공법·로스를 채워 주십시오. 한 번 채워 두면 이 화면에서는 고를 때마다 원가가 이미 나와 있습니다.
+        [품목 관리]에서 품목을 열고 <strong>원가 자료</strong> 칸에 원사 구성·가공법·로스를 채워 주십시오. 한 번 채워 두면 이 화면에서는 고를 때마다 원가가 이미 나와 있습니다.
       </div>`);
     }
     if (!C.fid) {
@@ -29288,7 +29549,7 @@ function validateBlendSum(blends, label) {
       </label><br>
       <label style="display:inline-flex;align-items:center;gap:7px;font-size:12.5px;color:#334155;cursor:pointer;margin-bottom:12px;">
         <input type="checkbox" id="ci-mkspec" style="width:15px;height:15px;">
-        [원단 기본 스펙]에 없는 품목을 <strong>판매 종료 상태로</strong> 새로 만들기
+        [품목 관리]에 없는 품목을 <strong>판매 종료 상태로</strong> 새로 만들기
         <span style="color:#94a3b8;">(직원 목록·작지 선택에는 안 나오고, 원가 계산기에서만 쓰입니다)</span>
       </label>
       <div id="ci-preview" style="font-size:12.5px;color:#64748b;line-height:1.9;">파일을 고르면 무엇이 몇 건 들어오는지 여기에 먼저 보여 드립니다.</div>
@@ -29376,7 +29637,7 @@ function validateBlendSum(blends, label) {
       P.def_procs = data.def_procs.map(normProc).filter(p => getCostProcs().includes(p));
       sum.defProcs = P.def_procs.length;
     }
-    // 원단별 원가 — 품목명이 [원단 기본 스펙]에 있는 것만 고정 코드로 이어 붙인다
+    // 원단별 원가 — 품목명이 [품목 관리]에 있는 것만 고정 코드로 이어 붙인다
     const fab = {};
     (Array.isArray(data.fabric_cost) ? data.fabric_cost : []).forEach(f => {
       const name = String(f && f.name || '').trim();
@@ -29432,11 +29693,8 @@ function validateBlendSum(blends, label) {
       }
       const built = buildCostImport(data, overwrite);
       const P = built.prices;
-      await setDoc(doc(db, C('cost_data'), 'prices'), {
-        yarns: P.yarns, knit: P.knit, proc: P.proc, bundles: P.bundles, def_procs: P.def_procs || [],
-        updated_at: serverTimestamp(), updated_by: state.user?.email || 'unknown'
-      });
-      state.costPrices = JSON.parse(JSON.stringify(P));
+      // hotfix394: prices 저장 문은 saveCostPrices 하나 (8칸 전부 · 사종 코드 부여 · yarn_names 사본까지). 이력은 아래서 통째로 병합.
+      if (!(await saveCostPrices(P, {}))) return false;
       const hk = Object.keys(built.hist);
       if (hk.length) {
         await setDoc(doc(db, C('cost_data'), 'price_history'), {
@@ -29447,11 +29705,7 @@ function validateBlendSum(blends, label) {
       }
       const fk = Object.keys(built.fab);
       if (fk.length) {
-        await setDoc(doc(db, C('cost_data'), 'fabric_cost'), {
-          items: built.fab, updated_at: serverTimestamp(), updated_by: state.user?.email || 'unknown'
-        }, { merge: true });
-        if (!state.fabricCost || typeof state.fabricCost !== 'object') state.fabricCost = {};
-        fk.forEach(k => { state.fabricCost[k] = built.fab[k]; });
+        if (!(await saveFabricCostItems(built.fab, '가져오기 실패'))) return false;   // hotfix394: 저장 문 하나로
       }
       return true;
     } catch (e) {
@@ -29601,9 +29855,9 @@ function validateBlendSum(blends, label) {
       성분을 확인해야 할 사종이 <strong>${needN}개</strong> 있습니다. 위 [성분] 칸에서 <strong>확인 필요</strong>를 고르면 그 사종만 볼 수 있습니다.
     </div>`;
     h += `<div class="dash-table-wrap"><table class="dash-table"><thead><tr>
-      ${cpSortTh('name', '사종', 'text-align:left;min-width:170px;')}${cpSortTh('kind', '구분', 'min-width:100px;')}${compOn ? `<th style="text-align:left;min-width:230px;">성분 (혼용율)</th>` : ''}<th style="min-width:96px;">단위</th>${own ? `<th style="min-width:56px;">수정</th><th style="min-width:56px;">삭제</th>` : ''}
+      ${cpSortTh('name', '사종', 'text-align:left;min-width:170px;')}<th style="min-width:70px;">컬러</th><th style="min-width:90px;">브랜드</th>${cpSortTh('kind', '구분', 'min-width:100px;')}${compOn ? `<th style="text-align:left;min-width:230px;">성분 (혼용율)</th>` : ''}<th style="min-width:96px;">단위</th>${own ? `<th style="min-width:56px;">수정</th><th style="min-width:56px;">삭제</th>` : ''}
     </tr></thead><tbody>`;
-    if (!rows.length) h += `<tr><td colspan="${3 + (compOn ? 1 : 0) + (own ? 2 : 0)}" style="text-align:center;color:#9ca3af;padding:18px;">${P.yarns.length ? '검색 결과가 없습니다.' : '등록된 사종이 없습니다. [＋ 사종 추가]를 눌러 주세요.'}</td></tr>`;
+    if (!rows.length) h += `<tr><td colspan="${5 + (compOn ? 1 : 0) + (own ? 2 : 0)}" style="text-align:center;color:#9ca3af;padding:18px;">${P.yarns.length ? '검색 결과가 없습니다.' : '등록된 사종이 없습니다. [＋ 사종 추가]를 눌러 주세요.'}</td></tr>`;
     rows.forEach(({ y, i }) => {
       const ctxt = yarnCompText(y);
       const cauto = !!(Array.isArray(y.comp) && y.comp.length && y.comp_auto);
@@ -29612,8 +29866,12 @@ function validateBlendSum(blends, label) {
         : `<span style="font-weight:700;color:#0f172a;">${escapeHtml(ctxt)}</span>`
           + (cauto ? ` <span style="font-size:10.5px;font-weight:800;color:#92400e;background:#fef3c7;border:1px solid #fcd34d;border-radius:4px;padding:1px 5px;">확인 필요</span>` : '')
           + ((!Array.isArray(y.comp) || !y.comp.length) ? ` <span style="font-size:11px;color:#94a3b8;">(구분으로 잡음)</span>` : '');
+      const pt = yarnParts(y);   // hotfix393: 사종 · 컬러 · 브랜드 칸
+      const colorTxt = yarnColorIsLW(pt.color) ? YARN_LW : pt.color;
       h += `<tr>
-        <td style="text-align:left;font-weight:700;">${escapeHtml(y.name || '-')}${y.yid ? `<span style="font-size:10.5px;color:#94a3b8;font-weight:400;margin-left:6px;">${escapeHtml(y.yid)}</span>` : ''}${(Array.isArray(y.aliases) && y.aliases.length) ? `<div style="font-size:10.5px;color:#6b7280;font-weight:400;">다른 표기: ${escapeHtml(y.aliases.join(', '))}</div>` : ''}</td>
+        <td style="text-align:left;font-weight:700;">${escapeHtml(pt.base || y.name || '-')}${y.yid ? `<span style="font-size:10.5px;color:#94a3b8;font-weight:400;margin-left:6px;">${escapeHtml(y.yid)}</span>` : ''}${(Array.isArray(y.aliases) && y.aliases.length) ? `<div style="font-size:10.5px;color:#6b7280;font-weight:400;">다른 표기: ${escapeHtml(y.aliases.join(', '))}</div>` : ''}</td>
+        <td style="text-align:center;font-weight:700;color:${yarnColorIsLW(pt.color) ? '#9ca3af' : '#7c2d12'};">${escapeHtml(colorTxt)}</td>
+        <td style="text-align:center;font-size:12px;color:#374151;">${escapeHtml(pt.brand || '-')}</td>
         <td style="text-align:center;">${costBadge(yarnKindName(y.kind), yarnKindColor(y.kind))}</td>
         ${compOn ? `<td style="text-align:left;font-size:12px;">${compCell}</td>` : ''}
         <td style="text-align:center;font-size:11.5px;color:#6b7280;">${escapeHtml(YARN_UNIT_LABEL[y.kind] || 'kg당')}</td>
@@ -29791,7 +30049,7 @@ function validateBlendSum(blends, label) {
     </div>`;
     if (!specs.length) {
       return h + `<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:14px 16px;font-size:13px;color:#92400e;line-height:1.8;">
-        보여 드릴 품목이 없습니다. [원단 기본 스펙]에서 품목을 먼저 등록해 주십시오.</div>`;
+        보여 드릴 품목이 없습니다. [품목 관리]에서 품목을 먼저 등록해 주십시오.</div>`;
     }
     const nameTd = s => `<td style="text-align:left;font-weight:700;position:sticky;left:0;background:#fff;z-index:2;box-shadow:1px 0 0 #e2e8f0;">
       ${escapeHtml(s.name || '-')}${s.active === false ? ' <span style="font-size:10px;color:#9ca3af;font-weight:400;">(판매 종료)</span>' : ''}
@@ -29838,7 +30096,7 @@ function validateBlendSum(blends, label) {
       h += `</tbody></table></div>
         <div style="font-size:11.5px;color:#9ca3af;margin-top:8px;line-height:1.7;">
           <strong style="color:#b45309;">노란 칸이 아직 안 채운 자리</strong>입니다. [등록]이나 [수정]을 누르면 그 자리에서 원가 자료 창이 열립니다.
-          품목을 새로 만들거나 지우는 것은 <strong>[원단 기본 스펙]</strong> 화면에서 합니다.
+          품목을 새로 만들거나 지우는 것은 <strong>[품목 관리]</strong> 화면에서 합니다.
         </div>` + renderFcModalHtml();
       return h;
     }
@@ -30205,7 +30463,7 @@ function validateBlendSum(blends, label) {
     const filled = specs.filter(s => fabricCostFilled(specFid(s))).length;
     let h = `<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px;margin-bottom:14px;font-size:12.5px;color:#475569;line-height:1.8;">
       품목마다 <strong>원사 구성 · 게이지 · 편직처 · 가공법 · 로스</strong>를 여기서 채웁니다. 한 번 채워 두면 [원가 계산] 화면에서 품목만 고르면 원가가 이미 나와 있습니다.<br>
-      이 자료는 <strong>따로 잠긴 곳</strong>에 저장되어 [원단 기본 스펙] 화면에는 나오지 않습니다. 그 화면은 권한을 준 직원에게 그대로 열어 주셔도 됩니다.
+      이 자료는 <strong>따로 잠긴 곳</strong>에 저장되어 [품목 관리] 화면에는 나오지 않습니다. 그 화면은 권한을 준 직원에게 그대로 열어 주셔도 됩니다.
     </div>
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px;">
       <input type="text" id="fc-search" lang="ko" autocomplete="off" placeholder="품목명 · 편직처 검색" value="${escapeHtml(state.fcSearch || '')}" style="${inputStyle}max-width:300px;">
@@ -30219,7 +30477,7 @@ function validateBlendSum(blends, label) {
       ${fcSortTh('knitter', '편직처', 'text-align:left;min-width:96px;')}<th style="text-align:left;min-width:120px;">원사 구성</th>
       <th style="min-width:110px;">가공법</th><th style="min-width:72px;">로스 편직/가공</th><th style="min-width:96px;">kg / yd 원가</th>${fcSortTh('updated', '수정일', 'min-width:80px;')}<th style="min-width:64px;">원가 자료</th>
     </tr></thead><tbody>`;
-    if (!rows.length) h += `<tr><td colspan="11" style="text-align:center;color:#9ca3af;padding:18px;">${specs.length ? '찾는 품목이 없습니다.' : '등록된 품목이 없습니다. [원단 기본 스펙]에서 먼저 품목을 만들어 주십시오.'}</td></tr>`;
+    if (!rows.length) h += `<tr><td colspan="11" style="text-align:center;color:#9ca3af;padding:18px;">${specs.length ? '찾는 품목이 없습니다.' : '등록된 품목이 없습니다. [품목 관리]에서 먼저 품목을 만들어 주십시오.'}</td></tr>`;
     rows.forEach(({ s, fid, c, kg, yd, knitters, usage }) => {
       const yarns = Array.isArray(c.yarns) ? c.yarns.filter(y => y && y.name) : [];
       const procs = Array.isArray(c.procs) ? c.procs.map(normProc).filter(Boolean) : [];
@@ -30308,7 +30566,7 @@ function validateBlendSum(blends, label) {
       <div style="flex:0 0 170px;"><label style="font-size:11.5px;font-weight:700;color:#475569;display:block;margin-bottom:3px;">이름으로 찾기</label>
         <input type="text" id="cc-card-q" lang="ko" autocomplete="off" value="${escapeHtml(state.ccCardQ || '')}" placeholder="글자를 치면 좁혀집니다" style="${inputStyle}"></div>
       <div style="margin-left:auto;font-size:11.5px;color:#94a3b8;line-height:1.7;padding-bottom:6px;">
-        전체 ${specs.length}품목 · 보이는 것 ${shown.length}<br>새 품목은 [원단 스펙 설정]의 [＋ 새 품목 추가]에서 만듭니다
+        전체 ${specs.length}품목 · 보이는 것 ${shown.length}<br>새 품목은 [품목 관리]의 [＋ 새 품목 추가]에서 만듭니다
       </div>
     </div>`;
     if (!cur) return h + `<div class="dash-empty">품목을 고르십시오.</div>`;
@@ -32954,7 +33212,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
               <div style="flex:1;min-width:110px;"><label style="font-size:11.5px;font-weight:700;color:#475569;display:block;margin-bottom:3px;">제작중량 g/y</label><input type="number" step="1" id="fs-c-makegy" style="${inputStyle}text-align:right;" placeholder="예: 270"></div>
               <div style="flex:1;min-width:110px;"><label style="font-size:11.5px;font-weight:700;color:#475569;display:block;margin-bottom:3px;">안내중량 g/y <span style="font-weight:400;color:#94a3b8;">품목 하나</span></label><input type="number" step="1" id="fs-c-guidegy" style="${inputStyle}text-align:right;" placeholder="예: 300"></div>
               <div style="flex:1;min-width:110px;"><label style="font-size:11.5px;font-weight:700;color:#475569;display:block;margin-bottom:3px;">추가 마진</label><input type="text" id="fs-c-gydiff" readonly tabindex="-1" style="${inputStyle}background:#eef2f7;font-weight:800;color:#166534;text-align:right;"></div>
-              <div style="flex:2;min-width:200px;font-size:11px;color:#94a3b8;line-height:1.6;padding-bottom:8px;">안내중량은 품목당 하나입니다. 여기서 고치면 [원단 기본 스펙]의 중량도 같이 바뀝니다</div>
+              <div style="flex:2;min-width:200px;font-size:11px;color:#94a3b8;line-height:1.6;padding-bottom:8px;">안내중량은 품목당 하나입니다. 여기서 고치면 [품목 관리]의 중량도 같이 바뀝니다</div>
             </div>
             <div id="fs-c-gywhy" style="font-size:11.5px;color:#475569;font-weight:700;margin-bottom:11px;min-height:15px;"></div>
             ${inCard ? '</section>' : ''}${inCard ? `<section style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:14px 16px;margin-bottom:13px;">
@@ -34162,7 +34420,14 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
         <div class="dash-modal-head"><span id="cp-modal-title">단가 추가</span><button class="dash-modal-close" id="cp-modal-close">✕</button></div>
         <div style="padding:16px;display:flex;flex-direction:column;gap:11px;">
           <div id="cp-f-name-wrap"><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">사종</label>
-            <input type="text" id="cp-f-name" autocomplete="off" style="${st}" placeholder="예: CM30 · 150/48"></div>
+            <input type="text" id="cp-f-name" autocomplete="off" style="${st}" placeholder="예: CM30수 · DTY 150/48">
+            <div style="display:flex;gap:8px;margin-top:8px;">
+              <div style="flex:1;"><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">컬러 <span style="font-weight:400;color:#9ca3af;font-size:11px;">— 비우면 L/W</span></label>
+                <input type="text" id="cp-f-color" autocomplete="off" list="cp-f-color-list" style="${st}" placeholder="L/W · 1% · 8%"><datalist id="cp-f-color-list"><option value="L/W"></option><option value="1%"></option><option value="8%"></option><option value="13%"></option></datalist></div>
+              <div style="flex:1;"><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">브랜드 <span style="font-weight:400;color:#9ca3af;font-size:11px;">— 원사 메이커</span></label>
+                <input type="text" id="cp-f-brand" autocomplete="off" list="cp-f-brand-list" style="${st}" placeholder="예: 효성 · 일신"><datalist id="cp-f-brand-list"></datalist></div>
+            </div>
+            <div id="cp-f-fullname" style="font-size:11.5px;color:#2563eb;font-weight:700;margin-top:6px;min-height:16px;"></div></div>
           <div id="cp-f-kind-wrap"><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">종류</label>
             <select id="cp-f-kind" style="${st}">${YARN_KINDS.map(k => `<option value="${k}">${yarnKindName(k)} (${YARN_UNIT_LABEL[k]})</option>`).join('')}</select></div>
           <div id="cp-f-comp-wrap" style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:7px;padding:10px 11px;">
@@ -36751,7 +37016,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
       body = renderYarnSetupDash();
       addBtn.style.display = 'none';
     } else if (state.dashView === 'fabricSpecs') {
-      title = '원단 기본 스펙 (관리자 전용)';
+      title = '품목 관리 (관리자 전용)';
       body = renderFabricSpecs();
       addBtn.style.display = 'none';
     } else if (state.dashView === 'vendors') {
@@ -39063,6 +39328,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
         const s = (idx >= 0) ? specs[idx] : { name: '', cat: '', width: '', tube: false, gy: '', blend: '' };
         document.getElementById('fs-modal-title').textContent = (idx >= 0) ? '품목 수정' : '품목 추가';
         document.getElementById('fs-f-name').value = s.name || '';
+        { const ab = document.getElementById('fs-f-abbr'); if (ab) ab.value = s.abbr || ''; }   // hotfix392: 줄임말
         const gSel = document.getElementById('fs-f-gubun');
         // hotfix244: 신규 추가는 현재 보고 있는 탭의 구분을 기본 선택 (전체 탭이면 몸판)
         gSel.value = (idx >= 0) ? (s.gubun || GUBUN_BODY) : (fsGubunFilter !== '__all__' ? fsGubunFilter : GUBUN_BODY);
@@ -39310,6 +39576,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
           gy: (function () { const cur = (editingSpecIdx >= 0) ? getFabricSpecs()[editingSpecIdx] : null; return (cur && cur.gy != null) ? cur.gy : ''; })(),   // 옛 안내중량은 그대로 둔다
           blend: document.getElementById('fs-f-blend').value.trim(),
           pair_rib: (document.getElementById('fs-f-pair')?.value || '').trim(),
+          abbr: (document.getElementById('fs-f-abbr')?.value || '').trim().toUpperCase(),   // hotfix392: 공유코드용 줄임말
           updated_at: todayYMD()
         };
         if (entry.gubun === GUBUN_RIB) entry.pair_rib = '';
@@ -40326,7 +40593,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
         const s = built.sum;
         const mk = !!(document.getElementById('ci-mkspec') || {}).checked;
         let msg = `원사 ${s.yarnNew + s.yarnChg}건 · 이력 ${s.histAdd}줄 · 원단 ${s.fabHit}개를 넣습니다.`;
-        if (mk && s.fabMissN) msg += `\n[원단 기본 스펙]에 없는 품목 ${s.fabMissN}개를 판매 종료 상태로 새로 만듭니다.`;
+        if (mk && s.fabMissN) msg += `\n[품목 관리]에 없는 품목 ${s.fabMissN}개를 판매 종료 상태로 새로 만듭니다.`;
         if (!confirm(msg + '\n계속할까요?')) return;
         goEl.disabled = true;
         const ok = await runCostImport(raw, !!(owEl && owEl.checked), mk);
@@ -40648,7 +40915,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
           if (res.skipped) msg += `\n· 건너뛴 줄 ${res.skipped}개`;
           if (res.badFids.length) msg += `\n· 없는 품목코드 ${res.badFids.slice(0, 5).join(', ')}${res.badFids.length > 5 ? ' 외' : ''}`;
           if (res.noVendor.length) msg += `\n· 편직공장이 빈 줄 ${res.noVendor.length}개 (건너뜁니다)`;
-          msg += `\n\n· 파일에 없는 품목·공장은 그대로 둡니다\n· [원단 기본 스펙]의 자료는 손대지 않습니다\n· 올리기 직전 상태를 떠 두므로 [직전으로 되돌리기]로 돌아올 수 있습니다\n\n계속할까요?`;
+          msg += `\n\n· 파일에 없는 품목·공장은 그대로 둡니다\n· [품목 관리]의 자료는 손대지 않습니다\n· 올리기 직전 상태를 떠 두므로 [직전으로 되돌리기]로 돌아올 수 있습니다\n\n계속할까요?`;
           if (!confirm(msg)) return;
           const ok = await saveKnitSpecs(res.next, res.blends);
           if (ok) { toast(`편직 사양 ${res.added + res.changed}줄을 채웠습니다`, 'success'); renderDashboard(); }
@@ -40664,13 +40931,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
         try {
           const items = {};
           fids.forEach(f => { items[f] = { knits: bk.knits[f] || {} }; });
-          await setDoc(doc(db, C('cost_data'), 'fabric_cost'), {
-            items: items, updated_at: serverTimestamp(), updated_by: state.user?.email || 'unknown'
-          }, { merge: true });
-          fids.forEach(f => {
-            if (!state.fabricCost[f]) state.fabricCost[f] = {};
-            state.fabricCost[f].knits = bk.knits[f] ? JSON.parse(JSON.stringify(bk.knits[f])) : {};
-          });
+          if (!(await saveFabricCostItems(items, '되돌리기 실패'))) return;   // hotfix394: 저장 문 하나로
           state.fcBackup = null;
           toast('직전 상태로 되돌렸습니다', 'success');
           renderDashboard();
@@ -40712,7 +40973,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
         state.costTab = 'card';
         renderDashboard();
       }));
-      // hotfix297: 안내중량은 품목당 하나 — [원단 기본 스펙]의 중량 칸에 함께 저장한다
+      // hotfix297: 안내중량은 품목당 하나 — [품목 관리]의 중량 칸에 함께 저장한다
       const fcSaveAll = async () => {
         const cost = collectCostFields();
         if (!cost) return false;
@@ -40866,7 +41127,12 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
           : document.getElementById('cp-modal-title').textContent;
         document.getElementById('cp-f-price-label').textContent =
           type === 'yarn' ? '단가' : (type === 'bundle' ? '묶음 단가 (kg당)' : 'kg당 단가');
-        document.getElementById('cp-f-name').value = cur.name || '';
+        { const pt = yarnParts(cur); document.getElementById('cp-f-name').value = isNew ? '' : pt.base;   // hotfix393
+          document.getElementById('cp-f-color').value = isNew ? '' : pt.color; document.getElementById('cp-f-brand').value = isNew ? '' : pt.brand;
+          const bl = document.getElementById('cp-f-brand-list'); if (bl) bl.innerHTML = Array.from(new Set(P.yarns.map(y => yarnParts(y).brand).filter(Boolean))).map(b => `<option value="${escapeHtml(b)}"></option>`).join('');
+          const paintFull = () => { const el = document.getElementById('cp-f-fullname'); if (el) { const nm = yarnFullName(document.getElementById('cp-f-name').value, document.getElementById('cp-f-color').value, document.getElementById('cp-f-brand').value); el.textContent = nm ? '저장 이름: ' + nm : ''; } };
+          ['cp-f-name', 'cp-f-color', 'cp-f-brand'].forEach(id => { const el = document.getElementById(id); if (el) el.oninput = paintFull; });
+          paintFull(); }
         document.getElementById('cp-f-kind').value = cur.kind || '기타';
         document.getElementById('cp-f-price').value = (cur.price != null ? moneyInputVal(cur.price) : '');
         document.getElementById('cp-f-memo').value = cur.memo || '';
@@ -40911,7 +41177,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
         const hit = [];
         P.yarns.forEach(y => {
           if (Array.isArray(y.comp) && y.comp.length) return;
-          const g = guessYarnComp(y.name, y.kind);
+          const g = guessYarnComp(yarnParts(y).base || y.name, y.kind);   // hotfix393: 사종 글자만 보고
           if (!g.length) return;
           y.comp = g; y.comp_auto = true;
           hit.push(`${y.name} → ${g.map(x => x.mat + ' ' + x.pct + '%').join(' · ')}`);
@@ -40952,17 +41218,20 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
         if (!setupOnly && (isNaN(price) || price < 0)) { toast('단가를 넣어 주세요', 'error'); return; }
         let entry = null, list = null, key = '';
         if (cpType === 'yarn') {
-          const name = document.getElementById('cp-f-name').value.trim();
-          if (!name) { toast('사종을 넣어 주세요', 'error'); return; }
+          const base = document.getElementById('cp-f-name').value.trim();
+          if (!base) { toast('사종을 넣어 주세요', 'error'); return; }
+          let color = document.getElementById('cp-f-color').value.trim(); if (yarnColorIsLW(color)) color = YARN_LW;   // hotfix393: 비우면 L/W
+          const brand = document.getElementById('cp-f-brand').value.trim();
+          const name = yarnFullName(base, color, brand);
           const kind = document.getElementById('cp-f-kind').value || '기타';
           const dup = P.yarns.findIndex((x, i) => i !== cpIdx && String(x.name || '').trim().toLowerCase() === name.toLowerCase());
-          if (dup >= 0) { toast('같은 사종이 이미 있습니다', 'error'); return; }
+          if (dup >= 0) { toast('같은 사종·컬러·브랜드가 이미 있습니다', 'error'); return; }
           // hotfix290: 성분(혼용율). 넣었으면 합이 100%여야 한다. 창에서 저장하면 대표가 확인한 것으로 본다.
           const comp = cpCompRead();
           if (comp.length && Math.abs(yarnCompSum(comp) - 100) > 0.5) { toast('성분 합계가 100%가 되어야 합니다', 'error'); return; }
           const prev = (cpIdx >= 0 && P.yarns[cpIdx]) ? P.yarns[cpIdx] : {};
           entry = {
-            name, kind,
+            name, kind, base, color, brand,   // hotfix393: 사종·컬러·브랜드 따로 (name 은 합친 글자)
             price: setupOnly ? (prev.price != null ? prev.price : null) : price,
             // 값 칸은 원가 계산기에서 채운다 — 여기서 지우지 않는다
             ship: (prev.ship == null ? null : prev.ship),
@@ -41175,6 +41444,25 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
   }
   
   // 의뢰서 미리보기 모달
+  // hotfix394: 의뢰서 이력 펼치기 — history[] (누가 · 언제 · 어느 칸 · 전→후). 관리자 이상만.
+  const WO_FIELD_KO = { colors: '컬러', items: '품목', yarns: '사종', stamps: '스탬프', date: '의뢰일', recipient: '수신처', supplier: '구매처', internal_memo: '메모', notes: '비고',
+    completed: '완료', completed_at: '완료일', deleted: '삭제', greige_shipments: '입·출고', kind: '성격', urgent: '긴급', body: '몸판', rib: '리프', delivery: '납기', purpose: '용도',
+    lot_no: 'LOT', gs_qty: '수량', gs_note: '메모', gs_invoice_no: '송장', gs_greige_no: '생지 번호', gs_status: '출고 상태', shared_code: '공유코드', received_body: '입고(몸판)', received_rib: '입고(리프)' };
+  function woHistoryHTML(wo) {
+    if (!isAdminUser()) return '';
+    const h = Array.isArray(wo && wo.history) ? wo.history.slice() : [];
+    const fmt = iso => { try { const d = new Date(iso); return isNaN(d) ? String(iso || '') : `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; } catch (e) { return ''; } };
+    const who = e => String(e || '').replace(/@.*$/, '');
+    const rows = h.slice().reverse().map(l => `<div style="display:flex;gap:10px;padding:5px 0;border-bottom:1px dashed #eee;font-size:11.5px;">
+        <span style="flex:0 0 78px;color:#6b7280;font-family:var(--font-gothic);">${escapeHtml(fmt(l.at))}</span>
+        <span style="flex:0 0 90px;color:#374151;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(l.by || '')}">${escapeHtml(who(l.by))}</span>
+        <span style="flex:1;color:#111827;">${escapeHtml((l.fields || []).map(f => WO_FIELD_KO[f] || f).join(' · '))}${Array.isArray(l.chg) && l.chg.length ? `<div style="color:#6b7280;font-size:11px;">${l.chg.map(c => escapeHtml(c.replace(/^([a-z_]+):/i, (m, k) => (WO_FIELD_KO[k] || k) + ':'))).join('<br>')}</div>` : ''}</span>
+      </div>`).join('');
+    return `<details class="wo-history" style="max-width:820px;margin:14px auto 0;background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:8px 14px;">
+      <summary style="cursor:pointer;font-size:12.5px;font-weight:700;color:#374151;">이력 ${h.length ? h.length + '건' : '(아직 없음)'} <span style="font-weight:400;color:#9ca3af;">— 누가 · 언제 · 어느 칸을 고쳤는가</span></summary>
+      <div style="margin-top:6px;">${rows || '<div style="font-size:11.5px;color:#9ca3af;padding:6px 0;">이 의뢰서는 이력 기능(hotfix394) 전에 만들어져 아직 기록이 없습니다. 다음 저장부터 남습니다.</div>'}</div>
+    </details>`;
+  }
   function showPreviewModal(wo) {
     const modal = document.getElementById('dash-modal-bg');
     const title = document.getElementById('dash-modal-title');
@@ -41224,7 +41512,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
           생지출고의뢰서 만들기
         </button>
       </div>` : '';
-    body.innerHTML = fixBar + gsBar + `<div class="wo-doc${btClass}" id="dash-modal-wo-doc" style="margin:auto;">${html}</div>`;
+    body.innerHTML = fixBar + gsBar + `<div class="wo-doc${btClass}" id="dash-modal-wo-doc" style="margin:auto;">${html}</div>` + woHistoryHTML(wo);   // hotfix394: [이력] 펼치기
     
     // 카톡 텍스트 버튼은 편직일 때만 노출 (메인 미리보기 정책과 동일)
     const kakaoBtn = document.getElementById('dash-modal-kakao');
@@ -43668,7 +43956,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix391';
+  const VERSION = 'v2.53 hotfix395';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
