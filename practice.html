@@ -7645,6 +7645,45 @@ function escapeHtml(s) {
 }
 
 // hotfix405: 폼 기준값 — 초기화·불러오기·저장 때 찍어 두고, 옮길 때는 깃발이 아니라 지금 값과 비교한다 (자동 채움만 된 폼은 헛묻지 않음)
+// hotfix407: 임시저장 공통 틀 (대표 확정) — 화면마다 자동 보관(localStorage hiwos.draft.<열쇠>) · 값이 바뀐 때만 세 갈래 팝업 · 돌아오면 되살릴지 한 번 묻기
+//   draftKey/draftSave/draftRead/draftDrop 이 저장소 부품. draftBind 가 화면 하나를 틀에 붙인다 (getData/setData 한 쌍이면 됨).
+//   화면은 state.__leaveGuard 에 자기 손잡이를 두고, switchDashView 가 옮기기 전에 askLeave() 로 묻는다.
+function draftKey(kind, id) { return 'hiwos.draft.' + String(kind || '') + (id != null && String(id) !== '' ? '.' + String(id) : ''); }
+function draftSave(key, data, brief) { try { localStorage.setItem(key, JSON.stringify({ at: Date.now(), brief: brief || '', data })); return true; } catch (e) { return false; } }
+function draftRead(key) { try { const o = JSON.parse(localStorage.getItem(key) || 'null'); return (o && o.data !== undefined) ? o : null; } catch (e) { return null; } }
+function draftDrop(key) { try { localStorage.removeItem(key); } catch (e) {} }
+function draftStamp(t) { const d = new Date(t || Date.now()), p = x => String(x).padStart(2, '0'); return (d.getMonth() + 1) + '월 ' + d.getDate() + '일 ' + p(d.getHours()) + ':' + p(d.getMinutes()); }
+function draftBind(o) {
+  const H = { key: o.key, base: '', t: null };
+  const snap = () => { try { return JSON.stringify(o.getData()); } catch (_) { return ''; } };
+  H.mark = () => { H.base = snap(); };
+  H.changed = o.changed || (() => snap() !== H.base);
+  H.save = () => { if (H.changed()) return draftSave(H.key, o.getData(), o.brief ? o.brief() : ''); draftDrop(H.key); return false; };
+  H.drop = () => draftDrop(H.key);
+  H.touch = () => { clearTimeout(H.t); H.t = setTimeout(() => { try { H.save(); } catch (_) {} }, o.autoMs || 600); };
+  H.flush = () => { clearTimeout(H.t); try { H.save(); } catch (_) {} };
+  H.askLeave = async () => {
+    H.flush();
+    if (!H.changed()) return true;
+    if (!window.__askThree) return true;
+    const r = await window.__askThree(o.title || '저장하지 않은 내용이 있습니다',
+      (o.brief ? o.brief() + '\n' : '') + '옮기면 이 화면에서는 사라집니다. 담아 두면 다음에 이 화면을 열 때 되살릴 수 있습니다.',
+      ['임시로 담아 두고 옮김', '버리고 옮김', '그냥 있기']);
+    if (r === 'stay') return false;
+    if (r === 'drop') H.drop(); else H.save();
+    return true;
+  };
+  H.offerRestore = async () => {
+    const d = draftRead(H.key); if (!d) return false;
+    const r = window.__draftRestoreAuto || (window.__askThree
+      ? await window.__askThree('담아 둔 내용이 있습니다', draftStamp(d.at) + ' 에 담아 둔 내용' + (d.brief ? ' — ' + d.brief : '') + '\n되살릴까요?', ['되살리기', '버리기', '나중에'])
+      : 'keep');
+    if (r === 'keep') { try { o.setData(d.data); } catch (_) {} return true; }
+    if (r === 'drop') H.drop();
+    return false;
+  };
+  return H;
+}
 function formBaseMark() { try { state.__formBase = JSON.stringify(getFormData()); } catch (_) { state.__formBase = ''; } }
 function formChanged() { if (!state.isDirty) return false; try { return JSON.stringify(getFormData()) !== (state.__formBase || ''); } catch (_) { return true; } }
 // 폼이 무엇인지 한 줄 (팝업 글에 씀)
@@ -13492,11 +13531,18 @@ function specGreigeColors(fid) {
       : ((Array.isArray(L[k]) && L[k].length) ? L[k].slice() : def.slice());
     const mrg = (k) => Object.assign({}, (L[k] && typeof L[k] === 'object') ? L[k] : {},
       (U[k] && typeof U[k] === 'object') ? U[k] : {});
+    // hotfix407: 옛 상자(cost_data/lists)와 이름표 상자(settings/lists)를 합칠 때
+    //   지금 가공 이름과 같은 열쇠(예: alias['텐타'] = '텐타(정상)' 인데 '텐타' 가 가공 목록에 있음)는
+    //   다른 표기가 아니라 고리(텐타 ↔ 텐타(정상))를 만드는 찌꺼기다 → 뺀다. 자기 자신을 가리키는 것도 뺀다.
+    const procs0 = pick('procs', COST_PROCS_DEFAULT);
+    const pa = mrg('proc_alias');
+    const pset = new Set(procs0.map(x => String(x || '').trim()));
+    Object.keys(pa).forEach(k => { const kk = String(k).trim(); if (pset.has(kk) || String(pa[k] || '').trim() === kk) delete pa[k]; });
     return {
       orgs: pick('orgs', KNIT_ORGS_DEFAULT),
       mats: pick('mats', YARN_MATS_DEFAULT),
-      procs: pick('procs', COST_PROCS_DEFAULT),
-      proc_alias: mrg('proc_alias'),
+      procs: procs0,
+      proc_alias: pa,
       proc_part: mrg('proc_part'),
       proc_hidden: Array.isArray(U.proc_hidden) ? U.proc_hidden.slice() : (Array.isArray(L.proc_hidden) ? L.proc_hidden.slice() : []),
       org_alias: mrg('org_alias')
@@ -13510,9 +13556,28 @@ function specGreigeColors(fid) {
   function normProc(p) {
     let t = String(p == null ? '' : p).trim();
     if (COST_PROC_ALIAS[t]) t = COST_PROC_ALIAS[t];
-    const a = costLists().proc_alias;
-    return a[t] || t;
+    const L = costLists();
+    const a = L.proc_alias;
+    // hotfix407: 다른 표기가 사슬로 이어져 있으면 끝까지 따라간다(최대 8단).
+    //   서로 가리키는 고리(A→B→A)면 [전체 설정] 가공 목록에 있는 이름을, 없으면 처음 이름을 쓴다.
+    const seen = [t]; let n = 0;
+    while (a[t] && a[t] !== t && n < 8) {
+      t = a[t]; n++;
+      if (seen.includes(t)) { const pl = L.procs.map(x => String(x || '').trim()); t = seen.find(x => pl.includes(x)) || seen[0]; break; }
+      seen.push(t);
+    }
+    return t;
   }
+  // hotfix407: 콘솔 점검용 — 가공 이름·다른 표기가 어디로 이어지는지 한 표로 (대표가 붙여넣기)
+  if (typeof window !== 'undefined') window.__procChain = function () {
+    const L = costLists(); const a = L.proc_alias || {};
+    const names = Array.from(new Set([].concat(L.procs.map(x => String(x || '').trim()), Object.keys(a))));
+    return names.filter(Boolean).map(nm => {
+      const hops = [nm]; let t = nm, n = 0, cyc = false;
+      while (a[t] && a[t] !== t && n < 8) { t = a[t]; n++; if (hops.includes(t)) { cyc = true; break; } hops.push(t); }
+      return { 이름: nm, 목록에있음: L.procs.map(x => String(x || '').trim()).includes(nm), 이어짐: hops.slice(1).join(' → ') || '', 최종: normProc(nm), 고리: cyc };
+    });
+  };
   function normOrg(o) {
     let t = String(o == null ? '' : o).trim();
     if (KNIT_ORG_ALIAS_FIXED[t]) t = KNIT_ORG_ALIAS_FIXED[t];
@@ -15875,6 +15940,16 @@ function validateBlendSum(blends, label) {
   }
 
   function switchDashView(view) {
+    // hotfix407: 지금 화면이 임시저장 틀에 붙어 있고 값이 바뀌었으면 세 갈래로 묻고 나서 옮긴다
+    const G = state.__leaveGuard;
+    if (G && typeof G.askLeave === 'function' && G.changed()) {
+      G.askLeave().then(ok => { if (!ok) return; state.__leaveGuard = null; switchDashViewNow(view); });
+      return;
+    }
+    state.__leaveGuard = null;
+    switchDashViewNow(view);
+  }
+  function switchDashViewNow(view) {
     // hotfix265: 등급 하드코딩 폐지 — 화면 진입 권한은 [권한 관리] 설정 한 곳에서만 판정한다
     //   (renderDashboard에서 canAccessView로 한 번 더 막는다)
     // v2.51 step3: 일일 보고는 페이지 전환 없이 모달만 진입
@@ -28260,13 +28335,23 @@ function validateBlendSum(blends, label) {
   function pfPartsOrdered(withOff) {
     const off = pfOff();
     const procs = getCostProcs().filter(p => withOff || !off.includes(normProc(p)));
-    const bag = {};
-    procs.forEach(p => { const k = procPartOf(p) || '기타'; (bag[k] = bag[k] || []).push(p); });
+    const bag = {}, seenK = new Set();
+    // hotfix407: 다른 표기 사슬로 같은 자리에 담기는 이름은 한 줄만 (첫 이름) — 안내는 pfChainNote
+    procs.forEach(p => { const pk = normProc(p); if (seenK.has(pk)) return; seenK.add(pk); const k = procPartOf(p) || '기타'; (bag[k] = bag[k] || []).push(p); });
     const order = COST_PROC_PART_ORDER.slice();
     Object.keys(bag).forEach(k => { if (!order.includes(k)) order.push(k); });
     // hotfix346: 파트 안 차례도 약어 목록에 적힌 그대로
     Object.keys(bag).forEach(k => bag[k].sort((a, b) => pfAbbrRank(a) - pfAbbrRank(b)));
     return order.filter(k => bag[k] && bag[k].length).map(k => ({ part: k, procs: bag[k] }));
+  }
+  // hotfix407: 이 이름이 다른 표기 사슬로 다른 이름에 이어져 있거나, 다른 이름과 같은 자리에 담기면 그 안내 글
+  function pfChainNote(pr) {
+    const raw = String(pr || '').trim(), pk = normProc(raw);
+    const others = getCostProcsAll().map(x => String(x || '').trim()).filter(x => x && x !== raw && normProc(x) === pk);
+    const parts = [];
+    if (raw !== pk) parts.push(`‘${raw}’ 은 ‘${pk}’ 로 이어져 있어 값이 ‘${pk}’ 에 담깁니다`);
+    if (others.length) parts.push(`같은 자리에 담기는 이름: ${others.join(' · ')}`);
+    return parts.join(' · ');
   }
   // 파트마다 옅은 바탕색 — 눈으로 확실히 갈린다
   const PF_PART_BG = { '선작업': '#eff6ff', '염색/물나염': '#fffbeb', '가공': '#eef2ff',
@@ -28523,20 +28608,29 @@ function validateBlendSum(blends, label) {
   async function pfAllSave() {
     const D = pfAllDraft();
     const L = JSON.parse(JSON.stringify(costLists()));
-    const names = D.rows.map(r => normProc(r.name)).filter(Boolean);
+    // hotfix407: 새 이름은 적은 글자 그대로 쓴다 (normProc 를 거치면 다른 표기 사슬이 옛 이름으로 되돌려 이름 바꾸기가 먹지 않았다)
+    const nmOf = r => { let t = String(r.name || '').trim(); return COST_PROC_ALIAS[t] || t; };
+    const names = D.rows.map(nmOf).filter(Boolean);
     if (names.length !== D.rows.length) { toast('이름이 빈 가공이 있습니다', 'error'); return false; }
     if (new Set(names).size !== names.length) { toast('같은 이름의 가공이 둘 있습니다', 'error'); return false; }
+    // hotfix407: 다른 표기가 다른 줄의 가공 이름과 같으면 값이 그쪽 줄에 담기게 되므로 막는다
+    for (const r of D.rows) {
+      const n = nmOf(r);
+      const bad = (r.aliases || []).map(a => String(a || '').trim()).find(a => a && a !== n && names.includes(a));
+      if (bad) { toast(`‘${bad}’ 은 가공 이름인데 ‘${n}’ 의 다른 표기로도 적혀 있습니다. 다른 표기에서 지우거나 가공 이름을 바꿔 주십시오`, 'error'); return false; }
+    }
     const renames = {};   // 옛 이름 → 새 이름
-    D.rows.forEach(r => { if (r.key && r.key !== normProc(r.name)) renames[r.key] = normProc(r.name); });
+    D.rows.forEach(r => { if (r.key && r.key !== nmOf(r)) renames[r.key] = nmOf(r); });
     // 이름표 상자
     L.procs = names.slice();
     L.proc_part = {};
     L.proc_alias = Object.assign({}, L.proc_alias || {});
     Object.keys(L.proc_alias).forEach(k => { if (renames[L.proc_alias[k]]) L.proc_alias[k] = renames[L.proc_alias[k]]; });
     D.rows.forEach(r => {
-      const n = normProc(r.name);
+      const n = nmOf(r);
       L.proc_part[n] = COST_PROC_PART_ORDER.includes(r.part) ? r.part : '기타';
       Object.keys(L.proc_alias).forEach(k => { if (L.proc_alias[k] === n) delete L.proc_alias[k]; });
+      delete L.proc_alias[n];   // hotfix407: 가공 이름과 같은 열쇠는 남기지 않는다
       (r.aliases || []).map(a => String(a || '').trim()).filter(a => a && a !== n).forEach(a => { L.proc_alias[a] = n; });
       if (r.key && renames[r.key]) L.proc_alias[r.key] = n;     // 옛 이름은 다른 표기로 남겨 옛 자료가 끊기지 않게
     });
@@ -28547,7 +28641,7 @@ function validateBlendSum(blends, label) {
     const P = JSON.parse(JSON.stringify(getCostPrices()));
     P.proc_abbr = Object.assign({}, P.proc_abbr || {});
     Object.keys(renames).forEach(o => { if (P.proc_abbr[o] != null) { P.proc_abbr[renames[o]] = P.proc_abbr[o]; delete P.proc_abbr[o]; } });
-    D.rows.forEach(r => { const n = normProc(r.name), a = String(r.abbr || '').trim(); if (a) P.proc_abbr[n] = a; else delete P.proc_abbr[n]; });
+    D.rows.forEach(r => { const n = nmOf(r), a = String(r.abbr || '').trim(); if (a) P.proc_abbr[n] = a; else delete P.proc_abbr[n]; });
     Object.keys(D.gabbr || {}).forEach(g => { const a = String(D.gabbr[g] || '').trim(); if (a) P.proc_abbr[g] = a; else delete P.proc_abbr[g]; });
     const rn = x => renames[String(x || '').trim()] || x;
     (P.proc || []).forEach(r => { if (r) r.proc = rn(r.proc); });
@@ -28556,7 +28650,7 @@ function validateBlendSum(blends, label) {
     const ok2 = await saveCostPrices(P);
     if (!ok2) return false;
     state.pfAllDraft = null;
-    try { localStorage.removeItem(PF_ALL_KEY); } catch (e) {}
+    pfAllStashDrop();
     state.pfDraft = null;
     return true;
   }
@@ -28586,15 +28680,39 @@ function validateBlendSum(blends, label) {
     return ok2;
   }
   // 임시저장 — 이 컴퓨터에 담아 두고, 다음에 이 화면을 열면 되살린다
-  function pfAllStash() { try { localStorage.setItem(PF_ALL_KEY, JSON.stringify({ at: Date.now(), D: pfAllDraft() })); } catch (e) {} }
-  function pfAllStashRead() { try { const o = JSON.parse(localStorage.getItem(PF_ALL_KEY) || 'null'); return (o && o.D && Array.isArray(o.D.rows)) ? o : null; } catch (e) { return null; } }
+  // hotfix407: 공통 임시저장 틀(draftKey/draftSave/draftRead/draftDrop) 위에 얹음 — [임시저장] 단추 없이 자동 보관
+  function pfAllStash() { if (pfAllDirty()) draftSave(draftKey('pfAll'), pfAllDraft(), '전체 설정 글자'); else draftDrop(draftKey('pfAll')); }
+  function pfAllStashRead() { const o = draftRead(draftKey('pfAll')); return (o && o.data && Array.isArray(o.data.rows)) ? { at: o.at, D: o.data } : null; }
+  function pfAllStashDrop() { draftDrop(draftKey('pfAll')); }
+  function pfVenRowsOf(P, V) { return (P.proc || []).filter(r => r && pfSame(r.vendor, V) && !String(r.item || '').trim()); }
+  function pfVenChanged() {
+    const V = pfVendor(); if (!V) return false;
+    if (pfNewB().some(b => b && ((b.procs || []).length || String(b.name || '').trim()))) return true;
+    if (!state.pfDraft) return false;
+    return JSON.stringify(pfVenRowsOf(state.pfDraft, V)) !== JSON.stringify(pfVenRowsOf(getCostPrices(), V));
+  }
   function pfVenStash() {
     const V = pfVendor(); if (!V) return;
-    const D = pfDraft();
-    const rows = (D.proc || []).filter(r => r && pfSame(r.vendor, V) && !String(r.item || '').trim());
-    try { localStorage.setItem(PF_VEN_KEY, JSON.stringify({ at: Date.now(), vendor: V, rows, newB: pfNewB() })); } catch (e) {}
+    if (!pfVenChanged()) { draftDrop(draftKey('pfVendor', V)); return; }
+    draftSave(draftKey('pfVendor', V), { vendor: V, rows: pfVenRowsOf(pfDraft(), V), newB: pfNewB() }, V + ' 낱개 단가 · 묶음');
   }
-  function pfVenStashRead() { try { const o = JSON.parse(localStorage.getItem(PF_VEN_KEY) || 'null'); return (o && o.vendor) ? o : null; } catch (e) { return null; } }
+  function pfVenStashRead() { const V = pfVendor(); if (!V) return null; const o = draftRead(draftKey('pfVendor', V)); return (o && o.data && o.data.vendor) ? Object.assign({ at: o.at }, o.data) : null; }
+  function pfVenStashDrop() { const V = pfVendor(); if (V) draftDrop(draftKey('pfVendor', V)); }
+  // 뿌리(dash-body 또는 팝업 몸통)에 한 번만 걸고, 그때그때 걸린 손잡이(state.__leaveGuard)에 넘긴다 — 다시 그려도 옛 손잡이가 남지 않게
+  function pfRootTouchOn(pfOn) {
+    ['input', 'change'].forEach(ev => pfOn(pfRoot(), ev, e => {
+      if (e.target && e.target.id === 'pf-vendor') return;
+      const G = state.__leaveGuard; if (G && typeof G.touch === 'function') G.touch();
+    }));
+  }
+  // 옮기기 전에 묻는 손잡이 — 층(전체/업체별)마다
+  function pfLeaveGuard() {
+    if ((state.pfSub || 'all') === 'all') return draftBind({ key: draftKey('pfAll'), getData: () => pfAllDraft(), setData: () => {}, changed: pfAllDirty, brief: () => '전체 설정에서 고친 글자(이름 · 파트 · 약어 · 다른 표기 · 새 가공)', title: '전체 설정에 저장하지 않은 글자가 있습니다' });
+    const V = pfVendor();
+    return draftBind({ key: draftKey('pfVendor', V), getData: () => ({ vendor: V, rows: pfVenRowsOf(pfDraft(), V), newB: pfNewB() }), setData: () => {}, changed: pfVenChanged,
+      brief: () => { const nb = pfNewB().filter(b => b && ((b.procs || []).length || String(b.name || '').trim())).length; return V + ' 낱개 단가' + (nb ? ' · 만들던 묶음 ' + nb + '개' : ''); },
+      title: V + ' 업체별 설정에 저장하지 않은 값이 있습니다' });
+  }
   function pfStampOf(t) { const d = new Date(t), p = x => String(x).padStart(2, '0'); return p(d.getMonth() + 1) + '/' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes()); }
   function pfAllHtml() {
     const D = pfAllDraft();
@@ -28661,9 +28779,8 @@ function validateBlendSum(blends, label) {
     h += `<div id="pf-savebar" style="position:sticky;bottom:0;z-index:40;margin:14px -20px 0;padding:11px 20px;
         background:#fff;border-top:2px solid #047857;box-shadow:0 -4px 12px rgba(15,23,42,.07);display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
       <span style="font-size:12.5px;font-weight:800;color:#0f172a;">전체 설정</span>
-      <span style="font-size:11.5px;color:#94a3b8;">[전체 저장] 은 이 화면에서 고친 글자(이름 · 파트 · 약어 · 다른 표기 · 새 가공)를 모두 담습니다. [임시저장] 은 이 컴퓨터에만 담아 두었다가 다음에 되살립니다.</span>
+      <span style="font-size:11.5px;color:#94a3b8;">[전체 저장] 은 이 화면에서 고친 글자(이름 · 파트 · 약어 · 다른 표기 · 새 가공)를 모두 담습니다. 고치는 중인 글자는 이 컴퓨터에 저절로 담아 두었다가 다음에 되살릴지 묻습니다.</span>
       <span style="flex:1;"></span>
-      <button class="dash-action-btn" id="pfa-stash" style="padding:6px 13px;">임시저장</button>
       <button class="dash-action-btn" id="pfa-save" style="background:#047857;color:#fff;font-weight:800;padding:8px 26px;font-size:13px;">전체 저장</button>
     </div>`;
     return h;
@@ -28708,12 +28825,12 @@ function validateBlendSum(blends, label) {
       sv.disabled = false; sv.textContent = '전체 저장';
       if (ok) { toast('전체 설정을 저장했습니다', 'success'); pfRepaint(); }
     });
-    const stash = pfRoot().querySelector('#pfa-stash');
-    if (stash) pfOn(stash, 'click', () => { pfAllStash(); toast('이 컴퓨터에 임시저장했습니다. 다음에 이 화면을 열면 되살릴 수 있습니다', 'success'); });
     const su = pfRoot().querySelector('#pfa-stash-use');
     if (su) pfOn(su, 'click', () => { const o = pfAllStashRead(); if (o) { state.pfAllDraft = Object.assign({}, o.D, { _fromStash: true }); } pfRepaint(); });
     const sd = pfRoot().querySelector('#pfa-stash-drop');
-    if (sd) pfOn(sd, 'click', () => { try { localStorage.removeItem(PF_ALL_KEY); } catch (e) {} pfRepaint(); });
+    if (sd) pfOn(sd, 'click', () => { pfAllStashDrop(); pfRepaint(); });
+    // hotfix407: 자동 보관 — 글자를 고칠 때마다(잠깐 뒤) 이 컴퓨터에 담아 둔다. 서버와 같으면 담아 둔 것을 지운다
+    state.__leaveGuard = pfLeaveGuard(); pfRootTouchOn(pfOn);
   }
   // ============================================================
   // hotfix385: 업체별 설정 팝업 — 품목 카드에서 [업체별 설정]을 누르면
@@ -28759,11 +28876,10 @@ function validateBlendSum(blends, label) {
       </div>
       <div id="pf-popup-body" style="padding:16px 20px 0;overflow:auto;flex:1 1 auto;"></div></div>`;
     document.body.appendChild(wrap);
-    const close = () => {
-      const left = pfNewB().filter(b => b && ((b.procs || []).length || String(b.name || '').trim()));
-      const dirty = state.pfDraft && JSON.stringify((state.pfDraft.proc || []).filter(r => r && pfSame(r.vendor, V) && !String(r.item || '').trim()))
-        !== JSON.stringify((getCostPrices().proc || []).filter(r => r && pfSame(r.vendor, V) && !String(r.item || '').trim()));
-      if ((left.length || dirty) && !confirm('아직 담지 않은 것이 있습니다' + (left.length ? ' (만들던 묶음 ' + left.length + '개)' : '') + (dirty ? ' (낱개 단가)' : '') + '.\n[전체 저장] · [묶음 저장] · [임시저장] 을 누르지 않고 닫으면 사라집니다.\n\n그래도 닫을까요?')) return;
+    const close = async () => {
+      const G = state.__leaveGuard;   // hotfix407: 닫을 때도 세 갈래(담아 두고 · 버리고 · 그냥 있기)
+      if (G && G.changed()) { const ok = await G.askLeave(); if (!ok) return; }
+      state.__leaveGuard = null;
       wrap.remove();
       state.pfNewB = []; state.pfDraft = null;
       if (typeof onClose === 'function') { try { onClose(); } catch (e) {} }
@@ -29125,7 +29241,7 @@ function validateBlendSum(blends, label) {
           const gOff = pfGradeOff();
           h += `<div style="border:1px solid #fcd34d;background:#fff;border-radius:8px;padding:9px 11px;margin-bottom:7px;">
             <div style="display:flex;align-items:center;gap:8px;margin-bottom:7px;">
-              <strong style="font-size:12px;color:#92400e;flex:1;">${escapeHtml(pr)} — 등급마다 값이 다릅니다</strong>${del}</div>
+              <strong style="font-size:12px;color:#92400e;flex:1;">${escapeHtml(pr)} — 등급마다 값이 다릅니다</strong>${del}</div>${pfChainNote(pr) ? `<div class="pf-chain" style="font-size:11px;color:#b45309;margin:-3px 0 6px;">${escapeHtml(pfChainNote(pr))}</div>` : ''}
             <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px 12px;">
               ${DYE_GRADES.filter(x => !gOff.includes(x)).map(x => `<label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#334155;justify-content:flex-start;">
                 <span style="flex:0 0 76px;text-align:right;font-weight:700;">${escapeHtml(dyeGradeLabel(x))}</span>
@@ -29143,11 +29259,12 @@ function validateBlendSum(blends, label) {
               <span style="flex:1;"></span>
             </div></div>`;
         } else {
-          h += `<div style="display:flex;align-items:center;gap:8px;padding:5px 2px;border-bottom:1px solid ${ln};">
+          const cn = pfChainNote(pr);
+          h += `<div style="display:flex;align-items:center;gap:8px;padding:5px 2px;border-bottom:1px solid ${ln};flex-wrap:wrap;">
             <span style="flex:0 0 150px;font-size:12.5px;font-weight:700;color:#334155;">${escapeHtml(pr)}</span>
             <input type="text" inputmode="numeric" class="pf-p" data-pf-p="${escapeHtml(pk)}" value="${escapeHtml(moneyInputVal(r && r.price))}" style="${iS}flex:0 0 120px;width:120px;">
             <span style="font-size:11px;color:#94a3b8;flex:0 0 38px;">원/kg</span>${del}
-            <span style="flex:1;"></span>
+            <span style="flex:1;"></span>${cn ? `<div class="pf-chain" style="flex:0 0 100%;font-size:11px;color:#b45309;padding:1px 0 2px 8px;">${escapeHtml(cn)}</div>` : ''}
           </div>`;
         }
       });
@@ -29166,9 +29283,8 @@ function validateBlendSum(blends, label) {
     h += `<div id="pf-savebar" style="position:sticky;bottom:0;z-index:40;margin:14px -20px 0;padding:11px 20px;
         background:#fff;border-top:2px solid #047857;box-shadow:0 -4px 12px rgba(15,23,42,.07);display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
       <span style="font-size:12.5px;font-weight:800;color:#0f172a;">${escapeHtml(V)}</span>
-      <span style="font-size:11.5px;color:#94a3b8;">[전체 저장] 은 이 업체의 낱개 단가를 담습니다. [임시저장] 은 이 컴퓨터에만 담아 두었다가 다음에 되살립니다. 업체를 바꾸기 전에 둘 중 하나를 눌러 주십시오.</span>
+      <span style="font-size:11.5px;color:#94a3b8;">[전체 저장] 은 이 업체의 낱개 단가를 담습니다. 넣는 중인 값은 이 컴퓨터에 저절로 담아 두었다가 다음에 되살릴지 묻습니다. 업체를 바꾸거나 화면을 옮기면 담아 둘지 물어봅니다.</span>
       <span style="flex:1;"></span>
-      <button class="dash-action-btn" id="pf-stash" style="padding:6px 13px;">임시저장</button>
       <button class="dash-action-btn" id="pf-save2" style="background:#047857;color:#fff;font-weight:800;padding:8px 26px;font-size:13px;">전체 저장</button>
     </div>`;
     return h;
@@ -29183,9 +29299,11 @@ function validateBlendSum(blends, label) {
       el.addEventListener(ev, fn);
     };
     // hotfix384: 층 고르기
-    pfRoot().querySelectorAll('.pf-sub').forEach(el => pfOn(el, 'click', () => {
-      if (state.pfSub === 'all' && el.dataset.pfSub !== 'all' && pfAllDirty() && !confirm('전체 설정에서 고친 글자가 아직 저장되지 않았습니다.\n[전체 저장] 또는 [임시저장]을 누르지 않고 옮기면 사라집니다.\n\n그래도 옮길까요?')) return;
-      if (el.dataset.pfSub !== 'all') state.pfAllDraft = null;
+    pfRoot().querySelectorAll('.pf-sub').forEach(el => pfOn(el, 'click', async () => {
+      if (el.dataset.pfSub === (state.pfSub || 'all')) return;
+      const G = state.__leaveGuard;   // hotfix407: 층을 옮길 때도 같은 세 갈래
+      if (G && G.changed()) { const ok = await G.askLeave(); if (!ok) return; }
+      if (el.dataset.pfSub !== 'all') state.pfAllDraft = null; else { state.pfDraft = null; state.pfNewB = []; }
       state.pfSub = el.dataset.pfSub; state.pfCmpOpen = false; pfRepaint();
     }));
     if ((state.pfSub || 'all') === 'all') { bindPfAll(pfOn); return; }
@@ -29199,15 +29317,15 @@ function validateBlendSum(blends, label) {
       pfRepaint();
     });
     const sd = pfRoot().querySelector('#pfv-stash-drop');
-    if (sd) pfOn(sd, 'click', () => { try { localStorage.removeItem(PF_VEN_KEY); } catch (e) {} pfRepaint(); });
-    const stash = pfRoot().querySelector('#pf-stash');
-    if (stash) pfOn(stash, 'click', () => { pfVenStash(); state.pfVenStashUsed = true; toast('이 컴퓨터에 임시저장했습니다', 'success'); });
+    if (sd) pfOn(sd, 'click', () => { pfVenStashDrop(); pfRepaint(); });
+    // hotfix407: 자동 보관 + 업체를 바꿀 때 세 갈래로 묻기
+    const gV = pfLeaveGuard(); state.__leaveGuard = gV; pfRootTouchOn(pfOn);
     const sel = pfRoot().querySelector('#pf-vendor');
-    if (sel) pfOn(sel, 'change', () => {
-      const left = pfNewB().filter(b => b && ((b.procs || []).length || String(b.name || '').trim()));
-      if (left.length && !confirm('만들고 계신 묶음 ' + left.length + '개가 아직 담기지 않았습니다.\n업체를 바꾸면 사라집니다.\n\n그래도 바꿀까요?')) { sel.value = pfVendor(); return; }
-      state.pfNewB = [];
-      state.pfVendor = sel.value;
+    if (sel) pfOn(sel, 'change', async () => {
+      const nextV = sel.value;
+      if (gV.changed()) { const ok = await gV.askLeave(); if (!ok) { sel.value = pfVendor(); return; } }
+      state.pfNewB = []; state.pfDraft = null;
+      state.pfVendor = nextV;
       state.pfVenStashUsed = false;
       pfRepaint();
     });
@@ -29371,7 +29489,7 @@ function validateBlendSum(blends, label) {
         || (r.grades && Object.keys(r.grades).length)));
       D.bundles = D.bundles.filter(b => String(b.name || '').trim() || (b.procs || []).length);
       const ok = await saveCostPrices(D);
-      if (ok) { state.pfDraft = null; try { localStorage.removeItem(PF_VEN_KEY); } catch (e) {} toast('낱개 단가를 저장했습니다', 'success'); pfRepaint(); }
+      if (ok) { state.pfDraft = null; pfVenStashDrop(); toast('낱개 단가를 저장했습니다', 'success'); pfRepaint(); }
     };
     if (sv) pfOn(sv, 'click', doSave);
     if (sv2) pfOn(sv2, 'click', doSave);
@@ -38327,6 +38445,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
     return !!(m && m.classList.contains('show'));
   }
   function renderDashboard() {
+    state.__leaveGuard = null;   // hotfix407: 그리는 화면이 임시저장 틀에 붙어 있으면 bind 에서 다시 건다
     if (fcModalIsOpen()) {
       state.__fcPendingRender = true;
       try { if (typeof repaintCostCalc === 'function') repaintCostCalc(); } catch (_) {}
@@ -45524,7 +45643,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix406';
+  const VERSION = 'v2.53 hotfix407';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
