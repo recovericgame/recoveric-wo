@@ -12359,7 +12359,53 @@ window.addEventListener('firebase-ready', () => {
           <span id="pr-msg" style="font-size:12.5px;color:#64748b;"></span>
         </div></div>`;
     }
+    // hotfix408: 본선 전환 — 연습선의 설정·원가·품목 사전을 본선 상자로 (의뢰서 제외). 연습선에서만 보인다.
+    if (window.__HIWOS_LINE) {
+      h += `<div style="margin-top:22px;border-top:2px solid #e2e8f0;padding-top:16px;">
+        <div style="font-size:15px;font-weight:800;color:#1e3a8a;margin-bottom:6px;">본선 전환 — 연습선 설정을 본선으로 옮기기</div>
+        <div style="background:#eff6ff;border:1px solid #93c5fd;border-radius:9px;padding:12px 15px;font-size:12.5px;color:#1e3a8a;line-height:1.9;margin-bottom:12px;">
+          연습선에서 고친 <strong>설정(settings) · 원가(cost_data) · 품목 사전(item_presets)</strong>을 본선 상자에 <strong>덮어씁니다</strong>.
+          <strong>의뢰서(workorders)는 옮기지 않습니다</strong> — 본선 의뢰서는 그대로입니다.<br>
+          누르면 먼저 <strong>본선 세 상자의 백업 파일</strong>이 이 컴퓨터로 받아지고, 그 다음에 씁니다. 옮긴 뒤에는 새 본선 HTML(index.html)로 바꿔 열어야 합니다.
+        </div>
+        <div class="dash-table-wrap"><table class="dash-table"><thead><tr><th style="text-align:left;">상자</th><th>연습선 건수</th><th>본선 건수</th></tr></thead><tbody>
+          ${BK_SETS.filter(x => x.key !== 'workorders').map(x => `<tr><td style="text-align:left;font-weight:800;">practice_${escapeHtml(x.key)} → ${escapeHtml(x.key)}</td><td style="text-align:center;" id="mv-prac-${x.key}">-</td><td style="text-align:center;" id="mv-main-${x.key}">-</td></tr>`).join('')}
+        </tbody></table></div>
+        <div style="margin-top:12px;display:flex;gap:9px;align-items:center;flex-wrap:wrap;">
+          <button class="dash-action-btn" id="mv-count" style="font-weight:700;padding:8px 16px;">건수 확인</button>
+          <button class="dash-action-btn" id="mv-run" style="background:#1e3a8a;color:#fff;font-weight:800;padding:9px 22px;font-size:13.5px;">본선으로 옮기기 (practice_ → 본선 · 의뢰서 제외)</button>
+          <span id="mv-msg" style="font-size:12.5px;color:#64748b;"></span>
+        </div></div>`;
+    }
     return h;
+  }
+  // hotfix408: 연습선 → 본선 (설정·원가·품목 사전만). 먼저 본선 것을 파일로 받고, 그 다음 400건씩 덮어쓴다. 문서 id 그대로. 본선에만 있는 문서는 지우지 않는다.
+  async function moveToMainLine(say) {
+    const sets = BK_SETS.filter(x => x.key !== 'workorders');
+    say('본선 백업을 만드는 중…');
+    const bak = { _made_at: new Date().toISOString(), _by: (state.user && state.user.email) || '', _app: 'HIWOS', _what: '본선 전환 직전 본선 설정 백업' };
+    for (const x of sets) { const snap = await getDocs(collection(db, x.key)); const bag = {}; snap.forEach(d => { bag[d.id] = d.data(); }); bak[x.key] = bag; }
+    try {
+      const blob = new Blob([JSON.stringify(bak, null, 2)], { type: 'application/json' });
+      const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'HIWOS_본선전환직전_본선설정백업_' + todayYMD().replace(/-/g, '') + '.json';
+      document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1500);
+    } catch (e) { throw new Error('백업 파일을 만들지 못해 멈췄습니다: ' + e.message); }
+    const result = {};
+    for (const x of sets) {
+      say('practice_' + x.key + ' 읽는 중…');
+      const snap = await getDocs(collection(db, 'practice_' + x.key));
+      const docsArr = []; snap.forEach(d => docsArr.push({ id: d.id, data: d.data() }));
+      say(x.key + ' ' + docsArr.length + '건 쓰는 중…');
+      for (let i = 0; i < docsArr.length; i += 400) {
+        const b = writeBatch(db);
+        docsArr.slice(i, i + 400).forEach(d => b.set(doc(db, x.key, d.id), d.data));
+        await b.commit();
+      }
+      result[x.key] = { prac: docsArr.length };
+    }
+    const after = await countLine('');
+    sets.forEach(x => { result[x.key].main = after[x.key]; });
+    return result;
   }
   // hotfix388: 연습선 만들기 — 읽기(본선) → 쓰기(practice_). 400건씩 묶어 쓴다. 문서 id 그대로
   async function countLine(prefix) {
@@ -12388,6 +12434,25 @@ window.addEventListener('firebase-ready', () => {
     return result;
   }
   function bindBackupDash() {
+    // hotfix408: 연습선 → 본선
+    { const mc = document.getElementById('mv-count'), mr = document.getElementById('mv-run');
+      const msay = t => { const m = document.getElementById('mv-msg'); if (m) m.textContent = t; };
+      const mfill = (prac, main) => BK_SETS.forEach(x => { const a = document.getElementById('mv-prac-' + x.key), b = document.getElementById('mv-main-' + x.key); if (a && prac) a.textContent = prac[x.key]; if (b && main) b.textContent = main[x.key]; });
+      if (mc) mc.addEventListener('click', async () => { mc.disabled = true; msay('세는 중…'); try { mfill(await countLine('practice_'), await countLine('')); msay('완료'); } catch (e) { msay('실패: ' + e.message); } mc.disabled = false; });
+      if (mr) mr.addEventListener('click', async () => {
+        if (!isOwnerUser()) return;
+        if (!confirm('연습선의 설정 · 원가 · 품목 사전을 본선 상자에 덮어씁니다.\n의뢰서는 옮기지 않습니다.\n먼저 본선 설정 백업 파일이 받아집니다.\n\n계속할까요?')) return;
+        if (!confirm('한 번 더 확인합니다. 본선 설정이 지금 연습선 상태로 바뀝니다.\n옮긴 뒤에는 새 본선 HTML 로 바꿔 열어야 합니다.')) return;
+        mr.disabled = true; mc && (mc.disabled = true);
+        try {
+          const r = await moveToMainLine(msay);
+          const prac = {}, main = {}; Object.keys(r).forEach(k => { prac[k] = r[k].prac; main[k] = r[k].main; }); mfill(prac, main);
+          msay('완료 — 이제 새 본선 HTML(index.html)로 바꿔 열어 확인하십시오');
+          toast('본선으로 옮겼습니다', 'success');
+        } catch (e) { msay('실패: ' + e.message); toast('본선 옮기기 실패: ' + e.message, 'error'); }
+        mr.disabled = false; mc && (mc.disabled = false);
+      });
+    }
     const pc = document.getElementById('pr-count'), pr = document.getElementById('pr-run');
     const psay = t => { const m = document.getElementById('pr-msg'); if (m) m.textContent = t; };
     const fill = (main, prac) => BK_SETS.forEach(x => {
@@ -28605,8 +28670,8 @@ function validateBlendSum(blends, label) {
   //   [업체별 설정] 업체를 고른 뒤에만 열린다 — 낱개 단가 · 이 업체 안 함 · 등급 안 함 · 묶음
   //   업체 화면·품목 카드에는 가공을 새로 만드는 단추가 없다.
   // ============================================================
-  const PF_ALL_KEY = 'hiwos.pfAllDraft';
-  const PF_VEN_KEY = 'hiwos.pfVendorDraft';
+  // hotfix408: 옛 열쇠(hiwos.pfAllDraft · hiwos.pfVendorDraft)는 공통 틀(hiwos.draft.*)로 옮겨 안 쓴다 — 처음 열 때 지운다
+  try { localStorage.removeItem('hiwos.pfAllDraft'); localStorage.removeItem('hiwos.pfVendorDraft'); } catch (e) {}
   function pfAllRows() {
     const L = costLists();
     const alias = L.proc_alias || {};
@@ -38454,7 +38519,6 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
   });
   // hotfix376: 화면을 옮기기 전에 넣던 값을 임시로 담아 둘지 물어본다
   //   [확인] 담아 둠 · [취소] 그냥 두고 이동 · 창을 닫으면 이동하지 않음
-  const WO_DRAFT_KEY = 'hiwos.woDraft';
   // hotfix405: 세 갈래 창 (담아 두고 옮김 / 버리고 옮김 / 그냥 있기) — Promise<'keep'|'drop'|'stay'>
   function askThree(title, body, labels) {
     if (window.__askThreeAuto) return Promise.resolve(window.__askThreeAuto);   // 화면 테스트용 자동 답 ('keep'|'drop'|'stay')
@@ -45691,7 +45755,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix407';
+  const VERSION = 'v2.53 hotfix408';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
