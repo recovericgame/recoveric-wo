@@ -13570,6 +13570,11 @@ window.addEventListener('firebase-ready', () => {
     if (String((before && before.memo) || '') !== String(after.memo || '')) ch.push('비고: ' + (String((before && before.memo) || '') || '(없음)') + ' → ' + (String(after.memo || '') || '(없음)'));
     const names = Array.from(new Set([].concat(yarnNames || [], Object.keys((before && before.loops) || {}), Object.keys(after.loops || {}))));
     names.forEach(nm => { const a = kfNum(before && before.loops && before.loops[nm]), b = kfNum(after.loops && after.loops[nm]); if (a !== b) ch.push('루프장 ' + nm + ': ' + (a == null ? '(없음)' : a) + ' → ' + (b == null ? '(없음)' : b)); });
+    // hotfix399e: 직접 % · 혼용율 내는 법
+    const pn = Array.from(new Set([].concat(Object.keys((before && before.pcts) || {}), Object.keys(after.pcts || {}))));
+    pn.forEach(nm => { const a = kfNum(before && before.pcts && before.pcts[nm]), b = kfNum(after.pcts && after.pcts[nm]); if (a !== b) ch.push('직접 % ' + nm + ': ' + (a == null ? '(없음)' : a) + ' → ' + (b == null ? '(없음)' : b)); });
+    const bm = x => (x && x.blend_mode === 'manual') ? '직접 %' : '루프장';
+    if (bm(before) !== bm(after) && (before || after.blend_mode === 'manual')) ch.push('혼용율 내는 법: ' + bm(before) + ' → ' + bm(after));
     return ch;
   }
   async function kfHistAdd(fid, factory, changes, memoTag) {
@@ -13599,6 +13604,8 @@ window.addEventListener('firebase-ready', () => {
     const after = { inch: kfNum(row.inch), needles: kfNum(row.needles), knit_loss: kfNum(row.knit_loss), knit_fee: kfNum(row.knit_fee),
       loops: {}, memo: String(row.memo || '').trim(), updated_at: editLogNow(), updated_by: hwMyName() };
     Object.keys(row.loops || {}).forEach(nm => { const x = kfNum(row.loops[nm]); if (x != null) after.loops[nm] = x; });
+    after.pcts = {}; Object.keys(row.pcts || {}).forEach(nm => { const x = kfNum(row.pcts[nm]); if (x != null) after.pcts[nm] = x; });   // hotfix399e: 직접 %
+    after.blend_mode = (row.blend_mode === 'manual') ? 'manual' : 'loop';
     // hotfix391: 루프장 사종 이름 → 코드 짝 (loops 는 이름 열쇠 그대로, 옆에 loop_yids 로 병기)
     after.loop_yids = {}; Object.keys(after.loops).forEach(nm => { const id = yarnYidOf(nm); if (id) after.loop_yids[nm] = id; });
     after.vendor_vid = vendorVidOf(V);
@@ -29105,11 +29112,25 @@ function validateBlendSum(blends, label) {
   }
   // 팝업 — 품목 × 공장 한 줄을 고친다. 카드에서도 같은 팝업이 열린다
   // hotfix399b: 편직 설정의 사종·루프장으로 혼용율 — 계산식 줄까지 돌려준다 (편직 설정 창 · 품목 수정 창 공용)
-  function knitBlendCalc(yarnNames, loops) {
+  function knitBlendCalc(yarnNames, loops, opts) {
     const yarns = Array.isArray(yarnNames) ? yarnNames : [];
     const L = loops || {};
     const skipped = [], why = [];
     const list = [];
+    // hotfix399e: 직접 % 방식 — 사종마다 적은 %를 그대로 사종 비율로 (합이 100 근처여야 한다)
+    if (opts && opts.mode === 'manual') {
+      const P = opts.pcts || {};
+      yarns.forEach(y => { const p = kfNum(P[y]); if (p == null || p <= 0) { skipped.push(y); why.push(y + ' % 없음'); return; } list.push({ name: y, bmode: 'manual', pct_manual: p, size: 0, unit: 'D', loop: 0 }); });
+      if (!list.length) return { ok: false, reason: why.length ? why.join(' · ') : '사종마다 %를 적어 주십시오', rows: [], text: '', skipped, sumContrib: 0, manual: true };
+      const sumP = list.reduce((a, r) => a + r.pct_manual, 0);
+      if (Math.abs(sumP - 100) > 0.5) return { ok: false, reason: '직접 % 합이 100이 아닙니다 (지금 ' + (Math.round(sumP * 10) / 10) + '%)', rows: [], text: '', skipped, sumContrib: 0, manual: true };
+      const yb = calcYarnBlend(list);
+      const f = calcFiberBlend(list);
+      if (f.unknown.length) return { ok: false, reason: f.unknown.join(' · ') + ' 의 소재(성분)가 원사 설정에 없습니다', rows: [], text: '', skipped, sumContrib: 0, manual: true };
+      const rows = yb.map(r => { const ent = yarnEntryByName(r.name); const comp = ent ? yarnCompOf(ent) : []; const s2 = yarnCompSum(comp) || 100;
+        return { name: r.name, sizeText: '-', loop: '-', contrib: '-', pct: r.pct, compText: comp.map(c => `${c.mat} ${Math.round(c.pct * 10) / 10}%`).join(' · '), partText: comp.map(c => `${c.mat} ${Math.round(r.pct * (c.pct / s2) * 10) / 10}%`).join(' · ') }; });
+      return { ok: true, reason: '', rows, text: f.rows.map(r => `${r.mat} ${r.pct}%`).join(' · '), skipped, sumContrib: 100, factory: '', manual: true };
+    }
     yarns.forEach(y => {
       const g = yarnGuessSpec(y); const lp = kfNum(L[y]);
       if (!g || !g.size) { skipped.push(y); why.push(y + ' 굵기 못 읽음'); return; }
@@ -29135,7 +29156,7 @@ function validateBlendSum(blends, label) {
     const K = knitFeeOf(fid); const facs = Object.keys(K); if (!facs.length) return null;
     const yarns = kfYarnNames(fid); if (!yarns.length) return null;
     let best = null;
-    facs.forEach(v => { if (best && best.ok) return; const r = knitBlendCalc(yarns, (K[v] || {}).loops || {}); r.factory = v; if (!best || (r.ok && !best.ok)) best = r; });
+    facs.forEach(v => { if (best && best.ok) return; const k = K[v] || {}; const r = knitBlendCalc(yarns, k.loops || {}, { mode: k.blend_mode, pcts: k.pcts }); r.factory = v; if (!best || (r.ok && !best.ok)) best = r; });
     return best;
   }
   // hotfix399d: 편직 설정의 사종 목록을 원가 계산기 카드 [원사]에 그대로 맞춘다 (주인 = 편직 설정 · 카드는 읽어 씀)
@@ -29221,18 +29242,24 @@ function validateBlendSum(blends, label) {
               <div><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px;">편직료 원/kg</label><input id="kf-fee" inputmode="decimal" value="${k.knit_fee == null ? '' : k.knit_fee}" style="${nS}font-weight:800;"></div>
             </div>
             <div style="margin-top:10px;"><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px;">비고</label><input id="kf-memo" lang="ko" value="${escapeHtml(k.memo || '')}" style="${iS}"></div>
-            <div style="margin-top:12px;font-size:12px;font-weight:800;color:#334155;">루프장 (사종마다 · 이 공장 값)</div>
-            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px 14px;margin-top:6px;">
-              ${yarns.length ? yarns.map(y => `<label style="display:flex;align-items:center;gap:6px;font-size:12.5px;"><span style="flex:1;font-weight:700;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(y)}${cardYarns.includes(y) ? '' : ' — [저장]하면 카드 [원사]에도 들어갑니다'}">${escapeHtml(y)}${cardYarns.includes(y) ? '' : ' <span style="font-size:10px;color:#b45309;font-weight:400;">(저장 전)</span>'}</span><input class="kf-loop" data-y="${escapeHtml(y)}" inputmode="decimal" value="${(k.loops || {})[y] == null ? '' : k.loops[y]}" style="${nS}width:84px;flex:0 0 84px;"><button class="dash-action-btn danger kf-ydel" data-y="${escapeHtml(y)}" title="이 사종 줄을 뺍니다 ([저장]하면 카드 [원사]에서도 빠집니다)" style="padding:3px 6px;font-size:11px;flex:0 0 auto;">x</button></label>`).join('')
+            <div style="margin-top:12px;display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
+              <span style="font-size:12px;font-weight:800;color:#334155;">원사 (이 공장 값)</span>
+              <span style="font-size:11.5px;color:#64748b;">혼용율 내는 법</span>
+              <label style="font-size:12px;font-weight:700;display:inline-flex;align-items:center;gap:4px;cursor:pointer;"><input type="radio" name="kf-bmode" class="kf-bmode" value="loop" ${k.blend_mode === 'manual' ? '' : 'checked'}> 루프장으로 계산</label>
+              <label style="font-size:12px;font-weight:700;display:inline-flex;align-items:center;gap:4px;cursor:pointer;"><input type="radio" name="kf-bmode" class="kf-bmode" value="manual" ${k.blend_mode === 'manual' ? 'checked' : ''}> 직접 % 넣기</label>
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:6px 18px;margin-top:6px;">
+              ${yarns.length ? `<div style="grid-column:1/-1;display:grid;grid-template-columns:1fr 84px 64px 28px;gap:6px;font-size:11px;color:#94a3b8;padding:0 2px;"><span>사종</span><span style="text-align:right;">루프장</span><span style="text-align:right;">직접 %</span><span></span></div>` + yarns.map(y => `<label style="display:grid;grid-template-columns:1fr 84px 64px 28px;align-items:center;gap:6px;font-size:12.5px;"><span style="font-weight:700;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(y)}${cardYarns.includes(y) ? '' : ' — [저장]하면 카드 [원사]에도 들어갑니다'}">${escapeHtml(y)}${cardYarns.includes(y) ? '' : ' <span style="font-size:10px;color:#b45309;font-weight:400;">(저장 전)</span>'}</span><input class="kf-loop" data-y="${escapeHtml(y)}" inputmode="decimal" placeholder="루프장" value="${(k.loops || {})[y] == null ? '' : k.loops[y]}" style="${nS}"><input class="kf-pct" data-y="${escapeHtml(y)}" inputmode="decimal" placeholder="%" value="${(k.pcts || {})[y] == null ? '' : k.pcts[y]}" style="${nS}"><button class="dash-action-btn danger kf-ydel" data-y="${escapeHtml(y)}" title="이 사종 줄을 뺍니다 ([저장]하면 카드 [원사]에서도 빠집니다)" style="padding:3px 6px;font-size:11px;">x</button></label>`).join('')
                 : '<span style="font-size:12px;color:#94a3b8;">이 품목에 원사가 없습니다. 아래 [원사 넣기]로 넣어 주십시오.</span>'}
             </div>
-            <div style="margin-top:10px;font-size:12px;font-weight:800;color:#334155;">원사 넣기 <span style="font-weight:400;color:#64748b;">— 구분 → 사종(글자 검색) → 컬러 → 루프장. [저장]하면 원가 계산기 카드 [원사]에도 그대로 들어갑니다</span></div>
-            <div style="display:flex;gap:8px;align-items:center;margin-top:6px;flex-wrap:wrap;">
-              <select id="kf-newyarn-kind" data-nodirty style="${iS}width:auto;min-width:110px;"><option value="">구분 …</option>${YARN_KINDS.map(k => `<option value="${k}">${escapeHtml(YARN_KIND_LABEL[k] || k)}</option>`).join('')}</select>
-              <input id="kf-newyarn" lang="ko" data-nodirty list="kf-newyarn-list" autocomplete="off" placeholder="구분 먼저 → 사종 검색" style="${iS}width:auto;min-width:200px;"><datalist id="kf-newyarn-list"></datalist>
-              <select id="kf-newyarn-color" data-nodirty style="${iS}width:auto;min-width:120px;"><option value="">컬러 …</option></select>
-              <input id="kf-newyarn-loop" data-nodirty inputmode="decimal" placeholder="루프장" style="${nS}width:84px;flex:0 0 84px;">
-              <button class="dash-action-btn" id="kf-newyarn-add" style="font-weight:800;padding:6px 12px;">＋ 넣기</button>
+            <div style="margin-top:10px;font-size:12px;font-weight:800;color:#334155;">원사 넣기 <span style="font-weight:400;color:#64748b;">— 구분 → 사종(글자 검색) → 컬러 → 루프장 또는 직접 %. [저장]하면 카드 [원사]에도 들어갑니다</span></div>
+            <div style="display:grid;grid-template-columns:110px 180px 120px 84px 64px auto;gap:6px;align-items:center;margin-top:6px;max-width:640px;">
+              <select id="kf-newyarn-kind" data-nodirty style="${iS}"><option value="">구분 …</option>${YARN_KINDS.map(k => `<option value="${k}">${escapeHtml(YARN_KIND_LABEL[k] || k)}</option>`).join('')}</select>
+              <input id="kf-newyarn" lang="ko" data-nodirty list="kf-newyarn-list" autocomplete="off" placeholder="사종 검색" style="${iS}"><datalist id="kf-newyarn-list"></datalist>
+              <select id="kf-newyarn-color" data-nodirty style="${iS}"><option value="">컬러 …</option></select>
+              <input id="kf-newyarn-loop" data-nodirty inputmode="decimal" placeholder="루프장" style="${nS}">
+              <input id="kf-newyarn-pct" data-nodirty inputmode="decimal" placeholder="%" style="${nS}">
+              <button class="dash-action-btn" id="kf-newyarn-add" style="font-weight:800;padding:6px 12px;white-space:nowrap;">＋ 넣기</button>
             </div>
             <div style="margin-top:14px;padding:10px 12px;border:1px solid #c7d2fe;border-radius:8px;background:#f5f7ff;">
               <div style="font-size:12px;font-weight:800;color:#334155;">혼용율 <span style="font-weight:400;color:#64748b;">— 사종 굵기 × 루프장으로 사종 비율을 내고, [원사 설정]의 소재(성분)로 소재 비율을 냅니다</span></div>
@@ -29254,15 +29281,18 @@ function validateBlendSum(blends, label) {
       gz();
       ['#kf-inch', '#kf-needles'].forEach(q => wrap.querySelector(q)?.addEventListener('input', gz));
       const collect = () => {
-        const loops = {};
+        const loops = {}, pcts = {};
         wrap.querySelectorAll('.kf-loop').forEach(el => { loops[el.dataset.y] = el.value; });
+        wrap.querySelectorAll('.kf-pct').forEach(el => { pcts[el.dataset.y] = el.value; });   // hotfix399e
+        const bm = wrap.querySelector('.kf-bmode:checked'); 
         return { inch: wrap.querySelector('#kf-inch').value, needles: wrap.querySelector('#kf-needles').value, knit_loss: wrap.querySelector('#kf-loss').value,
-          knit_fee: wrap.querySelector('#kf-fee').value, memo: wrap.querySelector('#kf-memo').value, loops };
+          knit_fee: wrap.querySelector('#kf-fee').value, memo: wrap.querySelector('#kf-memo').value, loops, pcts, blend_mode: (bm && bm.value === 'manual') ? 'manual' : 'loop' };
       };
       // hotfix399: "닫을까요" 는 화면에 보이는 칸이 열 때와 달라졌을 때만 — 저장돼 있던 값 중 화면에 없는 사종 줄 때문에 헛묻지 않는다
       const normC = c => {
         const o = { inch: kfNum(c.inch), needles: kfNum(c.needles), knit_loss: kfNum(c.knit_loss), knit_fee: kfNum(c.knit_fee), loops: {}, memo: String(c.memo || '').trim() };
         Object.keys(c.loops || {}).sort().forEach(y => { const x = kfNum(c.loops[y]); if (x != null) o.loops[y] = x; });
+        o.pcts = {}; Object.keys(c.pcts || {}).sort().forEach(y => { const x = kfNum(c.pcts[y]); if (x != null) o.pcts[y] = x; }); o.blend_mode = c.blend_mode || 'loop';   // hotfix399e
         return JSON.stringify(o);
       };
       const screenSnap = V && wrap.querySelector('#kf-inch') ? normC(collect()) : '';
@@ -29275,7 +29305,7 @@ function validateBlendSum(blends, label) {
       const paintBlend = () => {
         const box = wrap.querySelector('#kf-blend-auto'), calc = wrap.querySelector('#kf-blend-calc'), now = wrap.querySelector('#kf-blend-now');
         if (!box) return;
-        const b = knitBlendCalc(yarns, collect().loops);
+        const c0 = collect(); const b = knitBlendCalc(yarns, c0.loops, { mode: c0.blend_mode, pcts: c0.pcts });
         const curSpec = getFabricSpecs().find(x => specFid(x) === key) || sp;
         if (now) now.textContent = String(curSpec.blend || '').trim() || '(비어 있음)';
         if (!yarns.length) { box.innerHTML = '<span style="color:#94a3b8;">사종을 넣고 루프장을 적으면 여기서 저절로 나옵니다.</span>'; calc.innerHTML = ''; return; }
@@ -29285,9 +29315,10 @@ function validateBlendSum(blends, label) {
           <tr style="background:#eef2ff;color:#334155;"><th style="text-align:left;padding:3px 6px;">사종</th><th style="text-align:left;padding:3px 6px;">굵기 → 데니어</th><th style="text-align:right;padding:3px 6px;">× 루프장</th><th style="text-align:right;padding:3px 6px;">= 몫</th><th style="text-align:right;padding:3px 6px;">사종 비율</th><th style="text-align:left;padding:3px 6px;">소재(성분)</th><th style="text-align:left;padding:3px 6px;">소재 몫</th></tr>
           ${b.rows.map(r => `<tr style="border-top:1px solid #e2e8f0;"><td style="padding:3px 6px;font-weight:700;">${escapeHtml(r.name)}</td><td style="padding:3px 6px;">${escapeHtml(r.sizeText)}</td><td style="padding:3px 6px;text-align:right;">${r.loop}</td><td style="padding:3px 6px;text-align:right;">${r.contrib}</td><td style="padding:3px 6px;text-align:right;font-weight:700;">${r.pct}%</td><td style="padding:3px 6px;">${escapeHtml(r.compText)}</td><td style="padding:3px 6px;">${escapeHtml(r.partText)}</td></tr>`).join('')}
           <tr style="border-top:2px solid #94a3b8;background:#f8fafc;"><td style="padding:3px 6px;font-weight:800;">합계</td><td></td><td></td><td style="padding:3px 6px;text-align:right;">${b.sumContrib}</td><td style="padding:3px 6px;text-align:right;font-weight:800;">100%</td><td></td><td style="padding:3px 6px;font-weight:800;color:#166534;">${escapeHtml(b.text)}</td></tr>
-        </table><div style="color:#94a3b8;margin-top:3px;">수(방적사)는 5315 ÷ 수 로 데니어로 바꿉니다 · 몫 = 데니어 × 루프장 · 사종 비율 = 몫 ÷ 합계 · 소재 몫 = 사종 비율 × 성분%</div>` : '';
+        </table><div style="color:#94a3b8;margin-top:3px;">${b.manual ? '직접 넣은 %가 사종 비율입니다 · 소재 몫 = 사종 비율 × 성분%' : '수(방적사)는 5315 ÷ 수 로 데니어로 바꿉니다 · 몫 = 데니어 × 루프장 · 사종 비율 = 몫 ÷ 합계 · 소재 몫 = 사종 비율 × 성분%'}</div>` : '';
       };
-      wrap.querySelectorAll('.kf-loop').forEach(el => el.addEventListener('input', paintBlend));
+      wrap.querySelectorAll('.kf-loop, .kf-pct').forEach(el => el.addEventListener('input', paintBlend));
+      wrap.querySelectorAll('.kf-bmode').forEach(el => el.addEventListener('change', paintBlend));   // hotfix399e
       // hotfix399d: 원사 넣기 — 구분 → 사종(base, 글자 검색) → 컬러 고르개 → 루프장 → [＋ 넣기]. 모든 목록 오름차순
       const kfMasterYarns = () => (getCostPrices().yarns || []).filter(y => y && String(y.name || '').trim());
       const fillNewYarnList = () => {
@@ -29337,8 +29368,8 @@ function validateBlendSum(blends, label) {
         const y = b.dataset.y;
         if (!confirm('[' + y + '] 사종 줄을 이 공장에서 뺍니다. [저장]을 눌러야 서버에 담깁니다.\n\n뺄까요?')) return;
         const cur = collect(); yarns = yarns.filter(x => x !== y); touched = true;
-        if (K[V]) { K[V].loops = Object.assign({}, K[V].loops || {}); delete K[V].loops[y]; }
-        Object.keys(cur.loops).forEach(nm => { if (nm !== y && K[V]) K[V].loops[nm] = cur.loops[nm]; });
+        if (K[V]) { K[V].loops = Object.assign({}, K[V].loops || {}); delete K[V].loops[y]; K[V].pcts = Object.assign({}, K[V].pcts || {}); delete K[V].pcts[y]; K[V].blend_mode = cur.blend_mode; }
+        Object.keys(cur.loops).forEach(nm => { if (nm !== y && K[V]) { K[V].loops[nm] = cur.loops[nm]; K[V].pcts[nm] = cur.pcts[nm]; } });
         paint();
       }));
       const addNewYarn = () => {
@@ -29355,19 +29386,19 @@ function validateBlendSum(blends, label) {
         if (!yarnEntryByName(nm)) { toast(`"${nm}" 은(는) 원사 설정에 없는 사종입니다`, 'warning'); return; }
         const real = yarnEntryByName(nm).name;
         if (yarns.includes(real)) { toast(`"${real}" 은(는) 이미 있습니다`, 'info'); return; }
-        const lp = String(wrap.querySelector('#kf-newyarn-loop')?.value || '').trim();
+        const lp = String(wrap.querySelector('#kf-newyarn-loop')?.value || '').trim(), pc = String(wrap.querySelector('#kf-newyarn-pct')?.value || '').trim();
         const cur = collect(); yarns.push(real); touched = true;
-        if (K[V]) { K[V].loops = Object.assign({}, K[V].loops || {}, cur.loops); K[V].loops[real] = lp; }
+        if (K[V]) { K[V].loops = Object.assign({}, K[V].loops || {}, cur.loops); K[V].loops[real] = lp; K[V].pcts = Object.assign({}, K[V].pcts || {}, cur.pcts); K[V].pcts[real] = pc; K[V].blend_mode = cur.blend_mode; }
         paint();
         wrap.querySelector('#kf-newyarn')?.focus();
       };
       wrap.querySelector('#kf-newyarn-add')?.addEventListener('click', addNewYarn);
-      ['#kf-newyarn', '#kf-newyarn-loop'].forEach(q => wrap.querySelector(q)?.addEventListener('keydown', ev => { if (ev.key === 'Enter') { ev.preventDefault(); addNewYarn(); } }));
+      ['#kf-newyarn', '#kf-newyarn-loop', '#kf-newyarn-pct'].forEach(q => wrap.querySelector(q)?.addEventListener('keydown', ev => { if (ev.key === 'Enter') { ev.preventDefault(); addNewYarn(); } }));
       wrap.querySelector('#kf-newfac').addEventListener('change', ev => {
         const v = String(ev.target.value || '').trim(); if (!v) return;
         if (!askLeave()) { ev.target.value = ''; return; }
         const base = K[V] || null;
-        K[v] = { inch: base ? base.inch : null, needles: base ? base.needles : null, knit_loss: base ? base.knit_loss : null, knit_fee: null, loops: base ? JSON.parse(JSON.stringify(base.loops || {})) : {}, memo: '' , _new: true };
+        K[v] = { inch: base ? base.inch : null, needles: base ? base.needles : null, knit_loss: base ? base.knit_loss : null, knit_fee: null, loops: base ? JSON.parse(JSON.stringify(base.loops || {})) : {}, pcts: base ? JSON.parse(JSON.stringify(base.pcts || {})) : {}, blend_mode: base ? (base.blend_mode || 'loop') : 'loop', memo: '' , _new: true };
         V = v; paint();
         toast(v + ' 줄을 만들었습니다' + (base ? ' — 인치·침수·로스·루프장은 앞 공장 값을 가져왔습니다. 편직료를 넣고 [저장]' : ''), 'success');
       });
@@ -44998,7 +45029,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix399d';
+  const VERSION = 'v2.53 hotfix399e';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
