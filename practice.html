@@ -7868,7 +7868,7 @@ function addColorRow(data={}) {
   const row = document.createElement('div');
   row.className = 'item-row color-row';
   row.innerHTML = `
-    <input type="text" lang="ko" class="c-name" list="f-color-datalist" autocomplete="off" placeholder="BT No 컬러명 (품목 컬러 설정에서 고름)" value="${escapeHtml(data.name || '')}">
+    <input type="text" lang="ko" class="c-name" list="f-color-datalist" autocomplete="off" placeholder="컬러명 #BT No (품목 컬러 설정에서 고름)" value="${escapeHtml(data.name || '')}">
     <input type="number" class="c-body" placeholder="8" value="${data.body ?? ''}" step="0.5">
     <input type="number" class="c-rib" placeholder="1" value="${data.rib ?? ''}" step="0.5">
     <button class="btn-del">X</button>
@@ -8099,7 +8099,7 @@ function yarnKindOfBase(base) {
   return hit ? String(hit.kind || '기타') : '';
 }
 // hotfix399d: 품목 컬러 도우미 (settings/item_colors — 본체 스크립트, 의뢰서 폼과 설정 화면이 같이 쓴다)
-//   한 줄 = { yarn_color, dyer, bt_no, name, ext_code, updated_at, updated_by }. 출력은 늘 "BT No + 컬러명" 한 쌍
+//   한 줄 = { yarn_color, dyer, bt_no, name, ext_code, updated_at, updated_by }. 출력은 늘 "컬러명 #BT No" 한 쌍 (hotfix400: 순서 확정 — 예 "프진먹색 #451A")
 function itemColorsOf(fid) {
   const k = String(fid || '').trim();
   const m = (typeof state !== 'undefined' && state.itemColors && typeof state.itemColors === 'object') ? state.itemColors : {};
@@ -8107,14 +8107,14 @@ function itemColorsOf(fid) {
 }
 function itemColorLabel(c) {
   const b = String((c && c.bt_no) || '').trim(), n = String((c && c.name) || '').trim();
-  return (b && n) ? b + ' ' + n : (b || n);
+  return (b && n) ? n + ' #' + b : (n || (b ? '#' + b : ''));
 }
 function yarnColorKey(c) { return yarnColorIsLW(c) ? 'l/w' : vendorKey(c); }
-// 품목 컬러 목록을 원사 컬러 · 염색공장으로 거른다 (빈 조건은 안 거름). BT No → 컬러명 오름차순
+// 품목 컬러 목록을 원사 컬러 · 염색공장으로 거른다 (빈 조건은 안 거름). 컬러명 → BT No 오름차순 (hotfix400)
 function itemColorList(fid, yarnColor, dyer) {
   const yk = String(yarnColor || '').trim() ? yarnColorKey(yarnColor) : '', dk = vendorKey(dyer);
   return itemColorsOf(fid).filter(c => (!yk || yarnColorKey(c.yarn_color) === yk) && (!dk || vendorKey(c.dyer) === dk))
-    .slice().sort((a, b) => String(a.bt_no || '').localeCompare(String(b.bt_no || ''), 'ko', { numeric: true }) || String(a.name || '').localeCompare(String(b.name || ''), 'ko'));
+    .slice().sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'ko') || String(a.bt_no || '').localeCompare(String(b.bt_no || ''), 'ko', { numeric: true }));
 }
 // 염/가공 의뢰서 COLOR & QUANTITY 컬러 칸 고르개 — 편직업체 > 품목 > 원사 컬러(생지로트의 컬러) > 염색공장(수신처) 순으로 거른다
 function refreshFinishColorList() {
@@ -12680,6 +12680,7 @@ window.addEventListener('firebase-ready', () => {
       tube: !!it.tube,
       gy: (it.gy === '' || it.gy == null) ? null : (parseFloat(it.gy) || null),
       make_gy: (it.make_gy === '' || it.make_gy == null) ? null : (parseFloat(String(it.make_gy).replace(/,/g, '')) || null),   // hotfix378: 제작 g/y
+      gsm: (function () { const v = parseFloat(String(it.gsm == null ? '' : it.gsm).replace(/,/g, '')); return (v > 0) ? v : null; })(),   // hotfix400: 최종 스퀘어 중량 g/㎡
       blend: String(it.blend || '').trim(),
       pair_rib: String(it.pair_rib || '').trim(),
       ...(String(it.abbr || '').trim() ? { abbr: String(it.abbr).trim().toUpperCase() } : {}),   // hotfix392: 공유코드용 줄임말
@@ -12717,7 +12718,15 @@ window.addEventListener('firebase-ready', () => {
   }
   // ===== hotfix283: 품목 자료 CSV 내려받기 / 올려 고치기 =====
   //   주의사항(cautions)은 CSV에 담지 않는다. 올려도 기존 주의사항은 그대로 남는다.
-  const FS_CSV_COLS_ALL = ['품목코드', '품목명', '구분', '조직', '짝리프', '기준폭', '튜브', '제작g/y', '안내최저', '안내최고', '중량g/y', '혼용률', '판매'];
+  const FS_CSV_COLS_ALL = ['품목코드', '품목명', '구분', '조직', '짝리프', '기준폭', '튜브', '스퀘어g/㎡', '제작g/y', '안내최저', '안내최고', '중량g/y', '혼용률', '판매'];   // hotfix400: 스퀘어g/㎡(최종 스퀘어 중량) 열
+  // hotfix400: 김용범 중량 서식 — 품목코드 · 품목명 · 구분 · 기준폭 · 튜브(예/아니오) · 스퀘어g/㎡ 를 채워 올린다.
+  //   야드중량g/y(자동) = g/㎡ × 기준폭 inch × 0.0254 × 0.9144 (튜브면 ×2). 기준폭 글자에서 마지막 숫자를 쓴다("72/74" → 74).
+  //   ★대표 확정: 야드 중량은 저장하지 않고 매번 계산한다(안내중량 gy 는 없애는 중 — 거기에 안 쓴다). 올릴 때 야드중량 열은 무시.
+  const FS_CSV_COLS_WEIGHT = ['품목코드', '품목명', '구분', '기준폭', '튜브', '스퀘어g/㎡', '야드중량g/y(자동)'];
+  function specFinalGy(s) { return gsmToGy(specGsm(s), specWidthInch(s), s && s.tube); }
+  function specWidthInch(s) { const m = String((s && s.width) || '').match(/(\d+(?:\.\d+)?)(?!.*\d)/); return m ? parseFloat(m[1]) : null; }
+  function gsmToGy(gsm, widthIn, tube) { const g = parseFloat(gsm), w = parseFloat(widthIn); if (!(g > 0 && w > 0)) return null; return Math.round(g * w * 0.0254 * 0.9144 * (tube ? 2 : 1)); }
+  function specGsm(s) { const v = (s && s.gsm != null && s.gsm !== '') ? parseFloat(s.gsm) : NaN; return isNaN(v) ? null : v; }
   // hotfix289: 조직은 최고관리자만 본다. 관리자·직원이 내려받는 CSV에는 조직 열이 없다.
   //   조직 열이 없는 파일을 올리면 그 칸은 건드리지 않는다(기존 조직 그대로).
   const fsCsvCols = () => isOwnerUser() ? FS_CSV_COLS_ALL.slice() : FS_CSV_COLS_ALL.filter(c => c !== '조직');
@@ -12725,13 +12734,15 @@ window.addEventListener('firebase-ready', () => {
     const s = (v == null) ? '' : String(v);
     return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
   }
-  function buildFabricSpecCsv() {
-    const cols = fsCsvCols();
+  function buildFabricSpecCsv(colsIn) {
+    const cols = Array.isArray(colsIn) ? colsIn.slice() : fsCsvCols();   // hotfix400: 중량 서식은 열을 골라 받는다
     const rows = [cols.join(',')];
     getFabricSpecs().forEach(s => {
+      const gsmV = specGsm(s);
       const v = {
         '품목코드': specFid(s) || '', '품목명': s.name || '', '구분': s.gubun || '', '조직': s.cat || '',
-        '짝리프': s.pair_rib || '', '기준폭': s.width || '', '튜브': s.tube ? 'Y' : 'N',
+        '짝리프': s.pair_rib || '', '기준폭': s.width || '', '튜브': s.tube ? '예' : '아니오',   // hotfix400: 예/아니오 (올릴 때 Y/N 도 받음)
+        '스퀘어g/㎡': gsmV == null ? '' : gsmV, '야드중량g/y(자동)': (function () { const g = specFinalGy(s); return g == null ? '' : g; })(),
         '제작g/y': (s.make_gy == null || s.make_gy === '') ? '' : s.make_gy,
         '안내최저': (function () { const r = specGyRange(s); return r ? r.lo : ''; })(),
         '안내최고': (function () { const r = specGyRange(s); return r ? r.hi : ''; })(),
@@ -12776,7 +12787,7 @@ window.addEventListener('firebase-ready', () => {
       byName[fsKeyOf(s.name)] = i;
     });
     const get = (r, c) => (idx[c] >= 0 ? String(r[idx[c]] == null ? '' : r[idx[c]]).trim() : null);
-    let changed = 0, added = 0, skipped = 0;
+    let changed = 0, added = 0, skipped = 0, autoGy = 0;   // hotfix400: autoGy = 야드 중량을 저절로 낸 줄 수
     const addedNames = [], badFids = [];
     for (let i = 1; i < table.length; i++) {
       const r = table[i];
@@ -12796,9 +12807,11 @@ window.addEventListener('firebase-ready', () => {
         set('구분', v => { if (v) target.gubun = v; });
         set('조직', v => { target.cat = v; });
         set('짝리프', v => { target.pair_rib = v; });
-        set('기준폭', v => { target.width = v; });
-        set('튜브', v => { target.tube = /^(y|yes|о|o|1|true|✓|v|튜브)$/i.test(v) || v === 'Y'; });
-        set('중량g/y', v => { target.gy = (v === '') ? null : (parseFloat(v.replace(/,/g, '')) || null); });
+        set('기준폭', v => { if (v !== '') target.width = v; });   // hotfix400: 빈 칸은 안 건드린다 (중량 서식이 비워 보내도 옛 값 유지)
+        set('튜브', v => { if (v !== '') target.tube = /^(y|yes|о|o|1|true|✓|v|튜브|예)$/i.test(v) || v === 'Y'; });   // hotfix400: 예/아니오 · 빈 칸은 안 건드린다
+        set('스퀘어g/㎡', v => { if (v !== '') { const g = parseFloat(v.replace(/,/g, '')); target.gsm = (g > 0) ? g : null; } });   // hotfix400
+        set('중량g/y', v => { if (v !== '') target.gy = parseFloat(v.replace(/,/g, '')) || null; });   // hotfix400: 빈 칸은 안 건드린다 (옛 안내중량 — 없애는 중)
+        if (specFinalGy(target) != null) autoGy++;   // hotfix400: 야드 중량은 저장 안 함 — 스퀘어g/㎡ × 기준폭으로 매번 계산 (개수만 셈)
         set('제작g/y', v => { if (v !== '') target.make_gy = parseFloat(v.replace(/,/g, '')) || null; });   // hotfix377: 빈 칸은 안 건드린다
         set('혼용률', v => { target.blend = v; });
         set('판매', v => { if (v) target.active = !/종료|중지|off|n/i.test(v); });
@@ -12813,7 +12826,7 @@ window.addEventListener('firebase-ready', () => {
         added++; addedNames.push(name);
       }
     }
-    return { list, changed, added, skipped, addedNames, badFids };
+    return { list, changed, added, skipped, addedNames, badFids, autoGy };
   }
   // hotfix283: 품목 수정 창의 조직 고르개 — 목록에서 고른다. 옛 이름은 회색으로 남겨 둔다.
   function fillFsCatSelect(cur) {
@@ -26894,6 +26907,7 @@ function validateBlendSum(blends, label) {
       <button class="dash-action-btn" id="fs-gubun-btn" style="font-weight:700;padding:6px 14px;" title="몸판·리프 외에 스와치·문방구 같은 구분을 직접 추가·삭제합니다">구분 관리</button>` : ''}
       <span style="font-size:12px;color:#6b7280;font-weight:700;">총 ${specs.length}품목</span>
       <button class="dash-action-btn" id="fs-csv-out" style="margin-left:auto;font-weight:700;padding:6px 14px;" title="지금 품목 전부를 엑셀(CSV) 파일로 내려받습니다">CSV 내려받기</button>
+      <button class="dash-action-btn" id="fs-csv-weight" style="font-weight:700;padding:6px 14px;" title="기준폭 · 튜브(예/아니오) · 스퀘어g/㎡ 만 있는 짧은 서식입니다. 채워서 [CSV 올려 고치기]로 올리십시오. 야드 중량은 g/㎡ × 기준폭으로 매번 계산됩니다">중량 서식 내려받기</button>
       ${editOn ? `<button class="dash-action-btn" id="fs-csv-in" style="font-weight:700;padding:6px 14px;" title="내려받아 고친 CSV 파일을 올려 품목 자료를 한꺼번에 고칩니다">CSV 올려 고치기</button>` : ''}
       <input type="file" id="fs-csv-file" accept=".csv,text/csv" style="display:none;">
       ${isOwnerUser() ? `<button class="dash-action-btn" id="fs-item-migrate-btn" style="font-weight:700;padding:6px 14px;" title="저장된 의뢰서의 품목 글자 옆에 품목 코드(F0001…)와 생지 번호를 붙입니다 (글자는 그대로)">옛 자료 맞추기</button>` : ''}
@@ -27021,6 +27035,10 @@ function validateBlendSum(blends, label) {
             <label style="display:flex;align-items:center;gap:4px;white-space:nowrap;font-size:13px;cursor:pointer;padding-bottom:9px;"><input type="checkbox" id="fs-f-tube"> 튜브(×2)</label>
             <div style="flex:1;"><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">제작 g/y <span style="font-weight:400;color:#94a3b8;font-size:11px;">공장에 지시하는 중량</span></label>
               <input type="text" inputmode="numeric" id="fs-f-gy" style="${inputStyle}text-align:right;font-weight:700;" placeholder="480"></div>
+            <div style="flex:1;"><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">스퀘어 g/㎡ <span style="font-weight:400;color:#94a3b8;font-size:11px;">최종 실측</span></label>
+              <input type="text" inputmode="decimal" id="fs-f-gsm" style="${inputStyle}text-align:right;" placeholder="200" title="최종 스퀘어 중량. 야드 중량 = g/㎡ × 기준폭 inch × 0.0254 × 0.9144 (튜브면 ×2)"></div>
+            <div style="flex:1;"><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">야드 중량 g/y <span style="font-weight:400;color:#94a3b8;font-size:11px;">자동 · 저장 안 함</span></label>
+              <div id="fs-f-final-gy" style="${inputStyle}text-align:right;font-weight:700;background:#f8fafc;color:#0f172a;min-height:20px;">-</div></div>
           </div>
           <div id="fs-f-gy-range" style="font-size:11px;color:#475569;font-weight:700;margin-top:-6px;min-height:15px;line-height:1.6;"></div>
           <div><label style="font-size:12px;font-weight:700;color:#374151;display:flex;align-items:center;gap:8px;margin-bottom:4px;">혼용률 <span style="font-weight:400;color:#94a3b8;font-size:11px;">거래처에 알리는 값</span>
@@ -28393,13 +28411,13 @@ function validateBlendSum(blends, label) {
   // hotfix398c: [설정 및 관리] > 주의사항 초안 — 전체 초안 (품목 초안이 없을 때 의뢰서 기본값으로 쓰인다)
   // ============================================================
   // ============================================================
-  // hotfix399d: 품목 컬러 설정 — 품목 × 원사 컬러 × 염색공장 × 염색 컬러(BT No · 컬러명)
+  // hotfix399d: 품목 컬러 설정 — 품목 × 원사 컬러 × 염색공장 × 염색 컬러(컬러명 · B/T No) — hotfix400: 글자·열·입력 순서 "컬러명 #BT No"
   //   · 저장 settings/item_colors { items: { [fid]: [{ yarn_color, dyer, bt_no, name, ext_code, updated_at, updated_by }] } }
   //   · 직원이 넣고 고친다 · 지우기는 최고관리자만 · BT No 는 염색공장이 부르는 번호를 손으로 넣는다(자동 번호 아님)
-  //   · 위에서 품목 · 원사 컬러 · 염색공장을 한 번 고르면 아래 표에 BT No · 컬러명을 이어서 넣는다 (Enter 로 다음 줄)
+  //   · 위에서 품목 · 원사 컬러 · 염색공장을 한 번 고르면 아래 표에 컬러명 → B/T No 를 이어서 넣는다 (B/T No 칸에서 Enter 로 다음 줄)
   //   · ext_code 는 ERP 열쇠 자리(외부연동 기획서 v1) — 화면에서는 안 보인다
   // ============================================================
-  function icSel() { if (!state.icSel) state.icSel = { gubun: GUBUN_BODY, item: '', yarnColor: '', dyer: '' }; return state.icSel; }   // hotfix399f: 구분(몸판 기본) → 품목
+  function icSel() { if (!state.icSel) state.icSel = { gubun: GUBUN_BODY, item: '', yarnColor: '', dyer: '', showOff: false }; return state.icSel; }   // hotfix399f: 구분(몸판 기본) → 품목 · hotfix400: showOff = 판매종료 품목도 보기
   function icDyerList() {
     return Array.from(new Set((state.vendors || []).filter(v => v && v.name && vendorIsActive(v) && vendorTypesNorm(v).some(t => t === '염색처' || t === '가공처')).map(v => String(v.name).trim()))).sort((a, b) => a.localeCompare(b, 'ko'));
   }
@@ -28430,37 +28448,40 @@ function validateBlendSum(blends, label) {
     const S = icSel(); const fid = S.item ? icFidOf(S.item) : '';
     const iS = 'width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #d1d5db;border-radius:7px;font-size:13px;font-family:inherit;';
     const gubuns = getFabricGubuns();
-    const items = getFabricSpecs().filter(s => specIsOnSale(s) && (!S.gubun || s.gubun === S.gubun)).map(s => String(s.name || '').trim()).filter(Boolean).sort((a, b) => a.localeCompare(b, 'ko'));
+    const inGubun = getFabricSpecs().filter(s => !S.gubun || s.gubun === S.gubun);   // hotfix400: 이 구분의 품목 전부 (판매종료 포함)
+    const items = inGubun.filter(s => S.showOff || specIsOnSale(s)).map(s => String(s.name || '').trim()).filter(Boolean).sort((a, b) => a.localeCompare(b, 'ko'));
+    const offCnt = inGubun.filter(s => !specIsOnSale(s)).length;
     const all = itemColorsOf(fid); const rows = itemColorList(fid, S.yarnColor, S.dyer);
     const owner = isOwnerUser();
     let h = `<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px;margin-bottom:12px;font-size:12.5px;color:#475569;line-height:1.8;">
-      <strong>품목 → 원사 컬러 → 염색공장</strong>을 위에서 한 번 고르고, 아래 표에 <strong>BT No · 컬러명</strong>을 이어서 넣습니다 (컬러명 칸에서 Enter 를 누르면 저장되고 다음 줄로). BT No 는 염색공장이 부르는 번호를 그대로 적습니다.<br>
+      <strong>품목 → 원사 컬러 → 염색공장</strong>을 위에서 한 번 고르고, 아래 표에 <strong>컬러명 → B/T No</strong> 순서로 이어서 넣습니다 (B/T No 칸에서 Enter 를 누르면 저장되고 다음 줄로). B/T No 는 염색공장이 부르는 번호를 그대로 적습니다. 의뢰서에는 "컬러명 #B/T No"(예: 프진먹색 #451A)로 찍힙니다.<br>
       의뢰서 컬러 칸은 이 표에서 고르게 됩니다 (편직업체 → 품목 → 원사 컬러 → 염색공장 순으로 걸러서). 줄 지우기는 최고관리자만 됩니다.
     </div>`;
     h += `<div style="display:grid;grid-template-columns:110px 1.4fr 1fr 1fr auto;gap:10px;align-items:end;max-width:1080px;margin-bottom:12px;">
-      <div><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px;">구분</label><select id="ic-gubun" style="${iS}"><option value="">전체</option>${gubuns.map(g => `<option value="${escapeHtml(g)}"${S.gubun === g ? ' selected' : ''}>${escapeHtml(g)}</option>`).join('')}</select></div>
+      <div><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px;">구분</label><select id="ic-gubun" style="${iS}"><option value="">전체</option>${gubuns.map(g => `<option value="${escapeHtml(g)}"${S.gubun === g ? ' selected' : ''}>${escapeHtml(g)}</option>`).join('')}</select>
+        <label style="display:flex;align-items:center;gap:4px;font-size:11px;color:#64748b;margin-top:4px;white-space:nowrap;cursor:pointer;"><input type="checkbox" id="ic-show-off"${S.showOff ? ' checked' : ''}> 판매종료도 보기${offCnt ? ` (${offCnt})` : ''}</label></div>
       <div><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px;">품목 (글자 검색)</label><input id="ic-item" lang="ko" list="ic-item-list" autocomplete="off" value="${escapeHtml(S.item)}" placeholder="품목명" style="${iS}"><datalist id="ic-item-list">${items.map(n => `<option value="${escapeHtml(n)}"></option>`).join('')}</datalist></div>
       <div><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px;">원사 컬러 (비우면 L/W)</label><input id="ic-yc" lang="ko" list="ic-yc-list" autocomplete="off" value="${escapeHtml(S.yarnColor)}" placeholder="L/W" style="${iS}"><datalist id="ic-yc-list">${icYarnColorList(fid).map(n => `<option value="${escapeHtml(n)}"></option>`).join('')}</datalist></div>
       <div><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px;">염색공장 (필수 · 염색처·가공처)</label><input id="ic-dyer" lang="ko" list="ic-dyer-list" autocomplete="off" value="${escapeHtml(S.dyer)}" placeholder="염색공장" style="${iS}"><datalist id="ic-dyer-list">${icDyerList().map(n => `<option value="${escapeHtml(n)}"></option>`).join('')}</datalist></div>
-      <div style="font-size:12px;color:#64748b;padding-bottom:8px;white-space:nowrap;" id="ic-count">${fid ? `이 품목 컬러 ${all.length}개${(S.yarnColor || S.dyer) ? ` · 거른 것 ${rows.length}개` : ''}` : (S.item ? '<span style="color:#b45309;">등록된 품목이 아닙니다</span>' : '품목을 먼저 고르십시오')}</div>
+      <div style="font-size:12px;color:#64748b;padding-bottom:8px;white-space:nowrap;" id="ic-count">${fid ? `이 품목 컬러 ${all.length}개${(S.yarnColor || S.dyer) ? ` · 거른 것 ${rows.length}개` : ''}` : (S.item ? '<span style="color:#b45309;">등록된 품목이 아닙니다</span>' : (items.length ? '품목을 먼저 고르십시오' : `<span style="color:#b45309;">${S.gubun ? `[${escapeHtml(S.gubun)}] 구분으로 지정된${S.showOff ? '' : ' 판매중'} 품목이 없습니다 — 품목 설정 수정 창에서 구분을 바꾸십시오` : '등록된 품목이 없습니다'}</span>`))}</div>
     </div>`;
     const yc = S.yarnColor.trim() || YARN_LW;
     const canAdd = !!fid && !!S.dyer.trim() && icDyerList().some(n => vendorKey(n) === vendorKey(S.dyer));
     const tdS = 'padding:4px 6px;';
     const cellIn = (cls, i, v, w, ph) => `<input ${i < 0 ? `id="${cls}"` : `class="${cls}"`} data-i="${i}" lang="ko" autocomplete="off" value="${escapeHtml(v)}" placeholder="${ph}" style="${iS}padding:6px 8px;width:${w};">`;   // 새 줄(i<0)은 id, 있는 줄은 class
     h += `<div class="dash-table-wrap" style="max-width:980px;"><table class="dash-table" id="ic-rows"><thead><tr>
-      <th style="min-width:110px;">BT No</th><th style="text-align:left;min-width:180px;">컬러명</th><th style="min-width:90px;">원사 컬러</th><th style="text-align:left;min-width:120px;">염색공장</th><th style="min-width:120px;">고친 사람 · 날짜</th><th style="width:40px;"></th></tr></thead><tbody>`;
+      <th style="text-align:left;min-width:180px;">컬러명</th><th style="min-width:110px;">B/T No</th><th style="min-width:90px;">원사 컬러</th><th style="text-align:left;min-width:120px;">염색공장</th><th style="min-width:120px;">고친 사람 · 날짜</th><th style="width:40px;"></th></tr></thead><tbody>`;
     if (!fid) h += `<tr><td colspan="6" style="text-align:center;color:#9ca3af;padding:18px;">위에서 품목을 고르십시오.</td></tr>`;
     else {
       rows.forEach(c => {
         const i = all.indexOf(c);
-        h += `<tr class="ic-row" data-i="${i}"><td style="${tdS}">${cellIn('ic-bt', i, c.bt_no || '', '100px', 'BT No')}</td><td style="${tdS}">${cellIn('ic-name', i, c.name || '', '100%', '컬러명')}</td>
+        h += `<tr class="ic-row" data-i="${i}"><td style="${tdS}">${cellIn('ic-name', i, c.name || '', '100%', '컬러명')}</td><td style="${tdS}">${cellIn('ic-bt', i, c.bt_no || '', '100px', 'B/T No')}</td>
           <td style="${tdS}text-align:center;font-weight:700;color:${yarnColorIsLW(c.yarn_color) ? '#9ca3af' : '#7c2d12'};">${escapeHtml(yarnColorIsLW(c.yarn_color) ? YARN_LW : c.yarn_color)}</td><td style="${tdS}text-align:left;">${escapeHtml(c.dyer || '-')}</td>
           <td style="${tdS}text-align:center;font-size:11px;color:#64748b;">${escapeHtml(c.updated_by || '')}${c.updated_at ? '<br>' + escapeHtml(String(c.updated_at).slice(0, 10)) : ''}</td>
           <td style="${tdS}text-align:center;">${owner ? `<button class="dash-action-btn danger ic-del" data-i="${i}" title="이 줄을 지웁니다 (최고관리자)" style="padding:3px 7px;font-size:11px;">x</button>` : ''}</td></tr>`;
       });
       if (!rows.length) h += `<tr><td colspan="6" style="text-align:center;color:#9ca3af;padding:12px;">${all.length ? '이 원사 컬러 · 염색공장으로 넣은 컬러가 아직 없습니다.' : '이 품목에 넣은 컬러가 아직 없습니다.'}</td></tr>`;
-      h += `<tr id="ic-new" style="background:#f0fdf4;"><td style="${tdS}">${cellIn('ic-new-bt', -1, '', '100px', 'BT No')}</td><td style="${tdS}">${cellIn('ic-new-name', -1, '', '100%', '컬러명 → Enter')}</td>
+      h += `<tr id="ic-new" style="background:#f0fdf4;"><td style="${tdS}">${cellIn('ic-new-name', -1, '', '100%', '컬러명')}</td><td style="${tdS}">${cellIn('ic-new-bt', -1, '', '100px', 'B/T No → Enter')}</td>
         <td style="${tdS}text-align:center;font-weight:700;color:#166534;">${escapeHtml(yc)}</td><td style="${tdS}text-align:left;color:${canAdd ? '#166534' : '#b45309'};font-weight:700;">${escapeHtml(S.dyer.trim() || '염색공장을 고르십시오')}</td>
         <td style="${tdS}text-align:center;"><button class="dash-action-btn" id="ic-add" ${canAdd ? '' : 'disabled'} style="font-weight:800;padding:5px 12px;">＋ 넣기</button></td><td></td></tr>`;
     }
@@ -28474,6 +28495,7 @@ function validateBlendSum(blends, label) {
     const bindSel = (id, k) => { const el = document.getElementById(id); if (!el) return; el.addEventListener('change', () => { S[k] = el.value.trim(); rerender(); }); el.addEventListener('keydown', ev => { if (ev.key === 'Enter') { ev.preventDefault(); S[k] = el.value.trim(); rerender(); } }); };
     bindSel('ic-item', 'item'); bindSel('ic-yc', 'yarnColor'); bindSel('ic-dyer', 'dyer');
     document.getElementById('ic-gubun')?.addEventListener('change', ev => { S.gubun = ev.target.value; const sp = getFabricSpecs().find(x => vendorKey(x.name) === vendorKey(S.item)); if (S.gubun && sp && sp.gubun !== S.gubun) S.item = ''; rerender(); });   // hotfix399f
+    document.getElementById('ic-show-off')?.addEventListener('change', ev => { S.showOff = !!ev.target.checked; const sp = getFabricSpecs().find(x => vendorKey(x.name) === vendorKey(S.item)); if (!S.showOff && sp && !specIsOnSale(sp)) S.item = ''; rerender(); });   // hotfix400: 판매종료도 보기
     const fid = S.item ? icFidOf(S.item) : ''; if (!fid) return;
     const rowsAll = () => itemColorsOf(fid).map(c => Object.assign({}, c));
     // 있는 줄 고치기 — 칸을 떠나면 저장 (값이 바뀐 것만)
@@ -28500,19 +28522,19 @@ function validateBlendSum(blends, label) {
       const bt = document.getElementById('ic-new-bt'), nm = document.getElementById('ic-new-name'); if (!bt || !nm) return;
       const dyer = S.dyer.trim(); if (!dyer || !icDyerList().some(n => vendorKey(n) === vendorKey(dyer))) { toast('염색공장을 거래처(염색처·가공처)에서 고르십시오', 'warning'); document.getElementById('ic-dyer')?.focus(); return; }
       const b = bt.value.trim(), n = nm.value.trim(); if (!b && !n) { bt.focus(); return; }
-      if (!b) { toast('BT No 를 넣으십시오', 'warning'); bt.focus(); return; }
       if (!n) { toast('컬러명을 넣으십시오', 'warning'); nm.focus(); return; }
+      if (!b) { toast('B/T No 를 넣으십시오', 'warning'); bt.focus(); return; }
       const yc = S.yarnColor.trim() || YARN_LW;
       const rows = rowsAll();
       const dup = rows.find(c => vendorKey(c.bt_no) === vendorKey(b) && yarnColorKey(c.yarn_color) === yarnColorKey(yc) && vendorKey(c.dyer) === vendorKey(dyer));
-      if (dup) { toast(`BT No ${b} 은(는) 이미 있습니다 (${itemColorLabel(dup)})`, 'warning'); bt.focus(); bt.select(); return; }
+      if (dup) { toast(`B/T No ${b} 은(는) 이미 있습니다 (${itemColorLabel(dup)})`, 'warning'); bt.focus(); bt.select(); return; }
       rows.push({ yarn_color: yc, dyer, bt_no: b, name: n, ext_code: '' });
-      if (await saveItemColors(fid, rows)) { toast(`${b} ${n} 을(를) 넣었습니다`, 'success'); rerender(); setTimeout(() => document.getElementById('ic-new-bt')?.focus(), 0); }
+      if (await saveItemColors(fid, rows)) { toast(`${n} #${b} 을(를) 넣었습니다`, 'success'); rerender(); setTimeout(() => document.getElementById('ic-new-name')?.focus(), 0); }
     };
     document.getElementById('ic-add')?.addEventListener('click', add);
     ['ic-new-bt', 'ic-new-name'].forEach(id => document.getElementById(id)?.addEventListener('keydown', ev => {
       if (ev.key !== 'Enter') return; ev.preventDefault();
-      if (id === 'ic-new-bt' && !document.getElementById('ic-new-name').value.trim()) { document.getElementById('ic-new-name').focus(); return; }
+      if (id === 'ic-new-name' && !document.getElementById('ic-new-bt').value.trim()) { document.getElementById('ic-new-bt').focus(); return; }   // hotfix400: 컬러명 → B/T No 순, Enter 는 B/T No 칸에서
       add();
     }));
   }
@@ -40377,6 +40399,8 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
         fillFsCatSelect(s.cat || '');
         document.getElementById('fs-f-width').value = s.width || '';
         document.getElementById('fs-f-tube').checked = !!s.tube;
+        { const gsmEl = document.getElementById('fs-f-gsm'); if (gsmEl) gsmEl.value = specGsm(s) == null ? '' : specGsm(s); }   // hotfix400
+        if (typeof fsPaintFinalGy === 'function') fsPaintFinalGy();   // hotfix400
         // hotfix377: 제작 g/y 를 넣는다. 없으면 옛 안내중량을 미리 넣어 두고 알려 준다
         { const b = specGyBase(s);
           document.getElementById('fs-f-gy').value = (b.base == null) ? '' : moneyInputVal(b.base);
@@ -40609,6 +40633,14 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
         if (b && b.value.trim() !== auto.text) { b.value = auto.text; try { modalMarkDirty(modal); } catch (_) {} }
         el.innerHTML = `<span style="color:#166534;font-weight:800;">편직 설정(${escapeHtml(auto.factory)})에서 계산 — ${escapeHtml(auto.text)}</span>`;
       }
+      // hotfix400: 야드 중량(자동) = 스퀘어 g/㎡ × 기준폭 마지막 숫자 × 0.0254 × 0.9144 (튜브 ×2) — 칸이 바뀔 때마다 다시 그림
+      window.fsPaintFinalGy = function () {
+        const el = document.getElementById('fs-f-final-gy'); if (!el) return;
+        const g = gsmToGy(parseFloat(unComma(document.getElementById('fs-f-gsm')?.value || '')), specWidthInch({ width: document.getElementById('fs-f-width')?.value || '' }), !!document.getElementById('fs-f-tube')?.checked);
+        el.textContent = (g == null) ? '-' : String(g);
+      };
+      ['fs-f-gsm', 'fs-f-width'].forEach(id => document.getElementById(id)?.addEventListener('input', () => window.fsPaintFinalGy()));
+      document.getElementById('fs-f-tube')?.addEventListener('change', () => window.fsPaintFinalGy());
       document.getElementById('fs-f-gy')?.addEventListener('input', function () {
         const _e = document.getElementById('fs-f-gy'); if (_e) _e.dataset.legacy = '';
         this.value = this.value.replace(/[^0-9,]/g, '');
@@ -40639,6 +40671,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
           cat: document.getElementById('fs-f-cat').value.trim(),
           width: document.getElementById('fs-f-width').value.trim(),
           tube: document.getElementById('fs-f-tube').checked,
+          gsm: (function () { const v = parseFloat(unComma(document.getElementById('fs-f-gsm')?.value || '').trim()); return (v > 0) ? v : null; })(),   // hotfix400: 최종 스퀘어 중량 g/㎡
           make_gy: unComma(document.getElementById('fs-f-gy').value).trim(),   // hotfix377: 제작 g/y
           gy: (function () { const cur = (editingSpecIdx >= 0) ? getFabricSpecs()[editingSpecIdx] : null; return (cur && cur.gy != null) ? cur.gy : ''; })(),   // 옛 안내중량은 그대로 둔다
           blend: document.getElementById('fs-f-blend').value.trim(),
@@ -40748,6 +40781,18 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
           toast('CSV 파일을 내려받았습니다', 'success');
         } catch (e) { toast('내려받기 실패: ' + e.message, 'error'); }
       });
+      // hotfix400: 김용범 중량 서식 내려받기 (품목명은 채워져 있고, 기준폭 · 튜브 · 스퀘어g/㎡ 를 채워 온다)
+      document.getElementById('fs-csv-weight')?.addEventListener('click', () => {
+        try {
+          const blob = new Blob(['\uFEFF' + buildFabricSpecCsv(FS_CSV_COLS_WEIGHT)], { type: 'text/csv;charset=utf-8;' });
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download = todayYMD().replace(/-/g, '') + '_품목중량서식.csv';
+          document.body.appendChild(a); a.click();
+          setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
+          toast('중량 서식을 내려받았습니다 — 기준폭 · 튜브(예/아니오) · 스퀘어g/㎡ 를 채워 [CSV 올려 고치기]로 올리십시오 (야드중량 열은 계산값이라 올릴 때 무시)', 'success');
+        } catch (e) { toast('내려받기 실패: ' + e.message, 'error'); }
+      });
       // hotfix283: 품목 CSV 올려 고치기 — CSV에 없는 품목은 그대로 둔다
       document.getElementById('fs-csv-in')?.addEventListener('click', () => {
         document.getElementById('fs-csv-file')?.click();
@@ -40764,6 +40809,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
           if (res.err) { toast(res.err, 'error'); return; }
           let msg = `올린 파일을 이렇게 반영합니다.\n\n· 고칠 품목 ${res.changed}개\n· 새로 넣을 품목 ${res.added}개`;
           if (res.addedNames.length) msg += ` (${res.addedNames.slice(0, 6).join(', ')}${res.addedNames.length > 6 ? ` 외 ${res.addedNames.length - 6}개` : ''})`;
+          if (res.autoGy) msg += `\n· 스퀘어g/㎡ · 기준폭이 있어 야드 중량이 계산되는 품목 ${res.autoGy}개 (저장 안 함 — 매번 계산)`;   // hotfix400
           if (res.skipped) msg += `\n· 건너뛴 줄 ${res.skipped}개`;
           if (res.badFids.length) msg += `\n· 없는 품목코드 ${res.badFids.slice(0, 5).join(', ')}${res.badFids.length > 5 ? ' 외' : ''}`;
           msg += `\n\n· 파일에 없는 품목은 그대로 둡니다 (지워지지 않습니다)\n· 주의사항은 손대지 않습니다\n\n계속할까요?`;
@@ -45040,7 +45086,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix399f';
+  const VERSION = 'v2.53 hotfix400';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
