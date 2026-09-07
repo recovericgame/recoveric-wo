@@ -1837,6 +1837,15 @@
   .dash-table.vendor-table td { border: 1px solid #cbd5e1; }   /* hotfix397: 표 선을 진하게 */
   .dash-table.vendor-table th { border-bottom: 2px solid #94a3b8; }
   .dash-table.vendor-table tbody tr:nth-child(even) td { background: #fafbfd; }
+  .dash-table.vendor-table td { overflow-wrap: anywhere; }   /* hotfix405: table-layout fixed — 긴 주소·메모는 줄바꿈 */
+  .vd-alias-tg { margin-top: 3px; border: 1px solid #e2e8f0; background: #fff; color: #64748b; border-radius: 10px; padding: 1px 8px; font-size: 10.5px; font-weight: 700; cursor: pointer; font-family: inherit; }
+  .vd-alias-tg:hover { background: #f1f5f9; }
+  .hw-ask3 { position: fixed; inset: 0; background: rgba(15,23,42,.45); z-index: 100000; display: flex; align-items: center; justify-content: center; }
+  .hw-ask3-box { background: #fff; border-radius: 12px; padding: 20px 22px 16px; width: min(460px, 92vw); box-shadow: 0 12px 40px rgba(0,0,0,.25); font-family: inherit; }
+  .hw-ask3-t { font-weight: 800; font-size: 15px; margin-bottom: 8px; color: #1e293b; }
+  .hw-ask3-b { font-size: 13px; color: #475569; white-space: pre-line; line-height: 1.6; margin-bottom: 16px; }
+  .hw-ask3-btns { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+  .hw-ask3-btns .primary { background: var(--brand, #1e3a8a); color: #fff; border-color: var(--brand-deep, #1e3a8a); font-weight: 800; }
   .dash-table td.vendor-mgmt .dash-action-btn { font-size: 11px; padding: 3px 8px; margin-left: 3px; }
   .dash-table td.col-item {
     white-space: normal;
@@ -6333,6 +6342,12 @@
   .proc-picker .pp-parts { display: flex; gap: 5px; flex-wrap: wrap; margin-bottom: 6px; align-items: center; }
   .proc-picker .pp-part { border: 1px solid #cbd5e1; background: #fff; border-radius: 14px; padding: 3px 11px; font-size: 12px; font-weight: 700; cursor: pointer; font-family: inherit; color: #334155; }
   .proc-picker .pp-part.on { background: #1e3a8a; color: #fff; border-color: #1e3a8a; }
+  .proc-picker .pp-bundles { display: flex; gap: 5px; flex-wrap: wrap; align-items: center; margin-bottom: 6px; }
+  .proc-picker .pp-bundles:empty { display: none; }
+  .proc-picker .pp-bl-lbl { font-size: 11px; font-weight: 800; color: #7c2d12; margin-right: 2px; }
+  .proc-picker .pp-bundle { border: 1px solid #fcd34d; background: #fffbeb; color: #78350f; border-radius: 8px; padding: 3px 9px; font-size: 12px; font-weight: 700; cursor: pointer; font-family: inherit; display: inline-flex; flex-direction: column; align-items: flex-start; line-height: 1.25; }
+  .proc-picker .pp-bundle small { font-size: 10px; font-weight: 500; color: #92400e; }
+  .proc-picker .pp-bundle.on { background: #b45309; border-color: #b45309; color: #fff; } .proc-picker .pp-bundle.on small { color: #fde68a; }
   .proc-picker .pp-part .n { margin-left: 4px; font-size: 10.5px; opacity: .8; }
   .proc-picker .pp-names { display: flex; gap: 5px; flex-wrap: wrap; min-height: 24px; margin-bottom: 6px; }
   .proc-picker .pp-name { border: 1px dashed #94a3b8; background: #fff; border-radius: 12px; padding: 2px 10px; font-size: 12px; cursor: pointer; font-family: inherit; color: #334155; }
@@ -6695,7 +6710,7 @@
           <div class="blend-rows" id="body_blends"></div>
           <button class="btn-add" type="button" id="add_body_blend">+ 항목 추가</button>
         </div>
-        <div class="field"><label>몸판 가공 사양 <span style="font-weight:400;color:#9ca3af;">— 선작업 → 염색/물나염 → 가공 → 후가공 순으로 고릅니다 (염색처·가공처에 등록된 공정만) · 특이는 글로</span></label>
+        <div class="field"><label>몸판 가공 사양 <span style="font-weight:400;color:#9ca3af;">— 최고관리자가 선작업 → 염색/물나염 → 가공 → 후가공 순으로 고릅니다 (염색처·가공처에 등록된 공정만) · 특이는 글로 · 품목 표준 사양이 저절로 들어옵니다</span></label>
           <div id="f_body_proc_picker" class="proc-picker" data-part="body"></div>
           <input type="text" lang="ko" id="f_body_spec" placeholder="위에서 고르면 여기에 합쳐집니다 (옛 의뢰서 글은 그대로 고칠 수 있음)" title="의뢰서에 찍히는 가공 사양 글자">
           <input type="text" lang="ko" id="f_body_spec_note" placeholder="특이 사항 (예: 텐컴 후 70/72+400 · 색상 톤 맞춤)" style="margin-top:4px;"></div>
@@ -7629,6 +7644,17 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
+// hotfix405: 폼 기준값 — 초기화·불러오기·저장 때 찍어 두고, 옮길 때는 깃발이 아니라 지금 값과 비교한다 (자동 채움만 된 폼은 헛묻지 않음)
+function formBaseMark() { try { state.__formBase = JSON.stringify(getFormData()); } catch (_) { state.__formBase = ''; } }
+function formChanged() { if (!state.isDirty) return false; try { return JSON.stringify(getFormData()) !== (state.__formBase || ''); } catch (_) { return true; } }
+// 폼이 무엇인지 한 줄 (팝업 글에 씀)
+function formBriefText() {
+  try { const d = getFormData(); const t = d.type || state.currentType || '';
+    const who = t === '원사' ? d.supplier : (t === '편직' ? d.recipient : ((d.recipients && (d.recipients.dyeing || d.recipients.processing)) || ''));
+    const item = t === '원사' ? d.purpose : (t === '편직' ? (Array.isArray(d.items) && d.items[0] ? d.items[0].item : '') : (d.body && d.body.item));
+    return [t ? t + ' 의뢰서' : '의뢰서', who, item].filter(Boolean).join(' · ') + (state.currentWoNumber ? ' (' + state.currentWoNumber + ' 수정 중)' : ' (새로 작성 중)');
+  } catch (_) { return '작성 중인 의뢰서'; }
+}
 function markDirty() {
   if (!state.isDirty) {
     state.isDirty = true;
@@ -7927,9 +7953,10 @@ function addKnitRow(data={}) {
 // ============================================================
 const PROC_PARTS = ['선작업', '염색/물나염', '가공', '후가공'];
 const PROC_PART_COLOR = { '선작업': '#0369a1', '염색/물나염': '#b45309', '가공': '#4338ca', '후가공': '#047857' };
-function procMaster() { try { return (typeof window !== 'undefined' && window.__procMaster) ? window.__procMaster() : { rows: [], byVendor: {} }; } catch (e) { return { rows: [], byVendor: {} }; } }
-function procPartOfName(name) { const r = procMaster().rows.find(x => x.name === name); return r ? r.part : ''; }
+function procMaster() { try { return (typeof window !== 'undefined' && window.__procMaster) ? window.__procMaster() : { rows: [], byVendor: {}, bundles: {} }; } catch (e) { return { rows: [], byVendor: {}, bundles: {} }; } }
+function procPartOfName(name) { if (name === '염색') return '염색/물나염'; const r = procMaster().rows.find(x => x.name === name); return r ? r.part : ''; }
 function procVendorSet(vendor) { const set = procMaster().byVendor[vendorKey(vendor)]; return (set && set.size) ? set : null; }
+function procVendorBundles(vendor) { const b = (procMaster().bundles || {})[vendorKey(vendor)]; return Array.isArray(b) ? b : []; }   // hotfix405: 업체 묶음
 function procSpecText(procs, note) {
   const order = n => { const i = PROC_PARTS.indexOf(procPartOfName(n)); return i < 0 ? 9 : i; };
   const list = (Array.isArray(procs) ? procs : []).map(x => String(x || '').trim()).filter(Boolean).sort((a, b) => order(a) - order(b));
@@ -7945,19 +7972,31 @@ function mountProcPicker(host, opts) {
   const textEl = () => o.textId ? document.getElementById(o.textId) : null;
   const noteEl = () => o.noteId ? document.getElementById(o.noteId) : null;
   const vendorFor = part => { const v = (typeof o.vendorOf === 'function') ? (o.vendorOf() || {}) : {}; return (part === '가공' || part === '후가공') ? (v.post || '') : (v.pre || ''); };
-  const compose = () => { const t = textEl(); if (!t) return; if (host.__procs.length) { t.value = procSpecText(host.__procs, noteEl()?.value); t.readOnly = true; t.style.background = '#f8fafc'; } else { t.readOnly = false; t.style.background = ''; } };
+  // hotfix405: locked() 가 참이면(최고관리자 아님) 고르개는 감추고 글자·특이 칸은 읽기 전용 — 품목 표준 사양이 저절로 들어오는 것은 그대로 보인다
+  const locked = () => (typeof o.locked === 'function') && !!o.locked();
+  const lockFields = () => { const lk = locked(); host.style.display = lk ? 'none' : ''; host.dataset.locked = lk ? '1' : ''; const n = noteEl(); if (n) { n.readOnly = lk; n.style.background = lk ? '#f1f5f9' : ''; if (lk) { if (!n.dataset.ppPh) n.dataset.ppPh = n.placeholder || ''; n.placeholder = '특이 사항 — 최고관리자가 적습니다'; } else if (n.dataset.ppPh !== undefined) n.placeholder = n.dataset.ppPh; } const t = textEl(); if (t) { if (lk) { if (!t.dataset.ppPh) t.dataset.ppPh = t.placeholder || ''; t.placeholder = '가공 사양은 최고관리자가 고릅니다 (품목 표준 사양이 저절로 들어옵니다)'; } else if (t.dataset.ppPh !== undefined) t.placeholder = t.dataset.ppPh; } };
+  const compose = () => { lockFields(); const t = textEl(); if (!t) return; if (locked()) { if (host.__procs.length) t.value = procSpecText(host.__procs, noteEl()?.value); t.readOnly = true; t.style.background = '#f1f5f9'; return; } if (host.__procs.length) { t.value = procSpecText(host.__procs, noteEl()?.value); t.dataset.ppComposed = '1'; t.readOnly = true; t.style.background = '#f8fafc'; } else { if (t.dataset.ppComposed === '1') { t.value = ''; t.dataset.ppComposed = ''; } t.readOnly = false; t.style.background = ''; } };   // hotfix405: 뱃지를 다 빼면 합쳐 놓은 글자도 비운다 (옛 글자 의뢰서는 손대지 않음)
   const paint = () => {
+    lockFields(); if (locked()) { host.innerHTML = ''; return; }   // hotfix405
     const m = procMaster();
     const rowsOf = part => m.rows.filter(r => r.part === part);
     host.innerHTML = `<div class="pp-parts">${PROC_PARTS.map(p => { const n = host.__procs.filter(x => procPartOfName(x) === p).length; return `<button type="button" class="pp-part${p === host.__part ? ' on' : ''}" data-part="${escapeHtml(p)}">${escapeHtml(p)}${n ? `<span class="n">${n}</span>` : ''}</button>`; }).join('')}<span class="pp-hint" id="pp-hint"></span></div>
+      <div class="pp-bundles"></div>
       <div class="pp-names"></div>
       <div class="pp-sel">${host.__procs.length ? host.__procs.map(n => `<span class="pp-badge" style="background:${PROC_PART_COLOR[procPartOfName(n)] || '#64748b'};" data-n="${escapeHtml(n)}">${escapeHtml(n)}<b title="빼기">×</b></span>`).join('') : '<span class="pp-empty">고른 공정이 없습니다 — 위에서 고르십시오</span>'}</div>`;
     const vendor = vendorFor(host.__part); const set = vendor ? procVendorSet(vendor) : null;
     const names = rowsOf(host.__part);
+    // hotfix405: 업체 묶음 — 누르면 묶음의 공정을 한 번에 담는다 (염색처 묶음 + 가공처 묶음)
+    { const vs = (typeof o.vendorOf === 'function') ? (o.vendorOf() || {}) : {}; const bl = []; const seenV = new Set();
+      [vs.pre, vs.post].forEach(vv => { const vk = vendorKey(vv || ''); if (!vk || seenV.has(vk)) return; seenV.add(vk); procVendorBundles(vv).forEach(b => bl.push(Object.assign({ vendor: vv }, b))); });
+      const bb = host.querySelector('.pp-bundles');
+      if (bb) bb.innerHTML = bl.length ? `<span class="pp-bl-lbl">묶음</span>` + bl.map((b, i) => { const on = b.procs.every(p => host.__procs.includes(p)); return `<button type="button" class="pp-bundle${on ? ' on' : ''}" data-i="${i}" title="${escapeHtml(b.vendor + ' 묶음: ' + b.procs.join(' · '))}">${escapeHtml(b.name)}<small>${escapeHtml(b.procs.join('·'))}</small></button>`; }).join('') : '';
+      host.__bundles = bl; }
     const box = host.querySelector('.pp-names');
     box.innerHTML = names.length ? names.map(r => { const on = host.__procs.includes(r.name); const ok = !set || set.has(r.name) || on; return `<button type="button" class="pp-name${on ? ' on' : ''}${ok ? '' : ' off'}" data-n="${escapeHtml(r.name)}" ${ok ? '' : 'disabled title="' + escapeHtml(vendor) + ' 에 등록되지 않은 공정"'}>${escapeHtml(r.name)}</button>`; }).join('') : '<span class="pp-empty">이 단계의 공정이 없습니다 ([약어 설정]에서 넣습니다)</span>';
     const hint = host.querySelector('#pp-hint'); if (hint) hint.textContent = vendor ? (set ? `${vendor} 등록 공정 ${names.filter(r => set.has(r.name)).length}개` : `${vendor} 등록 공정 없음 — 전체`) : (o.vendorOf ? '업체(염색처·가공처)를 먼저 고르면 그 업체 공정만 보입니다' : '');
     host.querySelectorAll('.pp-part').forEach(b => b.addEventListener('click', () => { host.__part = b.dataset.part; paint(); }));
+    host.querySelectorAll('.pp-bundle').forEach(b => b.addEventListener('click', () => { const bd = (host.__bundles || [])[parseInt(b.dataset.i, 10)]; if (!bd) return; const all = bd.procs.every(p => host.__procs.includes(p)); if (all) host.__procs = host.__procs.filter(p => !bd.procs.includes(p)); else bd.procs.forEach(p => { if (!host.__procs.includes(p)) host.__procs.push(p); }); changed(); }));   // hotfix405: 묶음은 통째로 담고/빼기
     host.querySelectorAll('.pp-name:not(.off)').forEach(b => b.addEventListener('click', () => { const n = b.dataset.n; const i = host.__procs.indexOf(n); if (i >= 0) host.__procs.splice(i, 1); else host.__procs.push(n); changed(); }));
     host.querySelectorAll('.pp-badge b').forEach(b => b.addEventListener('click', () => { const n = b.parentElement.dataset.n; host.__procs = host.__procs.filter(x => x !== n); changed(); }));
   };
@@ -8148,13 +8187,24 @@ function knitItemColorList(name, fid, factory) {
   return out;
 }
 // hotfix404: 의뢰서 메모 기본값 — 같은 종류 · 같은 수신처로 마지막에 저장한 의뢰서의 메모를 빈 메모 칸(또는 앞서 자동으로 넣은 값)에 미리 넣는다. 손으로 고친 메모·수정 중인 의뢰서는 안 건드린다
-function lastNotesOf(type, recipient) {
-  const rk = vendorKey(String(recipient || '').trim()); if (!rk) return '';
+// hotfix405: 수신처 + 품목으로 찾는다 (품목마다 메모가 다름). 같은 품목 메모가 없으면 같은 수신처만으로 (반환 { notes, byItem })
+function lastNotesOf(type, recipient, item) {
+  const rk = vendorKey(String(recipient || '').trim()); if (!rk) return null;
+  const ik = vendorKey(String(item || '').trim());
   const list = (typeof state !== 'undefined' && Array.isArray(state.allWorkOrders)) ? state.allWorkOrders : [];
   const recOf = wo => wo.type === '원사' ? wo.supplier : (wo.type === '편직' ? wo.recipient : ((wo.recipients && (wo.recipients.dyeing || wo.recipients.processing)) || wo.recipient || ''));
-  let best = null;
-  list.forEach(wo => { if (!wo || wo.deleted || wo.type !== type || !String(wo.notes || '').trim()) return; if (vendorKey(recOf(wo)) !== rk) return; const at = String(wo.date || '') + '|' + String(wo.wo_number || ''); if (!best || at > best.at) best = { at, notes: String(wo.notes) }; });
-  return best ? best.notes : '';
+  const itemsOf = wo => wo.type === '원사' ? [wo.purpose] : (wo.type === '편직' ? (Array.isArray(wo.items) ? wo.items.map(it => it && it.item) : []) : [wo.body && wo.body.item]);
+  const itemMatch = wo => !!ik && itemsOf(wo).some(n => { const nk = vendorKey(String(n || '')); return nk === ik || (typeof greigeSplit === 'function' && vendorKey(greigeSplit(String(n || '')).name) === ik); });
+  let best = null, bestAny = null;
+  list.forEach(wo => { if (!wo || wo.deleted || wo.type !== type || !String(wo.notes || '').trim()) return; if (vendorKey(recOf(wo)) !== rk) return; const at = String(wo.date || '') + '|' + String(wo.wo_number || ''); const cand = { at, notes: String(wo.notes) }; if (!bestAny || at > bestAny.at) bestAny = cand; if (itemMatch(wo) && (!best || at > best.at)) best = cand; });
+  if (best) return { notes: best.notes, byItem: true };
+  return bestAny ? { notes: bestAny.notes, byItem: false } : null;
+}
+// 폼에서 지금 고른 품목 (원사 = 용도, 편직 = 첫 줄 품목, 염/가공 = 몸판 품목)
+function formItemOf(type) {
+  const el = type === '원사' ? document.getElementById('y_purpose') : (type === '편직' ? document.querySelector('#knit-items .k-item') : document.getElementById('f_body_item'));
+  const v = String(el && el.value || '').trim();
+  return (type === '편직' && typeof greigeSplit === 'function') ? greigeSplit(v).name : v;
 }
 function applyDefaultNotes(type) {
   const map = { '원사': ['y_notes', 'y_supplier'], '편직': ['k_notes', 'k_recipient'], '염색가공': ['f_notes', 'f_r_dye'] };
@@ -8162,10 +8212,11 @@ function applyDefaultNotes(type) {
   const nEl = document.getElementById(m[0]), rEl = document.getElementById(m[1]); if (!nEl || !rEl) return false;
   if (nEl.value.trim() && nEl.dataset.autoNotes !== '1') return false;   // 손으로 적은(또는 불러온) 메모
   if (state.currentWorkOrderId) return false;   // 수정 중인 의뢰서는 저장된 메모 그대로
-  const v = lastNotesOf(type, rEl.value);
+  const r = lastNotesOf(type, rEl.value, formItemOf(type));
+  const v = r ? r.notes : '';
   if (!v || v === nEl.value) return false;
   nEl.value = v; nEl.dataset.autoNotes = '1';
-  try { toast('같은 수신처의 마지막 의뢰서 메모를 미리 넣었습니다 (고칠 수 있습니다)', 'info'); } catch (_) {}
+  try { toast(r.byItem ? '같은 수신처 · 같은 품목의 마지막 의뢰서 메모를 미리 넣었습니다 (고칠 수 있습니다)' : '같은 품목 메모가 없어 같은 수신처의 마지막 메모를 넣었습니다 (고칠 수 있습니다)', 'info'); } catch (_) {}
   return true;
 }
 // hotfix402: 원사 발주서 용도 목록 — 줄들의 출고처(편직공장)가 짜는 품목만. 출고처가 없거나 등록 품목이 없으면 판매중 전부
@@ -8260,7 +8311,11 @@ function supplierYarnInfo(supplier) {
   const add = nm => { const b = baseOf(nm); const k = vendorKey(b); if (b && k && !seen.has(k)) { seen.add(k); out.bases.push(b); } };
   const vid = (typeof state !== 'undefined' && Array.isArray(state.vendors)) ? String((state.vendors.find(v => v && vendorKey(v.name) === sk) || {}).vid || '') : '';
   const isMine = (name, id) => (vendorKey(name) === sk) || (vid && String(id || '') === vid);
-  yarnNameList().forEach(y => { if (y && isMine(y.vendor, y.vendor_vid)) add(y.name || yarnParts(y).base); });
+  // hotfix406: 원사 설정의 브랜드 칸(예: "GSY 김윤철 실장님")이 수신처와 같으면 그 업체 사종으로 본다 (수신처 = 브랜드)
+  const myV = (typeof state !== 'undefined' && Array.isArray(state.vendors)) ? state.vendors.find(v => v && vendorKey(v.name) === sk) : null;
+  const myKeys = new Set([sk].concat(myV && Array.isArray(myV.aliases) ? myV.aliases.map(a => vendorKey(a)) : []));
+  const brandMine = y => { const br = vendorKey(yarnParts(y).brand); return !!br && myKeys.has(br); };
+  yarnNameList().forEach(y => { if (y && (isMine(y.vendor, y.vendor_vid) || brandMine(y))) add(y.name || yarnParts(y).base); });
   const fc = (typeof state !== 'undefined' && state.fabricCost && typeof state.fabricCost === 'object') ? state.fabricCost : {};
   Object.keys(fc).forEach(fid => { const ys = (fc[fid] && Array.isArray(fc[fid].yarns)) ? fc[fid].yarns : []; ys.forEach(y => { if (y && y.name && isMine(y.vendor, y.vendor_vid)) add(y.name); }); });
   const list = (typeof state !== 'undefined' && Array.isArray(state.allWorkOrders)) ? state.allWorkOrders : [];
@@ -10080,6 +10135,7 @@ function setFormData(d, opts={}) {
     state.savedFinishRecipients = null;
     state.savedFinishCautions = null;
   }
+  setTimeout(formBaseMark, 0);   // hotfix405
 }
 
 function switchType(type, skipReset=false) {
@@ -10170,6 +10226,7 @@ function resetForm() {
   updateSaveStatus('');
   if (typeof refreshVendorSelects === 'function') refreshVendorSelects();  // hotfix171: 로드값 → 대표명으로 셀렉트 동기화
   render();
+  setTimeout(formBaseMark, 0);   // hotfix405: 자동 채움까지 끝난 뒤 기준값
 }
 
 // ===== 레터헤드 / 푸터 =====
@@ -10900,8 +10957,8 @@ function checkDuplicateColors() {
 }
 
 document.querySelectorAll('.type-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    if (window.__askKeepDraft && !window.__askKeepDraft()) return;   // hotfix382
+  btn.addEventListener('click', async () => {
+    if (window.__askKeepDraft && !(await window.__askKeepDraft())) return;   // hotfix382 · hotfix405 세 갈래
     if (window.__goWrite) window.__goWrite();
     if (btn.dataset.type === '나염') {
       // 나염작지는 전용 작성 모달로 (작성 화면에서 바로 보면서 제작)
@@ -11028,8 +11085,8 @@ document.getElementById('form-panel').addEventListener('change', (e) => {
 
 // hotfix73: 품목 자동채움/기준 불러오기 로직은 findFabricSpec가 있는 firebase-ready 스코프로 이동함
 
-document.getElementById('new-btn').addEventListener('click', () => {
-  if (window.__askKeepDraft && !window.__askKeepDraft()) return;   // hotfix382: 바깥 스코프용 문
+document.getElementById('new-btn').addEventListener('click', async () => {
+  if (window.__askKeepDraft && !(await window.__askKeepDraft())) return;   // hotfix382 · hotfix405 세 갈래
   if (window.__goWrite) window.__goWrite();
   resetForm();
 });
@@ -11046,7 +11103,7 @@ document.getElementById('new-btn').addEventListener('click', () => {
       const t = new Date(d.at);
       const p = x => String(x).padStart(2, '0');
       if (!confirm('임시로 담아 둔 내용이 있습니다 (' + (t.getMonth() + 1) + '월 ' + t.getDate() + '일 '
-        + p(t.getHours()) + ':' + p(t.getMinutes()) + ').\n\n되살릴까요?')) return;
+        + p(t.getHours()) + ':' + p(t.getMinutes()) + ')' + (d.brief ? '\n' + d.brief : '') + '\n\n되살릴까요?')) return;
       setFormData(d.data);
       state.currentWorkOrderId = null; state.currentWoNumber = null;
       state.isDirty = true;
@@ -12911,6 +12968,7 @@ window.addEventListener('firebase-ready', () => {
       ...(it.cautions ? { cautions: it.cautions } : {}),
       ...(Array.isArray(it.std_procs) && it.std_procs.length ? { std_procs: it.std_procs.map(x => String(x || '').trim()).filter(Boolean) } : {}),   // hotfix403: 표준 가공 사양
       ...(String(it.std_note || '').trim() ? { std_note: String(it.std_note).trim() } : {}),
+      ...(it.std_by_vendor && typeof it.std_by_vendor === 'object' && Object.keys(it.std_by_vendor).length ? { std_by_vendor: it.std_by_vendor } : {}),   // hotfix406
       ...(it.updated_at ? { updated_at: it.updated_at } : {})
     })).filter(it => it.name);
     // hotfix264: 코드가 없는 품목에만 새 코드를 붙인다 (이미 있는 코드는 절대 안 바뀜)
@@ -14815,14 +14873,25 @@ function specGreigeColors(fid) {
     return true;
   }
   // hotfix403: 품목 표준 가공 사양 → 빈 고르개에 저절로 (이미 고른 게 있으면 안 건드린다)
+  // hotfix406: 염색처 + 품목 → (1) 같은 염색처·같은 품목으로 마지막 저장한 의뢰서의 가공법 → (2) 품목의 업체별 표준 → (3) 공통 표준
+  function procStdOf(spec, part) {
+    const dye = String(document.getElementById('f_r_dye')?.value || '').trim(); const dk = vendorKey(dye);
+    if (dk) { let best = null; (state.allWorkOrders || []).forEach(wo => { if (!wo || wo.deleted || wo.type !== '염색가공') return; const r = (wo.recipients && wo.recipients.dyeing) || ''; if (vendorKey(r) !== dk) return; const p = wo[part] || {}; const nm = greigeSplit(String(p.item || '')).name; if (!itemHasName(spec, nm)) return; if (!(Array.isArray(p.spec_procs) && p.spec_procs.length) && !String(p.spec_note || '').trim()) return; const at = String(wo.date || '') + '|' + String(wo.wo_number || ''); if (!best || at > best.at) best = { at, procs: p.spec_procs || [], note: p.spec_note || '' }; });
+      if (best) return { procs: best.procs, note: best.note, src: dye + ' 마지막 의뢰서' };
+      const bv = spec.std_by_vendor && spec.std_by_vendor[dye]; if (bv && ((bv.procs || []).length || String(bv.note || '').trim())) return { procs: bv.procs || [], note: bv.note || '', src: dye + ' 표준' }; }
+    const std = Array.isArray(spec.std_procs) ? spec.std_procs : []; if (std.length || String(spec.std_note || '').trim()) return { procs: std, note: spec.std_note || '', src: '공통 표준' };
+    return null;
+  }
   function procStdToPicker(hostId, spec) {
     const h = document.getElementById(hostId); if (!h || !h.__set || !spec) return false;
     if (h.__procs && h.__procs.length) return false;
-    const std = Array.isArray(spec.std_procs) ? spec.std_procs : []; if (!std.length && !String(spec.std_note || '').trim()) return false;
-    h.__set(std, spec.std_note || '');
-    try { toast(`"${spec.name}" 표준 가공 사양 자동 채움 (고칠 수 있습니다)`, 'info'); } catch (_) {}
+    const got = procStdOf(spec, hostId === 'f_rib_proc_picker' ? 'rib' : 'body'); if (!got) return false;
+    h.__set(got.procs, got.note);
+    try { toast(`"${spec.name}" 가공 사양 자동 채움 — ${got.src}${isOwnerUser() ? ' (고칠 수 있습니다)' : ''}`, 'info'); } catch (_) {}   // hotfix405 · 406
     render(); markDirty(); return true;
   }
+  // 염색처가 바뀌면(고르개가 비어 있을 때만) 그 업체 기준으로 다시 넣는다
+  if (typeof window !== 'undefined') window.__procStdOnVendor = function () { try { const b = findFabricSpec(document.getElementById('f_body_item')?.value || ''); if (b) procStdToPicker('f_body_proc_picker', b); const r = findFabricSpec(document.getElementById('f_rib_item')?.value || ''); if (r) procStdToPicker('f_rib_proc_picker', r); } catch (_) {} };
   function autoFillBodySpec(ask) {
     const el = document.getElementById('f_body_item');
     if (!el) return;
@@ -14841,10 +14910,13 @@ function specGreigeColors(fid) {
       fp.dataset.specAutofillBound = '1';
       // hotfix403: 가공 사양 뱃지 고르개 (몸판 · 리프) — 선작업·염색/물나염 은 염색처, 가공·후가공 은 가공처 공정
       const vendorOfFinish = () => ({ pre: String(document.getElementById('f_r_dye')?.value || '').trim(), post: String(document.getElementById('f_r_proc')?.value || document.getElementById('f_r_dye')?.value || '').trim() });
-      mountProcPicker(document.getElementById('f_body_proc_picker'), { textId: 'f_body_spec', noteId: 'f_body_spec_note', vendorOf: vendorOfFinish, onChange: () => { render(); markDirty(); } });
-      mountProcPicker(document.getElementById('f_rib_proc_picker'), { textId: 'f_rib_spec', noteId: 'f_rib_spec_note', vendorOf: vendorOfFinish, onChange: () => { render(); markDirty(); } });
+      const procLocked = () => !isOwnerUser();   // hotfix405: 가공 사양 고르개는 최고관리자만 (직원·관리자는 감춤 + 읽기 전용)
+      mountProcPicker(document.getElementById('f_body_proc_picker'), { textId: 'f_body_spec', noteId: 'f_body_spec_note', vendorOf: vendorOfFinish, locked: procLocked, onChange: () => { render(); markDirty(); } });
+      mountProcPicker(document.getElementById('f_rib_proc_picker'), { textId: 'f_rib_spec', noteId: 'f_rib_spec_note', vendorOf: vendorOfFinish, locked: procLocked, onChange: () => { render(); markDirty(); } });
       window.__procPickersPaint = () => ['f_body_proc_picker', 'f_rib_proc_picker'].forEach(id => { const h = document.getElementById(id); if (h && h.__paint) h.__paint(); });
-      fp.addEventListener('change', e => { const t = e.target; const id = (t && (t.id || (t.dataset && t.dataset.target))) || ''; if (id === 'f_r_dye' || id === 'f_r_proc') setTimeout(window.__procPickersPaint, 0); }, true);
+      fp.addEventListener('change', e => { const t = e.target; const id = (t && (t.id || (t.dataset && t.dataset.target))) || ''; if (id === 'f_r_dye' || id === 'f_r_proc') setTimeout(() => { window.__procPickersPaint(); if (id === 'f_r_dye') window.__procStdOnVendor(); }, 0); }, true);
+      // hotfix405: 품목(원사 용도 · 편직 첫 줄 품목 · 몸판 품목)이 바뀌면 메모 기본값을 수신처 + 품목으로 다시 찾는다
+      fp.addEventListener('change', e => { const t = e.target; if (!t) return; const type = t.id === 'y_purpose' ? '원사' : (t.classList && t.classList.contains('k-item') ? '편직' : (t.id === 'f_body_item' ? '염색가공' : '')); if (type) setTimeout(() => { try { applyDefaultNotes(type); } catch (_) {} }, 0); }, true);
       // change(확정) + input(목록 선택·정확 일치) 둘 다 — datalist 누락 방지
       fp.addEventListener('change', (e) => {
         if (!e.target) return;
@@ -15743,7 +15815,7 @@ function validateBlendSum(blends, label) {
         toast(`저장 완료: ${wo_number}${d.type === '원사' && d.lot_no ? ' / LOT ' + d.lot_no : ''}`, 'success');
         render();
       }
-      state.isDirty = false;
+      state.isDirty = false; formBaseMark();   // hotfix405
       updateSaveStatus('저장됨', 'saved');
     } catch (e) { console.error(e); toast('저장 실패: ' + e.message, 'error'); }
     finally { saveBtn.disabled = false; saveBtn.textContent = '저장'; }
@@ -26908,6 +26980,7 @@ function validateBlendSum(blends, label) {
   let vdSortKey = 'name';
   let vdSortDir = 'asc';
   let vdShowOff = false;
+  let vdAliasOpen = false;   // hotfix405: 거래처 표 "다른 표기" 줄 늘이기/줄이기 (모두)
   function renderVendors() {
     if (!canAccessView('vendors')) return `<div class="dash-empty">이 화면을 볼 권한이 없습니다.</div>`;
     const vEditOn = canEditView('vendors');   // hotfix383: 고치기는 [권한 설정]의 [고치기] 칸을 따른다 (기본 관리자까지)
@@ -26942,9 +27015,9 @@ function validateBlendSum(blends, label) {
         const on = vendorIsActive(v);
         return `
         <tr style="${on ? '' : 'background:#fafafa;'}">
-          <td style="white-space:normal;max-width:260px;line-height:1.45;">
+          <td style="white-space:normal;line-height:1.45;">
             <div style="font-weight:700;font-size:13px;color:${on ? 'var(--ui-text)' : '#9ca3af'};">${escapeHtml(v.name)}${(codeOn && v.vid) ? ` <span style="font-size:10.5px;font-weight:600;color:#94a3b8;">${escapeHtml(v.vid)}</span>` : ''}${on ? '' : ` <span style="font-size:11px;font-weight:700;color:#b45309;background:#fef3c7;border-radius:9px;padding:1px 7px;">사용 안 함</span>`}</div>
-            ${(Array.isArray(v.aliases) && v.aliases.length) ? `<div style="font-size:11px;color:#94a3b8;margin-top:2px;" title="다른 표기">다른 표기: ${v.aliases.map(a => escapeHtml(a)).join(', ')}</div>` : ''}
+            ${(Array.isArray(v.aliases) && v.aliases.length) ? `<button type="button" class="vd-alias-tg" data-n="${v.aliases.length}" title="다른 표기 늘이기/줄이기">${vdAliasOpen ? '다른 표기 줄이기 ▾' : `다른 표기 ${v.aliases.length}개 ▸`}</button><div class="vd-alias" style="display:${vdAliasOpen ? '' : 'none'};font-size:11px;color:#94a3b8;margin-top:2px;">${v.aliases.map(a => escapeHtml(a)).join(', ')}</div>` : ''}
           </td>
           <td style="white-space:normal;">${(getVendorTypes(v).length ? getVendorTypes(v).map(t => typeChip(t)).join(' ') : typeChip(''))}${
             getVendorTypes(v).includes('원사 구매처')
@@ -26953,9 +27026,10 @@ function validateBlendSum(blends, label) {
                     ? v.yarn_kinds.map(k => yarnKindName(k)).join(' · ')
                     : `<span style="background:#fffbeb;border:1px solid #fcd34d;color:#b45309;border-radius:4px;padding:1px 5px;">취급 원사 설정 전</span>`
                 }</div>` : ''}</td>
-          <td style="font-size:12px;color:#374151;white-space:normal;line-height:1.45;">${escapeHtml(v.contact || '') || '<span style="color:#c7cbd1;">-</span>'}${v.phone ? `<div style="color:#6b7280;white-space:nowrap;">${escapeHtml(v.phone)}</div>` : ''}</td>
-          <td style="color:#374151;font-size:12px;white-space:normal;max-width:260px;line-height:1.45;">${escapeHtml(v.address || '') || '<span style="color:#c7cbd1;">-</span>'}</td>
-          <td style="color:#6b7280;font-size:12px;white-space:normal;max-width:220px;">${escapeHtml(v.memo || '') || '<span style="color:#c7cbd1;">-</span>'}</td>
+          <td style="font-size:12px;color:#374151;white-space:normal;line-height:1.45;">${escapeHtml(v.contact || '') || '<span style="color:#c7cbd1;">-</span>'}</td>
+          <td style="font-size:12px;color:#374151;white-space:nowrap;line-height:1.45;">${escapeHtml(v.phone || '') || '<span style="color:#c7cbd1;">-</span>'}</td>
+          <td style="color:#374151;font-size:12px;white-space:normal;line-height:1.5;">${escapeHtml(v.address || '') || '<span style="color:#c7cbd1;">-</span>'}</td>
+          <td style="color:#6b7280;font-size:12px;white-space:normal;line-height:1.45;">${escapeHtml(v.memo || '') || '<span style="color:#c7cbd1;">-</span>'}</td>
           <td class="vendor-mgmt" style="text-align:right;white-space:nowrap;overflow:visible;max-width:none;">
             ${vEditOn ? `<button class="dash-action-btn vendor-edit-btn" data-idx="${i}" style="font-weight:700;">수정</button>
             <button class="dash-action-btn vendor-toggle-btn" data-idx="${i}" title="${on ? '선택 목록에서 숨깁니다 (기존 의뢰서는 그대로)' : '다시 선택 목록에 보이게 합니다'}">${on ? '사용 중지' : '다시 사용'}</button>
@@ -26963,7 +27037,7 @@ function validateBlendSum(blends, label) {
             ${vDelOn ? `<button class="dash-action-btn vendor-del-btn" data-idx="${i}" style="color:#b91c1c;border-color:#fecaca;" title="거래처를 지웁니다 (최고관리자)">삭제</button>` : ''}
           </td>
         </tr>`; }).join('')
-      : `<tr><td colspan="6" style="text-align:center;color:#9ca3af;padding:26px;">${vs.length === 0 ? '등록된 거래처가 없습니다. 아래 양식에서 추가해 주세요.' : (vq ? `"${escapeHtml(vdSearch)}" 검색 결과가 없습니다.` : '보여줄 거래처가 없습니다.')}</td></tr>`;
+      : `<tr><td colspan="7" style="text-align:center;color:#9ca3af;padding:26px;">${vs.length === 0 ? '등록된 거래처가 없습니다. 아래 양식에서 추가해 주세요.' : (vq ? `"${escapeHtml(vdSearch)}" 검색 결과가 없습니다.` : '보여줄 거래처가 없습니다.')}</td></tr>`;
     return `
       <div style="max-width:none;margin:0 auto;">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:12px;">
@@ -27016,16 +27090,19 @@ function validateBlendSum(blends, label) {
           <input type="text" id="vendor-search" lang="ko" autocomplete="off" placeholder="업체명 · 구분 · 담당자 · 연락처 · 주소 · 다른 표기 검색" value="${escapeHtml(vdSearch)}" style="flex:1;min-width:220px;max-width:380px;padding:8px 10px;border:1px solid var(--ui-line);border-radius:8px;font-size:13px;font-family:inherit;">
           ${vdSearch ? `<button class="dash-action-btn" id="vendor-search-clear" style="font-size:11px;padding:5px 10px;">지우기</button>` : ''}
           <label style="display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:700;color:${vdShowOff ? '#b45309' : '#6b7280'};cursor:pointer;white-space:nowrap;"><input type="checkbox" id="vendor-show-off" ${vdShowOff ? 'checked' : ''} style="width:15px;height:15px;"> 사용 안 함도 보기${offCnt ? ` (${offCnt})` : ''}</label>
+          <button type="button" class="dash-action-btn" id="vendor-alias-all" style="font-size:11px;padding:5px 10px;" title="모든 줄의 다른 표기를 한 번에 늘이거나 줄입니다">${vdAliasOpen ? '다른 표기 모두 줄이기' : '다른 표기 모두 늘이기'}</button>
           <span style="font-size:12px;color:#6b7280;font-weight:700;margin-left:auto;">${list.length}곳 표시</span>
         </div>
-        <table class="dash-table vendor-table" style="width:100%;">
+        <table class="dash-table vendor-table" style="width:100%;table-layout:fixed;">
+          <colgroup><col style="width:15%;"><col style="width:11%;"><col style="width:7%;"><col style="width:9%;"><col><col style="width:11%;"><col style="width:232px;"></colgroup>
           <thead><tr>
             <th class="vendor-sort-th" data-key="name" style="text-align:left;cursor:pointer;" title="업체명으로 정렬">업체명${vdArrow('name')}</th>
             <th class="vendor-sort-th" data-key="type" style="text-align:left;cursor:pointer;" title="구분으로 정렬">구분${vdArrow('type')}</th>
-            <th style="text-align:left;">담당자 · 연락처</th>
+            <th style="text-align:left;">담당자</th>
+            <th style="text-align:left;">연락처</th>
             <th style="text-align:left;">주소</th>
             <th style="text-align:left;">메모</th>
-            <th style="text-align:right;width:250px;">관리</th>
+            <th style="text-align:right;">관리</th>
           </tr></thead>
           <tbody>${rows}</tbody>
         </table>
@@ -27210,10 +27287,10 @@ function validateBlendSum(blends, label) {
     });
     const fsArrow = (k) => fsSortKey === k ? (fsSortDir === 'asc' ? ' ▲' : ' ▼') : ' <span style="color:#cbd5e1;">↕</span>';
     h += `<div class="dash-table-wrap"><table class="dash-table"><thead><tr>
-      <th class="fs-sort-th" data-key="name" style="text-align:left;cursor:pointer;" title="품목명으로 정렬">품목명${fsArrow('name')}</th><th title="편직 설정의 사종 컬러(원사 컬러) — 품목 컬러(염색 컬러)가 아닙니다">생지 컬러</th><th class="fs-sort-th" data-key="gubun" style="cursor:pointer;" title="구분으로 정렬">구분${fsArrow('gubun')}</th><th>${fsGubunFilter === GUBUN_RIB ? '짝 몸판' : (fsGubunFilter === GUBUN_BODY ? '짝 리프' : '짝 연결')}</th>${catOn ? `<th>조직</th>` : ''}<th>기준 폭</th><th>튜브</th><th>제작 g/y</th><th style="text-align:left;">혼용률<div style="font-size:10px;font-weight:400;color:#94a3b8;line-height:1.2;">원가 계산기에서 저절로</div></th>${costOn ? `<th title="원가 항목이 등록된 품목">원가</th>` : ''}<th>마지막 수정일</th><th>판매</th>${editOn ? `<th>수정</th>` : ''}<th>삭제</th>
+      <th class="fs-sort-th" data-key="name" style="text-align:left;cursor:pointer;" title="품목명으로 정렬">품목명${fsArrow('name')}</th><th title="편직 설정의 사종 컬러(원사 컬러) — 품목 컬러(염색 컬러)가 아닙니다">생지 컬러</th><th class="fs-sort-th" data-key="gubun" style="cursor:pointer;" title="구분으로 정렬">구분${fsArrow('gubun')}</th><th>${fsGubunFilter === GUBUN_RIB ? '짝 몸판' : (fsGubunFilter === GUBUN_BODY ? '짝 리프' : '짝 연결')}</th>${catOn ? `<th>조직</th>` : ''}<th>기준 폭</th><th>튜브</th><th>제작 g/y</th><th style="text-align:left;">혼용률<div style="font-size:10px;font-weight:400;color:#94a3b8;line-height:1.2;">원가 계산기에서 저절로</div></th><th style="text-align:left;min-width:150px;" title="업체별 표준 가공 사양 (약어)">가공 사양<div style="font-size:10px;font-weight:400;color:#94a3b8;line-height:1.2;">업체별 표준 · 약어</div></th>${costOn ? `<th title="원가 항목이 등록된 품목">원가</th>` : ''}<th>마지막 수정일</th><th>판매</th>${editOn ? `<th>수정</th>` : ''}<th>삭제</th>
     </tr></thead><tbody>`;
     if (shown.length === 0) {
-      h += `<tr><td colspan="${(costOn ? 13 : 12) - (catOn ? 0 : 1) - (editOn ? 0 : 1)}" style="text-align:center;color:#9ca3af;padding:18px;">${specs.length === 0 ? '등록된 품목이 없습니다. [＋ 새 품목 추가] 또는 [CSV 올려 고치기]' : (fsq ? `"${escapeHtml(fsSearch)}" 검색 결과가 없습니다.` : '이 구분에 등록된 품목이 없습니다.')}</td></tr>`;
+      h += `<tr><td colspan="${(costOn ? 14 : 13) - (catOn ? 0 : 1) - (editOn ? 0 : 1)}" style="text-align:center;color:#9ca3af;padding:18px;">${specs.length === 0 ? '등록된 품목이 없습니다. [＋ 새 품목 추가] 또는 [CSV 올려 고치기]' : (fsq ? `"${escapeHtml(fsSearch)}" 검색 결과가 없습니다.` : '이 구분에 등록된 품목이 없습니다.')}</td></tr>`;
     }
     shown.forEach(({ s, i }) => {
       const pairOk = s.pair_rib ? !!findPairRibSpec(s) : true;
@@ -27257,6 +27334,7 @@ function validateBlendSum(blends, label) {
           if (!String(s.blend || '').trim()) return `<span style="display:inline-block;background:#fffbeb;border:1px solid #fcd34d;color:#b45309;border-radius:4px;padding:1px 6px;font-size:11px;font-weight:700;" title="원가 계산기 품목 카드에서 원사를 넣고 [저장]을 누르면 저절로 채워집니다">설정 전</span>`;
           return `<span style="color:${blendBad ? '#b91c1c' : '#6b7280'};">${escapeHtml(s.blend)}</span>${blendBad ? ` <span style="font-weight:800;color:#b91c1c;" title="혼용률 합계가 100%가 아닙니다">합 ${Math.round(_bsum * 100) / 100}%</span>` : ''} <span style="display:inline-block;background:#f1f5f9;border:1px solid #e2e8f0;color:#64748b;border-radius:4px;padding:1px 6px;font-size:10.5px;font-weight:700;" title="원가 계산기 품목 카드에 원사가 아직 [저장]되지 않아 손으로 적은 값을 보여 줍니다. 카드에서 [저장]을 누르면 저절로 바뀝니다">손으로 적음 · 카드 저장 전</span>`;
         })()}</td>
+        <td style="text-align:left;font-size:11px;line-height:1.5;">${(() => { const ab = l => (Array.isArray(l) ? l : []).map(x => pfAbbrOf(x)).join('·'); const lines = []; const bv = (s.std_by_vendor && typeof s.std_by_vendor === 'object') ? s.std_by_vendor : {}; Object.keys(bv).forEach(k => { const v = bv[k] || {}; if ((v.procs || []).length) lines.push(`<span style="color:#7c2d12;font-weight:700;">${escapeHtml(k)}</span> ${escapeHtml(ab(v.procs))}${v.note ? ` <span style="color:#94a3b8;">/ ${escapeHtml(v.note)}</span>` : ''}`); }); if (Array.isArray(s.std_procs) && s.std_procs.length) lines.push(`<span style="color:#64748b;font-weight:700;">공통</span> ${escapeHtml(ab(s.std_procs))}`); return lines.length ? lines.join('<br>') : '<span style="color:#c7cbd1;">-</span>'; })()}</td>
         ${costOn ? `<td style="text-align:center;font-size:11px;">${fabricCostFilled(specFid(s))
           ? `<span style="display:inline-block;padding:2px 9px;border-radius:10px;background:#ecfdf5;border:1px solid #a7f3d0;color:#047857;font-weight:800;">등록</span>`
           : `<span style="color:#c7cbd1;">-</span>`}</td>` : ''}
@@ -27298,7 +27376,8 @@ function validateBlendSum(blends, label) {
             <div id="fs-f-final-gy" style="display:none;">-</div><!-- hotfix402: 야드 중량(자동) 칸은 감춤 — 제작 g/y 와 같은 값이라 제작 g/y 칸으로 합침 -->
           </div>
           <div id="fs-f-gy-range" style="display:none;font-size:11px;color:#475569;font-weight:700;margin-top:-6px;min-height:15px;line-height:1.6;"></div><!-- hotfix402: 안내 g/y 범위는 감춤 -->
-          <div><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">표준 가공 사양 <span style="font-weight:400;color:#94a3b8;font-size:11px;">의뢰서에서 이 품목을 고르면 저절로 들어가는 공정 뱃지 (업체 거름 없음 · 의뢰서에서 고칠 수 있음)</span></label>
+          <div><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">표준 가공 사양 <span style="font-weight:400;color:#94a3b8;font-size:11px;">염/가공소를 먼저 고르고 그 업체 공정으로 넣습니다 · 업체마다 따로 · 의뢰서에서 염색처 + 품목을 고르면 마지막 저장 가공법 → 없으면 이 값이 들어감 (옛 안내: 의뢰서에서 고칠 수 있음)</span></label>
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;"><span style="font-size:11.5px;font-weight:700;color:#7c2d12;">염/가공소</span><select id="fs-f-std-vendor" style="${inputStyle}max-width:260px;padding:5px 8px;"></select><span id="fs-f-std-vendors-hint" style="font-size:11px;color:#94a3b8;"></span></div><!-- hotfix406: 업체마다 표준 가공 사양 -->
             <div id="fs-f-proc-picker" class="proc-picker"></div>
             <input type="text" lang="ko" id="fs-f-std-note" style="${inputStyle}" placeholder="특이 사항 (예: 텐컴 후 70/72+400)"></div>
           <div><label style="font-size:12px;font-weight:700;color:#374151;display:flex;align-items:center;gap:8px;margin-bottom:4px;">혼용률 <span style="font-weight:400;color:#94a3b8;font-size:11px;">거래처에 알리는 값</span>
@@ -28069,16 +28148,28 @@ function validateBlendSum(blends, label) {
   }
   // hotfix403: 가공 사양 뱃지 고르개용 공정 마스터 — rows(part·name·abbr) + 업체별 등록 공정(원가 자료 proc · bundles). 직원은 원가 자료가 없어 업체 거름 없이 기본 목록
   if (typeof window !== 'undefined') window.__procMaster = function () {
-    const rows = pfAbbrList().filter(r => PROC_PARTS.includes(r.part));
-    const byVendor = {};
+    // hotfix405: 뱃지 고르개의 2차 목록은 [전체 설정] 공정 목록이 기준 — 이름을 바꾼 공정(예: 덤블 → 덤블(스프레이))은 새 이름만 보인다. 염색은 등급 이름으로 펼친다
+    const abbrRows = pfAbbrList();
+    const grades = abbrRows.filter(r => r.grade).map(r => ({ part: '염색/물나염', name: r.name, abbr: r.abbr, grade: true }));
+    const seen = new Set(); const rows = [];
+    costLists().procs.forEach(p => { const n = normProc(p); if (!n || n !== String(p).trim() || seen.has(n)) return; const part = procPartOf(n); if (!PROC_PARTS.includes(part)) return; seen.add(n);
+      if (procHasGrades(n)) { grades.forEach(g => { if (!seen.has(g.name)) { seen.add(g.name); rows.push(g); } }); return; }
+      rows.push({ part, name: n, abbr: pfAbbrOf(n) }); });
+    const partRank = r => PROC_PARTS.indexOf(r.part);
+    rows.sort((a, b) => partRank(a) - partRank(b) || 0);   // 단계 순, 같은 단계는 목록 순 (안정 정렬)
+    const byVendor = {}, bundles = {};
     try { const P = getCostPrices();
       (Array.isArray(P.proc) ? P.proc : []).forEach(r => { const vk = vendorKey(r && r.vendor); const pr = String((r && r.proc) || '').trim(); if (!vk || !pr) return; (byVendor[vk] = byVendor[vk] || new Set()).add(pr); });
-      (Array.isArray(P.bundles) ? P.bundles : []).forEach(b => { const vk = vendorKey(b && b.vendor); if (!vk) return; (Array.isArray(b.procs) ? b.procs : (Array.isArray(b.subs) ? b.subs : [])).forEach(pr => { pr = String(pr || '').trim(); if (pr) (byVendor[vk] = byVendor[vk] || new Set()).add(pr); }); });
+      (Array.isArray(P.bundles) ? P.bundles : []).forEach(b => { const vk = vendorKey(b && b.vendor); if (!vk) return; const procs = (Array.isArray(b.procs) ? b.procs : (Array.isArray(b.subs) ? b.subs : [])).map(pr => String(pr || '').trim()).filter(Boolean); procs.forEach(pr => (byVendor[vk] = byVendor[vk] || new Set()).add(pr));
+        // 묶음: 염색은 묶음 이름(약어)으로 등급을 찾아 등급 이름으로, 못 찾으면 '염색' 그대로
+        const nm = String((b && b.name) || pfAutoName(procs, '농색')).trim();
+        const g = grades.find(x => x.abbr && nm.startsWith(x.abbr));
+        const picks = procs.map(normProc).map(pr => procHasGrades(pr) ? (g ? g.name : '염색') : pr).filter(Boolean);
+        if (nm && picks.length) (bundles[vk] = bundles[vk] || []).push({ name: nm, procs: picks, price: b.price }); });
     } catch (_) {}
     // 염색은 '염색' 하나로 등록되고 진하기(등급)별 이름은 마스터에서 갈린다 → '염색'이 있으면 등급 이름 전부 등록된 것으로 본다
-    const grades = rows.filter(r => r.grade).map(r => r.name);
-    Object.keys(byVendor).forEach(vk => { if (byVendor[vk].has('염색')) grades.forEach(g => byVendor[vk].add(g)); });
-    return { rows, byVendor };
+    Object.keys(byVendor).forEach(vk => { if (byVendor[vk].has('염색')) grades.forEach(g => byVendor[vk].add(g.name)); });
+    return { rows, byVendor, bundles };
   };
   // 약어 차례 — 목록에 없는 것은 뒤로
   function pfAbbrRank(name) {
@@ -28730,7 +28821,7 @@ function validateBlendSum(blends, label) {
       <strong>품목 → 원사 컬러 → 염색공장</strong>을 위에서 한 번 고르고, 아래 표에 <strong>컬러명 → B/T No</strong> 순서로 이어서 넣습니다 (B/T No 칸에서 Enter 를 누르면 저장되고 다음 줄로). B/T No 는 염색공장이 부르는 번호를 그대로 적습니다. 의뢰서에는 "컬러명 #B/T No"(예: 프진먹색 #451A)로 찍힙니다.<br>
       의뢰서 컬러 칸은 이 표에서 고르게 됩니다 (편직업체 → 품목 → 원사 컬러 → 염색공장 순으로 걸러서). 줄 지우기는 최고관리자만 됩니다.
     </div>`;
-    h += `<div style="display:grid;grid-template-columns:110px 1.4fr 1fr 1fr auto;gap:10px;align-items:end;max-width:1080px;margin-bottom:12px;">
+    h += `<div style="display:grid;grid-template-columns:130px 1.4fr 1fr 1fr auto;gap:12px;align-items:end;max-width:1360px;margin-bottom:12px;">
       <div><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px;">구분</label><select id="ic-gubun" style="${iS}"><option value="">전체</option>${gubuns.map(g => `<option value="${escapeHtml(g)}"${S.gubun === g ? ' selected' : ''}>${escapeHtml(g)}</option>`).join('')}</select></div>
       <div><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px;">품목 (글자 검색)</label><input id="ic-item" lang="ko" list="ic-item-list" autocomplete="off" value="${escapeHtml(S.item)}" placeholder="품목명" style="${iS}"><datalist id="ic-item-list">${items.map(n => `<option value="${escapeHtml(n)}"></option>`).join('')}</datalist></div>
       <div><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px;">원사 컬러 (비우면 L/W)</label><input id="ic-yc" lang="ko" list="ic-yc-list" autocomplete="off" value="${escapeHtml(S.yarnColor)}" placeholder="L/W" style="${iS}"><datalist id="ic-yc-list">${icYarnColorList(fid).map(n => `<option value="${escapeHtml(n)}"></option>`).join('')}</datalist></div>
@@ -28742,19 +28833,19 @@ function validateBlendSum(blends, label) {
     const canAdd = !!fid && !!S.dyer.trim() && icDyerList().some(n => vendorKey(n) === vendorKey(S.dyer));
     const tdS = 'padding:4px 6px;';
     const cellIn = (cls, i, v, w, ph) => `<input ${i < 0 ? `id="${cls}"` : `class="${cls}"`} data-i="${i}" lang="ko" autocomplete="off" value="${escapeHtml(v)}" placeholder="${ph}" style="${iS}padding:6px 8px;width:${w};">`;   // 새 줄(i<0)은 id, 있는 줄은 class
-    h += `<div class="dash-table-wrap" style="max-width:980px;"><table class="dash-table" id="ic-rows"><thead><tr>
-      <th style="text-align:left;min-width:180px;">컬러명</th><th style="min-width:110px;">B/T No</th><th style="min-width:90px;">원사 컬러</th><th style="text-align:left;min-width:120px;">염색공장</th><th style="min-width:120px;">고친 사람 · 날짜</th><th style="width:40px;"></th></tr></thead><tbody>`;
+    h += `<div class="dash-table-wrap" style="max-width:1360px;"><table class="dash-table" id="ic-rows"><thead><tr>
+      <th style="text-align:left;min-width:260px;">컬러명</th><th style="min-width:170px;">B/T No</th><th style="min-width:110px;">원사 컬러</th><th style="text-align:left;min-width:150px;">염색공장</th><th style="min-width:130px;">고친 사람 · 날짜</th><th style="width:40px;"></th></tr></thead><tbody>`;   /* hotfix405: 칸 넓힘 */
     if (!fid) h += `<tr><td colspan="6" style="text-align:center;color:#9ca3af;padding:18px;">위에서 품목을 고르십시오.</td></tr>`;
     else {
       rows.forEach(c => {
         const i = all.indexOf(c);
-        h += `<tr class="ic-row" data-i="${i}"><td style="${tdS}">${cellIn('ic-name', i, c.name || '', '100%', '컬러명')}</td><td style="${tdS}">${cellIn('ic-bt', i, c.bt_no || '', '100px', 'B/T No')}</td>
+        h += `<tr class="ic-row" data-i="${i}"><td style="${tdS}">${cellIn('ic-name', i, c.name || '', '100%', '컬러명')}</td><td style="${tdS}">${cellIn('ic-bt', i, c.bt_no || '', '160px', 'B/T No')}</td>
           <td style="${tdS}text-align:center;font-weight:700;color:${yarnColorIsLW(c.yarn_color) ? '#9ca3af' : '#7c2d12'};">${escapeHtml(yarnColorIsLW(c.yarn_color) ? YARN_LW : c.yarn_color)}</td><td style="${tdS}text-align:left;">${escapeHtml(c.dyer || '-')}</td>
           <td style="${tdS}text-align:center;font-size:11px;color:#64748b;">${escapeHtml(c.updated_by || '')}${c.updated_at ? '<br>' + escapeHtml(String(c.updated_at).slice(0, 10)) : ''}</td>
           <td style="${tdS}text-align:center;">${owner ? `<button class="dash-action-btn danger ic-del" data-i="${i}" title="이 줄을 지웁니다 (최고관리자)" style="padding:3px 7px;font-size:11px;">x</button>` : ''}</td></tr>`;
       });
       if (!rows.length) h += `<tr><td colspan="6" style="text-align:center;color:#9ca3af;padding:12px;">${all.length ? '이 원사 컬러 · 염색공장으로 넣은 컬러가 아직 없습니다.' : '이 품목에 넣은 컬러가 아직 없습니다.'}</td></tr>`;
-      h += `<tr id="ic-new" style="background:#f0fdf4;"><td style="${tdS}">${cellIn('ic-new-name', -1, '', '100%', '컬러명')}</td><td style="${tdS}">${cellIn('ic-new-bt', -1, '', '100px', 'B/T No → Enter')}</td>
+      h += `<tr id="ic-new" style="background:#f0fdf4;"><td style="${tdS}">${cellIn('ic-new-name', -1, '', '100%', '컬러명')}</td><td style="${tdS}">${cellIn('ic-new-bt', -1, '', '160px', 'B/T No → Enter')}</td>
         <td style="${tdS}text-align:center;font-weight:700;color:#166534;">${escapeHtml(yc)}</td><td style="${tdS}text-align:left;color:${canAdd ? '#166534' : '#b45309'};font-weight:700;">${escapeHtml(S.dyer.trim() || '염색공장을 고르십시오')}</td>
         <td style="${tdS}text-align:center;"><button class="dash-action-btn" id="ic-add" ${canAdd ? '' : 'disabled'} style="font-weight:800;padding:5px 12px;">＋ 넣기</button></td><td></td></tr>`;
     }
@@ -38199,16 +38290,30 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
   // hotfix376: 화면을 옮기기 전에 넣던 값을 임시로 담아 둘지 물어본다
   //   [확인] 담아 둠 · [취소] 그냥 두고 이동 · 창을 닫으면 이동하지 않음
   const WO_DRAFT_KEY = 'hiwos.woDraft';
-  function askKeepDraft() {
-    if (!state.isDirty) return true;
-    const yes = confirm('입력 중인 내용이 있습니다.\n\n[확인] 임시로 담아 두고 옮깁니다\n[취소] 담지 않고 그냥 옮깁니다');
-    if (yes) {
+  // hotfix405: 세 갈래 창 (담아 두고 옮김 / 버리고 옮김 / 그냥 있기) — Promise<'keep'|'drop'|'stay'>
+  function askThree(title, body, labels) {
+    if (window.__askThreeAuto) return Promise.resolve(window.__askThreeAuto);   // 화면 테스트용 자동 답 ('keep'|'drop'|'stay')
+    return new Promise(res => {
+      const w = document.createElement('div'); w.className = 'hw-ask3';
+      w.innerHTML = `<div class="hw-ask3-box"><div class="hw-ask3-t">${escapeHtml(title)}</div><div class="hw-ask3-b">${escapeHtml(body)}</div>
+        <div class="hw-ask3-btns"><button type="button" data-r="keep" class="dash-action-btn primary">${escapeHtml(labels[0])}</button><button type="button" data-r="drop" class="dash-action-btn">${escapeHtml(labels[1])}</button><button type="button" data-r="stay" class="dash-action-btn">${escapeHtml(labels[2])}</button></div></div>`;
+      const done = r => { w.remove(); document.removeEventListener('keydown', onKey); res(r); };
+      const onKey = e => { if (e.key === 'Escape') done('stay'); };
+      w.querySelectorAll('button').forEach(b => b.addEventListener('click', () => done(b.dataset.r)));
+      document.addEventListener('keydown', onKey);
+      document.body.appendChild(w); try { w.querySelector('button').focus(); } catch (_) {}
+    });
+  }
+  window.__askThree = askThree;
+  // hotfix405: 깃발이 아니라 실제 값 비교(formChanged). 무엇이 안 담겼는지 글에 명시. 세 갈래 — 담아 두고 옮김 · 버리고 옮김 · 그냥 있기(옮기지 않음)
+  async function askKeepDraft() {
+    if (!(typeof formChanged === 'function' ? formChanged() : state.isDirty)) return true;
+    const r = await askThree('저장하지 않은 의뢰서가 있습니다', formBriefText() + '\n새로 시작하면 이 내용은 폼에서 사라집니다.', ['임시로 담아 두고 새로 시작', '버리고 새로 시작', '그냥 있기']);
+    if (r === 'stay') return false;
+    if (r === 'keep') {
       try {
-        localStorage.setItem(WO_DRAFT_KEY, JSON.stringify({
-          at: Date.now(), type: state.currentType,
-          data: (typeof getFormData === 'function' ? getFormData() : null)
-        }));
-        toast('임시로 담아 두었습니다. 작성 화면으로 돌아오면 되살릴 수 있습니다.', 'success');
+        localStorage.setItem(WO_DRAFT_KEY, JSON.stringify({ at: Date.now(), type: state.currentType, brief: formBriefText(), data: (typeof getFormData === 'function' ? getFormData() : null) }));
+        toast('임시로 담아 두었습니다. 왼쪽 [작업지시서 작성] 제목을 누르면 되살릴 수 있습니다.', 'success');
       } catch (e) { toast('임시저장 실패: ' + e.message, 'error'); }
     }
     return true;
@@ -40605,6 +40710,11 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
       if (vdClearEl) vdClearEl.addEventListener('click', () => { vdSearch = ''; renderDashboard(); });
       const vdOffEl = document.getElementById('vendor-show-off');
       if (vdOffEl) vdOffEl.addEventListener('change', () => { vdShowOff = vdOffEl.checked; renderDashboard(); });
+      // hotfix405: 다른 표기 줄 늘이기/줄이기 — 줄마다, 그리고 모두 한 번에 (다시 그리지 않고 화면에서 바로)
+      const vdAliasPaint = (tg, open) => { const box = tg.nextElementSibling; if (box) box.style.display = open ? '' : 'none'; tg.textContent = open ? '다른 표기 줄이기 ▾' : `다른 표기 ${tg.dataset.n}개 ▸`; };
+      document.querySelectorAll('#dash-body .vd-alias-tg').forEach(tg => tg.addEventListener('click', () => { const box = tg.nextElementSibling; vdAliasPaint(tg, !!(box && box.style.display === 'none')); }));
+      const vdAliasAll = document.getElementById('vendor-alias-all');
+      if (vdAliasAll) vdAliasAll.addEventListener('click', () => { vdAliasOpen = !vdAliasOpen; document.querySelectorAll('#dash-body .vd-alias-tg').forEach(tg => vdAliasPaint(tg, vdAliasOpen)); vdAliasAll.textContent = vdAliasOpen ? '다른 표기 모두 줄이기' : '다른 표기 모두 늘이기'; });
       document.querySelectorAll('#dash-body .vendor-sort-th').forEach(th => th.addEventListener('click', () => {
         const k = th.dataset.key || 'name';
         if (vdSortKey === k) vdSortDir = (vdSortDir === 'asc' ? 'desc' : 'asc');
@@ -40705,7 +40815,18 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
           document.getElementById('fs-f-gy').value = (b.base == null) ? '' : moneyInputVal(b.base);
           document.getElementById('fs-f-gy').dataset.legacy = (b.src === 'guide') ? '1' : ''; }
         document.getElementById('fs-f-blend').value = s.blend || '';
-        { const h = document.getElementById('fs-f-proc-picker'); if (h) { if (!h.__set) mountProcPicker(h, { noteId: 'fs-f-std-note', onChange: () => { try { modalMarkDirty(modal); } catch (_) {} } }); h.__set(idx >= 0 ? (s.std_procs || []) : [], idx >= 0 ? (s.std_note || '') : ''); } }   // hotfix403
+        { const h = document.getElementById('fs-f-proc-picker'); const vs = document.getElementById('fs-f-std-vendor');
+          // hotfix406: 업체별 표준 가공 사양 — modal.__stdMap = { 업체명: {procs, note} } ('' = 공통/옛 std_procs)
+          modal.__stdMap = {}; if (idx >= 0) { if (s.std_by_vendor && typeof s.std_by_vendor === 'object') Object.keys(s.std_by_vendor).forEach(k => { const v = s.std_by_vendor[k] || {}; modal.__stdMap[k] = { procs: Array.isArray(v.procs) ? v.procs.slice() : [], note: String(v.note || '') }; }); if ((Array.isArray(s.std_procs) && s.std_procs.length) || String(s.std_note || '').trim()) modal.__stdMap[''] = { procs: (s.std_procs || []).slice(), note: String(s.std_note || '') }; }
+          const fin = (state.vendors || []).filter(v => v && v.active !== false && (getVendorTypes(v).includes('염색처') || getVendorTypes(v).includes('가공처'))).map(v => v.name);
+          const has = Object.keys(modal.__stdMap).filter(k => k && (modal.__stdMap[k].procs.length || modal.__stdMap[k].note));
+          if (vs) { vs.innerHTML = `<option value="">— 업체 없음(공통) —</option>` + fin.map(n => `<option value="${escapeHtml(n)}">${escapeHtml(n)}${has.includes(n) ? ' ●' : ''}</option>`).join(''); vs.value = has[0] || ''; }
+          const hint = document.getElementById('fs-f-std-vendors-hint'); if (hint) hint.textContent = has.length ? '설정된 업체: ' + has.join(' · ') : '아직 설정된 업체 없음';
+          const curV = () => String(vs?.value || '');
+          if (h) { if (!h.__set) mountProcPicker(h, { noteId: 'fs-f-std-note', locked: () => !isOwnerUser(), vendorOf: () => ({ pre: curV(), post: curV() }), onChange: () => { const g = h.__get(); modal.__stdMap[curV()] = { procs: g.procs, note: g.note }; try { modalMarkDirty(modal); } catch (_) {} } }); /* hotfix405: 최고관리자만 */
+            const load = () => { const m = modal.__stdMap[curV()] || { procs: [], note: '' }; h.__set(m.procs, m.note); };
+            load();
+            if (vs && !vs.dataset.bound) { vs.dataset.bound = '1'; vs.addEventListener('change', load); } } }   // hotfix403 · hotfix406
         fsPaintGyRange();
         fsPaintBlendAuto(idx < 0 ? '' : specFid(s));
         const sc = s.cautions || {};
@@ -40940,13 +41061,15 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
       window.fsPaintFinalGy = function (from) {
         const gyEl = document.getElementById('fs-f-gy'), gsmEl = document.getElementById('fs-f-gsm'); if (!gyEl || !gsmEl) return;
         const w = fsSpecW(); const mode = fsWMode();
-        if (from === 'open') { window.__fsWTouched = false; gyEl.style.background = ''; gsmEl.style.background = ''; return; }
+        // hotfix406: 고른 방식의 칸만 손댈 수 있고 다른 쪽은 읽기 전용(자동 계산)
+        const lock = (el, on) => { el.readOnly = on; el.style.background = on ? '#f0fdf4' : ''; el.title = on ? '중량 입력 방식에서 고른 쪽을 고치면 자동으로 계산됩니다' : ''; };
+        lock(gyEl, mode === 'gsm'); lock(gsmEl, mode === 'gy');
+        if (from === 'open') { window.__fsWTouched = false; return; }
         if (from === 'gy' || from === 'gsm' || from === 'mode') window.__fsWTouched = true;
         if (!window.__fsWTouched) { fsPaintGyRange(); return; }   // 이번에 중량을 손대기 전에는 기준폭·튜브를 고쳐도 저장된 두 값을 덮지 않는다
         const gyV = parseFloat(unComma(gyEl.value || '')), gsmV = parseFloat(unComma(gsmEl.value || ''));
         if (mode === 'gsm' && from !== 'gy') { const g = gsmToGy(gsmV, w.inch, w.tube); if (g != null) { gyEl.value = String(g); formatMoneyInput(gyEl); gyEl.dataset.legacy = ''; } else if (!(gsmV > 0)) gyEl.value = gyEl.value; }
         else if (mode === 'gy' && from !== 'gsm') { const q = gyToGsm(gyV, w.inch, w.tube); if (q != null) gsmEl.value = String(q); else if (!(gyV > 0)) gsmEl.value = ''; }
-        gyEl.style.background = (mode === 'gsm') ? '#f0fdf4' : ''; gsmEl.style.background = (mode === 'gy') ? '#f0fdf4' : '';
         fsPaintGyRange();
       };
       document.getElementById('fs-f-gsm')?.addEventListener('input', () => window.fsPaintFinalGy('gsm'));
@@ -40987,8 +41110,9 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
           make_gy: unComma(document.getElementById('fs-f-gy').value).trim(),   // hotfix377: 제작 g/y
           gy: (function () { const cur = (editingSpecIdx >= 0) ? getFabricSpecs()[editingSpecIdx] : null; return (cur && cur.gy != null) ? cur.gy : ''; })(),   // 옛 안내중량은 그대로 둔다
           blend: document.getElementById('fs-f-blend').value.trim(),
-          std_procs: (document.getElementById('fs-f-proc-picker')?.__get ? document.getElementById('fs-f-proc-picker').__get().procs : []),   // hotfix403: 표준 가공 사양
-          std_note: (document.getElementById('fs-f-std-note')?.value || '').trim(),
+          std_procs: ((modal.__stdMap || {})[''] || {}).procs || [],   // hotfix403: 공통(업체 없음) 표준 가공 사양
+          std_note: String(((modal.__stdMap || {})[''] || {}).note || '').trim(),
+          std_by_vendor: (function () { const o = {}; Object.keys(modal.__stdMap || {}).forEach(k => { if (!k) return; const v = modal.__stdMap[k]; if ((v.procs || []).length || String(v.note || '').trim()) o[k] = { procs: v.procs.slice(), note: String(v.note || '').trim() }; }); return o; })(),   // hotfix406: 업체별
           pair_rib: (document.getElementById('fs-f-pair')?.value || '').trim(),
           abbr: (document.getElementById('fs-f-abbr')?.value || '').trim().toUpperCase(),   // hotfix392: 공유코드용 줄임말
           updated_at: todayYMD()
@@ -45400,7 +45524,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix404';
+  const VERSION = 'v2.53 hotfix406';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
