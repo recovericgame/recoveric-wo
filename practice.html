@@ -6720,7 +6720,7 @@
         <div class="item-row color-row" style="font-size:11px; color:#444; font-weight:700;">
           <div>컬러명</div><div>몸판(절)</div><div>리프(절)</div><div></div>
         </div>
-        <div id="f_colors"></div>
+        <div id="f_colors"></div><datalist id="f-color-datalist"></datalist>
         <div class="emphasis-empty-warning" id="f-color-empty-warning" style="display:none;">
           ⚠ 컬러가 입력되지 않았습니다. 아래 버튼으로 추가해 주세요.
         </div>
@@ -7442,6 +7442,7 @@ const state = {
   samplesSortDir: 'desc',
   samplesShrinkOnly: false,
   sampleMemos: {},          // settings/sample_memos — 샘플 표 전용 메모 (원본 작지 미변경)
+  itemColors: {},           // hotfix399d: settings/item_colors — 품목 컬러 { [fid]: [{yarn_color, dyer, bt_no, name, ext_code}] } (직원도 읽고 씀)
   // hotfix257: 생지출고 목록 검색
   gsSearch: '',
   gsPart: 'all',            // 'all' | '몸판' | '리프'
@@ -7866,7 +7867,7 @@ function addColorRow(data={}) {
   const row = document.createElement('div');
   row.className = 'item-row color-row';
   row.innerHTML = `
-    <input type="text" lang="ko" class="c-name" placeholder="프진먹색 #451A" value="${escapeHtml(data.name || '')}">
+    <input type="text" lang="ko" class="c-name" list="f-color-datalist" autocomplete="off" placeholder="BT No 컬러명 (품목 컬러 설정에서 고름)" value="${escapeHtml(data.name || '')}">
     <input type="number" class="c-body" placeholder="8" value="${data.body ?? ''}" step="0.5">
     <input type="number" class="c-rib" placeholder="1" value="${data.rib ?? ''}" step="0.5">
     <button class="btn-del">X</button>
@@ -7875,6 +7876,7 @@ function addColorRow(data={}) {
   row.querySelector('.btn-del').addEventListener('click', () => { row.remove(); render(); markDirty(); updateColorEmptyWarning(); });
   container.appendChild(row);
   updateColorEmptyWarning();
+  try { refreshFinishColorList(); } catch (_) {}   // hotfix399d
 }
 
 // v2.27: 컬러&수량 빈 상태 경고 토글
@@ -8094,6 +8096,38 @@ function yarnKindOfBase(base) {
   const kk = vendorKey(String(base || '').trim()); if (!kk) return '';
   const hit = yarnNameList().find(y => vendorKey(yarnParts(y).base) === kk || vendorKey(String(y.name || '')) === kk);
   return hit ? String(hit.kind || '기타') : '';
+}
+// hotfix399d: 품목 컬러 도우미 (settings/item_colors — 본체 스크립트, 의뢰서 폼과 설정 화면이 같이 쓴다)
+//   한 줄 = { yarn_color, dyer, bt_no, name, ext_code, updated_at, updated_by }. 출력은 늘 "BT No + 컬러명" 한 쌍
+function itemColorsOf(fid) {
+  const k = String(fid || '').trim();
+  const m = (typeof state !== 'undefined' && state.itemColors && typeof state.itemColors === 'object') ? state.itemColors : {};
+  return (k && Array.isArray(m[k])) ? m[k].filter(c => c && (String(c.bt_no || '').trim() || String(c.name || '').trim())) : [];
+}
+function itemColorLabel(c) {
+  const b = String((c && c.bt_no) || '').trim(), n = String((c && c.name) || '').trim();
+  return (b && n) ? b + ' ' + n : (b || n);
+}
+function yarnColorKey(c) { return yarnColorIsLW(c) ? 'l/w' : vendorKey(c); }
+// 품목 컬러 목록을 원사 컬러 · 염색공장으로 거른다 (빈 조건은 안 거름). BT No → 컬러명 오름차순
+function itemColorList(fid, yarnColor, dyer) {
+  const yk = String(yarnColor || '').trim() ? yarnColorKey(yarnColor) : '', dk = vendorKey(dyer);
+  return itemColorsOf(fid).filter(c => (!yk || yarnColorKey(c.yarn_color) === yk) && (!dk || vendorKey(c.dyer) === dk))
+    .slice().sort((a, b) => String(a.bt_no || '').localeCompare(String(b.bt_no || ''), 'ko', { numeric: true }) || String(a.name || '').localeCompare(String(b.name || ''), 'ko'));
+}
+// 염/가공 의뢰서 COLOR & QUANTITY 컬러 칸 고르개 — 편직업체 > 품목 > 원사 컬러(생지로트의 컬러) > 염색공장(수신처) 순으로 거른다
+function refreshFinishColorList() {
+  const dl = document.getElementById('f-color-datalist'); if (!dl) return;
+  const item = String(document.getElementById('f_body_item')?.value || '').trim();
+  const fid = item ? itemFidOf(item) : '';
+  if (!fid) { dl.innerHTML = ''; return; }
+  const no = String(document.getElementById('f_body_gno')?.value || '').trim();
+  let yc = '';
+  if (no) { try { const hit = greigeStockList(item, fid).find(r => r.no === (typeof greigeNoClean === 'function' ? greigeNoClean(no) : no)); if (hit && hit.color) yc = hit.color; } catch (_) {} }
+  const dyer = String(document.getElementById('f_r_dye')?.value || document.getElementById('f_r_proc')?.value || '').trim();
+  let rows = itemColorList(fid, yc, dyer);
+  if (!rows.length && (yc || dyer)) rows = itemColorList(fid, '', '');   // 거른 결과가 없으면 그 품목 전체
+  dl.innerHTML = rows.map(c => `<option value="${escapeHtml(itemColorLabel(c))}">${escapeHtml((yarnColorIsLW(c.yarn_color) ? YARN_LW : c.yarn_color) + ' · ' + (c.dyer || '-'))}</option>`).join('');
 }
 // 사종(base)만 모아 준다 — 원사 의뢰서 사종 칸 목록용
 function yarnBaseList() {
@@ -11235,6 +11269,7 @@ window.addEventListener('firebase-ready', () => {
     stampSettings: 'owner', specTol: 'owner',
     fabricSpecs: 'owner', vendors: 'owner', yarnSetup: 'owner', knitSetup: 'owner', procSetup: 'owner',   // hotfix398: [설정 및 관리]는 최고관리자 + 사람별로 허용한 관리자만
     cautionDrafts: 'owner',   // hotfix398c: 전체 주의사항 초안
+    itemColors: 'staff',   // hotfix399d: 품목 컬러 설정 — 직원이 넣고 고친다 (지우기는 최고관리자만)
     write: 'admin',   // hotfix398: 의뢰서 작성 · 복사 · 수정 (화면이 아니라 작업 항목)
     costCalc: 'owner', permissions: 'owner',
     users: 'owner', backup: 'owner', editLog: 'owner'
@@ -11247,6 +11282,7 @@ window.addEventListener('firebase-ready', () => {
     stampSettings: '작지 스템프 설정', fabricSpecs: '품목 설정', vendors: '거래처 설정', specTol: '규격 허용치 설정',
     yarnSetup: '원사 설정', knitSetup: '편직 설정', procSetup: '염/가공 설정',   // hotfix398: 편직 · 염/가공 설정은 독립 화면 (원가 계산기 탭에도 그대로 있다)
     cautionDrafts: '주의사항 초안',   // hotfix398c
+    itemColors: '품목 컬러 설정',   // hotfix399d
     write: '의뢰서 작성 · 복사 · 수정',   // hotfix398
     costCalc: '원가 계산기', permissions: '권한 설정',
     users: '사용자 관리', backup: '백업 내려받기', editLog: '수정 이력'
@@ -11512,7 +11548,7 @@ window.addEventListener('firebase-ready', () => {
   //   · 여기 단추는 기존 switchDashView 를 그대로 부른다
   // ============================================================
   const HW_MENU = [
-    { key: 'set',  name: '설정 및 관리', items: ['vendors', 'fabricSpecs', 'yarnSetup', 'knitSetup', 'procSetup', 'cautionDrafts'] },   // hotfix398c: 주의사항 초안   // hotfix397: 코드 등록 메뉴 (거래처 V · 품목 F · 원사 Y · 편직 · 염/가공 P)
+    { key: 'set',  name: '설정 및 관리', items: ['vendors', 'fabricSpecs', 'itemColors', 'yarnSetup', 'knitSetup', 'procSetup', 'cautionDrafts'] },   // hotfix399d: 품목 컬러 설정(직원)   // hotfix398c: 주의사항 초안   // hotfix397: 코드 등록 메뉴 (거래처 V · 품목 F · 원사 Y · 편직 · 염/가공 P)
     { key: 'prod', name: '생산 현황',    items: ['yarn', 'knit', 'finish', 'print', 'bt', 'kpiboard'] },
     { key: 'view', name: '조회',         items: ['of', 'gs', 'claims', 'samples', 'completed'] }
   ];
@@ -12462,6 +12498,12 @@ window.addEventListener('firebase-ready', () => {
         try { if (!state.savedKnitCautions) renderKnitCautions(); if (!state.savedFinishCautions) renderFinishCautions(); } catch (_) {}
       }
     }, err => console.warn('[cautionDrafts sub]', err.message));
+    // hotfix399d: 품목 컬러 구독 (직원도 읽고 쓴다 — 보안규칙 settings/item_colors 는 isAllowed 쓰기)
+    onSnapshot(doc(db, C('settings'), 'item_colors'), snap => {
+      state.itemColors = (snap.exists() && snap.data() && snap.data().items && typeof snap.data().items === 'object') ? snap.data().items : {};
+      if (state.uiMode === 'dashboard' && state.dashView === 'itemColors' && !document.activeElement?.closest?.('#ic-rows')) renderDashboard();
+      try { refreshFinishColorList(); } catch (_) {}
+    }, err => console.warn('[itemColors sub]', err.message));
     onSnapshot(doc(db, C('settings'), 'sample_memos'), snap => {
       state.sampleMemos = (snap.exists() && snap.data().items && typeof snap.data().items === 'object') ? snap.data().items : {};
       if (state.uiMode === 'dashboard' && state.dashView === 'samples' && !state.editingMemoCellId) renderDashboard();
@@ -12514,7 +12556,8 @@ window.addEventListener('firebase-ready', () => {
         const d = snap.exists() ? snap.data() : null;
         state.fabricCost = (d && d.items && typeof d.items === 'object') ? d.items : {};
         state.fabricCostLoaded = true;
-        if (state.uiMode === 'dashboard' && state.dashView === 'fabricSpecs') renderDashboard();
+        // hotfix399d: 품목 수정 창이 열려 있으면 다시 그리지 않는다 (편직 설정 [저장] → 카드 [원사] 반영 때 창이 닫히지 않게). 창 [저장]이 다시 그린다
+        if (state.uiMode === 'dashboard' && state.dashView === 'fabricSpecs' && !document.querySelector('#fs-modal.show')) renderDashboard();
         knitFeeMigrate();   // hotfix386
       }, err => console.warn('[fabricCost sub]', err.message));
       // hotfix386: 편직료 마스터 구독 — 카드는 이 값을 읽기만 한다
@@ -14553,6 +14596,10 @@ window.addEventListener('firebase-ready', () => {
         if (GNO_PAIRS[e.target.id]) fillGnoList(e.target.id);
         else if (ev === 'change' && GNO_OF_VENDOR[e.target.id || (e.target.dataset && e.target.dataset.target) || '']) setTimeout(() => { fillGnoList(GNO_OF_VENDOR[e.target.id || e.target.dataset.target]); try { refreshPartItemLists(); } catch (_) {} }, 0);   // hotfix398c: 입고처(고르개 → 숨은 칸) 바꾸면 로트 목록 다시
         else if (ev === 'focus' && /_gno$/.test(e.target.id || '')) fillGnoList(e.target.id.replace(/_gno$/, '_item'));
+        // hotfix399d: 품목·로트·염색처·가공처가 바뀌면 컬러 칸 고르개(품목 컬러)를 다시 거른다
+        const tid = e.target.id || (e.target.dataset && e.target.dataset.target) || '';
+        if (ev !== 'focus' && ['f_body_item', 'f_body_gno', 'f_r_dye', 'f_r_proc', 'f_receiving'].includes(tid)) setTimeout(() => { try { refreshFinishColorList(); } catch (_) {} }, 0);
+        else if (ev === 'focus' && e.target.classList && e.target.classList.contains('c-name')) { try { refreshFinishColorList(); } catch (_) {} }
       }, true));
       // hotfix398c: 로트를 고르면 입고처가 비어 있을 때 그 로트의 편직공장을 넣는다
       fp.addEventListener('change', (e) => {
@@ -27356,6 +27403,7 @@ function validateBlendSum(blends, label) {
       ['목록', ['of', 'gs', 'claims', 'samples', 'completed']],
       ['작성', ['write']],   // hotfix398: 의뢰서 작성 · 복사 · 수정 (기본 관리자까지)
       ['설정 및 관리 (기본 최고관리자 — 아래 사람별 표에서 관리자를 지정)', ['vendors', 'fabricSpecs', 'yarnSetup', 'knitSetup', 'procSetup', 'cautionDrafts']],
+      ['품목 컬러 설정 (기본 직원까지 — 지우기는 최고관리자만)', ['itemColors']],   // hotfix399d
       ['경영 전용 (최고관리자)', ['stampSettings', 'specTol', 'trash', 'costCalc', 'permissions']]
     ];
     const allViews = groups.reduce((a, g) => a.concat(g[1]), []).filter(v => !OWNER_LOCKED_VIEWS.includes(v));
@@ -28331,6 +28379,127 @@ function validateBlendSum(blends, label) {
   // ============================================================
   // hotfix398c: [설정 및 관리] > 주의사항 초안 — 전체 초안 (품목 초안이 없을 때 의뢰서 기본값으로 쓰인다)
   // ============================================================
+  // ============================================================
+  // hotfix399d: 품목 컬러 설정 — 품목 × 원사 컬러 × 염색공장 × 염색 컬러(BT No · 컬러명)
+  //   · 저장 settings/item_colors { items: { [fid]: [{ yarn_color, dyer, bt_no, name, ext_code, updated_at, updated_by }] } }
+  //   · 직원이 넣고 고친다 · 지우기는 최고관리자만 · BT No 는 염색공장이 부르는 번호를 손으로 넣는다(자동 번호 아님)
+  //   · 위에서 품목 · 원사 컬러 · 염색공장을 한 번 고르면 아래 표에 BT No · 컬러명을 이어서 넣는다 (Enter 로 다음 줄)
+  //   · ext_code 는 ERP 열쇠 자리(외부연동 기획서 v1) — 화면에서는 안 보인다
+  // ============================================================
+  function icSel() { if (!state.icSel) state.icSel = { item: '', yarnColor: '', dyer: '' }; return state.icSel; }
+  function icDyerList() {
+    return Array.from(new Set((state.vendors || []).filter(v => v && v.name && vendorIsActive(v) && vendorTypesNorm(v).some(t => t === '염색처' || t === '가공처')).map(v => String(v.name).trim()))).sort((a, b) => a.localeCompare(b, 'ko'));
+  }
+  function icYarnColorList(fid) {
+    const seen = new Set(); const out = [];
+    const add = c => { const k = yarnColorKey(c); if (seen.has(k)) return; seen.add(k); out.push(yarnColorIsLW(c) ? YARN_LW : String(c).trim()); };
+    add(YARN_LW);
+    itemColorsOf(fid).forEach(c => add(c.yarn_color));
+    yarnNameList().forEach(y => { const pt = yarnParts(y); if (pt.color) add(pt.color); });
+    return out.sort((a, b) => (a === YARN_LW ? -1 : b === YARN_LW ? 1 : a.localeCompare(b, 'ko')));
+  }
+  function icFidOf(name) { const s = getFabricSpecs().find(x => vendorKey(x.name) === vendorKey(name)); return s ? specFid(s) : (itemFidOf(name) || ''); }
+  async function saveItemColors(fid, rows) {
+    if (!canAccessView('itemColors')) { toast('품목 컬러를 고칠 권한이 없습니다', 'error'); return false; }
+    const key = String(fid || '').trim(); if (!key) { toast('품목 코드가 없습니다', 'error'); return false; }
+    const clean = (rows || []).map(c => ({ yarn_color: yarnColorIsLW(c.yarn_color) ? YARN_LW : String(c.yarn_color || '').trim(), dyer: String(c.dyer || '').trim(), bt_no: String(c.bt_no || '').trim(), name: String(c.name || '').trim(),
+      ext_code: String(c.ext_code || '').trim(), updated_at: c.updated_at || editLogNow(), updated_by: c.updated_by || hwMyName() })).filter(c => c.bt_no || c.name);
+    try {
+      await setDoc(doc(db, C('settings'), 'item_colors'), { items: { [key]: clean }, updated_at: serverTimestamp(), updated_by: state.user?.email || '' }, { merge: true });
+      if (!state.itemColors || typeof state.itemColors !== 'object') state.itemColors = {};
+      state.itemColors[key] = clean;
+      try { refreshFinishColorList(); } catch (_) {}
+      return true;
+    } catch (e) { toast('품목 컬러 저장 실패: ' + e.message, 'error'); return false; }
+  }
+  function renderItemColorsDash() {
+    if (!canAccessView('itemColors')) return `<div class="dash-empty">[권한 설정]에서 허용한 사람만 볼 수 있는 화면입니다.</div>`;
+    const S = icSel(); const fid = S.item ? icFidOf(S.item) : '';
+    const iS = 'width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #d1d5db;border-radius:7px;font-size:13px;font-family:inherit;';
+    const items = getFabricSpecs().filter(s => specIsOnSale(s)).map(s => String(s.name || '').trim()).filter(Boolean).sort((a, b) => a.localeCompare(b, 'ko'));
+    const all = itemColorsOf(fid); const rows = itemColorList(fid, S.yarnColor, S.dyer);
+    const owner = isOwnerUser();
+    let h = `<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px;margin-bottom:12px;font-size:12.5px;color:#475569;line-height:1.8;">
+      <strong>품목 → 원사 컬러 → 염색공장</strong>을 위에서 한 번 고르고, 아래 표에 <strong>BT No · 컬러명</strong>을 이어서 넣습니다 (컬러명 칸에서 Enter 를 누르면 저장되고 다음 줄로). BT No 는 염색공장이 부르는 번호를 그대로 적습니다.<br>
+      의뢰서 컬러 칸은 이 표에서 고르게 됩니다 (편직업체 → 품목 → 원사 컬러 → 염색공장 순으로 걸러서). 줄 지우기는 최고관리자만 됩니다.
+    </div>`;
+    h += `<div style="display:grid;grid-template-columns:1.4fr 1fr 1fr auto;gap:10px;align-items:end;max-width:980px;margin-bottom:12px;">
+      <div><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px;">품목 (글자 검색)</label><input id="ic-item" lang="ko" list="ic-item-list" autocomplete="off" value="${escapeHtml(S.item)}" placeholder="품목명" style="${iS}"><datalist id="ic-item-list">${items.map(n => `<option value="${escapeHtml(n)}"></option>`).join('')}</datalist></div>
+      <div><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px;">원사 컬러 (비우면 L/W)</label><input id="ic-yc" lang="ko" list="ic-yc-list" autocomplete="off" value="${escapeHtml(S.yarnColor)}" placeholder="L/W" style="${iS}"><datalist id="ic-yc-list">${icYarnColorList(fid).map(n => `<option value="${escapeHtml(n)}"></option>`).join('')}</datalist></div>
+      <div><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px;">염색공장 (필수 · 염색처·가공처)</label><input id="ic-dyer" lang="ko" list="ic-dyer-list" autocomplete="off" value="${escapeHtml(S.dyer)}" placeholder="염색공장" style="${iS}"><datalist id="ic-dyer-list">${icDyerList().map(n => `<option value="${escapeHtml(n)}"></option>`).join('')}</datalist></div>
+      <div style="font-size:12px;color:#64748b;padding-bottom:8px;white-space:nowrap;" id="ic-count">${fid ? `이 품목 컬러 ${all.length}개${(S.yarnColor || S.dyer) ? ` · 거른 것 ${rows.length}개` : ''}` : (S.item ? '<span style="color:#b45309;">등록된 품목이 아닙니다</span>' : '품목을 먼저 고르십시오')}</div>
+    </div>`;
+    const yc = S.yarnColor.trim() || YARN_LW;
+    const canAdd = !!fid && !!S.dyer.trim() && icDyerList().some(n => vendorKey(n) === vendorKey(S.dyer));
+    const tdS = 'padding:4px 6px;';
+    const cellIn = (cls, i, v, w, ph) => `<input ${i < 0 ? `id="${cls}"` : `class="${cls}"`} data-i="${i}" lang="ko" autocomplete="off" value="${escapeHtml(v)}" placeholder="${ph}" style="${iS}padding:6px 8px;width:${w};">`;   // 새 줄(i<0)은 id, 있는 줄은 class
+    h += `<div class="dash-table-wrap" style="max-width:980px;"><table class="dash-table" id="ic-rows"><thead><tr>
+      <th style="min-width:110px;">BT No</th><th style="text-align:left;min-width:180px;">컬러명</th><th style="min-width:90px;">원사 컬러</th><th style="text-align:left;min-width:120px;">염색공장</th><th style="min-width:120px;">고친 사람 · 날짜</th><th style="width:40px;"></th></tr></thead><tbody>`;
+    if (!fid) h += `<tr><td colspan="6" style="text-align:center;color:#9ca3af;padding:18px;">위에서 품목을 고르십시오.</td></tr>`;
+    else {
+      rows.forEach(c => {
+        const i = all.indexOf(c);
+        h += `<tr class="ic-row" data-i="${i}"><td style="${tdS}">${cellIn('ic-bt', i, c.bt_no || '', '100px', 'BT No')}</td><td style="${tdS}">${cellIn('ic-name', i, c.name || '', '100%', '컬러명')}</td>
+          <td style="${tdS}text-align:center;font-weight:700;color:${yarnColorIsLW(c.yarn_color) ? '#9ca3af' : '#7c2d12'};">${escapeHtml(yarnColorIsLW(c.yarn_color) ? YARN_LW : c.yarn_color)}</td><td style="${tdS}text-align:left;">${escapeHtml(c.dyer || '-')}</td>
+          <td style="${tdS}text-align:center;font-size:11px;color:#64748b;">${escapeHtml(c.updated_by || '')}${c.updated_at ? '<br>' + escapeHtml(String(c.updated_at).slice(0, 10)) : ''}</td>
+          <td style="${tdS}text-align:center;">${owner ? `<button class="dash-action-btn danger ic-del" data-i="${i}" title="이 줄을 지웁니다 (최고관리자)" style="padding:3px 7px;font-size:11px;">x</button>` : ''}</td></tr>`;
+      });
+      if (!rows.length) h += `<tr><td colspan="6" style="text-align:center;color:#9ca3af;padding:12px;">${all.length ? '이 원사 컬러 · 염색공장으로 넣은 컬러가 아직 없습니다.' : '이 품목에 넣은 컬러가 아직 없습니다.'}</td></tr>`;
+      h += `<tr id="ic-new" style="background:#f0fdf4;"><td style="${tdS}">${cellIn('ic-new-bt', -1, '', '100px', 'BT No')}</td><td style="${tdS}">${cellIn('ic-new-name', -1, '', '100%', '컬러명 → Enter')}</td>
+        <td style="${tdS}text-align:center;font-weight:700;color:#166534;">${escapeHtml(yc)}</td><td style="${tdS}text-align:left;color:${canAdd ? '#166534' : '#b45309'};font-weight:700;">${escapeHtml(S.dyer.trim() || '염색공장을 고르십시오')}</td>
+        <td style="${tdS}text-align:center;"><button class="dash-action-btn" id="ic-add" ${canAdd ? '' : 'disabled'} style="font-weight:800;padding:5px 12px;">＋ 넣기</button></td><td></td></tr>`;
+    }
+    h += `</tbody></table></div>`;
+    return h;
+  }
+  function bindItemColorsDash() {
+    const body = document.getElementById('dash-body'); if (!body) return;
+    const S = icSel();
+    const rerender = () => renderDashboard();
+    const bindSel = (id, k) => { const el = document.getElementById(id); if (!el) return; el.addEventListener('change', () => { S[k] = el.value.trim(); rerender(); }); el.addEventListener('keydown', ev => { if (ev.key === 'Enter') { ev.preventDefault(); S[k] = el.value.trim(); rerender(); } }); };
+    bindSel('ic-item', 'item'); bindSel('ic-yc', 'yarnColor'); bindSel('ic-dyer', 'dyer');
+    const fid = S.item ? icFidOf(S.item) : ''; if (!fid) return;
+    const rowsAll = () => itemColorsOf(fid).map(c => Object.assign({}, c));
+    // 있는 줄 고치기 — 칸을 떠나면 저장 (값이 바뀐 것만)
+    body.querySelectorAll('#ic-rows .ic-bt, #ic-rows .ic-name').forEach(inp => {
+      const save = async () => {
+        const i = parseInt(inp.dataset.i, 10); const rows = rowsAll(); if (!rows[i]) return;
+        const k = inp.classList.contains('ic-bt') ? 'bt_no' : 'name'; const v = inp.value.trim();
+        if (String(rows[i][k] || '') === v) return;
+        rows[i][k] = v; rows[i].updated_at = editLogNow(); rows[i].updated_by = hwMyName();
+        if (await saveItemColors(fid, rows)) toast('고쳤습니다', 'success');
+      };
+      inp.addEventListener('blur', save);
+      inp.addEventListener('keydown', ev => { if (ev.key === 'Enter') { ev.preventDefault(); inp.blur(); } });
+    });
+    body.querySelectorAll('#ic-rows .ic-del').forEach(b => b.addEventListener('click', async () => {
+      if (!isOwnerUser()) { toast('지우기는 최고관리자만 됩니다', 'error'); return; }
+      const i = parseInt(b.dataset.i, 10); const rows = rowsAll(); if (!rows[i]) return;
+      if (!confirm(`[${itemColorLabel(rows[i])}] 줄을 지웁니다.\n이미 낸 의뢰서에 적힌 글자는 그대로입니다.\n\n지울까요?`)) return;
+      rows.splice(i, 1);
+      if (await saveItemColors(fid, rows)) { toast('지웠습니다', 'success'); rerender(); }
+    }));
+    // 새 줄 넣기 — Enter 로 이어서
+    const add = async () => {
+      const bt = document.getElementById('ic-new-bt'), nm = document.getElementById('ic-new-name'); if (!bt || !nm) return;
+      const dyer = S.dyer.trim(); if (!dyer || !icDyerList().some(n => vendorKey(n) === vendorKey(dyer))) { toast('염색공장을 거래처(염색처·가공처)에서 고르십시오', 'warning'); document.getElementById('ic-dyer')?.focus(); return; }
+      const b = bt.value.trim(), n = nm.value.trim(); if (!b && !n) { bt.focus(); return; }
+      if (!b) { toast('BT No 를 넣으십시오', 'warning'); bt.focus(); return; }
+      if (!n) { toast('컬러명을 넣으십시오', 'warning'); nm.focus(); return; }
+      const yc = S.yarnColor.trim() || YARN_LW;
+      const rows = rowsAll();
+      const dup = rows.find(c => vendorKey(c.bt_no) === vendorKey(b) && yarnColorKey(c.yarn_color) === yarnColorKey(yc) && vendorKey(c.dyer) === vendorKey(dyer));
+      if (dup) { toast(`BT No ${b} 은(는) 이미 있습니다 (${itemColorLabel(dup)})`, 'warning'); bt.focus(); bt.select(); return; }
+      rows.push({ yarn_color: yc, dyer, bt_no: b, name: n, ext_code: '' });
+      if (await saveItemColors(fid, rows)) { toast(`${b} ${n} 을(를) 넣었습니다`, 'success'); rerender(); setTimeout(() => document.getElementById('ic-new-bt')?.focus(), 0); }
+    };
+    document.getElementById('ic-add')?.addEventListener('click', add);
+    ['ic-new-bt', 'ic-new-name'].forEach(id => document.getElementById(id)?.addEventListener('keydown', ev => {
+      if (ev.key !== 'Enter') return; ev.preventDefault();
+      if (id === 'ic-new-bt' && !document.getElementById('ic-new-name').value.trim()) { document.getElementById('ic-new-name').focus(); return; }
+      add();
+    }));
+  }
   const CD_STAGES = [['knitting', '편직', '편직 의뢰서'], ['dyeing', '염색', '염/가공 의뢰서'], ['processing', '가공', '염/가공 의뢰서'], ['post', '후가공', '염/가공 의뢰서'], ['print', '나염', '나염 의뢰서 (400에서 연결)']];
   function cdBuiltin(k) { return k === 'knitting' ? DEFAULT_KNIT_CAUTIONS : (DEFAULT_CAUTIONS[k] || []); }
   function renderCautionDraftsDash() {
@@ -28969,6 +29138,32 @@ function validateBlendSum(blends, label) {
     facs.forEach(v => { if (best && best.ok) return; const r = knitBlendCalc(yarns, (K[v] || {}).loops || {}); r.factory = v; if (!best || (r.ok && !best.ok)) best = r; });
     return best;
   }
+  // hotfix399d: 편직 설정의 사종 목록을 원가 계산기 카드 [원사]에 그대로 맞춘다 (주인 = 편직 설정 · 카드는 읽어 씀)
+  //   · 카드에 없는 사종 → 굵기·단위는 이름에서 짐작해 새 줄 (단가는 단가표에서 읽으므로 비움)
+  //   · 편직 설정에서 뺀 사종 → 카드 줄도 뺀다. 남는 줄의 값(굵기·합사·업체)은 그대로
+  //   · 순서는 편직 설정 순서. 바뀐 것이 없으면 저장하지 않는다
+  async function syncCardYarnsFromKnit(fid, names) {
+    const key = String(fid || '').trim(); if (!key || !isOwnerUser()) return false;
+    const want = (Array.isArray(names) ? names : []).map(x => String(x || '').trim()).filter(Boolean);
+    const prev = getFabricCost(key) || {};
+    const rows = (Array.isArray(prev.yarns) ? prev.yarns : []).filter(y => y && y.name);
+    const byName = {}; rows.forEach(y => { byName[String(y.name).trim()] = y; });
+    const next = want.map(nm => {
+      if (byName[nm]) return byName[nm];
+      const g = yarnGuessSpec(nm) || {};
+      return { name: nm, size: (g.size == null ? null : g.size), unit: (g.unit === '수' ? '수' : 'D'), ply: 1, loop: null,
+        bmode: (prev.blend_mode === 'manual' ? 'manual' : 'loop'), pct_manual: null, vendor: '', price: null, ship: null, loss: null,
+        yid: yarnYidOf(nm), vendor_vid: '' };
+    });
+    const same = rows.length === next.length && rows.every((y, i) => String(y.name).trim() === String(next[i].name).trim());
+    if (same) return false;
+    const ok = await saveFabricCost(key, Object.assign({}, prev, { yarns: next, updated_at: todayYMD() }));
+    if (ok) {
+      const added = want.filter(nm => !byName[nm]), gone = rows.map(y => String(y.name).trim()).filter(nm => !want.includes(nm));
+      toast('카드 [원사]에 맞췄습니다' + (added.length ? ' — 넣음: ' + added.join(' · ') : '') + (gone.length ? ' — 뺌: ' + gone.join(' · ') : ''), 'info');
+    }
+    return ok;
+  }
   // 편직 설정 저장 뒤 품목 혼용률을 자동으로 맞춘다 (값이 다를 때만 저장)
   async function syncSpecBlendFromKnit(fid) {
     const b = blendFromKnitFee(fid); if (!b || !b.ok) return false;
@@ -29028,14 +29223,16 @@ function validateBlendSum(blends, label) {
             <div style="margin-top:10px;"><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px;">비고</label><input id="kf-memo" lang="ko" value="${escapeHtml(k.memo || '')}" style="${iS}"></div>
             <div style="margin-top:12px;font-size:12px;font-weight:800;color:#334155;">루프장 (사종마다 · 이 공장 값)</div>
             <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px 14px;margin-top:6px;">
-              ${yarns.length ? yarns.map(y => `<label style="display:flex;align-items:center;gap:6px;font-size:12.5px;"><span style="flex:1;font-weight:700;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(y)}${cardYarns.includes(y) ? '' : ' — 카드 [원사]에는 아직 없는 사종'}">${escapeHtml(y)}${cardYarns.includes(y) ? '' : ' <span style="font-size:10px;color:#b45309;font-weight:400;">(카드에 없음)</span>'}</span><input class="kf-loop" data-y="${escapeHtml(y)}" inputmode="decimal" value="${(k.loops || {})[y] == null ? '' : k.loops[y]}" style="${nS}width:84px;flex:0 0 84px;">${cardYarns.includes(y) ? `<span style="width:22px;flex:0 0 22px;"></span>` : `<button class="dash-action-btn danger kf-ydel" data-y="${escapeHtml(y)}" title="이 사종 줄을 뺍니다" style="padding:3px 6px;font-size:11px;flex:0 0 auto;">x</button>`}</label>`).join('')
-                : '<span style="font-size:12px;color:#94a3b8;">이 품목에 원사가 없습니다. 아래 [＋ 사종]으로 넣거나 품목 카드 [원사]에서 넣어 주십시오.</span>'}
+              ${yarns.length ? yarns.map(y => `<label style="display:flex;align-items:center;gap:6px;font-size:12.5px;"><span style="flex:1;font-weight:700;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(y)}${cardYarns.includes(y) ? '' : ' — [저장]하면 카드 [원사]에도 들어갑니다'}">${escapeHtml(y)}${cardYarns.includes(y) ? '' : ' <span style="font-size:10px;color:#b45309;font-weight:400;">(저장 전)</span>'}</span><input class="kf-loop" data-y="${escapeHtml(y)}" inputmode="decimal" value="${(k.loops || {})[y] == null ? '' : k.loops[y]}" style="${nS}width:84px;flex:0 0 84px;"><button class="dash-action-btn danger kf-ydel" data-y="${escapeHtml(y)}" title="이 사종 줄을 뺍니다 ([저장]하면 카드 [원사]에서도 빠집니다)" style="padding:3px 6px;font-size:11px;flex:0 0 auto;">x</button></label>`).join('')
+                : '<span style="font-size:12px;color:#94a3b8;">이 품목에 원사가 없습니다. 아래 [원사 넣기]로 넣어 주십시오.</span>'}
             </div>
-            <div style="display:flex;gap:8px;align-items:center;margin-top:8px;">
-              <select id="kf-newyarn-kind" data-nodirty style="${iS}width:auto;min-width:110px;display:none;"><option value="">구분 …</option>${YARN_KINDS.map(k => `<option value="${k}">${escapeHtml(YARN_KIND_LABEL[k] || k)}</option>`).join('')}</select>
-              <input id="kf-newyarn" lang="ko" data-nodirty list="kf-newyarn-list" autocomplete="off" placeholder="구분 먼저 → 사종 검색" style="${iS}width:auto;min-width:220px;display:none;"><datalist id="kf-newyarn-list"></datalist>
-              <button class="dash-action-btn" id="kf-newyarn-add" style="font-weight:800;padding:6px 12px;display:none;">＋ 넣기</button>
-              <span style="font-size:11.5px;color:#94a3b8;">사종은 원가 계산기 카드 [원사]에서 넣고 뺍니다. (hotfix399c: 여기 넣기 줄은 감춤)</span>
+            <div style="margin-top:10px;font-size:12px;font-weight:800;color:#334155;">원사 넣기 <span style="font-weight:400;color:#64748b;">— 구분 → 사종(글자 검색) → 컬러 → 루프장. [저장]하면 원가 계산기 카드 [원사]에도 그대로 들어갑니다</span></div>
+            <div style="display:flex;gap:8px;align-items:center;margin-top:6px;flex-wrap:wrap;">
+              <select id="kf-newyarn-kind" data-nodirty style="${iS}width:auto;min-width:110px;"><option value="">구분 …</option>${YARN_KINDS.map(k => `<option value="${k}">${escapeHtml(YARN_KIND_LABEL[k] || k)}</option>`).join('')}</select>
+              <input id="kf-newyarn" lang="ko" data-nodirty list="kf-newyarn-list" autocomplete="off" placeholder="구분 먼저 → 사종 검색" style="${iS}width:auto;min-width:200px;"><datalist id="kf-newyarn-list"></datalist>
+              <select id="kf-newyarn-color" data-nodirty style="${iS}width:auto;min-width:120px;"><option value="">컬러 …</option></select>
+              <input id="kf-newyarn-loop" data-nodirty inputmode="decimal" placeholder="루프장" style="${nS}width:84px;flex:0 0 84px;">
+              <button class="dash-action-btn" id="kf-newyarn-add" style="font-weight:800;padding:6px 12px;">＋ 넣기</button>
             </div>
             <div style="margin-top:14px;padding:10px 12px;border:1px solid #c7d2fe;border-radius:8px;background:#f5f7ff;">
               <div style="font-size:12px;font-weight:800;color:#334155;">혼용율 <span style="font-weight:400;color:#64748b;">— 사종 굵기 × 루프장으로 사종 비율을 내고, [원사 설정]의 소재(성분)로 소재 비율을 냅니다</span></div>
@@ -29091,13 +29288,37 @@ function validateBlendSum(blends, label) {
         </table><div style="color:#94a3b8;margin-top:3px;">수(방적사)는 5315 ÷ 수 로 데니어로 바꿉니다 · 몫 = 데니어 × 루프장 · 사종 비율 = 몫 ÷ 합계 · 소재 몫 = 사종 비율 × 성분%</div>` : '';
       };
       wrap.querySelectorAll('.kf-loop').forEach(el => el.addEventListener('input', paintBlend));
-      // 사종 넣기: 구분 → 검색 → [＋ 넣기]
+      // hotfix399d: 원사 넣기 — 구분 → 사종(base, 글자 검색) → 컬러 고르개 → 루프장 → [＋ 넣기]. 모든 목록 오름차순
+      const kfMasterYarns = () => (getCostPrices().yarns || []).filter(y => y && String(y.name || '').trim());
       const fillNewYarnList = () => {
         const kd = wrap.querySelector('#kf-newyarn-kind')?.value || ''; const dl = wrap.querySelector('#kf-newyarn-list'); if (!dl) return;
-        dl.innerHTML = (getCostPrices().yarns || []).filter(y => y && y.name && (!kd || String(y.kind || '기타') === kd)).map(y => String(y.name).trim()).filter(nm => nm && !yarns.includes(nm)).sort((a, b) => a.localeCompare(b, 'ko')).map(nm => `<option value="${escapeHtml(nm)}"></option>`).join('');
+        const seen = new Set(); const bases = [];
+        kfMasterYarns().forEach(y => { if (kd && String(y.kind || '기타') !== kd) return; const b = yarnParts(y).base; const kk = vendorKey(b); if (b && !seen.has(kk)) { seen.add(kk); bases.push(b); } });
+        dl.innerHTML = bases.sort((a, b) => a.localeCompare(b, 'ko')).map(nm => `<option value="${escapeHtml(nm)}"></option>`).join('');
       };
-      wrap.querySelector('#kf-newyarn-kind')?.addEventListener('change', () => { fillNewYarnList(); wrap.querySelector('#kf-newyarn')?.focus(); });
-      fillNewYarnList();
+      // 고른 사종(base)의 컬러 목록 — 값은 저장 이름(name) 그대로. 컬러가 하나면 바로 고른다
+      const fillNewYarnColors = () => {
+        const sel = wrap.querySelector('#kf-newyarn-color'); if (!sel) return;
+        const base = String(wrap.querySelector('#kf-newyarn')?.value || '').trim(); const bk = vendorKey(base);
+        const kd = wrap.querySelector('#kf-newyarn-kind')?.value || '';
+        let ents = bk ? kfMasterYarns().filter(y => vendorKey(yarnParts(y).base) === bk && (!kd || String(y.kind || '기타') === kd)) : [];
+        if (!ents.length && bk) ents = kfMasterYarns().filter(y => vendorKey(String(y.name || '')) === bk);   // 옛 이름(base 없음)
+        const rows = ents.map(y => { const pt = yarnParts(y); const c = yarnColorIsLW(pt.color) ? YARN_LW : pt.color; return { name: String(y.name).trim(), label: c + (pt.brand ? ' (' + pt.brand + ')' : ''), sort: (yarnColorIsLW(pt.color) ? '' : c) + '|' + pt.brand }; })
+          .sort((a, b) => a.sort.localeCompare(b.sort, 'ko'));
+        sel.innerHTML = `<option value="">${rows.length ? '컬러 …' : (bk ? '(원사 설정에 없는 사종)' : '컬러 …')}</option>` + rows.map(r => `<option value="${escapeHtml(r.name)}"${yarns.includes(r.name) ? ' disabled' : ''}>${escapeHtml(r.label)}${yarns.includes(r.name) ? ' (있음)' : ''}</option>`).join('');
+        const free = rows.filter(r => !yarns.includes(r.name));
+        if (free.length === 1) sel.value = free[0].name;
+      };
+      wrap.querySelector('#kf-newyarn-kind')?.addEventListener('change', () => { fillNewYarnList(); fillNewYarnColors(); wrap.querySelector('#kf-newyarn')?.focus(); });
+      wrap.querySelector('#kf-newyarn')?.addEventListener('input', () => {
+        // 적은 사종의 구분이 다르면 구분이 사종을 따른다 (원사 의뢰서와 같은 규칙)
+        const kSel = wrap.querySelector('#kf-newyarn-kind'); const kd = yarnKindOfBase(wrap.querySelector('#kf-newyarn').value);
+        if (kSel && kd && kSel.value && kSel.value !== kd) { kSel.value = kd; fillNewYarnList(); }
+        fillNewYarnColors();
+      });
+      wrap.querySelector('#kf-newyarn')?.addEventListener('change', () => { fillNewYarnColors(); const c = wrap.querySelector('#kf-newyarn-color'); if (c && c.value) wrap.querySelector('#kf-newyarn-loop')?.focus(); else c?.focus(); });
+      wrap.querySelector('#kf-newyarn-color')?.addEventListener('change', () => wrap.querySelector('#kf-newyarn-loop')?.focus());
+      fillNewYarnList(); fillNewYarnColors();
       paintBlend();
       const askLeave = () => !dirty() || confirm('고친 값이 아직 저장되지 않았습니다.\n[저장]을 누르지 않고 옮기면 사라집니다.\n\n그래도 옮길까요?');
       wrap.querySelector('#kf-close').addEventListener('click', () => { if (!askLeave()) return; wrap.remove(); if (typeof onClose === 'function') { try { onClose(); } catch (e) {} } });
@@ -29121,16 +29342,27 @@ function validateBlendSum(blends, label) {
         paint();
       }));
       const addNewYarn = () => {
-        const inp = wrap.querySelector('#kf-newyarn'); const nm = String(inp?.value || '').trim(); if (!nm) return;
-        if (!yarnEntryByName(nm)) { toast(`"${nm}" 은(는) 원사 설정에 없는 사종입니다 — 목록에서 고르거나 [원사 설정]에 먼저 넣어 주십시오`, 'warning'); return; }
+        const inp = wrap.querySelector('#kf-newyarn'); const base = String(inp?.value || '').trim(); if (!base) { toast('사종을 먼저 고르십시오', 'warning'); inp?.focus(); return; }
+        const cSel = wrap.querySelector('#kf-newyarn-color'); let nm = String(cSel?.value || '').trim();
+        if (!nm) { fillNewYarnColors(); nm = String(cSel?.value || '').trim(); }   // 컬러가 하나뿐이면 저절로 고른다
+        if (!nm) {
+          const opts = [...(cSel?.options || [])].filter(o => o.value);
+          if (!opts.length) { toast(`"${base}" 은(는) 원사 설정에 없는 사종입니다 — 목록에서 고르거나 [원사 설정]에 먼저 넣어 주십시오`, 'warning'); return; }
+          const free = opts.filter(o => !o.disabled);
+          if (!free.length) { toast(`"${base}" 의 컬러가 모두 이미 있습니다`, 'info'); return; }
+          toast('컬러를 고르십시오', 'warning'); cSel?.focus(); return;
+        }
+        if (!yarnEntryByName(nm)) { toast(`"${nm}" 은(는) 원사 설정에 없는 사종입니다`, 'warning'); return; }
         const real = yarnEntryByName(nm).name;
-        if (yarns.includes(real)) { toast(`"${real}" 은(는) 이미 있습니다`, 'info'); inp.value = ''; return; }
+        if (yarns.includes(real)) { toast(`"${real}" 은(는) 이미 있습니다`, 'info'); return; }
+        const lp = String(wrap.querySelector('#kf-newyarn-loop')?.value || '').trim();
         const cur = collect(); yarns.push(real); touched = true;
-        if (K[V]) { K[V].loops = Object.assign({}, K[V].loops || {}, cur.loops); if (K[V].loops[real] === undefined) K[V].loops[real] = ''; }
+        if (K[V]) { K[V].loops = Object.assign({}, K[V].loops || {}, cur.loops); K[V].loops[real] = lp; }
         paint();
+        wrap.querySelector('#kf-newyarn')?.focus();
       };
       wrap.querySelector('#kf-newyarn-add')?.addEventListener('click', addNewYarn);
-      wrap.querySelector('#kf-newyarn')?.addEventListener('keydown', ev => { if (ev.key === 'Enter') { ev.preventDefault(); addNewYarn(); } });
+      ['#kf-newyarn', '#kf-newyarn-loop'].forEach(q => wrap.querySelector(q)?.addEventListener('keydown', ev => { if (ev.key === 'Enter') { ev.preventDefault(); addNewYarn(); } }));
       wrap.querySelector('#kf-newfac').addEventListener('change', ev => {
         const v = String(ev.target.value || '').trim(); if (!v) return;
         if (!askLeave()) { ev.target.value = ''; return; }
@@ -29143,6 +29375,7 @@ function validateBlendSum(blends, label) {
         const btn = wrap.querySelector('#kf-save'); btn.disabled = true; btn.textContent = '저장 중...';
         const ok = await saveKnitFeeRow(key, V, collect(), { yarnNames: yarns });
         btn.disabled = false; btn.textContent = '저장';
+        if (ok) { try { await syncCardYarnsFromKnit(key, yarns); } catch (e) { console.warn('[card yarn sync]', e.message); } }   // hotfix399d: 카드 [원사] 반영 (주인 = 편직 설정)
         if (ok) { try { await syncSpecBlendFromKnit(key); } catch (e) { console.warn('[blend sync]', e.message); } }   // hotfix399b: 품목 혼용률 자동
         if (ok) { Object.assign(K, knitFeeOf(key)); yarns = kfYarnNames(key); touched = false; toast('[' + V + '] 편직 값을 저장했습니다', 'success'); paint(); if (state.uiMode === 'dashboard' && (state.costTab || '') === 'knitfee') renderDashboard(); }
       });
@@ -37724,6 +37957,10 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
       title = '주의사항 초안 (설정 및 관리)';
       body = viewIsLocked('cautionDrafts') ? renderOwnerLockScreen('주의사항 초안') : renderCautionDraftsDash();
       addBtn.style.display = 'none';
+    } else if (state.dashView === 'itemColors') {   // hotfix399d: 품목 컬러 설정 (직원)
+      title = '품목 컬러 설정 (설정 및 관리)';
+      body = renderItemColorsDash();
+      addBtn.style.display = 'none';
     } else if (state.dashView === 'knitSetup' || state.dashView === 'procSetup') {   // hotfix398: 독립 화면 (원가 계산기 탭과 같은 표)
       const isK = state.dashView === 'knitSetup';
       title = isK ? '편직 설정' : '염/가공 설정';
@@ -37782,7 +38019,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
     const _TITLE_SUF = {
       costCalc: ' (최고관리자 전용)', permissions: ' (최고관리자 전용)', users: ' (최고관리자 전용)',
       trash: ' (최고관리자 전용)', stampSettings: ' (최고관리자 전용)', specTol: ' (최고관리자 전용)',
-      fabricSpecs: ' (설정 및 관리)', vendors: ' (설정 및 관리)', yarnSetup: ' (설정 및 관리)', knitSetup: ' (설정 및 관리)', procSetup: ' (설정 및 관리)', cautionDrafts: ' (설정 및 관리)'   // hotfix398
+      fabricSpecs: ' (설정 및 관리)', vendors: ' (설정 및 관리)', yarnSetup: ' (설정 및 관리)', knitSetup: ' (설정 및 관리)', procSetup: ' (설정 및 관리)', cautionDrafts: ' (설정 및 관리)', itemColors: ' (설정 및 관리)'   // hotfix398 · hotfix399d
     };
     let _tKey = state.dashView;
     if (_tKey === 'overview') {
@@ -38369,6 +38606,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
     if (state.dashView === 'editLog') bindEditLogDash();   // hotfix383
     // hotfix343: 염/가공료 설정
     if (state.dashView === 'cautionDrafts') bindCautionDraftsDash();   // hotfix398c
+    if (state.dashView === 'itemColors') bindItemColorsDash();   // hotfix399d
     if ((state.dashView === 'costCalc' && (state.costTab || 'card') === 'procfee') || state.dashView === 'procSetup') bindProcFeeTab();
     if ((state.dashView === 'costCalc' && (state.costTab || 'card') === 'knitfee') || state.dashView === 'knitSetup') bindKnitFeeTab();   // hotfix386 · hotfix398 독립 화면
     // hotfix380: [＋ 거래처 추가] 펼치기 · 접기
@@ -44760,7 +44998,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix399c';
+  const VERSION = 'v2.53 hotfix399d';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
