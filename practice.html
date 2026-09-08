@@ -13541,6 +13541,197 @@ function specGreigeColors(fid) {
     }
     return { list, changed, added, skipped, addedNames, badFids, autoGy };
   }
+  // ===== hotfix418: 김용범 조사 xlsx 그대로 올리기 =====
+  //   서식(20260908_HIWOS_품목조사_폭중량_김용범.xlsx) 열: 품목명 · 구분 · 짝 리프/짝 몸판 · 튜브(O) · 기준 폭 inch("72/74" 글자 그대로) · 스퀘어 g/㎡ · 야드 g/y(자동, 무시) · 비고
+  //   xlsx 는 zip 이라 브라우저의 DecompressionStream 으로 직접 푼다(바깥 라이브러리 없음). 첫 시트만 읽는다. CSV 로 저장한 파일도 같은 열이면 받는다.
+  //   ★대표 확정: 품목명(다른 표기 포함)으로 찾는다 · 못 찾으면 빨간 줄로만 알리고 자동 생성 안 함 · 폭은 글자 그대로 저장(계산은 마지막 숫자) · 야드 중량은 저장 안 함 · 몸판의 짝 리프까지 맞춤 · 구분·품목명은 안 건드림
+  function xlsxZipEntries(buf) {
+    const u8 = new Uint8Array(buf); const dv = new DataView(buf);
+    let eocd = -1;
+    for (let i = u8.length - 22; i >= Math.max(0, u8.length - 66000); i--) { if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; } }
+    if (eocd < 0) throw new Error('xlsx(zip) 끝 표식을 찾지 못했습니다');
+    const n = dv.getUint16(eocd + 10, true); let p = dv.getUint32(eocd + 16, true);
+    const out = {}; const td = new TextDecoder();
+    for (let k = 0; k < n; k++) {
+      if (dv.getUint32(p, true) !== 0x02014b50) throw new Error('zip 목록이 깨졌습니다');
+      const method = dv.getUint16(p + 10, true), csize = dv.getUint32(p + 20, true), nlen = dv.getUint16(p + 28, true), elen = dv.getUint16(p + 30, true), clen = dv.getUint16(p + 32, true), off = dv.getUint32(p + 42, true);
+      const name = td.decode(u8.subarray(p + 46, p + 46 + nlen));
+      out[name] = { method, csize, off };
+      p += 46 + nlen + elen + clen;
+    }
+    return { u8, dv, entries: out };
+  }
+  async function xlsxZipRead(z, name) {
+    const e = z.entries[name]; if (!e) return null;
+    const { dv, u8 } = z;
+    const nlen = dv.getUint16(e.off + 26, true), elen = dv.getUint16(e.off + 28, true);
+    const start = e.off + 30 + nlen + elen; const raw = u8.subarray(start, start + e.csize);
+    if (e.method === 0) return new TextDecoder().decode(raw);
+    if (e.method !== 8) throw new Error('지원하지 않는 압축 방식 ' + e.method);
+    if (typeof DecompressionStream !== 'function') throw new Error('이 브라우저는 xlsx 를 직접 읽지 못합니다 — 크롬 최신판을 쓰거나 CSV 로 저장해 올려 주십시오');
+    const ab = await new Response(new Blob([raw]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer();
+    return new TextDecoder().decode(ab);
+  }
+  function xmlUnesc(t) { return String(t || '').replace(/&#x([0-9a-f]+);/gi, (m, h) => String.fromCodePoint(parseInt(h, 16))).replace(/&#(\d+);/g, (m, d) => String.fromCodePoint(parseInt(d, 10))).replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&'); }
+  function xmlTexts(frag) { return [...String(frag || '').matchAll(/<t\b[^>]*>([\s\S]*?)<\/t>/g)].map(m => xmlUnesc(m[1])).join(''); }
+  function xlsxColIdx(ref) { const m = String(ref || '').match(/^[A-Z]+/); if (!m) return -1; let n = 0; for (const ch of m[0]) n = n * 26 + (ch.charCodeAt(0) - 64); return n - 1; }
+  // xlsx(ArrayBuffer) → 첫 시트의 줄 배열(칸은 글자 · 숫자는 숫자 그대로)
+  async function xlsxFirstSheetRows(buf) {
+    const z = xlsxZipEntries(buf);
+    let sheet = 'xl/worksheets/sheet1.xml';
+    if (!z.entries[sheet]) { const cands = Object.keys(z.entries).filter(k => /^xl\/worksheets\/sheet\d+\.xml$/.test(k)).sort(); if (!cands.length) throw new Error('시트를 찾지 못했습니다'); sheet = cands[0]; }
+    const sstXml = await xlsxZipRead(z, 'xl/sharedStrings.xml');
+    const sst = sstXml ? [...sstXml.matchAll(/<si\b[^>]*>([\s\S]*?)<\/si>/g)].map(m => xmlTexts(m[1])) : [];
+    const xml = await xlsxZipRead(z, sheet);
+    const rows = [];
+    for (const rm of xml.matchAll(/<row\b[^>]*>([\s\S]*?)<\/row>/g)) {
+      const row = [];
+      for (const cm of rm[1].matchAll(/<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)) {
+        const attrs = cm[1] || '', body = cm[2] || '';
+        const r = (attrs.match(/\br="([A-Z]+)\d+"/) || [])[1]; const ci = xlsxColIdx(r); if (ci < 0) continue;
+        const t = (attrs.match(/\bt="([^"]+)"/) || [])[1] || '';
+        let val = '';
+        if (t === 's') { const i = parseInt((body.match(/<v>([\s\S]*?)<\/v>/) || [])[1], 10); val = isNaN(i) ? '' : (sst[i] == null ? '' : sst[i]); }
+        else if (t === 'inlineStr') val = xmlTexts(body);
+        else if (t === 'str') val = xmlUnesc((body.match(/<v>([\s\S]*?)<\/v>/) || [])[1] || '');
+        else if (t === 'b') val = ((body.match(/<v>([\s\S]*?)<\/v>/) || [])[1] === '1') ? '예' : '';
+        else { const v = (body.match(/<v>([\s\S]*?)<\/v>/) || [])[1]; val = (v == null || v === '') ? '' : (isNaN(parseFloat(v)) ? xmlUnesc(v) : parseFloat(v)); }
+        row[ci] = val;
+      }
+      rows.push(row);
+    }
+    return rows;
+  }
+  // 조사 서식 줄 → 반영 계획 (미리 보기 표에 그대로 쓴다)
+  //   status: ok(반영) · blank(안 적음 — 건너뜀) · example(예시 줄) · notfound(빨강 — 품목 없음) · multi(둘 이상 맞음)
+  function surveyPlanOf(rows) {
+    if (!Array.isArray(rows) || rows.length < 2) return { err: '빈 파일입니다' };
+    const hk = h => String(h == null ? '' : h).replace(/\s+/g, '');
+    const head = (rows[0] || []).map(hk);
+    const find = re => head.findIndex(h => re.test(h));
+    const idx = { name: find(/^품목명/), gubun: find(/^구분/), pair: find(/^짝/), tube: find(/^튜브/), width: find(/폭/), gsm: find(/스퀘어/), note: find(/^비고/) };
+    if (idx.name < 0 || idx.width < 0 || idx.gsm < 0) return { err: '조사 서식이 아닙니다 — [품목명] · [기준 폭] · [스퀘어 중량] 열이 있어야 합니다' };
+    const cell = (r, i) => (i >= 0 && r[i] != null) ? r[i] : '';
+    const str = v => (typeof v === 'number') ? String(v) : String(v == null ? '' : v).trim();
+    const specs = getFabricSpecs();
+    const out = []; const seen = new Set();
+    for (let i = 1; i < rows.length; i++) {
+      const r = rows[i] || []; const name = str(cell(r, idx.name)); if (!name) continue;
+      const gubun = str(cell(r, idx.gubun)); if (!gubun && !str(cell(r, idx.width)) && !str(cell(r, idx.gsm))) continue;   // 안내 글줄
+      const row = { name, gubun, pairRaw: str(cell(r, idx.pair)), tubeRaw: str(cell(r, idx.tube)), widthRaw: str(cell(r, idx.width)), gsmRaw: str(cell(r, idx.gsm)), note: str(cell(r, idx.note)), status: 'ok', why: '', changes: [], pairNew: null, pairWhy: '' };
+      out.push(row);
+      if (/\(예시\)/.test(name)) { row.status = 'example'; row.why = '예시 줄'; continue; }
+      const hits = specs.filter(sp => sp && itemHasName(sp, name));
+      if (!hits.length) { row.status = 'notfound'; row.why = '품목이 없습니다 — [생지 및 편직 설정 › + 생지 추가]에서 먼저 만든 뒤 다시 올리십시오'; continue; }
+      if (hits.length > 1) { row.status = 'multi'; row.why = '같은 이름(다른 표기)이 둘 이상 — ' + hits.map(h => specFid(h) || h.name).join(', '); continue; }
+      const sp = hits[0]; row.spec = sp; row.fid = specFid(sp);
+      if (seen.has(row.fid)) { row.status = 'multi'; row.why = '파일에 같은 품목이 두 번'; continue; }
+      seen.add(row.fid);
+      if (gubun && String(sp.gubun || GUBUN_BODY) !== gubun) row.gubunWarn = `구분이 다릅니다 (등록 ${sp.gubun || GUBUN_BODY} · 파일 ${gubun}) — 구분은 안 바꿉니다`;
+      const surveyed = !!(row.widthRaw || row.gsmRaw || row.tubeRaw);
+      row.widthOld = String(sp.width || ''); row.tubeOld = !!sp.tube; row.gsmOld = specGsm(sp); row.pairOld = String(sp.pair_rib || '');
+      row.widthNew = row.widthOld; row.tubeNew = row.tubeOld; row.gsmNew = row.gsmOld; row.pairNew = row.pairOld;
+      if (surveyed) {
+        if (row.widthRaw) row.widthNew = row.widthRaw;
+        row.tubeNew = /^(o|ㅇ|○|◯|y|yes|1|true|✓|v|튜브|예)$/i.test(row.tubeRaw);
+        if (row.gsmRaw) { const g = parseFloat(row.gsmRaw.replace(/,/g, '')); if (g > 0) row.gsmNew = g; else row.gsmBad = true; }
+        if (row.widthNew !== row.widthOld) row.changes.push('폭');
+        if (row.tubeNew !== row.tubeOld) row.changes.push('튜브');
+        if (row.gsmNew !== row.gsmOld) row.changes.push('스퀘어');
+      }
+      row.gyNew = gsmToGy(row.gsmNew, specWidthInch({ width: row.widthNew }), row.tubeNew);
+      // 짝 리프 — 몸판 줄만. "(없음)" 이면 비움 · 빈 칸은 안 건드림 · 여럿이면 첫째만(등록된 리프여야)
+      if (String(sp.gubun || GUBUN_BODY) !== GUBUN_RIB && row.pairRaw) {
+        if (/^\(?없음\)?$/.test(row.pairRaw) || /^-+$/.test(row.pairRaw)) { row.pairNew = ''; }
+        else {
+          const names = row.pairRaw.split(/[,·、/]/).map(x => x.trim()).filter(Boolean);
+          const ribs = names.map(nm => specs.find(x => x && x.gubun === GUBUN_RIB && itemHasName(x, nm)) || null);
+          const first = ribs.find(Boolean);
+          if (!first) { row.pairWhy = '짝 리프 [' + names[0] + '] 가 리프 품목에 없습니다 — 짝은 그대로 둡니다'; }
+          else {
+            row.pairNew = String(first.name || '').trim();
+            const miss = names.filter((nm, k) => !ribs[k]); const extra = ribs.filter(Boolean).length > 1;
+            if (extra) row.pairWhy = '짝 리프는 하나만 저장 — 첫째 [' + row.pairNew + '] 만 (나머지는 비고로 두십시오)';
+            if (miss.length) row.pairWhy += (row.pairWhy ? ' · ' : '') + '리프에 없음: ' + miss.join(', ');
+          }
+        }
+        if (row.pairNew !== row.pairOld) row.changes.push('짝 리프');
+      }
+      if (!surveyed && !row.changes.length) { row.status = 'blank'; row.why = '적은 값이 없어 건너뜁니다'; }
+    }
+    if (!out.length) return { err: '읽을 줄이 없습니다' };
+    return { rows: out, ok: out.filter(x => x.status === 'ok').length, changed: out.filter(x => x.status === 'ok' && x.changes.length).length, notfound: out.filter(x => x.status === 'notfound').length, multi: out.filter(x => x.status === 'multi').length, blank: out.filter(x => x.status === 'blank' || x.status === 'example').length };
+  }
+  // 계획을 품목 목록에 얹는다 (status ok 줄만). 파일에 없는 품목은 그대로.
+  function surveyPlanApply(plan) {
+    const list = JSON.parse(JSON.stringify(getFabricSpecs()));
+    let n = 0;
+    (plan.rows || []).forEach(row => {
+      if (row.status !== 'ok' || !row.changes.length) return;
+      const sp = list.find(x => specFid(x) === row.fid); if (!sp) return;
+      sp.width = row.widthNew; sp.tube = !!row.tubeNew; sp.gsm = (row.gsmNew == null) ? null : row.gsmNew;
+      if (row.pairNew != null && String(sp.gubun || GUBUN_BODY) !== GUBUN_RIB) sp.pair_rib = row.pairNew;
+      sp.updated_at = todayYMD(); n++;
+    });
+    return { list, n };
+  }
+  function openSurveyPreviewModal(plan, fileName) {
+    const old = document.getElementById('fsv-modal'); if (old) old.remove();
+    const m = document.createElement('div'); m.id = 'fsv-modal';
+    m.style.cssText = 'position:fixed;inset:0;z-index:640;background:rgba(15,23,42,.45);display:flex;align-items:center;justify-content:center;';
+    const tdS = 'padding:5px 7px;border-bottom:1px solid #e5e7eb;font-size:12px;vertical-align:top;';
+    const thS = 'padding:6px 7px;border-bottom:2px solid #cbd5e1;font-size:11.5px;color:#475569;text-align:left;white-space:nowrap;background:#f8fafc;position:sticky;top:0;';
+    const diff = (a, b, chg) => chg ? `<span style="color:#94a3b8;text-decoration:line-through;">${escapeHtml(a === '' ? '—' : a)}</span> → <b>${escapeHtml(b === '' ? '—' : b)}</b>` : escapeHtml(a === '' ? '—' : a);
+    const rowsH = plan.rows.map(r => {
+      const bad = r.status === 'notfound' || r.status === 'multi'; const skip = r.status === 'blank' || r.status === 'example';
+      const bg = bad ? 'background:#fef2f2;' : (skip ? 'background:#f8fafc;color:#94a3b8;' : (r.changes.length ? '' : 'color:#94a3b8;'));
+      const tag = bad ? `<span style="color:#b91c1c;font-weight:800;">${r.status === 'notfound' ? '품목 없음' : '둘 이상'}</span>` : (skip ? '건너뜀' : (r.changes.length ? `<span style="color:#15803d;font-weight:800;">반영</span> (${r.changes.join(' · ')})` : '변화 없음'));
+      const why = [r.why, r.gubunWarn, r.pairWhy, r.gsmBad ? '스퀘어 값이 숫자가 아닙니다' : ''].filter(Boolean).join(' · ');
+      if (bad || skip) return `<tr style="${bg}"><td style="${tdS}font-weight:700;">${escapeHtml(r.name)}</td><td style="${tdS}">${escapeHtml(r.gubun)}</td><td style="${tdS}" colspan="5">${escapeHtml(why)}</td><td style="${tdS}">${tag}</td></tr>`;
+      const isRib = String(r.spec.gubun || GUBUN_BODY) === GUBUN_RIB;
+      return `<tr style="${bg}"><td style="${tdS}font-weight:700;">${escapeHtml(r.spec.name)}${r.spec.name !== r.name ? `<div style="font-size:10.5px;color:#64748b;font-weight:400;">파일 글자: ${escapeHtml(r.name)}</div>` : ''}<span style="font-size:10.5px;color:#94a3b8;font-weight:400;margin-left:5px;">${escapeHtml(r.fid)}</span></td>
+        <td style="${tdS}">${escapeHtml(r.spec.gubun || GUBUN_BODY)}</td>
+        <td style="${tdS}">${diff(r.widthOld, r.widthNew, r.changes.includes('폭'))}</td>
+        <td style="${tdS}">${diff(r.tubeOld ? '튜브' : '개폭', r.tubeNew ? '튜브' : '개폭', r.changes.includes('튜브'))}</td>
+        <td style="${tdS}text-align:right;">${diff(r.gsmOld == null ? '' : String(r.gsmOld), r.gsmNew == null ? '' : String(r.gsmNew), r.changes.includes('스퀘어'))}</td>
+        <td style="${tdS}text-align:right;color:#6b7280;">${r.gyNew == null ? '—' : r.gyNew}</td>
+        <td style="${tdS}">${isRib ? '<span style="color:#94a3b8;">(리프)</span>' : diff(r.pairOld, r.pairNew == null ? r.pairOld : r.pairNew, r.changes.includes('짝 리프'))}</td>
+        <td style="${tdS}">${tag}${why ? `<div style="font-size:10.5px;color:#b45309;">${escapeHtml(why)}</div>` : ''}</td></tr>`;
+    }).join('');
+    m.innerHTML = `<div style="background:#fff;border-radius:12px;width:min(1180px,96vw);max-height:92vh;display:flex;flex-direction:column;box-shadow:0 20px 50px rgba(0,0,0,.3);">
+      <div style="padding:16px 20px 8px;">
+        <div style="font-size:15px;font-weight:800;color:#0f172a;">조사 서식 미리 보기 — ${escapeHtml(fileName || '')}</div>
+        <div style="font-size:12px;color:#64748b;line-height:1.6;margin-top:4px;">반영 <b style="color:#15803d;">${plan.changed}</b>품목 (읽은 ${plan.ok}줄) · 품목 없음 <b style="color:#b91c1c;">${plan.notfound}</b> · 둘 이상 ${plan.multi} · 건너뜀 ${plan.blank}.
+          폭은 적은 글자 그대로 저장(계산은 마지막 숫자) · 야드 g/y 는 저장하지 않고 매번 계산 · 품목명 · 구분 · 비고는 바꾸지 않습니다 · 없는 품목은 만들지 않습니다.</div>
+      </div>
+      <div style="overflow:auto;padding:0 20px;flex:1;"><table style="width:100%;border-collapse:collapse;">
+        <thead><tr><th style="${thS}">품목명</th><th style="${thS}">구분</th><th style="${thS}">기준 폭</th><th style="${thS}">튜브</th><th style="${thS}text-align:right;">스퀘어 g/㎡</th><th style="${thS}text-align:right;">야드 g/y (계산)</th><th style="${thS}">짝 리프</th><th style="${thS}">결과</th></tr></thead>
+        <tbody>${rowsH}</tbody></table></div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;padding:12px 20px 16px;">
+        <button class="dash-action-btn" id="fsv-cancel" style="padding:8px 16px;">닫기</button>
+        <button class="dash-action-btn" id="fsv-ok" style="background:#1e3a8a;color:#fff;font-weight:800;padding:8px 20px;"${plan.changed ? '' : ' disabled'}>반영 (${plan.changed}품목)</button>
+      </div></div>`;
+    document.body.appendChild(m);
+    m.querySelector('#fsv-cancel').addEventListener('click', () => m.remove());
+    m.addEventListener('click', e => { if (e.target === m) m.remove(); });
+    m.querySelector('#fsv-ok').addEventListener('click', async () => {
+      const b = m.querySelector('#fsv-ok'); b.disabled = true;
+      const { list, n } = surveyPlanApply(plan);
+      const ok = await saveFabricSpecs(list);
+      if (!ok) { b.disabled = false; return; }
+      m.remove(); toast(`조사 서식을 반영했습니다 — ${n}품목 (폭 · 튜브 · 스퀘어 · 짝 리프)`, 'success');
+      if (state.uiMode === 'dashboard') renderDashboard();
+    });
+  }
+  // 파일(xlsx 또는 CSV) → 계획 → 미리 보기
+  async function surveyFileOpen(f) {
+    let rows;
+    if (/\.csv$/i.test(f.name)) { rows = parseCsvText(await f.text()); }
+    else { rows = await xlsxFirstSheetRows(await f.arrayBuffer()); }
+    const plan = surveyPlanOf(rows);
+    if (plan.err) { toast(plan.err, 'error'); return; }
+    openSurveyPreviewModal(plan, f.name);
+  }
   // hotfix283: 품목 수정 창의 조직 고르개 — 목록에서 고른다. 옛 이름은 회색으로 남겨 둔다.
   // hotfix417: selId 를 주면 그 고르개에 채운다 (기본 fs-f-cat)
   function fillFsCatSelect(cur, selId) {
@@ -28482,6 +28673,8 @@ function validateBlendSum(blends, label) {
       <button class="dash-action-btn" id="fs-csv-weight" style="font-weight:700;padding:6px 14px;" title="기준폭 · 튜브(예/아니오) · 스퀘어g/㎡ 만 있는 짧은 서식입니다. 채워서 [CSV 올려 고치기]로 올리십시오. 야드 중량은 g/㎡ × 기준폭으로 매번 계산됩니다">중량 서식 내려받기</button>
       ${editOn ? `<button class="dash-action-btn" id="fs-csv-in" style="font-weight:700;padding:6px 14px;" title="내려받아 고친 CSV 파일을 올려 품목 자료를 한꺼번에 고칩니다">CSV 올려 고치기</button>` : ''}
       <input type="file" id="fs-csv-file" accept=".csv,text/csv" style="display:none;">
+      ${editOn ? `<button class="dash-action-btn" id="fs-survey-in" style="font-weight:700;padding:6px 14px;background:#ecfdf5;border-color:#a7f3d0;color:#065f46;" title="김용범 조사 서식(xlsx)을 그대로 올립니다 — 품목명으로 찾아 기준 폭 · 튜브 · 스퀘어 g/㎡ · 몸판의 짝 리프를 미리 보고 반영합니다. 없는 품목은 만들지 않습니다">조사 xlsx 올리기</button>` : ''}
+      <input type="file" id="fs-survey-file" accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv" style="display:none;">
       ${isOwnerUser() ? `<button class="dash-action-btn" id="fs-item-migrate-btn" style="font-weight:700;padding:6px 14px;" title="저장된 의뢰서의 품목 글자 옆에 품목 코드(F0001…)와 생지 번호를 붙입니다 (글자는 그대로)">옛 자료 맞추기</button>` : ''}
     </div>`;
     // hotfix244: 구분 탭 / hotfix246: 판매 종료 탭
@@ -42800,6 +42993,17 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
         rd.onerror = () => toast('파일을 읽지 못했습니다', 'error');
         rd.readAsText(f, 'utf-8');
       });
+      // hotfix418: 조사 xlsx 올리기 — 미리 보기 뒤 [반영]
+      document.getElementById('fs-survey-in')?.addEventListener('click', () => {
+        document.getElementById('fs-survey-file')?.click();
+      });
+      document.getElementById('fs-survey-file')?.addEventListener('change', async (ev) => {
+        const f = ev.target.files && ev.target.files[0];
+        ev.target.value = '';
+        if (!f) return;
+        try { await surveyFileOpen(f); }
+        catch (e) { toast('파일을 읽지 못했습니다: ' + e.message + ' — 엑셀에서 [다른 이름으로 저장 › CSV] 한 파일로도 올릴 수 있습니다', 'error'); }
+      });
 
       // hotfix246: 판매 종료 / 판매 재개
       document.querySelectorAll('#dash-body .fs-sale-btn').forEach(b => b.addEventListener('click', async () => {
@@ -47141,7 +47345,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix417';
+  const VERSION = 'v2.53 hotfix418';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
