@@ -11744,6 +11744,8 @@ window.addEventListener('firebase-ready', () => {
   // 화면별 최소 등급 (기본값). [권한 관리]에서 최고관리자가 바꾼다.
   const VIEW_PERMS_DEFAULT = {
     yarn: 'staff', knit: 'staff', finish: 'staff', print: 'staff', bt: 'staff', yarnStock: 'staff',   // hotfix415: 원사 재고 현황
+    // hotfix416: [공장 간 이동] 목록(직원 기본) · 재고조정 · 이동 적기(작업 항목, 기본 최고관리자 — 사람별 허용, 대표 확정)
+    moves: 'staff', stockAdjust: 'owner',
     kpiboard: 'staff', overview: 'staff',
     completeReports: 'admin', ceoReports: 'admin',
     of: 'staff', gs: 'staff', claims: 'staff', 'daily-report': 'staff',
@@ -11762,11 +11764,13 @@ window.addEventListener('firebase-ready', () => {
   const VIEW_LABELS = {
     // hotfix409: 이름만 바꿈(원사 구매 → 원사 구매내역). hotfix413: 줄 끝 주석이 finish · print · bt 이름을 먹어 메뉴에 열쇠만 보이던 것 고침
     yarn: '원사 구매내역', knit: '생지생산 및 재고', yarnStock: '원사 재고 현황',
+    moves: '공장 간 이동', stockAdjust: '재고조정 · 공장 간 이동 적기 (원사 · 생지)',
     finish: '염색/가공 현황', print: '나염/가공 현황', bt: 'B/T 현황',
     kpiboard: '현황판', completeReports: '생산 완료 체크', ceoReports: '불량 체크',
     of: '공문조회', gs: '생지출고조회', claims: '클레임(땡처리)조회', 'daily-report': '가공소 일일 체크',
     samples: '샘플 조회', completed: '완료의뢰서 조회', trash: '휴지통',
-    stampSettings: '작지 스템프 설정', fabricSpecs: '품목 설정', vendors: '거래처 설정', specTol: '규격 허용치 설정',
+    // hotfix417: 품목 설정 → 품목 디테일 (품목명 · 구분 · 조직 · 기계는 [생지 및 편직 설정]이 본자리)
+    stampSettings: '작지 스템프 설정', fabricSpecs: '품목 디테일', vendors: '거래처 설정', specTol: '규격 허용치 설정',
     yarnSetup: '원사 설정', knitSetup: '생지 및 편직 설정', procSetup: '염/가공 설정',   // hotfix415: 이름만 바꿈(편직 설정 → 생지 및 편직 설정)   // hotfix398: 편직 · 염/가공 설정은 독립 화면 (원가 계산기 탭에도 그대로 있다)
     cautionDrafts: '주의사항 초안',   // hotfix398c
     itemColors: '품목 컬러 설정',   // hotfix399d
@@ -12058,7 +12062,8 @@ window.addEventListener('firebase-ready', () => {
   const HW_MENU = [
     { key: 'set',  name: '설정 및 관리', items: ['itemColors', 'procSetup'] },   // hotfix409: 염/가공 설정 옮김(직원도 전체 설정 층을 씀)   // hotfix402: 직원 화면(품목 컬러 설정)만 남김 — 코드 등록은 [최고관리자 설정]으로 옮김   // hotfix399d: 품목 컬러 설정(직원)   // hotfix398c: 주의사항 초안   // hotfix397: 코드 등록 메뉴 (거래처 V · 품목 F · 원사 Y · 편직 · 염/가공 P)
     { key: 'prod', name: '생산 현황',    items: ['finish', 'print', 'bt'] },   // hotfix409: 원사 구매내역 · 생지생산 및 재고 · 현황판은 [조회]로 옮김
-    { key: 'view', name: '조회',         items: ['yarn', 'yarnStock', 'knit', 'kpiboard', 'of', 'gs', 'claims', 'samples', 'completed'] }   // hotfix415: 원사 재고 현황
+    // hotfix416: [공장 간 이동] 목록
+    { key: 'view', name: '조회',         items: ['yarn', 'yarnStock', 'knit', 'kpiboard', 'of', 'gs', 'moves', 'claims', 'samples', 'completed'] }   // hotfix415: 원사 재고 현황
   ];
   // hotfix341: [사용자 관리]는 최고관리자 영역([≡])과 계정 메뉴에만 둔다
   // hotfix402: [최고관리자 설정] 내림 메뉴 — 묶음별로 (코드 등록 · 의뢰서 규칙 · 사람·권한 · 자료 관리). 사람별로 허용받은 화면은 그 사람에게도 보인다
@@ -13186,7 +13191,7 @@ window.addEventListener('firebase-ready', () => {
       const d = snap.exists() ? snap.data() : null;
       state.yarnLedger = (d && Array.isArray(d.items)) ? d.items : [];
       state.yarnLedgerLoaded = true;
-      if (state.uiMode === 'dashboard' && (state.dashView === 'yarn' || state.dashView === 'yarnStock')) renderDashboard();
+      if (state.uiMode === 'dashboard' && (state.dashView === 'yarn' || state.dashView === 'yarnStock' || state.dashView === 'moves')) renderDashboard();
     }, err => console.warn('[yarnLedger sub]', err.message));
     // hotfix413: 생지 원장 구독 — stock/greige (편직완료 · 뒤에 이동·조정)
     onSnapshot(doc(db, C('stock'), 'greige'), snap => {
@@ -13537,8 +13542,9 @@ function specGreigeColors(fid) {
     return { list, changed, added, skipped, addedNames, badFids, autoGy };
   }
   // hotfix283: 품목 수정 창의 조직 고르개 — 목록에서 고른다. 옛 이름은 회색으로 남겨 둔다.
-  function fillFsCatSelect(cur) {
-    const sel = document.getElementById('fs-f-cat');
+  // hotfix417: selId 를 주면 그 고르개에 채운다 (기본 fs-f-cat)
+  function fillFsCatSelect(cur, selId) {
+    const sel = document.getElementById(typeof selId === 'string' && selId ? selId : 'fs-f-cat');
     if (!sel) return;
     const now = String(cur == null ? '' : cur).trim();
     const orgs = getKnitOrgs().slice().sort(orgSortKo);   // hotfix398b: 가나다 → ABC 오름차순
@@ -13552,7 +13558,9 @@ function specGreigeColors(fid) {
       ? (orgs.find(o => orgKey(o) === orgKey(now)) || now) : now;
   }
   // 새 조직 넣기 — 띄어쓰기만 다르면 막고, 앞뒤만 겹치면 알려만 준다
-  async function addKnitOrgFromPrompt() {
+  async function addKnitOrgFromPrompt(selId) {
+    // hotfix417: selId(글자)를 주면 그 고르개에 넣는다 — 단추 이벤트로 불리면 fs-f-cat
+    const sid = (typeof selId === 'string' && selId) ? selId : 'fs-f-cat';
     const raw = prompt('새로 넣을 조직 이름을 적어 주십시오.\n(예: 하이멀티싱글)');
     if (raw == null) return;
     const name = String(raw).trim();
@@ -13560,7 +13568,7 @@ function specGreigeColors(fid) {
     const { same, like } = findLikeOrg(name);
     if (same) {
       alert(`[${same}] 라는 조직이 이미 있습니다.\n띄어쓰기만 다릅니다 — 같은 조직으로 봅니다.\n\n[${same}]로 골라 두겠습니다.`);
-      fillFsCatSelect(same);
+      fillFsCatSelect(same, sid);
       return;
     }
     if (like.length) {
@@ -13574,7 +13582,7 @@ function specGreigeColors(fid) {
     const next = { orgs: L.orgs.slice(), procs: L.procs.slice(), proc_alias: Object.assign({}, L.proc_alias), org_alias: Object.assign({}, L.org_alias) , proc_part: Object.assign({}, L.proc_part) };
     next.orgs.push(name);
     const ok = await saveCostLists(next);
-    if (ok) { toast(`조직 [${name}]을(를) 넣었습니다`, 'success'); fillFsCatSelect(name); }
+    if (ok) { toast(`조직 [${name}]을(를) 넣었습니다`, 'success'); fillFsCatSelect(name, sid); }
   }
   // ===== hotfix287: 편직 사양 CSV — 품목 × 편직공장 한 줄 =====
   //   자료를 옮기지 않는다. 공장별 사양(knits)이 있으면 그것을, 없으면 옛 칸을 그 공장 사양으로 읽는다.
@@ -14322,6 +14330,7 @@ function specGreigeColors(fid) {
     ['inch', 'needles', 'knit_loss', 'knit_fee'].forEach(k => { const a = kfNum(before && before[k]), b = kfNum(after[k]); if (a !== b) ch.push(KF_LABEL[k] + ': ' + (a == null ? '(없음)' : a) + ' → ' + (b == null ? '(없음)' : b)); });
     if (String((before && before.memo) || '') !== String(after.memo || '')) ch.push('비고: ' + (String((before && before.memo) || '') || '(없음)') + ' → ' + (String(after.memo || '') || '(없음)'));
     if (String((before && before.color) || '') !== String(after.color || '')) ch.push('생지 컬러: ' + (String((before && before.color) || '') || '(자동)') + ' → ' + (String(after.color || '') || '(자동)'));   // hotfix415
+    if (String((before && before.machine) || '') !== String(after.machine || '')) ch.push('기계: ' + (String((before && before.machine) || '') || '(없음)') + ' → ' + (String(after.machine || '') || '(없음)'));
     const names = Array.from(new Set([].concat(yarnNames || [], Object.keys((before && before.loops) || {}), Object.keys(after.loops || {}))));
     names.forEach(nm => { const a = kfNum(before && before.loops && before.loops[nm]), b = kfNum(after.loops && after.loops[nm]); if (a !== b) ch.push('루프장 ' + nm + ': ' + (a == null ? '(없음)' : a) + ' → ' + (b == null ? '(없음)' : b)); });
     // hotfix399e: 직접 % · 혼용율 내는 법
@@ -14360,6 +14369,8 @@ function specGreigeColors(fid) {
     Object.keys(row.loops || {}).forEach(nm => { const x = kfNum(row.loops[nm]); if (x != null) after.loops[nm] = x; });
     after.pcts = {}; Object.keys(row.pcts || {}).forEach(nm => { const x = kfNum(row.pcts[nm]); if (x != null) after.pcts[nm] = x; });   // hotfix399e: 직접 %
     after.color = String(row.color || '').trim();   // hotfix415: 생지 컬러 (비우면 사종 컬러에서 짐작)
+    // hotfix417: 어느 기계에서 짜는지 (직접 적기 — 비우면 기계 이름 자동값만)
+    after.machine = String(row.machine || '').trim();
     after.blend_mode = (row.blend_mode === 'manual') ? 'manual' : 'loop';
     // hotfix391: 루프장 사종 이름 → 코드 짝 (loops 는 이름 열쇠 그대로, 옆에 loop_yids 로 병기)
     after.loop_yids = {}; Object.keys(after.loops).forEach(nm => { const id = yarnYidOf(nm); if (id) after.loop_yids[nm] = id; });
@@ -23773,18 +23784,21 @@ function validateBlendSum(blends, label) {
           const items = w.items || [];
           const tj = items.reduce((s, i) => s + (parseFloat(i.jul) || 0), 0);
           const tk = items.reduce((s, i) => s + (parseFloat(i.jul) || 0) * (parseFloat(i.kg_per_jul) || 21), 0);
-          const sh = w.greige_shipments || [];
+          const sh = (w.greige_shipments || []).filter(shLive);
           const outj = sh.reduce((s, x) => s + (x.dir === 'in' ? 0 : (parseFloat(x.jul) || 0)), 0);
           const outk = sh.reduce((s, x) => s + (x.dir === 'in' ? 0 : (parseFloat(x.kg) || 0)), 0);
           const inj = sh.reduce((s, x) => s + (x.dir === 'in' ? (parseFloat(x.jul) || 0) : 0), 0);
           const ink = sh.reduce((s, x) => s + (x.dir === 'in' ? (parseFloat(x.kg) || 0) : 0), 0);
           sj += (tj + inj - outj); sk += (tk + ink - outk);
         });
+        // hotfix416: 업체를 고르면 이동으로 받은 생지를 더한다 (받은 공장 쪽 +)
+        let gotTag = '';
+        if (cv !== 'all') { const got = greigeMovedIn(cv, kindPool2); if (got.n) { sj += got.jul; sk += got.kg; gotTag = `<span style="margin-left:6px;padding:1px 7px;border-radius:9px;background:#dbeafe;color:#1e40af;font-size:11px;font-weight:700;white-space:nowrap;" title="다른 공장에서 이동으로 받은 생지 (합계에 들어 있음)">이동 받음 ${got.jul}절</span>`; } }
         const opts = ['all', ...vendors].map(v => `<option value="${escapeHtml(v)}" ${cv === v ? 'selected' : ''}>${v === 'all' ? '전체 업체' : escapeHtml(v)}</option>`).join('');
         const kindLabel = { all: '편직', regular: '기획', stock: '재고', sample: '샘플' }[kk] || '편직';
         stockBox = `<span style="display:inline-flex;align-items:center;gap:8px;margin-left:8px;">
           <select id="ov-knit-vendor" style="padding:4px 8px;border:1px solid #d1d5db;border-radius:5px;font-size:12px;font-family:inherit;">${opts}</select>
-          <span style="font-size:12px;font-weight:800;color:#374151;white-space:nowrap;">${cv === 'all' ? '전체' : escapeHtml(cv)} ${kindLabel} 생지 재고 <span style="color:#c0271f;">${sj}절</span> <span style="color:#9ca3af;">/</span> <span style="color:#c0271f;">${sk.toFixed(1)}kg</span></span>
+          <span style="font-size:12px;font-weight:800;color:#374151;white-space:nowrap;">${cv === 'all' ? '전체' : escapeHtml(cv)} ${kindLabel} 생지 재고 <span style="color:#c0271f;">${sj}절</span> <span style="color:#9ca3af;">/</span> <span style="color:#c0271f;">${sk.toFixed(1)}kg</span></span>${gotTag}
         </span>`;
       }
       html += `<div class="ov-knit-subbar" style="display:flex;align-items:center;gap:5px;margin:0 0 10px 2px;flex-wrap:wrap;padding:7px 10px;background:#f9fafb;border:1px solid #eee;border-radius:6px;">
@@ -24355,7 +24369,7 @@ function validateBlendSum(blends, label) {
         <td class="col-action ov-knit-ship-cell">${shipCol}</td>
         <td class="col-num" style="text-align:right;" title="재고 절 = 의뢰 ${totalJul}절${inJ > 0 ? ' + 입고 ' + inJ + '절' : ''} − 출고 ${shJul}절">${qtyCol}</td>
         <td class="col-num" style="text-align:right;">${kgCol}</td>
-        <td>${escapeHtml(wo.recipient || '-')}</td>
+        <td>${escapeHtml(wo.recipient || '-')}${(items.length > 0 ? items : [{}]).map((it, idx) => knitMoveTagHtml(wo, idx)).join('')}</td>
         ${renderEditableCell(wo, 'internal_memo', wo.internal_memo, 'text')}
         <td class="col-action col-act-view"><button class="dash-action-btn dash-view-btn" data-id="${wo.id}">보기</button>${gsStatusBadge(wo)}</td>
         <td class="col-action" style="white-space:nowrap;">${(kind === 'regular' || kind === 'stock' || wo.knit_done) ? knitDoneCellHtml(wo) : '-'}</td>`;
@@ -24647,6 +24661,278 @@ function validateBlendSum(blends, label) {
   //   왼쪽 업체 목록 · 오른쪽 표(입고 · 사용 · 조정 · 이동 · 재고) · 줄을 펼치면 "어느 통이 얼마 썼나"와 "입고·조정·이동 기록"
   // ============================================================
   function yarnStockLines(key) { return yarnLedger().filter(r => r && !r.void && yarnLedgerKey(r) === key); }
+  // ============================================================
+  // hotfix416: 재고통합 5·6단계 — 원사 재고조정(kind 'adjust') · 원사 이동(kind 'move' 두 줄, 묶음 move_id) · 생지 이동(출고 줄 move:true + dest, 공장간이동 기획서 v2 길 ③) · [이 통 로스 확정](입고 조정 줄 src 'loss')
+  //   권한 = [권한 설정] 'stockAdjust'(기본 최고관리자 · 사람별 허용). 취소 · 되돌리기는 최고관리자만(void 도장, 기록은 남는다)
+  //   원사 조정 줄 = { id, kind:'adjust', yarn, yid, color, vendor, vendor_vid, kg(차이, ±), before, after, measured, reason, memo, date, by, at, void }
+  //   원사 이동 줄 = { id, kind:'move', move_id, yarn, yid, color, vendor, vendor_vid, kg(보낸 곳 −, 받은 곳 +), dest|from, memo, date, by, at, void }
+  //   생지 이동 줄 = greige_shipments { dir:'out', move:true, dest, dest_vid, src:'move', jul, kg, kg_manual, date, memo, by, at, void, item_idx }
+  // ============================================================
+  function canStockAdjust() { return !!state.user && canAccessView('stockAdjust'); }
+  const YARN_ADJ_REASONS = { invoice: '청구서', measured: '실측', loss: '로스', base: '기초 재고', other: '기타' };
+  function yarnAdjReasonLabel(r) { return YARN_ADJ_REASONS[r] || String(r || ''); }
+  function stockLineId(p) { return p + '_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6); }
+  // 이 줄(사종 × 컬러 × 업체)의 지금 재고 kg
+  function yarnStockOf(key) { const r = yarnStockRows().find(x => x.key === key); return r ? r.stock_kg : 0; }
+  function yarnKeyOf(yarn, yid, color, vendor, vendor_vid) { return yarnLedgerKey({ yarn, yid, color, vendor, vendor_vid }); }
+  // 도움말 — 이 업체에서 이 사종·컬러를 쓰는 통(use 줄)마다 생지 남은 절 · 로스 추정(남은 절 × kg/절 × 비율). 남은 절 0 이하 = 로스 없음
+  function yarnAdjustHelpRows(key) {
+    return yarnStockLines(key).filter(x => x.kind === 'use').map(u => {
+      const wo = state.allWorkOrders.find(w => w && w.id === u.wo_id);
+      const idx = u.item_idx != null ? u.item_idx : 0;
+      const rem = wo ? (knitFinalJul(wo, idx) - knitOutJul(wo, idx)) : 0;
+      const loss = rem >= 1 ? Math.round(rem * (parseFloat(u.kg_per_jul) || 21) * ((parseFloat(u.pct) || 0) / 100) * 10) / 10 : 0;
+      return { u, wo, idx, done: !!(wo && wo.knit_done), rem, loss };
+    });
+  }
+  // [조정 기록] — 실측 kg 를 넣으면 차이 = 실측 − 시스템 재고. before/after 를 줄에 남긴다
+  async function yarnAdjustAdd(row, opt) {
+    if (!canStockAdjust()) { toast('재고조정 권한이 없습니다 — [권한 설정]에서 허용받은 사람만 됩니다', 'error'); return false; }
+    const before = yarnStockOf(row.key);
+    const measured = parseFloat(opt.measured);
+    const kg = Math.round((isNaN(measured) ? (parseFloat(opt.kg) || 0) : (measured - before)) * 10) / 10;
+    if (!kg) { toast('차이가 0 이라 조정할 것이 없습니다', 'info'); return false; }
+    const at = new Date().toISOString(), by = state.user.email || '';
+    const line = { id: stockLineId('adj'), kind: 'adjust', yarn: row.yarn, yid: row.yid || '', color: row.color || '', vendor: row.vendor, vendor_vid: row.vendor_vid || vendorVidOf(row.vendor) || '', kg, before: Math.round(before * 10) / 10, after: Math.round((before + kg) * 10) / 10, measured: isNaN(measured) ? null : measured, reason: opt.reason || 'other', memo: String(opt.memo || '').trim(), date: opt.date || todayYMD(), by, at, void: false };
+    return yarnLedgerSave(yarnLedger().concat([line]));
+  }
+  // 원사 이동 — 보낸 곳 − · 받은 곳 + 두 줄을 같은 move_id 로 묶는다 (기획서: 한 건으로 묶여 함께 되돌아간다)
+  async function yarnMoveAdd(row, dest, kg, dateStr, memo) {
+    if (!canStockAdjust()) { toast('이동 권한이 없습니다 — [권한 설정]에서 허용받은 사람만 됩니다', 'error'); return false; }
+    kg = Math.round((parseFloat(kg) || 0) * 10) / 10;
+    const to = String(dest || '').trim();
+    if (!kg || kg < 0) { toast('옮길 kg 를 넣어 주십시오', 'error'); return false; }
+    if (!to || vendorKey(to) === vendorKey(row.vendor)) { toast('받는 곳을 골라 주십시오 (보낸 곳과 다른 편직공장)', 'error'); return false; }
+    const at = new Date().toISOString(), by = state.user.email || '', mid = stockLineId('mv');
+    const base = { kind: 'move', move_id: mid, yarn: row.yarn, yid: row.yid || '', color: row.color || '', memo: String(memo || '').trim(), date: dateStr || todayYMD(), by, at, void: false };
+    const a = Object.assign({ id: mid + '_out', vendor: row.vendor, vendor_vid: row.vendor_vid || vendorVidOf(row.vendor) || '', kg: -kg, dest: to, dest_vid: vendorVidOf(to) || '' }, base);
+    const b = Object.assign({ id: mid + '_in', vendor: to, vendor_vid: vendorVidOf(to) || '', kg, from: row.vendor, from_vid: row.vendor_vid || vendorVidOf(row.vendor) || '' }, base);
+    return yarnLedgerSave(yarnLedger().concat([a, b]));
+  }
+  // 원장 줄 취소(최고관리자) — 이동은 묶음(move_id) 두 줄이 같이 취소된다
+  async function yarnLineVoid(id) {
+    if (!isOwnerUser()) { toast('취소는 최고관리자만 됩니다', 'error'); return false; }
+    const hit = yarnLedger().find(r => r && r.id === id); if (!hit) return false;
+    const at = new Date().toISOString(), by = state.user.email || '';
+    const items = yarnLedger().map(r => (r && !r.void && (r.id === id || (hit.move_id && r.move_id === hit.move_id))) ? Object.assign({}, r, { void: true, void_by: by, void_at: at }) : r);
+    return yarnLedgerSave(items);
+  }
+  // 생지 이동 — 통(편직 의뢰서 품목 줄)에 출고 줄 move:true + dest. 보낸 공장은 out 이라 저절로 −, 받은 공장은 greigeMovedIn 이 + 로 센다
+  async function greigeMoveAdd(wo, idx, dest, jul, kg, dateStr, memo) {
+    if (!canStockAdjust()) { toast('이동 권한이 없습니다 — [권한 설정]에서 허용받은 사람만 됩니다', 'error'); return false; }
+    const it = (wo.items || [])[idx] || {};
+    jul = parseFloat(jul) || 0; const to = String(dest || '').trim();
+    if (!jul || jul < 0) { toast('옮길 절수를 넣어 주십시오', 'error'); return false; }
+    if (!to || vendorKey(to) === vendorKey(wo.recipient)) { toast('받는 곳을 골라 주십시오 (보낸 곳과 다른 편직공장)', 'error'); return false; }
+    const kpj = parseFloat(it.kg_per_jul) || 21; const typed = !!parseFloat(kg);
+    const at = new Date().toISOString(), by = state.user.email || '';
+    const line = { dir: 'out', move: true, dest: to, dest_vid: vendorVidOf(to) || '', src: 'move', item_idx: idx, jul, kg: typed ? Math.round(parseFloat(kg) * 10) / 10 : Math.round(jul * kpj * 10) / 10, kg_manual: typed, date: dateStr || todayYMD(), memo: String(memo || '').trim() || (String(wo.recipient || '') + ' → ' + to + ' 이동'), by, at, void: false, id: stockLineId('gmv') };
+    const sh = (Array.isArray(wo.greige_shipments) ? wo.greige_shipments : []).concat([line]);
+    try { await updateDoc(doc(db, C('workorders'), wo.id), { greige_shipments: sh, updated_at: serverTimestamp(), updated_by: by }); wo.greige_shipments = sh; }
+    catch (e) { toast('이동 줄을 적지 못했습니다: ' + e.message, 'error'); return false; }
+    try { await knitUseRefresh(wo); } catch (e) { console.warn('[use refresh]', e.message); }
+    return true;
+  }
+  // 생지 줄 취소(최고관리자) — 이동 · 로스 줄을 void 도장 (재고는 돌아오고 기록은 남는다)
+  async function greigeLineVoid(woId, shId) {
+    if (!isOwnerUser()) { toast('되돌리기는 최고관리자만 됩니다', 'error'); return false; }
+    const wo = state.allWorkOrders.find(w => w && w.id === woId); if (!wo) return false;
+    const at = new Date().toISOString(), by = state.user.email || '';
+    const sh = (wo.greige_shipments || []).map(x => (x && x.id === shId) ? Object.assign({}, x, { void: true, void_by: by, void_at: at }) : x);
+    try { await updateDoc(doc(db, C('workorders'), wo.id), { greige_shipments: sh, updated_at: serverTimestamp(), updated_by: by }); wo.greige_shipments = sh; }
+    catch (e) { toast('되돌리지 못했습니다: ' + e.message, 'error'); return false; }
+    try { await knitUseRefresh(wo); } catch (_) {}
+    return true;
+  }
+  // [이 통 로스 확정] — 생지 남은 절을 0 으로 맞추는 입고 조정 줄(절 −남은 절, src 'loss'). 남은 절이 1 미만이면 하지 않는다 (대표 확정)
+  async function greigeLossFix(wo, idx, dateStr, memo) {
+    if (!canStockAdjust()) { toast('재고조정 권한이 없습니다', 'error'); return false; }
+    const it = (wo.items || [])[idx] || {};
+    const rem = knitFinalJul(wo, idx) - knitOutJul(wo, idx);
+    if (rem < 1) { toast('생지 남은 절이 ' + rem + '절 — 로스로 볼 것이 없습니다', 'info'); return false; }
+    const kpj = parseFloat(it.kg_per_jul) || 21;
+    const at = new Date().toISOString(), by = state.user.email || '';
+    const line = { dir: 'in', src: 'loss', item_idx: idx, jul: -rem, kg: -Math.round(rem * kpj * 10) / 10, kg_manual: false, date: dateStr || todayYMD(), memo: String(memo || '').trim() || ('로스 확정 ' + rem + '절'), by, at, void: false, id: stockLineId('gls') };
+    const sh = (Array.isArray(wo.greige_shipments) ? wo.greige_shipments : []).concat([line]);
+    try { await updateDoc(doc(db, C('workorders'), wo.id), { greige_shipments: sh, updated_at: serverTimestamp(), updated_by: by }); wo.greige_shipments = sh; }
+    catch (e) { toast('로스 줄을 적지 못했습니다: ' + e.message, 'error'); return false; }
+    return true;
+  }
+  // 받은 공장 쪽 — 살아 있는 이동 줄 가운데 dest 가 이 업체인 것의 절 · kg 합 (업체별 생지 재고 합계에 더한다)
+  function greigeMovedIn(vendor, pool) {
+    const vk = vendorKey(vendor); const out = { jul: 0, kg: 0, n: 0 };
+    if (!vk) return out;
+    (Array.isArray(pool) ? pool : state.allWorkOrders).forEach(w => {
+      if (!w || w.deleted || w.type !== '편직') return;
+      (w.greige_shipments || []).forEach(x => { if (x && x.move && shLive(x) && vendorKey(x.dest) === vk) { out.jul += parseFloat(x.jul) || 0; out.kg += parseFloat(x.kg) || 0; out.n++; } });
+    });
+    return out;
+  }
+  // 보낸 통의 꼬리표 — [세원섬유에 30절 이동] (받는 곳별로 합침)
+  function knitMoveTagHtml(wo, idx) {
+    const bag = {};
+    (wo.greige_shipments || []).forEach(x => { if (x && x.move && shLive(x) && ((x.item_idx != null ? x.item_idx : 0) === idx)) { const k = String(x.dest || ''); bag[k] = (bag[k] || 0) + (parseFloat(x.jul) || 0); } });
+    return Object.keys(bag).map(d => `<div style="display:inline-block;margin-top:2px;padding:1px 6px;border-radius:9px;background:#dbeafe;color:#1e40af;font-size:10.5px;font-weight:700;white-space:nowrap;" title="이동 (판매 출고 아님)">${escapeHtml(d)}에 ${bag[d]}절 이동</div>`).join('');
+  }
+  // [공장 간 이동] 목록 — 생지 이동 줄(의뢰서) + 원사 이동 묶음(원장) 한 화면. 되돌리기는 취소됨 도장
+  function moveListRows() {
+    const out = [];
+    state.allWorkOrders.forEach(w => {
+      if (!w || w.type !== '편직' || !Array.isArray(w.greige_shipments)) return;
+      w.greige_shipments.forEach(x => {
+        if (!x || !x.move) return;
+        const it = (w.items || [])[x.item_idx != null ? x.item_idx : 0] || {};
+        out.push({ kind: '생지', date: String(x.date || '').slice(0, 10), item: greigeSplit(it.item || '').name || it.item || '', color: it.color || '', lot: greigeNoClean(it.greige_no) || greigeSplit(it.item || '').no || '', qty: (parseFloat(x.jul) || 0) + '절 / ' + (parseFloat(x.kg) || 0).toFixed(1) + 'kg', from: w.recipient || '', to: x.dest || '', by: x.by || '', memo: x.memo || '', dead: !shLive(x), wo_id: w.id, wo_number: w.wo_number || '', sh_id: x.id || '' });
+      });
+    });
+    const seen = new Set();
+    yarnLedger().forEach(r => {
+      if (!r || r.kind !== 'move' || !r.move_id || seen.has(r.move_id)) return;
+      seen.add(r.move_id);
+      const o = yarnLedger().find(x => x && x.move_id === r.move_id && (parseFloat(x.kg) || 0) < 0) || r;
+      out.push({ kind: '원사', date: String(o.date || '').slice(0, 10), item: o.yarn || '', color: (o.color && !yarnColorIsLW(o.color)) ? o.color : '', lot: '', qty: Math.abs(parseFloat(o.kg) || 0).toFixed(1) + 'kg', from: o.vendor || o.from || '', to: o.dest || '', by: o.by || '', memo: o.memo || '', dead: !!o.void, ledger_id: o.id });
+    });
+    return out.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  }
+  function renderMovesDash() {
+    const rows = moveListRows(); const owner = isOwnerUser();
+    let h = `<div style="font-size:12px;color:#64748b;line-height:1.7;margin-bottom:10px;">공장 간 이동만 모은 목록입니다 (판매 출고가 아니라 생지출고 목록 · 실적에는 나오지 않습니다). 생지 이동은 [생지생산 및 재고 › 입·출고 › 다른 공장으로 이동], 원사 이동은 [원사 재고 현황 › 이동]에서 적습니다. 되돌리기는 최고관리자만 — 지우지 않고 취소됨으로 남깁니다.</div>
+    <div class="dash-table-wrap"><table class="dash-table"><thead><tr><th>날짜</th><th>종류</th><th>품목 / 사종</th><th>컬러</th><th>로트</th><th>수량</th><th>보낸 곳</th><th>받은 곳</th><th>적은 사람</th><th>메모</th><th>되돌리기</th></tr></thead><tbody>`;
+    if (!rows.length) h += `<tr><td colspan="11" style="text-align:center;color:#9ca3af;padding:20px;">아직 이동 기록이 없습니다.</td></tr>`;
+    rows.forEach(r => {
+      h += `<tr style="${r.dead ? 'color:#9ca3af;text-decoration:line-through;' : ''}"><td>${escapeHtml(r.date)}</td><td style="text-align:center;"><span style="padding:1px 7px;border-radius:9px;background:${r.kind === '생지' ? '#dbeafe' : '#dcfce7'};color:${r.kind === '생지' ? '#1e40af' : '#166534'};font-weight:700;font-size:11px;text-decoration:none;">${r.kind}</span></td><td style="text-align:left;">${escapeHtml(r.item)}${r.wo_number ? `<div style="font-size:10.5px;color:#94a3b8;">${escapeHtml(r.wo_number)}</div>` : ''}</td><td>${escapeHtml(r.color || '-')}</td><td style="font-family:var(--font-gothic);font-weight:700;color:#1e3a8a;">${escapeHtml(r.lot || '-')}</td><td style="text-align:right;font-weight:700;">${escapeHtml(r.qty)}</td><td>${escapeHtml(r.from)}</td><td style="font-weight:700;color:#1e40af;">${escapeHtml(r.to)}</td><td style="font-size:11px;color:#64748b;">${escapeHtml(String(r.by).split('@')[0])}</td><td style="text-align:left;">${escapeHtml(r.memo)}</td>
+        <td style="text-align:center;">${r.dead ? '<span style="font-size:11px;color:#b91c1c;font-weight:700;text-decoration:none;">취소됨</span>' : (owner ? `<button class="dash-action-btn mv-undo" data-kind="${r.kind}" data-wo="${escapeHtml(r.wo_id || '')}" data-sh="${escapeHtml(r.sh_id || '')}" data-ledger="${escapeHtml(r.ledger_id || '')}" style="font-size:11px;padding:2px 8px;">되돌리기</button>` : '<span style="font-size:11px;color:#9ca3af;">최고관리자</span>')}</td></tr>`;
+    });
+    return h + `</tbody></table></div>`;
+  }
+  function bindMovesDash() {
+    document.querySelectorAll('#dash-body .mv-undo').forEach(b => b.addEventListener('click', async () => {
+      if (!confirm('이 이동을 되돌립니다. 양쪽 재고가 원래대로 돌아오고 줄은 취소됨으로 남습니다.\n\n되돌릴까요?')) return;
+      const ok = b.dataset.kind === '생지' ? await greigeLineVoid(b.dataset.wo, b.dataset.sh) : await yarnLineVoid(b.dataset.ledger);
+      if (ok) { toast('이동을 되돌렸습니다', 'success'); renderDashboard(); }
+    }));
+  }
+  // 재고조정 창 — 줄(row)이 있으면 그 줄, 없으면(기초 재고) 사종 · 컬러 · 업체를 골라 넣는다
+  function openYarnAdjustModal(row) {
+    const old = document.getElementById('ya-modal'); if (old) old.remove();
+    const iS = 'width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #d1d5db;border-radius:7px;font-size:13px;font-family:inherit;';
+    const lab = t => `<label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px;">${t}</label>`;
+    const f1 = x => (Math.round(x * 10) / 10).toFixed(1);
+    const m = document.createElement('div'); m.id = 'ya-modal';
+    m.style.cssText = 'position:fixed;inset:0;z-index:2000;background:rgba(15,23,42,.45);display:flex;align-items:center;justify-content:center;';
+    const facs = knitFactoryList();
+    const yarns = yarnNameList();
+    const bases = Array.from(new Set(yarns.map(y => yarnParts(y).base).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'ko'));
+    const pick = !row;
+    const head = pick ? `<div style="display:grid;grid-template-columns:1.4fr 1fr 1fr;gap:8px;margin-bottom:10px;">
+        <div>${lab('사종')}<select id="ya-yarn" style="${iS}"><option value="">고르기</option>${bases.map(y => `<option value="${escapeHtml(y)}">${escapeHtml(y)}</option>`).join('')}</select></div>
+        <div>${lab('컬러')}<input type="text" lang="ko" id="ya-color" list="ya-color-list" value="${escapeHtml(YARN_LW)}" style="${iS}"><datalist id="ya-color-list">${(() => { const s = new Set(); const o = []; yarns.forEach(y => { const c = yarnParts(y).color; const t = c ? (yarnColorIsLW(c) ? YARN_LW : c) : YARN_LW; if (!s.has(yarnColorKey(t))) { s.add(yarnColorKey(t)); o.push(t); } }); return o.map(c => `<option value="${escapeHtml(c)}"></option>`).join(''); })()}</datalist></div>
+        <div>${lab('업체 (편직공장)')}<select id="ya-vendor" style="${iS}"><option value="">고르기</option>${facs.map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('')}</select></div>
+      </div>` : '';
+    m.innerHTML = `<div style="background:#fff;border-radius:12px;width:min(720px,96vw);max-height:92vh;overflow:auto;padding:18px 20px;box-shadow:0 20px 50px rgba(0,0,0,.3);">
+      <div style="font-size:15px;font-weight:800;color:#0f172a;margin-bottom:4px;">${pick ? '기초 재고 · 재고조정' : '재고조정 — ' + escapeHtml(row.vendor || '') + ' · ' + escapeHtml(row.yarn || '') + ' · ' + escapeHtml(row.color || YARN_LW)}</div>
+      <div style="font-size:12px;color:#64748b;line-height:1.6;margin-bottom:10px;">월 1회 청구서 · 재고표가 올 때 실측 kg 를 넣으면 차이만큼 조정 줄이 생깁니다. 처음 넣는 기초 재고도 같은 창입니다(사유 = 기초 재고).</div>
+      ${head}
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin-bottom:10px;">
+        <div>${lab('시스템 재고 kg')}<input type="text" id="ya-before" readonly value="${pick ? '' : f1(row.stock_kg)}" style="${iS}background:#f8fafc;color:#334155;font-weight:700;"></div>
+        <div>${lab('실측(청구서) kg')}<input type="number" step="0.1" id="ya-measured" placeholder="예: 298.0" style="${iS}font-weight:800;color:#1e3a8a;"></div>
+        <div>${lab('차이 kg')}<input type="text" id="ya-diff" readonly value="" style="${iS}background:#f8fafc;font-weight:800;"></div>
+        <div>${lab('조정일')}<input type="date" id="ya-date" value="${todayYMD()}" style="${iS}"></div>
+      </div>
+      <div id="ya-help" style="font-size:11.5px;color:#334155;line-height:1.6;background:#f8fafc;border-radius:8px;padding:8px 10px;margin-bottom:10px;"></div>
+      <div style="display:grid;grid-template-columns:150px 1fr;gap:8px;margin-bottom:12px;">
+        <div>${lab('사유')}<select id="ya-reason" style="${iS}">${Object.keys(YARN_ADJ_REASONS).map(k => `<option value="${k}"${(pick ? k === 'base' : k === 'invoice') ? ' selected' : ''}>${YARN_ADJ_REASONS[k]}</option>`).join('')}</select></div>
+        <div>${lab('메모')}<input type="text" lang="ko" id="ya-memo" placeholder="청구서 번호 · 비고" style="${iS}"></div>
+      </div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;align-items:center;">
+        <span id="ya-after" style="margin-right:auto;font-size:12.5px;color:#334155;"></span>
+        <button class="dash-action-btn" id="ya-cancel" style="padding:8px 16px;">취소</button>
+        <button class="dash-action-btn" id="ya-ok" style="background:#1e3a8a;color:#fff;font-weight:800;padding:8px 20px;">조정 기록</button>
+      </div></div>`;
+    document.body.appendChild(m);
+    const curRow = () => {
+      if (!pick) return row;
+      const yn = m.querySelector('#ya-yarn').value, c = m.querySelector('#ya-color').value.trim() || YARN_LW, v = m.querySelector('#ya-vendor').value;
+      if (!yn || !v) return null;
+      const r = { yarn: yn, yid: yarnYidOf(yn) || '', color: yarnColorIsLW(c) ? '' : c, vendor: v, vendor_vid: vendorVidOf(v) || '' };
+      r.key = yarnLedgerKey(r); r.stock_kg = yarnStockOf(r.key); return r;
+    };
+    const paint = () => {
+      const r = curRow(); const help = m.querySelector('#ya-help');
+      const before = r ? r.stock_kg : 0;
+      if (pick) m.querySelector('#ya-before').value = r ? f1(before) : '';
+      const mv = parseFloat(m.querySelector('#ya-measured').value);
+      const diff = isNaN(mv) ? NaN : Math.round((mv - before) * 10) / 10;
+      m.querySelector('#ya-diff').value = isNaN(diff) ? '' : (diff > 0 ? '+' : '') + f1(diff);
+      m.querySelector('#ya-after').textContent = isNaN(diff) ? '' : '조정 뒤 재고 ' + f1(before + diff) + ' kg';
+      if (!r) { help.innerHTML = '사종 · 업체를 고르면 지금 재고와 쓰는 통이 보입니다.'; return; }
+      const rows = yarnAdjustHelpRows(r.key);
+      if (!rows.length) { help.innerHTML = '이 업체에서 이 사종을 쓰는 통이 없습니다.'; return; }
+      help.innerHTML = `<div style="font-weight:700;margin-bottom:3px;">이 업체에서 이 사종을 쓰는 통 — 생지 남은 절이 1절 이상이면 로스로 봅니다(남은 절 × kg/절 × 비율). 0절 이하는 로스 없음.</div>
+        <table class="dash-table" style="font-size:11.5px;"><thead><tr><th>통</th><th>생산절</th><th>kg/절</th><th>비율</th><th>사용 kg</th><th>남은 절</th><th>로스 추정</th><th></th></tr></thead><tbody>` +
+        rows.map(x => `<tr><td style="text-align:left;">${escapeHtml(x.u.item || '')} <span style="font-family:var(--font-gothic);font-weight:700;color:#1e3a8a;">${escapeHtml(x.u.greige_no || '')}</span> <span style="font-size:10.5px;color:#94a3b8;">${escapeHtml(x.u.wo_number || '')} · ${x.done ? '편직완료' : '기획 중'}</span></td><td style="text-align:right;">${x.u.jul}</td><td style="text-align:right;">${x.u.kg_per_jul}</td><td style="text-align:right;">${x.u.pct}%</td><td style="text-align:right;">${f1(x.u.kg)}</td><td style="text-align:right;font-weight:700;color:${x.rem >= 1 ? '#b45309' : '#047857'};">${x.rem}</td><td style="text-align:right;font-weight:700;">${x.loss ? f1(x.loss) : '-'}</td><td style="text-align:center;">${x.rem >= 1 && x.wo ? `<button class="dash-action-btn ya-loss" data-wo="${x.wo.id}" data-idx="${x.idx}" style="font-size:10.5px;padding:1px 7px;" title="생지 남은 절을 0 으로 맞추는 입고 조정 줄을 넣습니다 (원사는 이 창의 조정으로)">이 통 로스 확정</button>` : ''}</td></tr>`).join('') + `</tbody></table>`;
+      help.querySelectorAll('.ya-loss').forEach(b => b.addEventListener('click', async () => {
+        const wo = state.allWorkOrders.find(w => w.id === b.dataset.wo); if (!wo) return;
+        if (!confirm('이 통의 생지 남은 절을 0 으로 맞춥니다 (로스 확정). 입·출고 창에 로스 줄이 남고 되돌리기는 최고관리자만.\n\n확정할까요?')) return;
+        const ok = await greigeLossFix(wo, parseInt(b.dataset.idx, 10), m.querySelector('#ya-date').value, m.querySelector('#ya-memo').value);
+        if (ok) { toast('로스를 확정했습니다 — 생지 재고 0절', 'success'); paint(); }
+      }));
+    };
+    ['#ya-measured', '#ya-yarn', '#ya-color', '#ya-vendor'].forEach(q => { const el = m.querySelector(q); if (el) { el.addEventListener('input', paint); el.addEventListener('change', paint); } });
+    paint();
+    m.querySelector('#ya-cancel').addEventListener('click', () => m.remove());
+    m.addEventListener('click', e => { if (e.target === m) m.remove(); });
+    m.querySelector('#ya-ok').addEventListener('click', async () => {
+      const r = curRow(); if (!r) { toast('사종 · 업체를 골라 주십시오', 'error'); return; }
+      const measured = m.querySelector('#ya-measured').value;
+      if (measured === '') { toast('실측(청구서) kg 를 넣어 주십시오', 'error'); return; }
+      const b = m.querySelector('#ya-ok'); b.disabled = true;
+      const ok = await yarnAdjustAdd(r, { measured, reason: m.querySelector('#ya-reason').value, memo: m.querySelector('#ya-memo').value, date: m.querySelector('#ya-date').value });
+      if (ok) { m.remove(); toast('재고조정을 기록했습니다', 'success'); renderDashboard(); } else b.disabled = false;
+    });
+  }
+  // 원사 이동 창 — 받는 곳 · kg · 양쪽 미리 보기 (재고보다 많으면 빨간 글씨로 알리되 막지 않는다)
+  function openYarnMoveModal(row) {
+    const old = document.getElementById('ym-modal'); if (old) old.remove();
+    const iS = 'width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #d1d5db;border-radius:7px;font-size:13px;font-family:inherit;';
+    const lab = t => `<label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px;">${t}</label>`;
+    const f1 = x => (Math.round(x * 10) / 10).toFixed(1);
+    const facs = knitFactoryList().filter(v => vendorKey(v) !== vendorKey(row.vendor));
+    const m = document.createElement('div'); m.id = 'ym-modal';
+    m.style.cssText = 'position:fixed;inset:0;z-index:2000;background:rgba(15,23,42,.45);display:flex;align-items:center;justify-content:center;';
+    m.innerHTML = `<div style="background:#fff;border-radius:12px;width:min(560px,94vw);padding:18px 20px;box-shadow:0 20px 50px rgba(0,0,0,.3);">
+      <div style="font-size:15px;font-weight:800;color:#0f172a;margin-bottom:4px;">원사 이동 — ${escapeHtml(row.yarn || '')} ${escapeHtml(row.color || YARN_LW)}</div>
+      <div style="font-size:12px;color:#64748b;margin-bottom:10px;">보낸 곳 <strong>${escapeHtml(row.vendor || '')}</strong> (지금 ${f1(row.stock_kg)} kg) → 받는 곳을 고르십시오. 한 건으로 묶여 양쪽 재고가 같이 움직입니다.</div>
+      <div style="display:grid;grid-template-columns:1.2fr 1fr 1fr;gap:8px;margin-bottom:10px;">
+        <div>${lab('받는 곳 (편직공장)')}<select id="ym-dest" style="${iS}"><option value="">고르기</option>${facs.map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('')}</select></div>
+        <div>${lab('옮길 kg')}<input type="number" step="0.1" id="ym-kg" style="${iS}font-weight:800;"></div>
+        <div>${lab('날짜')}<input type="date" id="ym-date" value="${todayYMD()}" style="${iS}"></div>
+      </div>
+      <div style="margin-bottom:10px;">${lab('메모')}<input type="text" lang="ko" id="ym-memo" placeholder="비고" style="${iS}"></div>
+      <div id="ym-preview" style="font-size:12.5px;color:#334155;line-height:1.8;background:#f8fafc;border-radius:8px;padding:8px 10px;margin-bottom:12px;"></div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;">
+        <button class="dash-action-btn" id="ym-cancel" style="padding:8px 16px;">취소</button>
+        <button class="dash-action-btn" id="ym-ok" style="background:#1e40af;color:#fff;font-weight:800;padding:8px 20px;">이동 기록</button>
+      </div></div>`;
+    document.body.appendChild(m);
+    const paint = () => {
+      const to = m.querySelector('#ym-dest').value, kg = parseFloat(m.querySelector('#ym-kg').value) || 0;
+      const pv = m.querySelector('#ym-preview');
+      if (!to || !kg) { pv.innerHTML = '받는 곳과 kg 를 넣으면 양쪽 재고가 어떻게 바뀌는지 미리 보입니다.'; return; }
+      const toKey = yarnKeyOf(row.yarn, row.yid, row.color, to, vendorVidOf(to) || '');
+      const bst = yarnStockOf(toKey);
+      pv.innerHTML = `${escapeHtml(row.vendor)} <strong>${f1(row.stock_kg)}</strong> → <strong style="color:${row.stock_kg - kg < 0 ? '#b91c1c' : '#0f172a'};">${f1(row.stock_kg - kg)}</strong> kg${row.stock_kg - kg < 0 ? ' <span style="color:#b91c1c;font-weight:700;">(재고보다 많습니다 — 적을 수는 있습니다)</span>' : ''}<br>${escapeHtml(to)} <strong>${f1(bst)}</strong> → <strong>${f1(bst + kg)}</strong> kg`;
+    };
+    ['#ym-dest', '#ym-kg'].forEach(q => { const el = m.querySelector(q); el.addEventListener('input', paint); el.addEventListener('change', paint); });
+    paint();
+    m.querySelector('#ym-cancel').addEventListener('click', () => m.remove());
+    m.addEventListener('click', e => { if (e.target === m) m.remove(); });
+    m.querySelector('#ym-ok').addEventListener('click', async () => {
+      const b = m.querySelector('#ym-ok'); b.disabled = true;
+      const ok = await yarnMoveAdd(row, m.querySelector('#ym-dest').value, m.querySelector('#ym-kg').value, m.querySelector('#ym-date').value, m.querySelector('#ym-memo').value);
+      if (ok) { m.remove(); toast('원사 이동을 기록했습니다', 'success'); renderDashboard(); } else b.disabled = false;
+    });
+  }
   function renderYarnStockDash() {
     if (!state.yarnLedgerLoaded) return `<div class="dash-empty">원사 재고 원장을 읽는 중입니다…</div>`;
     const S = state.ysFilter || (state.ysFilter = { vendor: '', yarn: '', from: '', to: '', open: '' });
@@ -24662,11 +24948,12 @@ function validateBlendSum(blends, label) {
     // 사종별 총합 (업체 무관)
     const byYarn = {};
     all.forEach(r => { const k = (r.yid || vendorKey(r.yarn)) + '|' + yarnColorKey(r.color); const o = byYarn[k] || (byYarn[k] = { yarn: r.yarn, color: r.color, st: 0, n: 0 }); o.st += r.stock_kg; o.n++; });
-    let h = `<div style="font-size:12px;color:#64748b;line-height:1.7;margin-bottom:10px;">원사 재고 = 입고완료 − 편직 사용량(생산절 × kg/절 × 사종 비율, 로스 없음) ± 조정 ± 이동. 한 줄 = 사종 × 컬러 × 업체(원사가 있는 편직공장). 줄을 누르면 어느 통이 얼마 썼는지와 기록이 펼쳐집니다. 재고조정·이동은 416 판에서 들어옵니다.</div>
+    let h = `<div style="font-size:12px;color:#64748b;line-height:1.7;margin-bottom:10px;">원사 재고 = 입고완료 − 편직 사용량(생산절 × kg/절 × 사종 비율, 로스 없음) ± 조정 ± 이동. 한 줄 = 사종 × 컬러 × 업체(원사가 있는 편직공장). 줄을 누르면 어느 통이 얼마 썼는지와 기록이 펼쳐집니다. [재고조정]은 월 1회 청구서 때 실측 kg 로, [이동]은 다른 편직공장으로 옮길 때(허용받은 사람만).</div>
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:10px;">
       <input type="text" lang="ko" id="ys-q" value="${escapeHtml(S.yarn || '')}" placeholder="사종 · 컬러 찾기" style="${iS}min-width:200px;">
       <label style="font-size:12px;color:#475569;">기간 <input type="date" id="ys-from" value="${escapeHtml(S.from || '')}" style="${iS}"> ~ <input type="date" id="ys-to" value="${escapeHtml(S.to || '')}" style="${iS}"></label>
       <span style="font-size:11.5px;color:#94a3b8;">${rows.length}줄 · 기간은 아래 기록에만 적용</span>
+      ${canStockAdjust() ? `<button class="dash-action-btn" id="ys-base" style="margin-left:auto;font-weight:700;padding:6px 14px;" title="원장에 없는 사종 · 업체의 기초 재고를 넣습니다 (재고조정과 같은 창, 사유 = 기초 재고)">+ 기초 재고 넣기</button>` : ''}
     </div>
     <div style="display:grid;grid-template-columns:150px 1fr;gap:12px;align-items:start;">
       <div style="border:1px solid #e2e8f0;border-radius:9px;background:#fff;overflow:hidden;">
@@ -24677,25 +24964,27 @@ function validateBlendSum(blends, label) {
       <div>
         <div class="dash-table-wrap"><table class="dash-table"><thead><tr>
           <th style="text-align:left;min-width:140px;">사종</th><th style="min-width:70px;">컬러</th><th style="min-width:90px;">업체</th>
-          <th style="min-width:80px;">입고 kg</th><th style="min-width:80px;">사용 kg</th><th style="min-width:70px;">조정</th><th style="min-width:70px;">이동</th><th style="min-width:90px;">재고 kg</th><th style="min-width:60px;">펼치기</th>
+          <th style="min-width:80px;">입고 kg</th><th style="min-width:80px;">사용 kg</th><th style="min-width:70px;">조정</th><th style="min-width:70px;">이동</th><th style="min-width:90px;">재고 kg</th><th style="min-width:60px;">펼치기</th><th style="min-width:110px;">작업</th>
         </tr></thead><tbody>`;
-    if (!rows.length) h += `<tr><td colspan="9" style="text-align:center;color:#9ca3af;padding:20px;">아직 원사 재고 기록이 없습니다 — [원사 구매내역]의 [입고완료]가 첫 줄을 만듭니다.</td></tr>`;
+    const canAdj = canStockAdjust();
+    if (!rows.length) h += `<tr><td colspan="10" style="text-align:center;color:#9ca3af;padding:20px;">아직 원사 재고 기록이 없습니다 — [원사 구매내역]의 [입고완료]가 첫 줄을 만듭니다${canAdj ? ' (또는 위 [+ 기초 재고 넣기])' : ''}.</td></tr>`;
     rows.forEach(r => {
       const open = S.open === r.key;
       h += `<tr class="ys-row" data-key="${escapeHtml(r.key)}" style="cursor:pointer;${open ? 'background:#eef2ff;' : ''}">
         <td style="text-align:left;font-weight:700;">${escapeHtml(r.yarn || '')}</td><td style="text-align:center;">${escapeHtml(r.color || YARN_LW)}</td><td style="text-align:center;">${escapeHtml(r.vendor || '(업체 없음)')}</td>
         <td style="text-align:right;">${f1(r.in_kg)}</td><td style="text-align:right;color:#b45309;">${r.use_kg ? '−' + f1(r.use_kg) : '-'}</td><td style="text-align:right;">${r.adjust_kg ? f1(r.adjust_kg) : '-'}</td><td style="text-align:right;">${r.move_kg ? f1(r.move_kg) : '-'}</td>
-        <td style="text-align:right;font-weight:800;color:${r.stock_kg < 0 ? '#1d4ed8' : '#0f172a'};">${f1(r.stock_kg)}</td><td style="text-align:center;color:#64748b;">${open ? '▲' : '▼'}</td></tr>`;
+        <td style="text-align:right;font-weight:800;color:${r.stock_kg < 0 ? '#1d4ed8' : '#0f172a'};">${f1(r.stock_kg)}</td><td style="text-align:center;color:#64748b;">${open ? '▲' : '▼'}</td>
+        <td style="text-align:center;white-space:nowrap;">${canAdj ? `<button class="dash-action-btn ys-adjust" data-key="${escapeHtml(r.key)}" style="font-size:11px;padding:2px 8px;" title="시스템 재고 vs 실측(청구서) kg — 차이를 조정 줄로">재고조정</button> <button class="dash-action-btn ys-move" data-key="${escapeHtml(r.key)}" style="font-size:11px;padding:2px 8px;color:#1e40af;border-color:#bfdbfe;" title="다른 편직공장으로 원사 이동">이동</button>` : '<span style="font-size:11px;color:#9ca3af;">허용자만</span>'}</td></tr>`;
       if (open) {
         const ls = yarnStockLines(r.key);
         const uses = ls.filter(x => x.kind === 'use');
-        const recs = ls.filter(x => x.kind !== 'use' && inRange(x.date));
-        h += `<tr><td colspan="9" style="background:#f8fafc;padding:10px 14px;">
+        const recs = yarnLedger().filter(x => x && yarnLedgerKey(x) === r.key && x.kind !== 'use' && inRange(x.date));
+        h += `<tr><td colspan="10" style="background:#f8fafc;padding:10px 14px;">
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
             <div><div style="font-size:11.5px;font-weight:800;color:#334155;margin-bottom:5px;">어느 통이 얼마 썼나 (${uses.length})</div>
               ${uses.length ? `<table class="dash-table" style="font-size:12px;"><thead><tr><th>통</th><th>절</th><th>kg/절</th><th>비율</th><th>사용 kg</th></tr></thead><tbody>` + uses.map(u => { const wo = state.allWorkOrders.find(w => w.id === u.wo_id); const done = !!(wo && wo.knit_done); return `<tr><td style="text-align:left;">${escapeHtml(u.item || '')} ${escapeHtml(u.color && !yarnColorIsLW(u.color) ? '' : '')}<span style="font-family:var(--font-gothic);font-weight:700;color:#1e3a8a;">${escapeHtml(u.greige_no || '')}</span> <span style="font-size:10.5px;color:#94a3b8;">${escapeHtml(u.wo_number || '')} · ${done ? '편직완료' : '기획 중(출고분)'}</span></td><td style="text-align:right;">${u.jul}</td><td style="text-align:right;">${u.kg_per_jul}</td><td style="text-align:right;">${u.pct}%</td><td style="text-align:right;font-weight:700;">${f1(u.kg)}</td></tr>`; }).join('') + `</tbody></table>` : '<div style="font-size:12px;color:#9ca3af;">아직 쓴 통이 없습니다.</div>'}</div>
             <div><div style="font-size:11.5px;font-weight:800;color:#334155;margin-bottom:5px;">입고 · 조정 · 이동 기록 (${recs.length})</div>
-              ${recs.length ? `<table class="dash-table" style="font-size:12px;"><thead><tr><th>날짜</th><th>구분</th><th>kg</th><th>비고</th><th>누가</th></tr></thead><tbody>` + recs.sort((a, b) => String(b.date || '').localeCompare(String(a.date || ''))).map(x => `<tr><td>${escapeHtml(String(x.date || '').slice(0, 10))}</td><td style="text-align:center;">${{ in: '입고', adjust: '조정', move: '이동' }[x.kind] || escapeHtml(x.kind || '')}${x.wo_number ? `<div style="font-size:10.5px;color:#94a3b8;">${escapeHtml(x.wo_number)}</div>` : ''}</td><td style="text-align:right;font-weight:700;">${f1(parseFloat(x.kg) || 0)}</td><td style="text-align:left;">${escapeHtml(x.memo || x.reason || '')}</td><td style="text-align:center;font-size:11px;color:#64748b;">${escapeHtml(String(x.by || '').split('@')[0])}</td></tr>`).join('') + `</tbody></table>` : '<div style="font-size:12px;color:#9ca3af;">기간 안 기록이 없습니다.</div>'}</div>
+              ${recs.length ? `<table class="dash-table" style="font-size:12px;"><thead><tr><th>날짜</th><th>구분</th><th>kg</th><th>비고</th><th>누가</th><th></th></tr></thead><tbody>` + recs.sort((a, b) => String(b.date || '').localeCompare(String(a.date || ''))).map(x => `<tr style="${x.void ? 'color:#9ca3af;text-decoration:line-through;' : ''}"><td>${escapeHtml(String(x.date || '').slice(0, 10))}</td><td style="text-align:center;">${{ in: '입고', adjust: '조정', move: '이동' }[x.kind] || escapeHtml(x.kind || '')}${x.kind === 'move' ? `<div style="font-size:10.5px;color:#1e40af;font-weight:700;">${(parseFloat(x.kg) || 0) < 0 ? '→ ' + escapeHtml(x.dest || '') : escapeHtml(x.from || '') + ' →'}</div>` : ''}${x.kind === 'adjust' ? `<div style="font-size:10.5px;color:#64748b;">${escapeHtml(yarnAdjReasonLabel(x.reason))}${x.before != null ? ' · ' + f1(parseFloat(x.before) || 0) + ' → ' + f1(parseFloat(x.after) || 0) : ''}</div>` : ''}${x.wo_number ? `<div style="font-size:10.5px;color:#94a3b8;">${escapeHtml(x.wo_number)}</div>` : ''}</td><td style="text-align:right;font-weight:700;">${(parseFloat(x.kg) || 0) > 0 && x.kind !== 'in' ? '+' : ''}${f1(parseFloat(x.kg) || 0)}</td><td style="text-align:left;">${escapeHtml(x.memo || '')}</td><td style="text-align:center;font-size:11px;color:#64748b;">${escapeHtml(String(x.by || '').split('@')[0])}</td><td style="text-align:center;">${x.void ? '<span style="font-size:10.5px;color:#b91c1c;font-weight:700;text-decoration:none;">취소됨</span>' : ((x.kind === 'adjust' || x.kind === 'move') && isOwnerUser() ? `<button class="dash-action-btn ys-void" data-id="${escapeHtml(x.id || '')}" style="font-size:10.5px;padding:1px 6px;">취소</button>` : '')}</td></tr>`).join('') + `</tbody></table>` : '<div style="font-size:12px;color:#9ca3af;">기간 안 기록이 없습니다.</div>'}</div>
           </div></td></tr>`;
       }
     });
@@ -24715,6 +25004,17 @@ function validateBlendSum(blends, label) {
     document.querySelectorAll('#dash-body .ys-row').forEach(tr => tr.addEventListener('click', () => { S.open = (S.open === tr.dataset.key) ? '' : tr.dataset.key; renderDashboard(); }));
     bindRerenderSearch('ys-q', v => { S.yarn = v || ''; });
     ['from', 'to'].forEach(k => { const el = document.getElementById('ys-' + k); if (el) el.addEventListener('change', () => { S[k] = el.value || ''; renderDashboard(); }); });
+    // hotfix416: 재고조정 · 이동 · 기초 재고 · 취소
+    const rowOf = key => yarnStockRows().find(r => r.key === key);
+    document.querySelectorAll('#dash-body .ys-adjust').forEach(b => b.addEventListener('click', e => { e.stopPropagation(); const r = rowOf(b.dataset.key); if (r) openYarnAdjustModal(r); }));
+    document.querySelectorAll('#dash-body .ys-move').forEach(b => b.addEventListener('click', e => { e.stopPropagation(); const r = rowOf(b.dataset.key); if (r) openYarnMoveModal(r); }));
+    document.getElementById('ys-base')?.addEventListener('click', () => openYarnAdjustModal(null));
+    document.querySelectorAll('#dash-body .ys-void').forEach(b => b.addEventListener('click', async e => {
+      e.stopPropagation();
+      if (!confirm('이 줄을 취소합니다. 재고는 원래대로 돌아오고 줄은 취소됨으로 남습니다 (이동은 양쪽 줄이 같이).\n\n취소할까요?')) return;
+      const ok = await yarnLineVoid(b.dataset.id);
+      if (ok) { toast('취소했습니다', 'success'); renderDashboard(); }
+    }));
   }
   function bindKnitDone() {
     document.querySelectorAll('#dash-body .kd-done').forEach(b => b.addEventListener('click', () => {
@@ -28711,8 +29011,10 @@ function validateBlendSum(blends, label) {
     const groups = [
       ['진행 상황', ['yarn', 'yarnStock', 'knit', 'finish', 'print', 'bt', 'kpiboard']],
       ['보고', ['completeReports', 'ceoReports', 'daily-report']],
-      ['목록', ['of', 'gs', 'claims', 'samples', 'completed']],
+      ['목록', ['of', 'gs', 'moves', 'claims', 'samples', 'completed']],
       ['작성', ['write']],   // hotfix398: 의뢰서 작성 · 복사 · 수정 (기본 관리자까지)
+      // hotfix416: 재고조정 · 이동 적기 (기본 최고관리자 — 아래 사람별 표에서 허용, 취소 · 되돌리기는 최고관리자만)
+      ['재고 (기본 최고관리자 — 아래 사람별 표에서 허용 · 취소와 되돌리기는 최고관리자만)', ['stockAdjust']],
       ['설정 및 관리 (기본 최고관리자 — 아래 사람별 표에서 관리자를 지정)', ['vendors', 'fabricSpecs', 'yarnSetup', 'knitSetup', 'procSetup', 'cautionDrafts']],
       ['품목 컬러 설정 (기본 직원까지 — 지우기는 최고관리자만)', ['itemColors']],   // hotfix399d
       // hotfix410: 염/가공 설정 세부 다섯 가지
@@ -28783,7 +29085,7 @@ function validateBlendSum(blends, label) {
               </select>`
             : '<span style="font-size:11.5px;color:#9ca3af;">해당 없음</span>'}</td>
           <td style="text-align:center;">${editable ? '<span style="font-size:11.5px;color:#6b7280;font-weight:700;">대표만 (고정)</span>'
-            : (locked || v === 'daily-report' || PROC_SUB_PERMS.includes(v)) ? '<span style="font-size:11.5px;color:#9ca3af;">해당 없음</span>'
+            : (locked || v === 'daily-report' || v === 'stockAdjust' || PROC_SUB_PERMS.includes(v)) ? '<span style="font-size:11.5px;color:#9ca3af;">해당 없음</span>'
             : `<select class="perm-del" data-perm-view="${v}" style="width:100%;padding:4px 6px;border:1px solid #d1d5db;border-radius:5px;font-size:12px;font-family:inherit;">
                 <option value="owner"${delCur === 'owner' ? ' selected' : ''}>대표만</option>
                 <option value="admin"${delCur === 'admin' ? ' selected' : ''}>관리자까지</option>
@@ -30465,6 +30767,10 @@ function validateBlendSum(blends, label) {
     getFabricSpecs().slice().sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'ko', { numeric: true })).forEach(sp => {
       const fid = specFid(sp); if (!fid) return;
       if (!state.kfClosed && sp.active === false && !/\(복사\)$/.test(String(sp.name || ''))) return;   // hotfix387: 판매 중만 (복사본은 늘 보임)
+      // hotfix417: 샘플(구분 샘플 · 이름이 "(샘플)"로 시작)은 [샘플도 보기]를 켜야 보인다 · 구분 걸러 보기
+      const isSample = String(sp.gubun || '') === GUBUN_SAMPLE || /^\(샘플\)/.test(String(sp.name || '').trim());
+      if (!state.kfSample && isSample && !/\(복사\)$/.test(String(sp.name || ''))) return;
+      if (state.kfGubun && String(sp.gubun || GUBUN_BODY) !== state.kfGubun) return;
       if (q && String(sp.name || '').toLowerCase().indexOf(q) < 0 && fid.toLowerCase() !== q) return;
       const K = knitFeeOf(fid);
       const yarns = kfYarnNames(fid);
@@ -30481,27 +30787,29 @@ function validateBlendSum(blends, label) {
     const q = String(state.kfQ || '').trim();
     const iS = 'padding:6px 9px;border:1px solid #d1d5db;border-radius:7px;font-size:13px;font-family:inherit;';
     let h = `<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px;margin-bottom:12px;font-size:12.5px;color:#475569;line-height:1.8;">
-      편직 값(루프장 · 기계인치 · 침수 · 편직로스 · 편직료 · 비고)의 <strong>본자리</strong>입니다. 품목 카드는 이 값을 읽기만 합니다.
-      원사 한 줄에 한 줄로 보이고, 같은 품목·공장의 기계 값은 세로로 묶여 한 번만 보입니다.<br>
-      사종 자체와 원사 단가는 품목 카드 [원사] 줄에서, 조직은 원단 기본 스펙에서 고칩니다. 게이지 = 침수 ÷ 기계인치 ÷ 3.14, 기계 이름 = 조직 + 게이지 반올림 + G.
+      생지(품목명 · 구분 · 조직 · 기계)와 편직 값(루프장 · 기계인치 · 침수 · 편직로스 · 편직료 · 비고)의 <strong>본자리</strong>입니다. 새 생지는 [+ 생지 추가], 품목명 · 구분 · 조직은 [수정] 창 위 "생지 기본"에서 고칩니다. 폭 · 중량 · 가공 사양은 [품목 디테일]에서.<br>
+      원사 한 줄에 한 줄로 보이고, 같은 품목·공장의 기계 값은 세로로 묶여 한 번만 보입니다. 게이지 = 침수 ÷ 기계인치 ÷ 3.14, 기계 이름 = 조직 + 게이지 반올림 + G (어느 기계인지는 [기계 (직접)]에 적습니다).
     </div>
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px;">
       <input type="text" lang="ko" id="kf-q" value="${escapeHtml(q)}" placeholder="품목 찾기 (이름 일부 · 코드)" style="${iS}min-width:230px;">
       <select id="kf-factory" style="${iS}"><option value="">편직공장 전체</option>${knitFactoryList().map(v => `<option value="${escapeHtml(v)}"${v === state.kfFactory ? ' selected' : ''}>${escapeHtml(v)}</option>`).join('')}<option value="${KF_UNREG}"${state.kfFactory === KF_UNREG ? ' selected' : ''}>(거래처 미등록 이름만)</option></select>
+      <select id="kf-gubun" style="${iS}" title="구분(몸판 · 리프 · 샘플 …)으로 걸러 봅니다"><option value="">구분 전체</option>${Array.from(new Set(getFabricGubuns().concat([GUBUN_SAMPLE]))).map(g => `<option value="${escapeHtml(g)}"${g === state.kfGubun ? ' selected' : ''}>${escapeHtml(g)}</option>`).join('')}</select>
       <label style="display:flex;align-items:center;gap:5px;font-size:12.5px;color:#475569;cursor:pointer;"><input type="checkbox" id="kf-closed"${state.kfClosed ? ' checked' : ''} style="width:15px;height:15px;">판매 종료도 보기</label>
+      <label style="display:flex;align-items:center;gap:5px;font-size:12.5px;color:#475569;cursor:pointer;"><input type="checkbox" id="kf-sample"${state.kfSample ? ' checked' : ''} style="width:15px;height:15px;">샘플도 보기</label>
       <span style="font-size:11.5px;color:#94a3b8;">${rows.length}줄</span>
       <span style="flex:1;"></span>
+      ${isOwnerUser() ? `<button class="dash-action-btn" id="kf-add-item" style="background:#1e3a8a;color:#fff;font-weight:800;padding:6px 14px;" title="새 생지(품목)를 등록합니다 — 품목명 · 구분 · 조직 · 편직공장을 넣고 바로 편직 값을 적습니다">+ 생지 추가</button>` : ''}
       <button class="dash-action-btn" id="kf-csv-out" style="font-weight:700;padding:6px 14px;">CSV 내려받기${state.kfFactory ? ' (' + escapeHtml(state.kfFactory) + ')' : ''}</button>
       <button class="dash-action-btn" id="kf-csv-in" style="font-weight:700;padding:6px 14px;" title="업체가 채워 보낸 CSV를 올려 채워진 칸만 덮어씁니다">CSV 올려 고치기</button>
       <input type="file" id="kf-csv-file" accept=".csv,text/csv" style="display:none;">
     </div>
     <div class="dash-table-wrap"><table class="dash-table"><thead><tr>
-      <th style="text-align:left;min-width:150px;">품목명</th><th style="min-width:80px;" title="이 줄로 짠 생지의 컬러 — 편직 의뢰서 컬러 칸 · 원사 사용량 · 생지 원장이 이 값을 씁니다. [수정]에서 적고, 비우면 사종 컬러에서 짐작합니다">생지 컬러</th><th style="text-align:left;min-width:150px;">사종</th><th style="min-width:64px;">루프장</th>
+      <th style="text-align:left;min-width:150px;">품목명</th><th style="min-width:56px;">구분</th><th style="min-width:80px;" title="이 줄로 짠 생지의 컬러 — 편직 의뢰서 컬러 칸 · 원사 사용량 · 생지 원장이 이 값을 씁니다. [수정]에서 적고, 비우면 사종 컬러에서 짐작합니다">생지 컬러</th><th style="text-align:left;min-width:150px;">사종</th><th style="min-width:64px;">루프장</th>
       <th style="min-width:100px;">편직공장</th><th style="min-width:56px;">기계인치</th><th style="min-width:64px;">침수</th><th style="min-width:60px;">게이지</th><th style="min-width:80px;">기계 이름</th>
       <th style="min-width:56px;">로스 %</th><th style="min-width:76px;">편직료 원/kg</th><th style="text-align:left;min-width:120px;">비고</th><th style="min-width:96px;">마지막 수정</th>
       <th style="min-width:52px;">복사</th><th style="min-width:52px;">수정</th><th style="min-width:52px;">삭제</th>
     </tr></thead><tbody>`;
-    if (!rows.length) h += `<tr><td colspan="16" style="text-align:center;color:#9ca3af;padding:20px;">${q ? '찾으신 품목이 없습니다.' : '품목이 없습니다.'}</td></tr>`;
+    if (!rows.length) h += `<tr><td colspan="17" style="text-align:center;color:#9ca3af;padding:20px;">${q ? '찾으신 품목이 없습니다.' : '품목이 없습니다.'}</td></tr>`;
     rows.forEach(r => {
       const yarns = r.yarns.length ? r.yarns : [''];
       const n = yarns.length;
@@ -30510,6 +30818,7 @@ function validateBlendSum(blends, label) {
       const nameCell = `<td rowspan="${n}" style="text-align:left;font-weight:800;vertical-align:top;">${escapeHtml(r.sp.name || '')}
         <div style="font-size:10.5px;color:#94a3b8;font-weight:400;">${escapeHtml(r.fid)}${r.sp.active === false ? ' · <span style="color:#b45309;">판매 종료</span>' : ''}</div>
         ${copyName ? '<span style="display:inline-block;margin-top:3px;font-size:10.5px;font-weight:800;color:#b45309;border:1px solid #fcd34d;background:#fffbeb;border-radius:9px;padding:1px 6px;">복사본 · 이름 미정</span>' : ''}</td>
+        <td rowspan="${n}" style="text-align:center;vertical-align:top;font-size:12px;color:#334155;">${escapeHtml(r.sp.gubun || GUBUN_BODY)}<div style="font-size:10.5px;color:#94a3b8;">${escapeHtml(r.sp.cat || '')}</div></td>
         <td rowspan="${n}" style="text-align:center;vertical-align:top;font-weight:800;color:${String(k.color || '').trim() ? '#1e3a8a' : '#64748b'};" title="${String(k.color || '').trim() ? '적어 둔 생지 컬러' : '사종 컬러에서 짐작한 값 — [수정]에서 적을 수 있습니다'}">${r.factory ? escapeHtml(knitRowGreigeColor(k)) : '-'}${r.factory && !String(k.color || '').trim() ? '<div style="font-size:10px;font-weight:400;color:#94a3b8;">(자동)</div>' : ''}</td>`;
       const g = kfGauge(k.inch, k.needles);
       const fac = r.factory
@@ -30517,7 +30826,7 @@ function validateBlendSum(blends, label) {
            <td rowspan="${n}" style="text-align:right;vertical-align:top;">${kfNumTxt(k.inch)}</td>
            <td rowspan="${n}" style="text-align:right;vertical-align:top;">${kfMoney(k.needles)}</td>
            <td rowspan="${n}" style="text-align:right;vertical-align:top;color:#1e3a8a;font-weight:700;">${g == null ? '-' : (Math.trunc(g * 100) / 100).toFixed(2)}</td>
-           <td rowspan="${n}" style="text-align:center;vertical-align:top;font-weight:700;color:#1e3a8a;">${escapeHtml(kfMachine(r.fid, k.inch, k.needles) || '-')}</td>
+           <td rowspan="${n}" style="text-align:center;vertical-align:top;font-weight:700;color:#1e3a8a;">${escapeHtml(kfMachine(r.fid, k.inch, k.needles) || '-')}${String(k.machine || '').trim() ? `<div style="font-size:10.5px;color:#334155;font-weight:400;" title="적어 둔 기계">${escapeHtml(k.machine)}</div>` : ''}</td>
            <td rowspan="${n}" style="text-align:right;vertical-align:top;">${kfNumTxt(k.knit_loss)}</td>
            <td rowspan="${n}" style="text-align:right;vertical-align:top;font-weight:800;">${kfMoney(k.knit_fee)}</td>
            <td rowspan="${n}" style="text-align:left;vertical-align:top;font-size:12px;color:#475569;">${escapeHtml(k.memo || '')}</td>
@@ -30698,6 +31007,85 @@ function validateBlendSum(blends, label) {
     if (ok) toast(`[${it.name}] 혼용률을 ${b.text} 로 맞췄습니다`, 'success');
     return ok;
   }
+  // ============================================================
+  // hotfix417: [생지 및 편직 설정]이 생지의 본자리 — 품목명 · 구분 · 조직을 여기서 고치고, 새 생지도 여기서 만든다
+  //   품목명을 바꾸면: 코드(F)로 매인 편직 값 · 원가 · 의뢰서는 저절로 새 이름, 옛 이름은 aliases(다른 표기)로 남아 옛 의뢰서 글자도 이 품목으로 읽힌다 · 짝 리프 이름도 따라간다
+  // ============================================================
+  async function saveSpecBasics(fid, vals) {
+    if (!isOwnerUser()) { toast('최고관리자만 고칠 수 있습니다', 'error'); return false; }
+    const key = String(fid || '').trim();
+    const list = getFabricSpecs().map(x => Object.assign({}, x));
+    const i = list.findIndex(x => specFid(x) === key);
+    if (i < 0) { toast('품목을 찾지 못했습니다', 'error'); return false; }
+    const cur = list[i];
+    const prevName = String(cur.name || '').trim(), name = String(vals.name || '').trim();
+    const gubun = String(vals.gubun || cur.gubun || GUBUN_BODY).trim(), cat = String(vals.cat || '').trim();
+    if (!name) { toast('품목명을 넣어 주십시오', 'error'); return false; }
+    if (name !== prevName && list.some((x, j) => j !== i && String(x.name || '').trim() === name)) { toast('이미 [' + name + '] 이(가) 있습니다', 'error'); return false; }
+    const ch = [];
+    if (name !== prevName) {
+      cur.aliases = Array.from(new Set((Array.isArray(cur.aliases) ? cur.aliases : []).concat([prevName]).map(a => String(a || '').trim()).filter(a => a && a !== name)));
+      list.forEach(x => { if (String(x.pair_rib || '').trim() === prevName) x.pair_rib = name; });
+      cur.name = name; ch.push('품목명: ' + prevName + ' → ' + name);
+    }
+    if (gubun !== String(cur.gubun || GUBUN_BODY)) { ch.push('구분: ' + String(cur.gubun || GUBUN_BODY) + ' → ' + gubun); cur.gubun = gubun; if (gubun === GUBUN_RIB) cur.pair_rib = ''; }
+    if (cat !== String(cur.cat || '').trim()) { ch.push('조직: ' + (String(cur.cat || '') || '(없음)') + ' → ' + (cat || '(없음)')); cur.cat = cat; }
+    if (!ch.length) { toast('바뀐 값이 없습니다', 'info'); return true; }
+    cur.updated_at = todayYMD();
+    const ok = await saveFabricSpecs(list);
+    if (!ok) return false;
+    try { await kfHistAdd(key, '', ch, '생지 기본'); } catch (e) { console.warn('[spec hist]', e.message); }
+    try { await knitBlendSync(key); } catch (e) { console.warn('[knit_blend sync]', e.message); }
+    toast('생지 기본을 저장했습니다 — ' + ch.join(' · '), 'success');
+    return true;
+  }
+  // [+ 생지 추가] — 품목명 · 구분 · 조직 · 편직공장 → 품목을 만들고 바로 편직 설정 창으로
+  function openKnitNewItemModal() {
+    if (!isOwnerUser()) { toast('최고관리자만 생지를 넣을 수 있습니다', 'error'); return; }
+    const old = document.getElementById('kn-modal'); if (old) old.remove();
+    const iS = 'width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #d1d5db;border-radius:7px;font-size:13px;font-family:inherit;';
+    const lab = t => `<label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px;">${t}</label>`;
+    const m = document.createElement('div'); m.id = 'kn-modal';
+    m.style.cssText = 'position:fixed;inset:0;z-index:640;background:rgba(15,23,42,.45);display:flex;align-items:center;justify-content:center;';
+    m.innerHTML = `<div style="background:#fff;border-radius:12px;width:min(620px,94vw);padding:18px 20px;box-shadow:0 20px 50px rgba(0,0,0,.3);">
+      <div style="font-size:15px;font-weight:800;color:#0f172a;margin-bottom:4px;">생지 추가</div>
+      <div style="font-size:12px;color:#64748b;line-height:1.6;margin-bottom:12px;">품목명 · 구분 · 조직을 넣으면 품목 코드(F)가 생기고, 바로 편직 설정 창이 열려 편직공장 값(기계인치 · 침수 · 사종 · 루프장 · 기계)을 적을 수 있습니다. 폭 · 스퀘어 중량 · 가공 사양은 [품목 디테일]에서.</div>
+      <div style="display:grid;grid-template-columns:1.6fr 1fr;gap:8px 10px;margin-bottom:8px;">
+        <div>${lab('품목명 *')}<input id="kn-name" lang="ko" placeholder="예: 슈퍼싱글" style="${iS}font-weight:800;"></div>
+        <div>${lab('구분')}<select id="kn-gubun" style="${iS}">${Array.from(new Set(getFabricGubuns().concat([GUBUN_SAMPLE]))).map(g => `<option value="${escapeHtml(g)}">${escapeHtml(g)}</option>`).join('')}</select></div>
+      </div>
+      <div style="display:grid;grid-template-columns:1.6fr auto 1fr;gap:8px 10px;align-items:end;margin-bottom:12px;">
+        <div>${lab('조직')}<select id="kn-cat" style="${iS}"></select></div>
+        <button class="dash-action-btn" id="kn-cat-add" style="padding:8px 10px;font-size:12px;font-weight:700;white-space:nowrap;">＋ 새 조직</button>
+        <div>${lab('편직공장 (첫 줄)')}<select id="kn-fac" style="${iS}"><option value="">나중에</option>${knitFactoryList().map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('')}</select></div>
+      </div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;">
+        <button class="dash-action-btn" id="kn-cancel" style="padding:8px 16px;">취소</button>
+        <button class="dash-action-btn" id="kn-ok" style="background:#1e3a8a;color:#fff;font-weight:800;padding:8px 20px;">생지 만들기</button>
+      </div></div>`;
+    document.body.appendChild(m);
+    fillFsCatSelect('', 'kn-cat');
+    m.querySelector('#kn-cat-add').addEventListener('click', () => addKnitOrgFromPrompt('kn-cat'));
+    m.querySelector('#kn-cancel').addEventListener('click', () => m.remove());
+    m.addEventListener('click', e => { if (e.target === m) m.remove(); });
+    setTimeout(() => m.querySelector('#kn-name').focus(), 50);
+    m.querySelector('#kn-ok').addEventListener('click', async () => {
+      const name = m.querySelector('#kn-name').value.trim();
+      if (!name) { toast('품목명을 넣어 주십시오', 'error'); return; }
+      const list = getFabricSpecs().map(x => Object.assign({}, x));
+      if (list.some(x => String(x.name || '').trim() === name)) { toast('이미 [' + name + '] 이(가) 있습니다', 'error'); return; }
+      const b = m.querySelector('#kn-ok'); b.disabled = true;
+      list.push({ name, gubun: m.querySelector('#kn-gubun').value || GUBUN_BODY, cat: m.querySelector('#kn-cat').value.trim(), width: '', tube: false, gy: '', blend: '', active: true, updated_at: todayYMD() });
+      assignFabricIds(list);
+      const ok = await saveFabricSpecs(list);
+      if (!ok) { b.disabled = false; return; }
+      const nu = getFabricSpecs().find(x => String(x.name || '').trim() === name);
+      const fid = nu ? specFid(nu) : '';
+      m.remove(); toast('[' + name + '] 생지를 만들었습니다' + (fid ? ' — ' + fid : ''), 'success');
+      if (state.uiMode === 'dashboard') renderDashboard();
+      if (fid) openKnitFeePopup(fid, m.querySelector('#kn-fac').value || '', null, () => { if (state.uiMode === 'dashboard') renderDashboard(); });
+    });
+  }
   function openKnitFeePopup(fid, factory, yarnNames, onClose) {
     if (!canAccessView('knitSetup')) { toast('편직 설정 권한이 없습니다', 'error'); return; }   // hotfix398
     const key = String(fid || '').trim();
@@ -30725,6 +31113,16 @@ function validateBlendSum(blends, label) {
           <span style="font-size:12px;color:#64748b;">${escapeHtml(key)} · 조직 ${escapeHtml(sp.cat || '-')}</span>
           <span style="flex:1;"></span><button class="dash-action-btn" id="kf-close">닫기</button></div>
         <div style="padding:14px 18px;overflow:auto;">
+          <div style="border:1px solid #c7d2fe;border-radius:9px;padding:10px 14px;background:#eef2ff;margin-bottom:12px;">
+            <div style="font-size:12px;font-weight:800;color:#1e3a8a;margin-bottom:6px;">생지 기본 <span style="font-weight:400;color:#64748b;">— 품목명 · 구분 · 조직의 본자리. 품목명을 바꾸면 코드(${escapeHtml(key)})로 이어진 편직 값 · 원가 · 의뢰서가 새 이름을 쓰고, 옛 글자는 다른 표기로 남습니다</span></div>
+            <div style="display:grid;grid-template-columns:1.6fr 1fr 1.4fr auto auto;gap:8px 10px;align-items:end;">
+              <div><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px;">품목명</label><input id="kf-sp-name" lang="ko" value="${escapeHtml(sp.name || '')}" style="${iS}font-weight:800;"></div>
+              <div><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px;">구분</label><select id="kf-sp-gubun" style="${iS}">${Array.from(new Set(getFabricGubuns().concat([GUBUN_SAMPLE, String(sp.gubun || '')]))).filter(Boolean).map(g => `<option value="${escapeHtml(g)}"${g === String(sp.gubun || GUBUN_BODY) ? ' selected' : ''}>${escapeHtml(g)}</option>`).join('')}</select></div>
+              <div><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px;">조직</label><select id="kf-sp-cat" style="${iS}"></select></div>
+              <button class="dash-action-btn" id="kf-sp-cat-add" style="padding:7px 10px;font-size:12px;font-weight:700;white-space:nowrap;" title="목록에 없는 조직을 새로 넣습니다">＋ 새 조직</button>
+              <button class="dash-action-btn" id="kf-sp-save" style="padding:7px 14px;font-weight:800;background:#1e3a8a;color:#fff;white-space:nowrap;">생지 기본 저장</button>
+            </div>
+          </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px;">
             <span style="font-size:12px;font-weight:800;color:#334155;">편직공장</span>
             ${Object.keys(K).map(v => `<span style="display:inline-flex;align-items:stretch;"><button class="dash-action-btn kf-tab" data-v="${escapeHtml(v)}" style="padding:5px 12px;font-weight:800;border-radius:7px 0 0 7px;${v === V ? 'background:#1e3a8a;color:#fff;border-color:#1e3a8a;' : ''}">${escapeHtml(v)}${knitFactoryKnown(v) ? '' : ' <span style="font-size:10px;font-weight:400;">(미등록)</span>'}</button><button class="dash-action-btn danger kf-fdel" data-v="${escapeHtml(v)}" title="이 공장 줄을 지웁니다" style="padding:5px 8px;border-radius:0 7px 7px 0;border-left:0;font-weight:800;">x</button></span>`).join('')}
@@ -30732,12 +31130,13 @@ function validateBlendSum(blends, label) {
           </div>
           ${V ? `<div style="border:1px solid #e2e8f0;border-radius:9px;padding:12px 14px;background:#f8fafc;">
             <div style="font-size:12.5px;font-weight:800;color:#1e3a8a;margin-bottom:8px;">${escapeHtml(V)}${K[V] ? '' : ' <span style="font-size:11px;color:#b45309;">(새 줄)</span>'}</div>
-            <div style="display:grid;grid-template-columns:1.4fr repeat(6,1fr);gap:8px 10px;">
+            <div style="display:grid;grid-template-columns:1.4fr repeat(7,1fr);gap:8px 10px;">
               <div><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px;" title="이 줄로 짠 생지의 컬러 — 편직 의뢰서 컬러 칸 · 원사 사용량 · 생지 원장이 이 값을 씁니다">생지 컬러</label><input id="kf-color" lang="ko" list="kf-color-list" autocomplete="off" value="${escapeHtml(k.color || '')}" placeholder="${escapeHtml(knitRowGreigeColor(k))} (자동)" style="${iS}font-weight:800;color:#1e3a8a;"><datalist id="kf-color-list">${(() => { const seen = new Set(); const o = []; const add = c => { const t = String(c || '').trim(); if (!t) return; const kk = yarnColorKey(t); if (!seen.has(kk)) { seen.add(kk); o.push(yarnColorIsLW(t) ? YARN_LW : t); } }; add(YARN_LW); add(knitRowGreigeColor(k)); Object.keys(k.loops || {}).concat(Object.keys(k.pcts || {})).forEach(nm => { const y = yarnNameList().find(x => vendorKey(String(x.name || '')) === vendorKey(nm)); if (y) add(yarnParts(y).color); }); yarnNameList().forEach(y => add(yarnParts(y).color)); return o.map(c => `<option value="${escapeHtml(c)}"></option>`).join(''); })()}</datalist></div>
               <div><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px;">기계인치</label><input id="kf-inch" inputmode="decimal" value="${k.inch == null ? '' : k.inch}" style="${nS}"></div>
               <div><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px;">침수</label><input id="kf-needles" inputmode="decimal" value="${k.needles == null ? '' : k.needles}" style="${nS}"></div>
               <div><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px;">게이지 (자동)</label><input id="kf-gauge" readonly style="${nS}background:#eef2f7;"></div>
               <div><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px;">기계 이름 (자동)</label><input id="kf-machine" readonly style="${iS}background:#eef2f7;font-weight:800;color:#1e3a8a;"></div>
+              <div><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px;" title="이 공장의 어느 기계에서 짜는지 (직접 적기, 예: 3호기)">기계 (직접)</label><input id="kf-mach" lang="ko" value="${escapeHtml(k.machine || '')}" placeholder="예: 3호기" style="${iS}"></div>
               <div><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px;">편직로스 %</label><input id="kf-loss" inputmode="decimal" value="${k.knit_loss == null ? '' : k.knit_loss}" style="${nS}"></div>
               <div><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px;">편직료 원/kg</label><input id="kf-fee" inputmode="decimal" value="${k.knit_fee == null ? '' : k.knit_fee}" style="${nS}font-weight:800;"></div>
             </div>
@@ -30787,11 +31186,12 @@ function validateBlendSum(blends, label) {
         wrap.querySelectorAll('.kf-pct').forEach(el => { pcts[el.dataset.y] = el.value; });   // hotfix399e
         const bm = wrap.querySelector('.kf-bmode:checked'); 
         return { inch: wrap.querySelector('#kf-inch').value, needles: wrap.querySelector('#kf-needles').value, knit_loss: wrap.querySelector('#kf-loss').value,
-          knit_fee: wrap.querySelector('#kf-fee').value, memo: wrap.querySelector('#kf-memo').value, color: (wrap.querySelector('#kf-color') || {}).value || '', loops, pcts, blend_mode: (bm && bm.value === 'manual') ? 'manual' : 'loop' };
+          knit_fee: wrap.querySelector('#kf-fee').value, memo: wrap.querySelector('#kf-memo').value, color: (wrap.querySelector('#kf-color') || {}).value || '', machine: (wrap.querySelector('#kf-mach') || {}).value || '', loops, pcts, blend_mode: (bm && bm.value === 'manual') ? 'manual' : 'loop' };
       };
       // hotfix399: "닫을까요" 는 화면에 보이는 칸이 열 때와 달라졌을 때만 — 저장돼 있던 값 중 화면에 없는 사종 줄 때문에 헛묻지 않는다
       const normC = c => {
-        const o = { inch: kfNum(c.inch), needles: kfNum(c.needles), knit_loss: kfNum(c.knit_loss), knit_fee: kfNum(c.knit_fee), loops: {}, memo: String(c.memo || '').trim() };
+        // hotfix417: 생지 컬러 · 기계(직접)도 "닫을까요" 판단에 넣는다
+        const o = { inch: kfNum(c.inch), needles: kfNum(c.needles), knit_loss: kfNum(c.knit_loss), knit_fee: kfNum(c.knit_fee), loops: {}, memo: String(c.memo || '').trim(), color: String(c.color || '').trim(), machine: String(c.machine || '').trim() };
         Object.keys(c.loops || {}).sort().forEach(y => { const x = kfNum(c.loops[y]); if (x != null) o.loops[y] = x; });
         o.pcts = {}; Object.keys(c.pcts || {}).sort().forEach(y => { const x = kfNum(c.pcts[y]); if (x != null) o.pcts[y] = x; }); o.blend_mode = c.blend_mode || 'loop';   // hotfix399e
         return JSON.stringify(o);
@@ -30930,6 +31330,15 @@ function validateBlendSum(blends, label) {
         try { await navigator.clipboard.writeText(text); toast('사양표를 복사했습니다 — 비밀 카톡에 붙여넣으십시오', 'success'); }
         catch (e) { try { prompt('아래 글자를 복사하십시오:', text); } catch (e2) {} }
       });
+      // hotfix417: 생지 기본(품목명 · 구분 · 조직) 저장 · 새 조직
+      fillFsCatSelect(sp.cat || '', 'kf-sp-cat');
+      wrap.querySelector('#kf-sp-cat-add')?.addEventListener('click', () => addKnitOrgFromPrompt('kf-sp-cat'));
+      wrap.querySelector('#kf-sp-save')?.addEventListener('click', async () => {
+        const btn = wrap.querySelector('#kf-sp-save'); btn.disabled = true;
+        const ok = await saveSpecBasics(key, { name: wrap.querySelector('#kf-sp-name').value, gubun: wrap.querySelector('#kf-sp-gubun').value, cat: wrap.querySelector('#kf-sp-cat').value });
+        btn.disabled = false;
+        if (ok) { const s2 = getFabricSpecs().find(x => specFid(x) === key); if (s2) Object.assign(sp, s2); paint(); if (state.uiMode === 'dashboard') renderDashboard(); }
+      });
       wrap.querySelector('#kf-save')?.addEventListener('click', async () => {
         const btn = wrap.querySelector('#kf-save'); btn.disabled = true; btn.textContent = '저장 중...';
         const ok = await saveKnitFeeRow(key, V, collect(), { yarnNames: yarns });
@@ -30981,14 +31390,15 @@ function validateBlendSum(blends, label) {
     if (ok) toast(nm + ' 으로 이름을 정하고 판매 중으로 켰습니다', 'success');
   }
   // CSV — 최고관리자만. 내리기는 표 그대로, 올리기는 채워진 칸만
-  const KF_CSV_HEAD = ['품목코드', '품목명', '사종', '루프장', '편직공장', '기계인치', '침수', '게이지', '기계이름', '편직로스', '편직료', '비고', '마지막수정'];
+  // hotfix416: 생지컬러 열 (품목명 다음) — 비우면 그대로, 적으면 그 줄의 생지 컬러(415)로
+  const KF_CSV_HEAD = ['품목코드', '품목명', '생지컬러', '사종', '루프장', '편직공장', '기계인치', '침수', '게이지', '기계이름', '편직로스', '편직료', '비고', '마지막수정'];
   function kfCsvDownload() {
     const rows = kfRowsAll().filter(r => r.factory);
     const esc = v => { const t = String(v == null ? '' : v); return /[",\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t; };
     const lines = [KF_CSV_HEAD.join(',')];
     rows.forEach(r => {
       const k = r.k || {}; const g = kfGauge(k.inch, k.needles);
-      (r.yarns.length ? r.yarns : ['']).forEach(y => lines.push([r.fid, r.sp.name, y, y && k.loops ? (k.loops[y] == null ? '' : k.loops[y]) : '', r.factory,
+      (r.yarns.length ? r.yarns : ['']).forEach(y => lines.push([r.fid, r.sp.name, k.color || '', y, y && k.loops ? (k.loops[y] == null ? '' : k.loops[y]) : '', r.factory,
         k.inch == null ? '' : k.inch, k.needles == null ? '' : k.needles, g == null ? '' : (Math.trunc(g * 100) / 100).toFixed(2), kfMachine(r.fid, k.inch, k.needles),
         k.knit_loss == null ? '' : k.knit_loss, k.knit_fee == null ? '' : k.knit_fee, k.memo || '', k.updated_at || ''].map(esc).join(',')));
     });
@@ -31034,6 +31444,7 @@ function validateBlendSum(blends, label) {
       if (v('편직로스') !== '') P.knit_loss = v('편직로스');
       if (v('편직료') !== '') P.knit_fee = v('편직료').replace(/,/g, '');
       if (v('비고') !== '') P.memo = v('비고');
+      if (v('생지컬러') !== '') P.color = v('생지컬러');
       if (v('사종') && v('루프장') !== '') { P.loops = P.loops || {}; P.loops[v('사종')] = v('루프장'); }
     });
     const keys = Object.keys(plan);
@@ -31058,6 +31469,10 @@ function validateBlendSum(blends, label) {
     });
     document.getElementById('kf-factory')?.addEventListener('change', ev => { state.kfFactory = ev.target.value; renderDashboard(); });
     document.getElementById('kf-closed')?.addEventListener('change', ev => { state.kfClosed = !!ev.target.checked; renderDashboard(); });
+    // hotfix417: 구분 · 샘플도 보기 · [+ 생지 추가]
+    document.getElementById('kf-gubun')?.addEventListener('change', ev => { state.kfGubun = ev.target.value || ''; renderDashboard(); });
+    document.getElementById('kf-sample')?.addEventListener('change', ev => { state.kfSample = !!ev.target.checked; renderDashboard(); });
+    document.getElementById('kf-add-item')?.addEventListener('click', () => openKnitNewItemModal());
     document.querySelectorAll('#dash-body .kf-delitem').forEach(b => b.addEventListener('click', async () => {
       const sp = getFabricSpecs().find(x => specFid(x) === b.dataset.kfFid);
       const nm = sp ? sp.name : '이 품목';
@@ -39487,6 +39902,11 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
       title = '원사 재고 현황';
       body = renderYarnStockDash();
       addBtn.style.display = 'none';
+    } else if (state.dashView === 'moves') {
+      // hotfix416: 공장 간 이동 목록 (생지 · 원사)
+      title = '공장 간 이동';
+      body = renderMovesDash();
+      addBtn.style.display = 'none';
     } else if (state.dashView === 'yarn') {
       title = 'ㄴ 원사 진행';
       body = renderYarnDash();
@@ -41895,13 +42315,15 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
         editingSpecIdx = idx;
         const specs = getFabricSpecs();
         const s = (idx >= 0) ? specs[idx] : { name: '', cat: '', width: '', tube: false, gy: '', blend: '' };
-        document.getElementById('fs-modal-title').textContent = (idx >= 0) ? '품목 수정' : '품목 추가';
+        document.getElementById('fs-modal-title').textContent = (idx >= 0) ? '품목 디테일 수정' : '품목 추가';
         document.getElementById('fs-f-name').value = s.name || '';
         { const ab = document.getElementById('fs-f-abbr'); if (ab) ab.value = s.abbr || ''; }   // hotfix392: 줄임말
         const gSel = document.getElementById('fs-f-gubun');
         // hotfix244: 신규 추가는 현재 보고 있는 탭의 구분을 기본 선택 (전체 탭이면 몸판)
         gSel.value = (idx >= 0) ? (s.gubun || GUBUN_BODY) : (fsGubunFilter !== '__all__' ? fsGubunFilter : GUBUN_BODY);
         if (!gSel.value) gSel.value = GUBUN_BODY;
+        // hotfix417: 품목명 · 구분 · 조직은 [생지 및 편직 설정]에서 고친다 — 디테일 수정에서는 잠금 (새 품목 추가는 그대로)
+        { const lock = idx >= 0; ['fs-f-name', 'fs-f-gubun', 'fs-f-cat'].forEach(id => { const el = document.getElementById(id); if (el) { el.disabled = lock; el.title = lock ? '품목명 · 구분 · 조직은 [생지 및 편직 설정]에서 고칩니다' : ''; el.style.background = lock ? '#f1f5f9' : ''; } }); const ca = document.getElementById('fs-f-cat-add'); if (ca) ca.style.display = lock ? 'none' : ''; }
         const pSel = document.getElementById('fs-f-pair');
         if (pSel) {
           // hotfix253: 판매 종료된 리프는 목록에서 제외. 단 이미 걸어둔 리프는 남긴다
@@ -42569,6 +42991,8 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
     try { bindKnitDone(); } catch (e) { console.warn('[knit done bind]', e.message); }
     // hotfix415: 원사 재고 현황
     if (state.dashView === 'yarnStock') { try { bindYarnStockDash(); } catch (e) { console.warn('[yarn stock bind]', e.message); } }
+    // hotfix416: 공장 간 이동 목록
+    if (state.dashView === 'moves') { try { bindMovesDash(); } catch (e) { console.warn('[moves bind]', e.message); } }
     // 완료 체크박스 (확인 팝업)
     document.querySelectorAll('#dash-body .dash-complete-cb').forEach(cb => {
       cb.addEventListener('change', async (e) => {
@@ -45655,6 +46079,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
         ${viewMode === 'list' ? `<span style="display:flex;gap:6px;">
           <button class="dash-action-btn" id="ship-show-add-out" style="display:none;background:#059669;color:#fff;padding:6px 14px;">+ 새 출고 추가</button>
           <button class="dash-action-btn" id="ship-show-add-in" style="background:#2563eb;color:#fff;padding:6px 14px;" title="편직 마감 ± 절 조정 (출고는 염/가공 의뢰서 [생지출고의뢰서]의 몸판/리프 만들기가 자동으로 뺍니다)">+ 새 입고 추가</button>
+          ${canStockAdjust() ? `<button class="dash-action-btn" id="ship-show-move" style="background:#1e40af;color:#fff;padding:6px 14px;" title="이 통의 생지를 다른 편직공장으로 옮깁니다 (판매 출고 아님 — 보낸 곳 −, 받은 곳 +)">+ 다른 공장으로 이동</button>` : ''}
         </span>` : ''}
       </div>
       <table class="dash-table" style="margin-bottom:14px;">
@@ -45689,12 +46114,18 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
               </td>
             </tr>`;
           } else {
-            const dlabel = isIn(sh)
+            // hotfix416: 이동 줄은 파란 [이동] 배지 + 받는 곳, 로스 줄은 [로스]
+            const dlabel = sh.move
+              ? `<span style="display:inline-block;padding:1px 7px;border-radius:9px;background:#dbeafe;color:#1e40af;font-weight:700;font-size:11px;">이동</span><div style="font-size:10.5px;color:#1e40af;font-weight:700;">${escapeHtml(wo.recipient || '')} → ${escapeHtml(sh.dest || '')}</div>`
+              : sh.src === 'loss' ? '<span style="color:#b45309;font-weight:700;">로스</span>'
+              : isIn(sh)
               ? '<span style="color:#2563eb;font-weight:700;">입고</span>'
               : '<span style="color:#059669;font-weight:700;">출고</span>';
             // hotfix414: 자동 줄(src 'gs')은 번호표 · 취소된 줄은 회색 · 계산 kg 는 회색 + [입력]
             const dead = !shLive(sh); const auto = sh.src === 'gs';
-            const calcKg = !isIn(sh) && sh.kg_manual === false;
+            // hotfix416: 이동 · 로스 줄은 지우지 않고 취소(최고관리자)
+            const stamped = !!(sh.move || sh.src === 'loss');
+            const calcKg = !isIn(sh) && sh.kg_manual === false && !stamped;
             body += `<tr style="${dead ? 'color:#9ca3af;text-decoration:line-through;' : ''}">
               <td>${sh.date ? new Date(sh.date).toLocaleDateString('ko-KR') : '-'}</td>
               <td style="text-align:center;">${dlabel}${auto ? `<div style="font-size:10px;color:#64748b;font-weight:400;text-decoration:none;">자동 · ${escapeHtml(sh.gs_number || '')}</div>` : ''}${dead ? '<div style="font-size:10px;color:#b91c1c;font-weight:700;">취소됨</div>' : ''}</td>
@@ -45703,8 +46134,8 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
               <td>${escapeHtml(sh.memo || '-')}</td>
               <td style="text-align:center;">
                 ${viewMode === 'list' && !dead ? `
-                  <button class="dash-action-btn" data-start-edit="${idx}">수정</button>
-                  ${auto ? `<button class="dash-action-btn danger" data-void-ship="${idx}" title="자동 출고 줄은 지우지 않고 취소됨으로 남깁니다 (재고는 돌아옴)">취소</button>` : `<button class="dash-action-btn danger" data-del-ship="${idx}">삭제</button>`}
+                  ${stamped ? '' : `<button class="dash-action-btn" data-start-edit="${idx}">수정</button>`}
+                  ${auto ? `<button class="dash-action-btn danger" data-void-ship="${idx}" title="자동 출고 줄은 지우지 않고 취소됨으로 남깁니다 (재고는 돌아옴)">취소</button>` : stamped ? (isOwnerUser() ? `<button class="dash-action-btn danger" data-void-ship="${idx}" title="지우지 않고 취소됨으로 남깁니다 (양쪽 재고가 원래대로)">되돌리기</button>` : '<span style="font-size:10.5px;color:#9ca3af;">최고관리자</span>') : `<button class="dash-action-btn danger" data-del-ship="${idx}">삭제</button>`}
                 ` : ''}
               </td>
             </tr>`;
@@ -45713,6 +46144,27 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
       }
       
       body += `</tbody></table>`;
+      
+      // hotfix416: 다른 공장으로 이동 (공장간이동 기획서 v2 길 ③ — 출고 줄에 받는 곳 + move 표시, 양쪽 미리 보기)
+      if (viewMode === 'move') {
+        const facs = knitFactoryList().filter(v => vendorKey(v) !== vendorKey(wo.recipient));
+        body += `<div style="background:#eff6ff;padding:14px;border-radius:4px;border:2px solid #1e40af;">
+          <div style="font-size:13px;font-weight:700;margin-bottom:10px;color:#1e40af;">다른 공장으로 이동 — ${escapeHtml(wo.recipient || '')} → 받는 곳 (판매 출고가 아닙니다)</div>
+          <div style="display:grid;grid-template-columns:1.3fr 1fr 1fr 1fr 1.6fr;gap:8px;margin-bottom:10px;">
+            <div><label style="font-size:11px;color:#666;display:block;margin-bottom:3px;">받는 곳 *</label><select id="mv-dest" style="width:100%;padding:6px;border:1px solid #ccc;border-radius:3px;"><option value="">고르기</option>${facs.map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('')}</select></div>
+            <div><label style="font-size:11px;color:#666;display:block;margin-bottom:3px;">절수 *</label><input type="number" id="mv-jul" step="0.5" placeholder="30" style="width:100%;padding:6px;border:1px solid #ccc;border-radius:3px;"></div>
+            <div><label style="font-size:11px;color:#666;display:block;margin-bottom:3px;">중량(kg)</label><input type="number" id="mv-kg" step="0.1" placeholder="비우면 자동" style="width:100%;padding:6px;border:1px solid #ccc;border-radius:3px;"></div>
+            <div><label style="font-size:11px;color:#666;display:block;margin-bottom:3px;">날짜 *</label><input type="date" id="mv-date" value="${todayYMD()}" style="width:100%;padding:6px;border:1px solid #ccc;border-radius:3px;"></div>
+            <div><label style="font-size:11px;color:#666;display:block;margin-bottom:3px;">메모</label><input type="text" id="mv-memo" placeholder="비고" style="width:100%;padding:6px;border:1px solid #ccc;border-radius:3px;"></div>
+          </div>
+          <div id="mv-preview" style="font-size:12px;color:#1e3a8a;line-height:1.7;margin-bottom:10px;">받는 곳과 절수를 넣으면 양쪽이 어떻게 바뀌는지 미리 보입니다.</div>
+          <div style="display:flex;gap:8px;justify-content:flex-end;">
+            <button class="dash-action-btn" id="ship-cancel-btn" style="padding:8px 16px;">취소</button>
+            <button class="dash-action-btn" id="mv-submit-btn" style="padding:8px 18px;font-size:13px;background:#1e40af;color:#fff;font-weight:700;">이동 기록</button>
+          </div>
+          <div style="font-size:11px;color:#888;margin-top:10px;">※ 절수만 넣으면 kg/절(${avgKgPerJul.toFixed(1)})로 자동 계산. 재고보다 많으면 빨간 글씨로 알리되 막지는 않습니다. 되돌리기는 최고관리자만(취소됨 도장).</div>
+        </div>`;
+      }
       
       // 새 입·출고 입력 영역 (viewMode=='add'일 때만)
       if (viewMode === 'add') {
@@ -45758,6 +46210,21 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
           setTimeout(() => document.getElementById('new-ship-jul')?.focus(), 50);
         });
       }
+      // hotfix416: 이동 폼 · 미리 보기 · 기록
+      document.getElementById('ship-show-move')?.addEventListener('click', () => { viewMode = 'move'; renderModal(); setTimeout(() => document.getElementById('mv-dest')?.focus(), 50); });
+      const mvPaint = () => {
+        const pv = document.getElementById('mv-preview'); if (!pv) return;
+        const to = document.getElementById('mv-dest').value, jul = parseFloat(document.getElementById('mv-jul').value) || 0;
+        if (!to || !jul) { pv.textContent = '받는 곳과 절수를 넣으면 양쪽이 어떻게 바뀌는지 미리 보입니다.'; return; }
+        const got = greigeMovedIn(to);
+        pv.innerHTML = `${escapeHtml(wo.recipient || '')} 이 통 <strong>${remainJul}절</strong> → <strong style="color:${remainJul - jul < 0 ? '#b91c1c' : '#1e3a8a'};">${remainJul - jul}절</strong>${remainJul - jul < 0 ? ' <span style="color:#b91c1c;font-weight:700;">(재고보다 많습니다 — 적을 수는 있습니다)</span>' : ''}<br>${escapeHtml(to)} 이동으로 받은 생지 <strong>${got.jul}절</strong> → <strong>${got.jul + jul}절</strong>`;
+      };
+      ['mv-dest', 'mv-jul'].forEach(id => { const el = document.getElementById(id); if (el) { el.addEventListener('input', mvPaint); el.addEventListener('change', mvPaint); } });
+      document.getElementById('mv-submit-btn')?.addEventListener('click', async () => {
+        const b = document.getElementById('mv-submit-btn'); b.disabled = true;
+        const ok = await greigeMoveAdd(wo, _ii, document.getElementById('mv-dest').value, document.getElementById('mv-jul').value, document.getElementById('mv-kg').value, document.getElementById('mv-date').value, document.getElementById('mv-memo').value);
+        if (ok) { toast('이동을 기록했습니다', 'success'); setTimeout(() => openShipmentModal(woId, _ii), 200); } else b.disabled = false;
+      });
       
       // 입력 취소
       const cancelBtn = document.getElementById('ship-cancel-btn');
@@ -45843,8 +46310,11 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
       // hotfix414: 자동 출고 줄 [취소] — void 도장 (재고는 돌아오고 기록은 남는다) + 기획 중 사용량 갈아 끼움
       document.querySelectorAll('[data-void-ship]').forEach(b => {
         b.addEventListener('click', async () => {
-          if (!confirm('이 자동 출고 줄을 취소합니다. 재고는 돌아오고 줄은 취소됨으로 남습니다.\n\n(생지출고의뢰서 자체는 그대로입니다 — 의뢰서를 지우려면 [생지출고조회]에서)')) return;
           const idx = parseInt(b.dataset.voidShip);
+          const tgt = shipments[idx] || {};
+          // hotfix416: 이동 · 로스 줄 되돌리기는 최고관리자만
+          if ((tgt.move || tgt.src === 'loss') && !isOwnerUser()) { toast('되돌리기는 최고관리자만 됩니다', 'error'); return; }
+          if (!confirm(tgt.move ? '이 이동을 되돌립니다. 양쪽 재고가 원래대로 돌아오고 줄은 취소됨으로 남습니다.\n\n되돌릴까요?' : tgt.src === 'loss' ? '로스 확정을 되돌립니다. 생지 재고가 돌아오고 줄은 취소됨으로 남습니다.\n\n되돌릴까요?' : '이 자동 출고 줄을 취소합니다. 재고는 돌아오고 줄은 취소됨으로 남습니다.\n\n(생지출고의뢰서 자체는 그대로입니다 — 의뢰서를 지우려면 [생지출고조회]에서)')) return;
           const newShipments = shipments.map((sh, i) => i === idx ? { ...sh, void: true, void_by: state.user?.email || '', void_at: new Date().toISOString() } : sh);
           try {
             await updateDoc(doc(db, C('workorders'), woId), { greige_shipments: newShipments, updated_at: serverTimestamp(), updated_by: state.user.email });
@@ -46671,7 +47141,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix415';
+  const VERSION = 'v2.53 hotfix417';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
