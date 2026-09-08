@@ -11780,25 +11780,19 @@ window.addEventListener('firebase-ready', () => {
   const PROC_SUB_PERMS = ['procNew', 'procAlias', 'procAbbr', 'procRename', 'procVendor'];
   function pfCan(k) { return isOwnerUser() || (canAccessView('procSetup') && canAccessView(k)); }
   // 약어 · 이름 바꾸기 · 업체별 단가는 단가표(cost_data/prices)를 같이 써야 한다 — 이 셋 중 하나라도 있으면 단가표를 읽고 쓴다 (규칙 hotfix410)
-  function pfCostPerm() { return pfCan('procAbbr') || pfCan('procRename') || pfCan('procVendor'); }
+  function pfCostPerm() { return pfCan('procRename') || pfCan('procVendor'); }
   // 최고관리자가 아닌데 단가표 권한이 있으면 단가표를 한 번만 구독한다 (최고관리자는 로그인 때 이미 구독)
   function pfEnsurePrices() {
     if (isOwnerUser() || state.__pfPricesSub || !pfCostPerm()) return;
     state.__pfPricesSub = true;
-    onSnapshot(doc(db, C('cost_data'), 'prices'), snap => {
-      const d = snap.exists() ? snap.data() : null;
+    // hotfix412: 가공료 문서(proc_prices)만 — 원사 단가 · 편직료(prices)는 서버에서 내려오지 않는다
+    onSnapshot(doc(db, C('cost_data'), 'proc_prices'), snap => {
       const first = !state.costPricesLoaded;
-      state.costPrices = {
-        yarns: (d && Array.isArray(d.yarns)) ? d.yarns : [], knit: (d && Array.isArray(d.knit)) ? d.knit : [],
-        proc: (d && Array.isArray(d.proc)) ? d.proc : [], bundles: (d && Array.isArray(d.bundles)) ? d.bundles : [],
-        def_procs: (d && Array.isArray(d.def_procs)) ? d.def_procs : [],
-        proc_off: (d && d.proc_off && typeof d.proc_off === 'object') ? d.proc_off : {},
-        grade_off: (d && d.grade_off && typeof d.grade_off === 'object') ? d.grade_off : {},
-        proc_abbr: (d && d.proc_abbr && typeof d.proc_abbr === 'object') ? d.proc_abbr : {}
-      };
-      state.costPricesLoaded = true;
+      state.__procRaw = snap.exists() ? snap.data() : null;
+      state.__procRawLoaded = true;
+      costPricesMerge();
       if (first && state.uiMode === 'dashboard' && state.dashView === 'procSetup') renderDashboard();
-    }, err => console.warn('[costPrices sub(proc)]', err.message));
+    }, err => console.warn('[procPrices sub]', err.message));
   }
   // ============================================================
   // hotfix265: "권한을 준 화면은 대표와 똑같이 보인다"
@@ -12989,7 +12983,9 @@ window.addEventListener('firebase-ready', () => {
         proc_alias: (d.proc_alias && typeof d.proc_alias === 'object') ? d.proc_alias : {},
         proc_part: (d.proc_part && typeof d.proc_part === 'object') ? d.proc_part : {},
         proc_hidden: Array.isArray(d.proc_hidden) ? d.proc_hidden : [],   // hotfix384: 전체에서 사용 안 함으로 접어 둔 가공
-        org_alias: (d.org_alias && typeof d.org_alias === 'object') ? d.org_alias : {}
+        org_alias: (d.org_alias && typeof d.org_alias === 'object') ? d.org_alias : {},
+        // hotfix412: 약어(이름표 상자)
+        proc_abbr: (d.proc_abbr && typeof d.proc_abbr === 'object') ? d.proc_abbr : {}
       } : null;
       if (state.uiMode === 'dashboard' && (state.dashView === 'fabricSpecs' || state.dashView === 'costCalc')) renderDashboard();
     }, err => console.warn('[uiLists sub]', err.message));
@@ -13046,6 +13042,12 @@ window.addEventListener('firebase-ready', () => {
       if (state.uiMode === 'dashboard' && state.dashView === 'itemColors' && !document.activeElement?.closest?.('#ic-rows')) renderDashboard();
       try { refreshFinishColorList(); } catch (_) {}
     }, err => console.warn('[itemColors sub]', err.message));
+    // hotfix412: 업체별 가공 사본(금액 없음) 구독 — 직원 읽기 전용 층
+    onSnapshot(doc(db, C('settings'), 'proc_vendors'), snap => {
+      const d = snap.exists() ? snap.data() : null;
+      state.procVendors = (d && d.vendors && typeof d.vendors === 'object') ? d.vendors : {};
+      if (state.uiMode === 'dashboard' && state.dashView === 'procSetup' && (state.pfSub || 'all') === 'vendor' && !pfCan('procVendor')) renderDashboard();
+    }, err => console.warn('[procVendors sub]', err.message));
     // hotfix411: 원사 재고 원장 구독 — stock/yarn (입고 · 조정 · 이동 기록, 직원도 읽고 씀)
     onSnapshot(doc(db, C('stock'), 'yarn'), snap => {
       const d = snap.exists() ? snap.data() : null;
@@ -13122,23 +13124,19 @@ window.addEventListener('firebase-ready', () => {
         }
       }, err => console.warn('[knitFee sub]', err.message));
       // hotfix268: 단가표 구독
+      // hotfix412: 단가표는 두 문서 — prices(원사 단가 · 편직료, 최고관리자만) + proc_prices(가공료 · 묶음, 업체별 허용자도). 둘을 합쳐 state.costPrices 로
       onSnapshot(doc(db, C('cost_data'), 'prices'), snap => {
-        const d = snap.exists() ? snap.data() : null;
-        state.costPrices = {
-          yarns: (d && Array.isArray(d.yarns)) ? d.yarns : [],
-          knit: (d && Array.isArray(d.knit)) ? d.knit : [],
-          proc: (d && Array.isArray(d.proc)) ? d.proc : [],
-          bundles: (d && Array.isArray(d.bundles)) ? d.bundles : [],
-          def_procs: (d && Array.isArray(d.def_procs)) ? d.def_procs : [],
-          // hotfix345: 업체마다 "이 가공은 안 함" 목록
-          proc_off: (d && d.proc_off && typeof d.proc_off === 'object') ? d.proc_off : {},
-          grade_off: (d && d.grade_off && typeof d.grade_off === 'object') ? d.grade_off : {},
-          // hotfix346: 묶음 이름을 저절로 지을 때 쓰는 약어
-          proc_abbr: (d && d.proc_abbr && typeof d.proc_abbr === 'object') ? d.proc_abbr : {}
-        };
-        state.costPricesLoaded = true;
+        state.__pricesRaw = snap.exists() ? snap.data() : null;
+        state.__pricesRawLoaded = true;
+        costPricesMerge();
         renderCostFromSub();
       }, err => console.warn('[costPrices sub]', err.message));
+      onSnapshot(doc(db, C('cost_data'), 'proc_prices'), snap => {
+        state.__procRaw = snap.exists() ? snap.data() : null;
+        state.__procRawLoaded = true;
+        costPricesMerge();
+        renderCostFromSub();
+      }, err => console.warn('[procPrices sub]', err.message));
       // hotfix268: 단가 이력 구독 (옛 값은 지우지 않고 쌓기만 한다)
       onSnapshot(doc(db, C('cost_data'), 'price_history'), snap => {
         const d = snap.exists() ? snap.data() : null;
@@ -13775,7 +13773,9 @@ function specGreigeColors(fid) {
       proc_alias: pa,
       proc_part: mrg('proc_part'),
       proc_hidden: Array.isArray(U.proc_hidden) ? U.proc_hidden.slice() : (Array.isArray(L.proc_hidden) ? L.proc_hidden.slice() : []),
-      org_alias: mrg('org_alias')
+      org_alias: mrg('org_alias'),
+      // hotfix412: 약어 — 이름표 상자(settings/lists)가 으뜸, 없으면 옛 단가표(prices.proc_abbr) 값
+      proc_abbr: Object.assign({}, (state.costPrices && state.costPrices.proc_abbr) || {}, (U.proc_abbr && typeof U.proc_abbr === 'object') ? U.proc_abbr : {})
     };
   }
   function getKnitOrgs() { return costLists().orgs; }
@@ -13855,6 +13855,8 @@ function specGreigeColors(fid) {
         proc_alias: next.proc_alias || {}, org_alias: next.org_alias || {},
         proc_part: next.proc_part || {},
         proc_hidden: Array.isArray(next.proc_hidden) ? next.proc_hidden : [],   // hotfix384
+        // hotfix412: 약어
+        proc_abbr: (next.proc_abbr && typeof next.proc_abbr === 'object') ? next.proc_abbr : {},
         updated_at: serverTimestamp(),
         updated_by: state.user?.email || 'unknown'
       });
@@ -14453,6 +14455,31 @@ function specGreigeColors(fid) {
   // ★ hotfix364: 여기서 내주지 않는 칸은 화면에서도 안 보이고, 저장할 때 통째로 지워진다.
   //   proc_off · grade_off · proc_abbr 세 칸이 빠져 있어서
   //   [이 업체 안 함] 이 담겨도 곧바로 사라지고 있었다. 반드시 함께 내준다.
+  // hotfix412: prices(원사·편직) + proc_prices(가공료·묶음·안 함 목록) 합치기.
+  //   proc_prices 문서가 아직 없으면(옛 자료) prices 안의 가공 칸을 그대로 쓴다 — 최고관리자가 한 번 저장하면 proc_prices 로 옮겨진다.
+  //   약어는 settings/lists 로 갔다(costLists().proc_abbr) — 여기 proc_abbr 는 옛 값 대비용
+  function costPricesMerge() {
+    const d = state.__pricesRaw, q = state.__procRaw;
+    const arr = (o, k) => (o && Array.isArray(o[k])) ? o[k] : [];
+    const obj = (o, k) => (o && o[k] && typeof o[k] === 'object') ? o[k] : {};
+    const src = q ? q : d;
+    state.costPrices = {
+      yarns: arr(d, 'yarns'), knit: arr(d, 'knit'),
+      proc: arr(src, 'proc'), bundles: arr(src, 'bundles'), def_procs: arr(src, 'def_procs'),
+      proc_off: obj(src, 'proc_off'), grade_off: obj(src, 'grade_off'),
+      proc_abbr: obj(d, 'proc_abbr')
+    };
+    // 최고관리자는 두 문서를 다 읽어야 "읽음". 업체별 허용자는 proc_prices 만 읽으면 "읽음"
+    state.costPricesLoaded = isOwnerUser() ? !!(state.__pricesRawLoaded && state.__procRawLoaded) : !!state.__procRawLoaded;
+  }
+  // hotfix412: 단가표에서 금액을 뺀 업체별 사본 — { 업체: { procs:[가공], bundles:[{name, procs, grade}] } }
+  function procVendorsCopyOf(P) {
+    const out = {};
+    const V = v => String(v || '').trim();
+    (P.proc || []).forEach(r => { if (!r || !V(r.vendor) || String(r.item || '').trim()) return; const o = out[V(r.vendor)] || (out[V(r.vendor)] = { procs: [], bundles: [] }); const n = String(r.proc || '').trim(); if (n && !o.procs.includes(n)) o.procs.push(n); });
+    (P.bundles || []).forEach(b => { if (!b || !V(b.vendor)) return; const o = out[V(b.vendor)] || (out[V(b.vendor)] = { procs: [], bundles: [] }); o.bundles.push({ name: String(b.name || '').trim(), procs: Array.isArray(b.procs) ? b.procs.slice() : [], grade: String(b.grade || '') }); });
+    return out;
+  }
   function getCostPrices() {
     const c = state.costPrices || {};
     const obj = k => (c[k] && typeof c[k] === 'object' && !Array.isArray(c[k])) ? c[k] : {};
@@ -14509,23 +14536,35 @@ function specGreigeColors(fid) {
     if (!isOwnerUser() && !pfCostPerm()) { toast('최고관리자만 저장할 수 있습니다', 'error'); return false; }
     if (!state.costPricesLoaded) { toast('단가표를 아직 다 읽지 못했습니다. 잠시 뒤 다시 시도해 주세요', 'warning'); return false; }
     try {
-      assignYarnIds(next.yarns || []);   // hotfix391: 코드 없는 사종에만 새 코드(Y0001…). 있는 코드는 절대 안 바뀜
-      await setDoc(doc(db, C('cost_data'), 'prices'), {
-        yarns: next.yarns || [], knit: next.knit || [], proc: next.proc || [], bundles: next.bundles || [],
-        def_procs: next.def_procs || [], proc_off: next.proc_off || {}, grade_off: next.grade_off || {},
-        proc_abbr: next.proc_abbr || {},
-        updated_at: serverTimestamp(),
-        updated_by: state.user?.email || 'unknown'
-      });
-      state.costPrices = JSON.parse(JSON.stringify(next));
-      // hotfix391: 사종 이름·코드·구분·다른 표기만 떼어 직원도 읽는 사본에 적는다 (단가·운임·로스 없음)
-      const names = (next.yarns || []).filter(y => y && y.name).map(y => Object.assign({ yid: y.yid || '', name: y.name, kind: y.kind || '기타' },
-        (y.base != null) ? { base: String(y.base || ''), color: String(y.color || ''), brand: String(y.brand || '') } : {},   // hotfix393
-        (Array.isArray(y.aliases) && y.aliases.length) ? { aliases: y.aliases.slice() } : {}));
-      await setDoc(doc(db, C('settings'), 'yarn_names'), { items: names, updated_at: serverTimestamp(), updated_by: state.user?.email || 'unknown' });
-      state.yarnNames = names;
+      const stamp = { updated_at: serverTimestamp(), updated_by: state.user?.email || 'unknown' };
+      // hotfix412: 가공료 문서(proc_prices) 먼저 — 최고관리자 · 업체별 허용자 모두 쓴다
+      await setDoc(doc(db, C('cost_data'), 'proc_prices'), Object.assign({
+        proc: next.proc || [], bundles: next.bundles || [], def_procs: next.def_procs || [],
+        proc_off: next.proc_off || {}, grade_off: next.grade_off || {}
+      }, stamp));
+      state.__procRaw = { proc: next.proc || [], bundles: next.bundles || [], def_procs: next.def_procs || [], proc_off: next.proc_off || {}, grade_off: next.grade_off || {} };
+      state.__procRawLoaded = true;
+      // 금액 없는 사본 — 업체별 하는 가공 · 묶음 이름과 구성 (직원 읽기 전용 층이 이것만 읽는다)
+      await setDoc(doc(db, C('settings'), 'proc_vendors'), Object.assign({ vendors: procVendorsCopyOf(next) }, stamp));
+      state.procVendors = procVendorsCopyOf(next);
+      if (isOwnerUser()) {
+        assignYarnIds(next.yarns || []);   // hotfix391: 코드 없는 사종에만 새 코드(Y0001…). 있는 코드는 절대 안 바뀜
+        // hotfix412: prices 에는 원사 단가 · 편직료만 남긴다 (가공 칸은 proc_prices 로). 옛 약어(proc_abbr)는 settings/lists 로 갔으므로 여기 안 씀
+        await setDoc(doc(db, C('cost_data'), 'prices'), Object.assign({ yarns: next.yarns || [], knit: next.knit || [] }, stamp));
+        state.__pricesRaw = { yarns: next.yarns || [], knit: next.knit || [] };
+        state.__pricesRawLoaded = true;
+      }
+      costPricesMerge();
+      if (isOwnerUser()) {
+        // hotfix391: 사종 이름·코드·구분·다른 표기만 떼어 직원도 읽는 사본에 적는다 (단가·운임·로스 없음)
+        const names = (next.yarns || []).filter(y => y && y.name).map(y => Object.assign({ yid: y.yid || '', name: y.name, kind: y.kind || '기타' },
+          (y.base != null) ? { base: String(y.base || ''), color: String(y.color || ''), brand: String(y.brand || '') } : {},   // hotfix393
+          (Array.isArray(y.aliases) && y.aliases.length) ? { aliases: y.aliases.slice() } : {}));
+        await setDoc(doc(db, C('settings'), 'yarn_names'), { items: names, updated_at: serverTimestamp(), updated_by: state.user?.email || 'unknown' });
+        state.yarnNames = names;
+      }
       const adds = historyAdds || {};
-      const keys = Object.keys(adds);
+      const keys = isOwnerUser() ? Object.keys(adds) : [];
       if (keys.length) {
         const merged = {};
         keys.forEach(k => {
@@ -28577,8 +28616,8 @@ function validateBlendSum(blends, label) {
   ];
   // 저장된 값을 기본값 위에 덮는다
   function pfAbbrList() {
-    const saved = (getCostPrices().proc_abbr && typeof getCostPrices().proc_abbr === 'object')
-      ? getCostPrices().proc_abbr : {};
+    // hotfix412: 약어는 이름표 상자에서
+    const saved = costLists().proc_abbr || {};
     const rows = PF_ABBR_DEFAULT.map(r => Object.assign({}, r, saved[r.name] ? { abbr: String(saved[r.name]) } : {}));
     const have = new Set(rows.map(r => r.name));
     Object.keys(saved).forEach(k => { if (!have.has(k)) rows.push({ part: procPartOf(k) || '기타', name: k, abbr: String(saved[k]) }); });
@@ -29006,20 +29045,23 @@ function validateBlendSum(blends, label) {
       if (r.key && renames[r.key]) L.proc_alias[r.key] = n;     // 옛 이름은 다른 표기로 남겨 옛 자료가 끊기지 않게
     });
     L.proc_hidden = (L.proc_hidden || []).map(x => renames[x] || x);
+    // hotfix412: 약어는 이름표 상자에 — 이름 바꾼 것도 따라간다
+    L.proc_abbr = Object.assign({}, L.proc_abbr || {});
+    Object.keys(renames).forEach(o => { if (L.proc_abbr[o] != null) { L.proc_abbr[renames[o]] = L.proc_abbr[o]; delete L.proc_abbr[o]; } });
+    if (pfCan('procAbbr')) {
+      D.rows.forEach(r => { const n = nmOf(r), a = String(r.abbr || '').trim(); if (a) L.proc_abbr[n] = a; else delete L.proc_abbr[n]; });
+      Object.keys(D.gabbr || {}).forEach(g => { const a = String(D.gabbr[g] || '').trim(); if (a) L.proc_abbr[g] = a; else delete L.proc_abbr[g]; });
+    }
     const ok1 = await saveCostLists(L);
     if (!ok1) return false;
-    // 단가표 쪽 — 약어 · 이름 바꾼 것 따라가기
+    // 단가표 쪽 — 이름 바꾼 것 따라가기 (약어는 위 이름표 상자에 담겼다)
     const P = JSON.parse(JSON.stringify(getCostPrices()));
-    P.proc_abbr = Object.assign({}, P.proc_abbr || {});
-    Object.keys(renames).forEach(o => { if (P.proc_abbr[o] != null) { P.proc_abbr[renames[o]] = P.proc_abbr[o]; delete P.proc_abbr[o]; } });
-    D.rows.forEach(r => { const n = nmOf(r), a = String(r.abbr || '').trim(); if (a) P.proc_abbr[n] = a; else delete P.proc_abbr[n]; });
-    Object.keys(D.gabbr || {}).forEach(g => { const a = String(D.gabbr[g] || '').trim(); if (a) P.proc_abbr[g] = a; else delete P.proc_abbr[g]; });
     const rn = x => renames[String(x || '').trim()] || x;
     (P.proc || []).forEach(r => { if (r) r.proc = rn(r.proc); });
     (P.bundles || []).forEach(b => { if (b && Array.isArray(b.procs)) b.procs = b.procs.map(rn); });
     Object.keys(P.proc_off || {}).forEach(v => { P.proc_off[v] = (P.proc_off[v] || []).map(rn); });
-    // hotfix410: 약어 · 이름 바꾸기 · 업체별 권한이 있는 사람은 단가표도 같이 쓴다(규칙 hotfix410). 없으면 단가표는 건드리지 않는다 (hotfix409)
-    const ok2 = pfCostPerm() ? await saveCostPrices(P) : true;
+    // hotfix412: 단가표(가공료 문서)는 이름을 바꾼 것이 있을 때만, 그 권한이 있는 사람만 쓴다. 약어만 고쳤으면 안 쓴다
+    const ok2 = (Object.keys(renames).length && pfCostPerm()) ? await saveCostPrices(P) : true;
     if (!ok2) return false;
     state.pfAllDraft = null;
     pfAllStashDrop();
@@ -29043,8 +29085,8 @@ function validateBlendSum(blends, label) {
     Object.keys(L.proc_alias || {}).forEach(k => { if (normProc(L.proc_alias[k]) === n) delete L.proc_alias[k]; });
     const ok1 = await saveCostLists(L);
     if (!ok1) return false;
+    if (L.proc_abbr) delete L.proc_abbr[n];
     const P = JSON.parse(JSON.stringify(getCostPrices()));
-    if (P.proc_abbr) delete P.proc_abbr[n];
     P.proc = (P.proc || []).filter(r => !(r && normProc(r.proc) === n));
     Object.keys(P.proc_off || {}).forEach(v => { P.proc_off[v] = (P.proc_off[v] || []).filter(x => normProc(x) !== n); });
     const ok2 = await saveCostPrices(P);
@@ -29463,8 +29505,7 @@ function validateBlendSum(blends, label) {
     // hotfix410: 단가표 권한(약어 · 이름 바꾸기 · 업체별)이 있는 사람은 단가표를 구독한다
     pfEnsurePrices();
     if ((isOwnerUser() || pfCostPerm()) && !state.costPricesLoaded) return `<div class="dash-empty">단가표를 읽는 중입니다…</div>`;
-    // hotfix410: [업체별 설정] 층은 procVendor 허용자만 (hotfix409: 직원·관리자는 [전체 설정] 층만)
-    if (!pfCan('procVendor')) state.pfSub = 'all';
+    // hotfix412: [업체별 설정] 층은 누구나 열되, procVendor 허용자가 아니면 금액 없는 사본만 읽는 읽기 전용 (hotfix410 에서는 층을 감췄다)
     const sub = state.pfSub || 'all';
     // hotfix410: 이 사람이 [전체 설정]에서 할 수 있는 것 / 없는 것
     const pfCanList = [['procNew', '새 가공 넣기 · 파트'], ['procAlias', '다른 표기'], ['procAbbr', '약어'], ['procRename', '이름 바꾸기'], ['procVendor', '업체별 단가와 묶음']];
@@ -29472,15 +29513,47 @@ function validateBlendSum(blends, label) {
     const tb = on => `padding:6px 16px;border:1px solid #1e3a8a;border-radius:8px;font-size:12.5px;font-weight:800;cursor:pointer;background:${on ? '#1e3a8a' : '#fff'};color:${on ? '#fff' : '#1e3a8a'};`;
     let h = `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
       <button class="pf-sub" data-pf-sub="all" style="${tb(sub === 'all')}">전체 설정</button>
-      ${pfCan('procVendor') ? `<span style="color:#cbd5e1;">›</span>
-      <button class="pf-sub" data-pf-sub="vendor" style="${tb(sub === 'vendor')}">업체별 설정</button>` : ''}
+      <span style="color:#cbd5e1;">›</span>
+      <button class="pf-sub" data-pf-sub="vendor" style="${tb(sub === 'vendor')}">업체별 설정${pfCan('procVendor') ? '' : ' (읽기)'}</button>
       ${isOwnerUser() ? `<span style="font-size:11.5px;color:#94a3b8;margin-left:4px;">가공은 [전체 설정]에서 만들고, 값과 묶음은 [업체별 설정]에서 넣습니다.</span>`
       : `<span style="font-size:11.5px;color:#94a3b8;margin-left:4px;">할 수 있는 것: <strong style="color:#475569;">${escapeHtml(pfYes.join(' · ') || '보기만')}</strong>${pfNo.length ? ` · 최고관리자(또는 [권한 설정]에서 허용한 사람)만: ${escapeHtml(pfNo.join(' · '))}` : ''}</span>`}
       <span style="flex:1;"></span>
-      ${sub === 'vendor' ? `<button class="dash-action-btn" id="pf-cmp" style="padding:6px 13px;font-weight:700;background:${state.pfCmpOpen ? '#1e3a8a' : '#fff'};color:${state.pfCmpOpen ? '#fff' : '#334155'};">업체별 단가 한눈에</button>
+      ${sub === 'vendor' && pfCan('procVendor') ? `<button class="dash-action-btn" id="pf-cmp" style="padding:6px 13px;font-weight:700;background:${state.pfCmpOpen ? '#1e3a8a' : '#fff'};color:${state.pfCmpOpen ? '#fff' : '#334155'};">업체별 단가 한눈에</button>
       <button class="dash-action-btn" id="pf-goflat" style="padding:6px 13px;font-weight:700;">개별 설정으로</button>` : ''}
     </div>`;
-    return h + (sub === 'vendor' ? pfVendorHtml() : pfAllHtml());
+    return h + (sub === 'vendor' ? (pfCan('procVendor') ? pfVendorHtml() : pfVendorReadHtml()) : pfAllHtml());
+  }
+  // hotfix412: 업체별 읽기 전용 층 — settings/proc_vendors(금액 없는 사본)만 읽는다. 가공료 · 묶음 단가는 서버에서 내려오지 않는다
+  function pfVendorReadHtml() {
+    const V = pfVendor();
+    const list = pfVendorList();
+    const PV = state.procVendors || {};
+    let h = `<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px;margin-bottom:14px;font-size:12.5px;color:#475569;line-height:1.8;">
+      업체가 <strong>하는 가공</strong>과 <strong>묶음 이름 · 구성</strong>을 봅니다. <strong>가공료 · 묶음 단가는 [권한 설정]에서 허용받은 사람만</strong> 보고 넣습니다 (이 화면에는 금액이 내려오지 않습니다).
+    </div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:14px;">
+      <label style="display:inline-flex;align-items:center;gap:7px;font-size:12.5px;font-weight:800;color:#334155;">업체
+        <select id="pf-vendor" style="padding:7px 10px;border:1px solid #d1d5db;border-radius:7px;font-size:13px;font-family:inherit;min-width:190px;">
+          <option value=""${V ? '' : ' selected'}>— 업체를 고르십시오 —</option>
+          ${list.map(v => `<option value="${escapeHtml(v)}"${v === V ? ' selected' : ''}>${escapeHtml(v)}</option>`).join('')}
+        </select></label>
+    </div>`;
+    if (!list.length) return h + `<div class="dash-empty">염색·가공 업체가 없습니다.</div>`;
+    if (!V) return h + `<div class="dash-empty">위에서 업체를 고르면 그 업체의 가공 · 묶음이 열립니다.</div>`;
+    const o = PV[V] || { procs: [], bundles: [] };
+    const hid = procHiddenList();
+    const procs = (o.procs || []).filter(pn => !hid.includes(normProc(pn)));
+    h += `<div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:14px 16px;margin-bottom:16px;">
+      <div style="font-size:13.5px;font-weight:800;color:#0f172a;margin-bottom:8px;">${escapeHtml(V)} 가 하는 가공 ${procs.length}개</div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px;">${procs.map(pn => `<span style="font-size:12px;padding:3px 10px;border:1px solid #e2e8f0;border-radius:12px;background:#f8fafc;color:#334155;">${escapeHtml(pn)}</span>`).join('') || '<span style="font-size:12px;color:#94a3b8;">등록된 가공이 없습니다 (최고관리자가 업체별 설정을 한 번 저장하면 채워집니다)</span>'}</div>
+    </div>
+    <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:14px 16px;">
+      <div style="font-size:13.5px;font-weight:800;color:#0f172a;margin-bottom:8px;">묶음 ${(o.bundles || []).length}개</div>
+      <div class="dash-table-wrap"><table class="dash-table"><thead><tr><th style="text-align:left;min-width:130px;">묶음 이름</th><th style="text-align:left;min-width:230px;">묶인 가공</th><th style="min-width:96px;">묶음 단가</th></tr></thead><tbody>
+      ${(o.bundles || []).map(b => `<tr><td style="text-align:left;font-weight:800;color:#1e3a8a;">${escapeHtml(b.name || '(이름 없음)')}${b.grade && (b.procs || []).includes('염색') ? ` <span style="font-size:10.5px;color:#b45309;">${escapeHtml(dyeGradeLabel(b.grade))}</span>` : ''}</td><td style="text-align:left;font-size:11.5px;color:#475569;">${escapeHtml((b.procs || []).join(' · ') || '-')}</td><td style="text-align:center;font-size:11px;color:#94a3b8;">권한 있는 사람만</td></tr>`).join('') || '<tr><td colspan="3" style="text-align:center;color:#9ca3af;padding:10px;">묶음이 없습니다.</td></tr>'}
+      </tbody></table></div>
+    </div>`;
+    return h;
   }
   function pfVendorHtml() {
     const V = pfVendor();
@@ -29688,6 +29761,8 @@ function validateBlendSum(blends, label) {
       state.pfSub = el.dataset.pfSub; state.pfCmpOpen = false; pfRepaint();
     }));
     if ((state.pfSub || 'all') === 'all') { bindPfAll(pfOn); return; }
+    // hotfix412: 읽기 전용 층은 업체 고르개만 건다
+    if (!pfCan('procVendor')) { const vs = pfRoot().querySelector('#pf-vendor'); if (vs) pfOn(vs, 'change', () => { state.pfVendor = vs.value; pfRepaint(); }); return; }
     const su = pfRoot().querySelector('#pfv-stash-use');
     if (su) pfOn(su, 'click', () => {
       const o = pfVenStashRead(); if (!o) return;
@@ -32776,12 +32851,12 @@ function validateBlendSum(blends, label) {
       if (hit) hit.price = x; else next.proc.push({ vendor: V, proc: nm, item: '', price: x });
       await saveCostPrices(next);
     }
-    // hotfix381: 약어도 같은 자리(cost_data/prices.proc_abbr)에 곧바로 담는다
+    // hotfix412: 약어는 이름표 상자(settings/lists.proc_abbr)에 담는다 (hotfix381 때는 단가표였다)
     const ab = String(abbr || '').trim();
-    if (ab && state.costPricesLoaded) {
-      const next2 = JSON.parse(JSON.stringify(getCostPrices()));
-      next2.proc_abbr = Object.assign({}, next2.proc_abbr || {}); next2.proc_abbr[nm] = ab;
-      await saveCostPrices(next2);
+    if (ab) {
+      const L2 = JSON.parse(JSON.stringify(costLists()));
+      L2.proc_abbr = Object.assign({}, L2.proc_abbr || {}); L2.proc_abbr[nm] = ab;
+      await saveCostLists(L2);
     }
     state.pfDraft = null;
     return true;
@@ -46049,7 +46124,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix411';
+  const VERSION = 'v2.53 hotfix412';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
