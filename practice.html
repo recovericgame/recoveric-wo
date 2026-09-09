@@ -6762,6 +6762,7 @@
           <span class="emphasis-mark">●</span>
           <span>컬러 &amp; 수량 (단위: 절)</span>
           <span class="emphasis-required">필수 입력</span>
+          <button type="button" id="f-color-setup-btn" class="dash-action-btn" style="margin-left:auto;padding:4px 10px;font-size:11.5px;font-weight:700;" title="이 몸판 품목 · 원사 컬러 · 염색공장으로 [품목 컬러 설정] 화면을 엽니다">＋ 품목 컬러 설정</button>
         </div>
         <div class="emphasis-hint">컬러를 입력하지 않으면 작업지시가 성립하지 않습니다. 1개 이상 반드시 입력해 주세요.</div>
         <div class="item-row color-row" style="font-size:11px; color:#444; font-weight:700;">
@@ -8104,6 +8105,43 @@ function mountProcPicker(host, opts) {
   paint(); compose();
   return host;
 }
+// hotfix419: 글자 검색 목록 상자 — datalist 대신. 포커스하면 전체, 글자를 적으면 포함하는 것만, 클릭하면 고른다
+function attachPickList(inp, itemsFn, onPick) {
+  if (!inp || inp.dataset.pickBound) return; inp.dataset.pickBound = '1';
+  let box = null;
+  const close = () => { document.querySelectorAll('.pick-list').forEach(b => b.remove()); box = null; };
+  const open = () => {
+    let items = []; try { items = itemsFn() || []; } catch (_) { items = []; }
+    const q = vendorKey(inp.value);
+    const hits = items.filter(t => !q || vendorKey(t).includes(q)).slice(0, 60);
+    if (!hits.length) { close(); return; }
+    if (!box || !box.isConnected) { close(); box = document.createElement('div'); box.className = 'pick-list'; box.style.cssText = 'position:fixed;z-index:9999;background:#fff;border:1px solid #cbd5e1;border-radius:7px;box-shadow:0 10px 30px rgba(15,23,42,.18);max-height:260px;overflow:auto;font-size:13px;'; document.body.appendChild(box); }
+    const r = inp.getBoundingClientRect(); box.style.left = r.left + 'px'; box.style.top = (r.bottom + 2) + 'px'; box.style.minWidth = Math.max(180, r.width) + 'px';
+    box.innerHTML = hits.map(t => `<div class="pick-item" style="padding:6px 10px;cursor:pointer;white-space:nowrap;">${escapeHtml(t)}</div>`).join('');
+    box.querySelectorAll('.pick-item').forEach(d => d.addEventListener('mousedown', ev => { ev.preventDefault(); inp.value = d.textContent; close(); inp.dispatchEvent(new Event('input', { bubbles: true })); inp.dispatchEvent(new Event('change', { bubbles: true })); if (typeof onPick === 'function') onPick(d.textContent); }));
+  };
+  inp.addEventListener('focus', open); inp.addEventListener('input', open); inp.addEventListener('click', open);
+  inp.addEventListener('blur', () => setTimeout(close, 120));
+  inp.addEventListener('keydown', ev => { if (ev.key === 'Escape') close(); });
+}
+// hotfix419: 염/가공 의뢰서 컬러 칸의 조건(품목 · 원사 컬러 · 염색공장) — 컬러 목록과 [＋ 품목 컬러 설정]이 같이 쓴다
+function finishColorCtx() {
+  const item = String(document.getElementById('f_body_item')?.value || '').trim();
+  const fid = item ? itemFidOf(item) : '';
+  const no = String(document.getElementById('f_body_gno')?.value || '').trim();
+  let yc = '';
+  if (fid && no) { try { const hit = greigeStockList(item, fid).find(r => r.no === (typeof greigeNoClean === 'function' ? greigeNoClean(no) : no)); if (hit && hit.color) yc = hit.color; } catch (_) {} }
+  const dyer = String(document.getElementById('f_r_dye')?.value || document.getElementById('f_r_proc')?.value || '').trim();
+  return { item, fid, yc, dyer };
+}
+function openItemColorsFromForm() {
+  const c = finishColorCtx();
+  if (!c.fid) { toast('먼저 몸판 품목을 고르십시오', 'warning'); return; }
+  const sp = (state.fabricSpecs || []).find(x => String(x.fid || '') === c.fid) || {};
+  state.icSel = { gubun: String(sp.gubun || GUBUN_BODY), item: String(sp.name || c.item), yarnColor: (c.yc && !yarnColorIsLW(c.yc)) ? c.yc : '', dyer: c.dyer, showOff: false };
+  if (typeof window.hwGoView === 'function') window.hwGoView('itemColors'); else toast('품목 컬러 설정 화면으로 갈 수 없습니다', 'error');
+}
+document.addEventListener('click', e => { const b = e.target && e.target.closest && e.target.closest('#f-color-setup-btn'); if (b) { e.preventDefault(); openItemColorsFromForm(); } });
 // ===== 컬러 행 =====
 function addColorRow(data={}) {
   const container = document.getElementById('f_colors');
@@ -8116,6 +8154,7 @@ function addColorRow(data={}) {
     <button class="btn-del">X</button>
   `;
   row.querySelectorAll('input').forEach(inp => inp.addEventListener('input', () => { render(); markDirty(); }));
+  attachPickList(row.querySelector('.c-name'), () => { try { refreshFinishColorList(); } catch (_) {} return window.__finishColorOpts || []; });   // hotfix419
   row.querySelector('.btn-del').addEventListener('click', () => { row.remove(); render(); markDirty(); updateColorEmptyWarning(); });
   container.appendChild(row);
   updateColorEmptyWarning();
@@ -8570,15 +8609,11 @@ function itemColorList(fid, yarnColor, dyer) {
 // 염/가공 의뢰서 COLOR & QUANTITY 컬러 칸 고르개 — 편직업체 > 품목 > 원사 컬러(생지로트의 컬러) > 염색공장(수신처) 순으로 거른다
 function refreshFinishColorList() {
   const dl = document.getElementById('f-color-datalist'); if (!dl) return;
-  const item = String(document.getElementById('f_body_item')?.value || '').trim();
-  const fid = item ? itemFidOf(item) : '';
-  if (!fid) { dl.innerHTML = ''; return; }
-  const no = String(document.getElementById('f_body_gno')?.value || '').trim();
-  let yc = '';
-  if (no) { try { const hit = greigeStockList(item, fid).find(r => r.no === (typeof greigeNoClean === 'function' ? greigeNoClean(no) : no)); if (hit && hit.color) yc = hit.color; } catch (_) {} }
-  const dyer = String(document.getElementById('f_r_dye')?.value || document.getElementById('f_r_proc')?.value || '').trim();
+  const { fid, yc, dyer } = finishColorCtx();
+  if (!fid) { dl.innerHTML = ''; window.__finishColorOpts = []; return; }
   let rows = itemColorList(fid, yc, dyer);
   if (!rows.length && (yc || dyer)) rows = itemColorList(fid, '', '');   // 거른 결과가 없으면 그 품목 전체
+  window.__finishColorOpts = rows.map(c => itemColorLabel(c));   // hotfix419: 목록 상자용
   dl.innerHTML = rows.map(c => `<option value="${escapeHtml(itemColorLabel(c))}"></option>`).join('');   // hotfix407: 컬러명 #BT No 만 보인다 (원사 컬러 · 염색공장은 거르는 데만 쓴다)
 }
 // 사종(base)만 모아 준다 — 원사 의뢰서 사종 칸 목록용
@@ -12135,6 +12170,7 @@ window.addEventListener('firebase-ready', () => {
     switchDashView(HW_HOME_VIEW);
     hwTopPaint();
   }
+  window.hwGoView = (v) => hwGo(v);   // hotfix419: 의뢰서 폼(바깥)에서 화면 이동
   function hwGo(view) {
     hwCloseAll();
     if (!view) return;
@@ -13190,9 +13226,14 @@ window.addEventListener('firebase-ready', () => {
     onSnapshot(doc(db, C('stock'), 'yarn'), snap => {
       const d = snap.exists() ? snap.data() : null;
       state.yarnLedger = (d && Array.isArray(d.items)) ? d.items : [];
-      state.yarnLedgerLoaded = true;
+      state.yarnLedgerLoaded = true; state.yarnLedgerErr = '';
       if (state.uiMode === 'dashboard' && (state.dashView === 'yarn' || state.dashView === 'yarnStock' || state.dashView === 'moves')) renderDashboard();
-    }, err => console.warn('[yarnLedger sub]', err.message));
+    }, err => {
+      // hotfix419: 읽기 실패(보안규칙 등)도 "읽는 중" 대신 이유를 보인다
+      console.warn('[yarnLedger sub]', err.message);
+      state.yarnLedger = []; state.yarnLedgerLoaded = true; state.yarnLedgerErr = String(err.message || err);
+      if (state.uiMode === 'dashboard' && (state.dashView === 'yarnStock' || state.dashView === 'moves')) renderDashboard();
+    });
     // hotfix413: 생지 원장 구독 — stock/greige (편직완료 · 뒤에 이동·조정)
     onSnapshot(doc(db, C('stock'), 'greige'), snap => {
       const d = snap.exists() ? snap.data() : null;
@@ -14481,7 +14522,7 @@ function specGreigeColors(fid) {
     state._kfMigrating = false;
   }
   const KF_LABEL = { inch: '기계인치', needles: '침수', knit_loss: '편직로스', knit_fee: '편직료', memo: '비고' };
-  function kfNum(v) { const x = parseFloat(v); return isFinite(x) ? x : null; }
+  function kfNum(v) { const x = parseFloat(String(v == null ? '' : v).replace(/,/g, '')); return isFinite(x) ? x : null; }
   function kfGauge(inch, needles) { const g = kfNum(needles) / (kfNum(inch) || 1) / 3.14; return isFinite(g) && kfNum(inch) ? g : null; }
   function kfMachine(fid, inch, needles) {
     const sp = getFabricSpecs().find(x => specFid(x) === String(fid || '').trim());
@@ -25126,6 +25167,7 @@ function validateBlendSum(blends, label) {
   }
   function renderYarnStockDash() {
     if (!state.yarnLedgerLoaded) return `<div class="dash-empty">원사 재고 원장을 읽는 중입니다…</div>`;
+    if (state.yarnLedgerErr) return `<div class="dash-empty" style="color:#b91c1c;">원사 재고 원장(stock/yarn)을 읽지 못했습니다 — ${escapeHtml(state.yarnLedgerErr)}<br><span style="font-size:12px;color:#64748b;">Firebase 보안규칙이 hotfix412 txt 로 게시되어 있는지(practice_stock 허용) 확인해 주십시오.</span></div>`;
     const S = state.ysFilter || (state.ysFilter = { vendor: '', yarn: '', from: '', to: '', open: '' });
     const all = yarnStockRows();
     const vendors = Array.from(new Set(all.map(r => r.vendor || '(업체 없음)'))).sort((a, b) => a.localeCompare(b, 'ko'));
@@ -28781,13 +28823,13 @@ function validateBlendSum(blends, label) {
     h += `</tbody></table></div>`;
     // 편집 모달
     h += `<div class="dash-modal-bg" id="fs-modal">
-      <div class="dash-modal" style="max-width:${costOn ? '1040px' : '760px'};">
+      <div class="dash-modal" style="max-width:${costOn ? '1040px' : '760px'};max-height:calc(100vh - 32px);overflow:auto;">
         <div class="dash-modal-head"><span id="fs-modal-title">품목 추가</span><button class="dash-modal-close" id="fs-modal-close">✕</button></div>
         <div style="padding:16px;display:flex;flex-direction:column;gap:11px;">
           <div style="display:flex;gap:8px;">
-            <div style="flex:1;"><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">품목명</label><input type="text" id="fs-f-name" style="${inputStyle}" placeholder="예: 슈퍼싱글"></div>
+            <div style="flex:1;"><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">품목명</label><input type="text" autocomplete="off" id="fs-f-name" style="${inputStyle}" placeholder="예: 슈퍼싱글"></div>
             <div style="flex:1;"><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">생지 컬러 <span style="font-weight:400;color:#94a3b8;font-size:11px;">편직 설정의 사종 컬러 — 품목 컬러(염색)와 다름</span></label><div id="fs-f-greige-colors" style="${inputStyle}background:#f8fafc;min-height:20px;font-size:12px;">-</div></div>
-            <div style="width:120px;display:none;"><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">줄임말 <span style="font-weight:400;color:#9ca3af;">(공유코드용)</span></label><input type="text" id="fs-f-abbr" style="${inputStyle}text-transform:uppercase;text-align:center;font-weight:700;" placeholder="예: US" maxlength="6" title="편직 공유코드(PL-US-LW-001)에 들어가는 품목 약자. 비우면 품목 코드(F0001)를 씁니다"></div>
+            <div style="width:120px;display:none;"><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">줄임말 <span style="font-weight:400;color:#9ca3af;">(공유코드용)</span></label><input type="text" autocomplete="off" id="fs-f-abbr" style="${inputStyle}text-transform:uppercase;text-align:center;font-weight:700;" placeholder="예: US" maxlength="6" title="편직 공유코드(PL-US-LW-001)에 들어가는 품목 약자. 비우면 품목 코드(F0001)를 씁니다"></div>
           </div>
           <div style="display:flex;gap:8px;">
             <div style="flex:1;"><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">구분</label><select id="fs-f-gubun" style="${inputStyle}">${gubuns.map(g => `<option value="${escapeHtml(g)}">${escapeHtml(g)}</option>`).join('')}</select></div>
@@ -28798,25 +28840,25 @@ function validateBlendSum(blends, label) {
               </div></div>
           </div>
           <div style="display:flex;gap:8px;align-items:flex-end;">
-            <div style="flex:1;"><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">기준 폭</label><input type="text" id="fs-f-width" style="${inputStyle}" placeholder="60/62"></div>
+            <div style="flex:1;"><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">기준 폭</label><input type="text" autocomplete="off" id="fs-f-width" style="${inputStyle}" placeholder="60/62"></div>
             <label style="display:flex;align-items:center;gap:4px;white-space:nowrap;font-size:13px;cursor:pointer;padding-bottom:9px;"><input type="checkbox" id="fs-f-tube"> 튜브(×2)</label>
             <div style="flex:0 0 auto;padding-bottom:6px;font-size:11.5px;color:#334155;white-space:nowrap;" title="한쪽을 넣으면 다른 쪽이 기준폭 · 튜브로 저절로 계산됩니다 (g/y = g/㎡ × 기준폭 inch × 0.0254 × 0.9144, 튜브 ×2). 제작 g/y 는 계산된 뒤에도 손으로 고칠 수 있습니다"><div style="font-weight:700;margin-bottom:3px;">중량 입력</div>
               <label style="display:block;cursor:pointer;"><input type="radio" name="fs-f-wmode" class="fs-f-wmode" value="gy" checked> 제작 g/y로</label>
               <label style="display:block;cursor:pointer;"><input type="radio" name="fs-f-wmode" class="fs-f-wmode" value="gsm"> 스퀘어 g/㎡로</label></div>
             <div style="flex:1;"><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">제작 g/y <span style="font-weight:400;color:#94a3b8;font-size:11px;">공장에 지시하는 중량</span></label>
-              <input type="text" inputmode="numeric" id="fs-f-gy" style="${inputStyle}text-align:right;font-weight:700;" placeholder="480"></div>
+              <input type="text" inputmode="numeric" id="fs-f-gy" autocomplete="off" style="${inputStyle}text-align:right;font-weight:700;" placeholder=""></div>
             <div style="flex:1;"><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">스퀘어 g/㎡ <span style="font-weight:400;color:#94a3b8;font-size:11px;">최종 실측</span></label>
-              <input type="text" inputmode="decimal" id="fs-f-gsm" style="${inputStyle}text-align:right;" placeholder="200" title="스퀘어 중량. 제작 g/y = g/㎡ × 기준폭 inch × 0.0254 × 0.9144 (튜브면 ×2)"></div>
+              <input type="text" autocomplete="off" inputmode="decimal" id="fs-f-gsm" style="${inputStyle}text-align:right;" placeholder="200" title="스퀘어 중량. 제작 g/y = g/㎡ × 기준폭 inch × 0.0254 × 0.9144 (튜브면 ×2)"></div>
             <div id="fs-f-final-gy" style="display:none;">-</div><!-- hotfix402: 야드 중량(자동) 칸은 감춤 — 제작 g/y 와 같은 값이라 제작 g/y 칸으로 합침 -->
           </div>
           <div id="fs-f-gy-range" style="display:none;font-size:11px;color:#475569;font-weight:700;margin-top:-6px;min-height:15px;line-height:1.6;"></div><!-- hotfix402: 안내 g/y 범위는 감춤 -->
           <div><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">표준 가공 사양 <span style="font-weight:400;color:#94a3b8;font-size:11px;">염/가공소를 먼저 고르고 그 업체 공정으로 넣습니다 · 업체마다 따로 · 의뢰서에서 염색처 + 품목을 고르면 마지막 저장 가공법 → 없으면 이 값이 들어감 (옛 안내: 의뢰서에서 고칠 수 있음)</span></label>
             <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;"><span style="font-size:11.5px;font-weight:700;color:#7c2d12;">염/가공소</span><select id="fs-f-std-vendor" style="${inputStyle}max-width:260px;padding:5px 8px;"></select><span id="fs-f-std-vendors-hint" style="font-size:11px;color:#94a3b8;"></span></div><!-- hotfix406: 업체마다 표준 가공 사양 -->
             <div id="fs-f-proc-picker" class="proc-picker"></div>
-            <input type="text" lang="ko" id="fs-f-std-note" style="${inputStyle}" placeholder="특이 사항 (예: 텐컴 후 70/72+400)"></div>
+            <input type="text" autocomplete="off" lang="ko" id="fs-f-std-note" style="${inputStyle}" placeholder="특이 사항 (예: 텐컴 후 70/72+400)"></div>
           <div><label style="font-size:12px;font-weight:700;color:#374151;display:flex;align-items:center;gap:8px;margin-bottom:4px;">혼용률 <span style="font-weight:400;color:#94a3b8;font-size:11px;">거래처에 알리는 값</span>
               <button type="button" class="dash-action-btn" id="fs-f-knit-open" style="margin-left:auto;font-size:11px;padding:3px 10px;font-weight:700;" title="이 품목의 편직 설정(루프장 · 편직공장별 값)을 엽니다. 루프장을 넣으면 혼용율이 원가 계산기에서 저절로 나옵니다">편직 설정 열기</button></label>
-            <input type="text" id="fs-f-blend" readonly style="${inputStyle}background:#f8fafc;color:#0f172a;font-weight:700;" placeholder="빈칸 — [편직 설정 열기]로 사종·루프장을 넣으면 혼용율이 저절로 계산됩니다">
+            <input type="text" autocomplete="off" id="fs-f-blend" readonly style="${inputStyle}background:#f8fafc;color:#0f172a;font-weight:700;" placeholder="빈칸 — [편직 설정 열기]로 사종·루프장을 넣으면 혼용율이 저절로 계산됩니다">
             <div id="fs-f-blend-auto" style="font-size:11.5px;line-height:1.7;margin-top:5px;"></div></div>
           <div id="fs-pair-wrap" style="background:#faf5ff;border:1px solid #e9d5ff;border-radius:8px;padding:11px 12px;">
             <label style="font-size:12px;font-weight:800;color:#6b21a8;display:block;margin-bottom:5px;">짝 리프 <span style="font-weight:400;color:#a78bc4;font-size:11px;">— 이 몸판과 늘 함께 나가는 리프. 지정하면 작업의뢰서에서 몸판만 골라도 리프칸이 같이 채워집니다 (없으면 비워두세요)</span></label>
@@ -28827,7 +28869,7 @@ function validateBlendSum(blends, label) {
           <div id="fs-bodies-wrap" style="background:#faf5ff;border:1px solid #e9d5ff;border-radius:8px;padding:11px 12px;display:none;">
             <label style="font-size:12px;font-weight:800;color:#6b21a8;display:block;margin-bottom:5px;">이 리프를 쓰는 몸판 <span style="font-weight:400;color:#a78bc4;font-size:11px;">— 체크한 몸판은 작업의뢰서에서 이 리프가 자동으로 채워집니다. 여기서 한 번에 붙이고 뗄 수 있습니다</span></label>
             <div style="display:flex;gap:6px;margin-bottom:7px;">
-              <input type="text" id="fs-bodies-search" placeholder="몸판 품목 검색" style="${inputStyle}border-color:#d8b4fe;">
+              <input type="text" autocomplete="off" id="fs-bodies-search" placeholder="몸판 품목 검색" style="${inputStyle}border-color:#d8b4fe;">
               <button type="button" id="fs-bodies-none" class="dash-action-btn" style="white-space:nowrap;font-size:11px;padding:6px 11px;">전체 해제</button>
             </div>
             <div id="fs-bodies-list" style="max-height:230px;overflow-y:auto;background:#fff;border:1px solid #e9d5ff;border-radius:6px;padding:6px 8px;"></div>
@@ -28876,7 +28918,7 @@ function validateBlendSum(blends, label) {
               </div>
             </div>
           </div>
-          <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:6px;">
+          <div style="display:flex;gap:8px;justify-content:flex-end;position:sticky;bottom:0;background:#fff;margin:0 -16px -16px;padding:10px 16px;border-top:1px solid #e5e7eb;z-index:2;">
             <button class="dash-action-btn" id="fs-modal-cancel" style="padding:7px 16px;">취소</button>
             <button class="dash-action-btn" id="fs-modal-save" style="background:#1e3a8a;color:#fff;font-weight:700;padding:7px 18px;">저장</button>
           </div>
@@ -30308,7 +30350,7 @@ function validateBlendSum(blends, label) {
       <strong>품목 → 원사 컬러 → 염색공장</strong>을 위에서 한 번 고르고, 아래 표에 <strong>컬러명 → B/T No</strong> 순서로 이어서 넣습니다 (B/T No 칸에서 Enter 를 누르면 저장되고 다음 줄로). B/T No 는 염색공장이 부르는 번호를 그대로 적습니다. 의뢰서에는 "컬러명 #B/T No"(예: 프진먹색 #451A)로 찍힙니다.<br>
       의뢰서 컬러 칸은 이 표에서 고르게 됩니다 (편직업체 → 품목 → 원사 컬러 → 염색공장 순으로 걸러서). 줄 지우기는 최고관리자만 됩니다.
     </div>`;
-    h += `<div style="display:grid;grid-template-columns:130px 1.4fr 1fr 1fr auto;gap:12px;align-items:end;max-width:1360px;margin-bottom:12px;">
+    h += `<div style="display:grid;grid-template-columns:130px 1.4fr 1fr 1fr auto;gap:12px;align-items:end;margin-bottom:12px;">
       <div><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px;">구분</label><select id="ic-gubun" style="${iS}"><option value="">전체</option>${gubuns.map(g => `<option value="${escapeHtml(g)}"${S.gubun === g ? ' selected' : ''}>${escapeHtml(g)}</option>`).join('')}</select></div>
       <div><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px;">품목 (글자 검색)</label><input id="ic-item" lang="ko" list="ic-item-list" autocomplete="off" value="${escapeHtml(S.item)}" placeholder="품목명" style="${iS}"><datalist id="ic-item-list">${items.map(n => `<option value="${escapeHtml(n)}"></option>`).join('')}</datalist></div>
       <div><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px;">원사 컬러 (비우면 L/W)</label><input id="ic-yc" lang="ko" list="ic-yc-list" autocomplete="off" value="${escapeHtml(S.yarnColor)}" placeholder="L/W" style="${iS}"><datalist id="ic-yc-list">${icYarnColorList(fid).map(n => `<option value="${escapeHtml(n)}"></option>`).join('')}</datalist></div>
@@ -30320,19 +30362,19 @@ function validateBlendSum(blends, label) {
     const canAdd = !!fid && !!S.dyer.trim() && icDyerList().some(n => vendorKey(n) === vendorKey(S.dyer));
     const tdS = 'padding:4px 6px;';
     const cellIn = (cls, i, v, w, ph) => `<input ${i < 0 ? `id="${cls}"` : `class="${cls}"`} data-i="${i}" lang="ko" autocomplete="off" value="${escapeHtml(v)}" placeholder="${ph}" style="${iS}padding:6px 8px;width:${w};">`;   // 새 줄(i<0)은 id, 있는 줄은 class
-    h += `<div class="dash-table-wrap" style="max-width:1360px;"><table class="dash-table" id="ic-rows"><thead><tr>
-      <th style="text-align:left;min-width:260px;">컬러명</th><th style="min-width:170px;">B/T No</th><th style="min-width:110px;">원사 컬러</th><th style="text-align:left;min-width:150px;">염색공장</th><th style="min-width:130px;">고친 사람 · 날짜</th><th style="width:40px;"></th></tr></thead><tbody>`;   /* hotfix405: 칸 넓힘 */
+    h += `<div class="dash-table-wrap"><table class="dash-table" id="ic-rows" style="width:100%;"><thead><tr>
+      <th style="text-align:left;min-width:260px;width:38%;">컬러명</th><th style="min-width:170px;width:22%;">B/T No</th><th style="min-width:110px;">원사 컬러</th><th style="text-align:left;min-width:150px;">염색공장</th><th style="min-width:130px;">고친 사람 · 날짜</th><th style="width:40px;"></th></tr></thead><tbody>`;   /* hotfix405: 칸 넓힘 */
     if (!fid) h += `<tr><td colspan="6" style="text-align:center;color:#9ca3af;padding:18px;">위에서 품목을 고르십시오.</td></tr>`;
     else {
       rows.forEach(c => {
         const i = all.indexOf(c);
-        h += `<tr class="ic-row" data-i="${i}"><td style="${tdS}">${cellIn('ic-name', i, c.name || '', '100%', '컬러명')}</td><td style="${tdS}">${cellIn('ic-bt', i, c.bt_no || '', '160px', 'B/T No')}</td>
+        h += `<tr class="ic-row" data-i="${i}"><td style="${tdS}">${cellIn('ic-name', i, c.name || '', '100%', '컬러명')}</td><td style="${tdS}">${cellIn('ic-bt', i, c.bt_no || '', '100%', 'B/T No')}</td>
           <td style="${tdS}text-align:center;font-weight:700;color:${yarnColorIsLW(c.yarn_color) ? '#9ca3af' : '#7c2d12'};">${escapeHtml(yarnColorIsLW(c.yarn_color) ? YARN_LW : c.yarn_color)}</td><td style="${tdS}text-align:left;">${escapeHtml(c.dyer || '-')}</td>
           <td style="${tdS}text-align:center;font-size:11px;color:#64748b;">${escapeHtml(c.updated_by || '')}${c.updated_at ? '<br>' + escapeHtml(String(c.updated_at).slice(0, 10)) : ''}</td>
           <td style="${tdS}text-align:center;">${owner ? `<button class="dash-action-btn danger ic-del" data-i="${i}" title="이 줄을 지웁니다 (최고관리자)" style="padding:3px 7px;font-size:11px;">x</button>` : ''}</td></tr>`;
       });
       if (!rows.length) h += `<tr><td colspan="6" style="text-align:center;color:#9ca3af;padding:12px;">${all.length ? '이 원사 컬러 · 염색공장으로 넣은 컬러가 아직 없습니다.' : '이 품목에 넣은 컬러가 아직 없습니다.'}</td></tr>`;
-      h += `<tr id="ic-new" style="background:#f0fdf4;"><td style="${tdS}">${cellIn('ic-new-name', -1, '', '100%', '컬러명')}</td><td style="${tdS}">${cellIn('ic-new-bt', -1, '', '160px', 'B/T No → Enter')}</td>
+      h += `<tr id="ic-new" style="background:#f0fdf4;"><td style="${tdS}">${cellIn('ic-new-name', -1, '', '100%', '컬러명')}</td><td style="${tdS}">${cellIn('ic-new-bt', -1, '', '100%', 'B/T No → Enter')}</td>
         <td style="${tdS}text-align:center;font-weight:700;color:#166534;">${escapeHtml(yc)}</td><td style="${tdS}text-align:left;color:${canAdd ? '#166534' : '#b45309'};font-weight:700;">${escapeHtml(S.dyer.trim() || '염색공장을 고르십시오')}</td>
         <td style="${tdS}text-align:center;"><button class="dash-action-btn" id="ic-add" ${canAdd ? '' : 'disabled'} style="font-weight:800;padding:5px 12px;">＋ 넣기</button></td><td></td></tr>`;
     }
@@ -30997,7 +31039,7 @@ function validateBlendSum(blends, label) {
       <input type="file" id="kf-csv-file" accept=".csv,text/csv" style="display:none;">
     </div>
     <div class="dash-table-wrap"><table class="dash-table"><thead><tr>
-      <th style="text-align:left;min-width:150px;">품목명</th><th style="min-width:56px;">구분</th><th style="min-width:80px;" title="이 줄로 짠 생지의 컬러 — 편직 의뢰서 컬러 칸 · 원사 사용량 · 생지 원장이 이 값을 씁니다. [수정]에서 적고, 비우면 사종 컬러에서 짐작합니다">생지 컬러</th><th style="text-align:left;min-width:150px;">사종</th><th style="min-width:64px;">루프장</th>
+      <th style="text-align:left;min-width:150px;">품목명</th><th style="min-width:80px;" title="이 줄로 짠 생지의 컬러 — 편직 의뢰서 컬러 칸 · 원사 사용량 · 생지 원장이 이 값을 씁니다. [수정]에서 적고, 비우면 사종 컬러에서 짐작합니다">생지 컬러</th><th style="min-width:56px;">구분</th><th style="text-align:left;min-width:150px;">사종</th><th style="min-width:64px;">루프장</th>
       <th style="min-width:100px;">편직공장</th><th style="min-width:56px;">기계인치</th><th style="min-width:64px;">침수</th><th style="min-width:60px;">게이지</th><th style="min-width:80px;">기계 이름</th>
       <th style="min-width:56px;">로스 %</th><th style="min-width:76px;">편직료 원/kg</th><th style="text-align:left;min-width:120px;">비고</th><th style="min-width:96px;">마지막 수정</th>
       <th style="min-width:52px;">복사</th><th style="min-width:52px;">수정</th><th style="min-width:52px;">삭제</th>
@@ -31011,8 +31053,8 @@ function validateBlendSum(blends, label) {
       const nameCell = `<td rowspan="${n}" style="text-align:left;font-weight:800;vertical-align:top;">${escapeHtml(r.sp.name || '')}
         <div style="font-size:10.5px;color:#94a3b8;font-weight:400;">${escapeHtml(r.fid)}${r.sp.active === false ? ' · <span style="color:#b45309;">판매 종료</span>' : ''}</div>
         ${copyName ? '<span style="display:inline-block;margin-top:3px;font-size:10.5px;font-weight:800;color:#b45309;border:1px solid #fcd34d;background:#fffbeb;border-radius:9px;padding:1px 6px;">복사본 · 이름 미정</span>' : ''}</td>
-        <td rowspan="${n}" style="text-align:center;vertical-align:top;font-size:12px;color:#334155;">${escapeHtml(r.sp.gubun || GUBUN_BODY)}<div style="font-size:10.5px;color:#94a3b8;">${escapeHtml(r.sp.cat || '')}</div></td>
-        <td rowspan="${n}" style="text-align:center;vertical-align:top;font-weight:800;color:${String(k.color || '').trim() ? '#1e3a8a' : '#64748b'};" title="${String(k.color || '').trim() ? '적어 둔 생지 컬러' : '사종 컬러에서 짐작한 값 — [수정]에서 적을 수 있습니다'}">${r.factory ? escapeHtml(knitRowGreigeColor(k)) : '-'}${r.factory && !String(k.color || '').trim() ? '<div style="font-size:10px;font-weight:400;color:#94a3b8;">(자동)</div>' : ''}</td>`;
+        <td rowspan="${n}" style="text-align:center;vertical-align:top;font-weight:800;color:${String(k.color || '').trim() ? '#1e3a8a' : '#64748b'};" title="${String(k.color || '').trim() ? '적어 둔 생지 컬러' : '사종 컬러에서 짐작한 값 — [수정]에서 적을 수 있습니다'}">${r.factory ? escapeHtml(knitRowGreigeColor(k)) : '-'}${r.factory && !String(k.color || '').trim() ? '<div style="font-size:10px;font-weight:400;color:#94a3b8;">(자동)</div>' : ''}</td>
+        <td rowspan="${n}" style="text-align:center;vertical-align:top;font-size:12px;color:#334155;">${escapeHtml(r.sp.gubun || GUBUN_BODY)}<div style="font-size:10.5px;color:#94a3b8;">${escapeHtml(r.sp.cat || '')}</div></td>`;
       const g = kfGauge(k.inch, k.needles);
       const fac = r.factory
         ? `<td rowspan="${n}" style="text-align:center;font-weight:700;vertical-align:top;">${escapeHtml(r.factory)}${knitFactoryKnown(r.factory) ? '' : '<div style="font-size:10px;color:#b45309;font-weight:700;">(거래처 미등록)</div>'}${r.fromCard ? '<div style="font-size:10px;color:#94a3b8;font-weight:400;">카드 값</div>' : ''}</td>
@@ -31033,7 +31075,7 @@ function validateBlendSum(blends, label) {
       yarns.forEach((y, i) => {
         h += `<tr>${i === 0 ? nameCell : ''}
           <td style="text-align:left;">${y ? escapeHtml(y) : '<span style="color:#cbd5e1;">원사 없음</span>'}</td>
-          <td style="text-align:right;">${y && k.loops ? kfNumTxt(k.loops[y]) : '-'}</td>
+          <td style="text-align:right;">${!y ? '-' : ((k.blend_mode === 'manual' && k.pcts && kfNum(k.pcts[y]) != null) ? `<span style="color:#7c3aed;font-weight:700;">${kfNum(k.pcts[y])}%</span>` : (k.loops ? kfNumTxt(k.loops[y]) : '-'))}</td>
           ${i === 0 ? fac + act : ''}</tr>`;
       });
     });
@@ -31289,7 +31331,7 @@ function validateBlendSum(blends, label) {
     let V = String(factory || '').trim();
     if (!V || !K[V]) V = K[V] ? V : (V || '');
     let yarns = (Array.isArray(yarnNames) && yarnNames.length) ? yarnNames.slice() : kfYarnNames(key);
-    const cardYarns = kfCardYarnNames(key);   // hotfix387: 카드 [원사]에 있는 사종은 여기서 못 뺀다
+    let cardYarns = kfCardYarnNames(key);   // hotfix387: 카드 [원사]에 있는 사종은 여기서 못 뺀다
     const facs = knitFactoryList();
     let touched = false;   // hotfix387: 사종을 넣거나 빼면 저장 전까지 "고친 상태"
     const wrap = document.createElement('div');
@@ -31308,8 +31350,9 @@ function validateBlendSum(blends, label) {
         <div style="padding:14px 18px;overflow:auto;">
           <div style="border:1px solid #c7d2fe;border-radius:9px;padding:10px 14px;background:#eef2ff;margin-bottom:12px;">
             <div style="font-size:12px;font-weight:800;color:#1e3a8a;margin-bottom:6px;">생지 기본 <span style="font-weight:400;color:#64748b;">— 품목명 · 구분 · 조직의 본자리. 품목명을 바꾸면 코드(${escapeHtml(key)})로 이어진 편직 값 · 원가 · 의뢰서가 새 이름을 쓰고, 옛 글자는 다른 표기로 남습니다</span></div>
-            <div style="display:grid;grid-template-columns:1.6fr 1fr 1.4fr auto auto;gap:8px 10px;align-items:end;">
+            <div style="display:grid;grid-template-columns:1.5fr .9fr .9fr 1.3fr auto auto;gap:8px 10px;align-items:end;">
               <div><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px;">품목명</label><input id="kf-sp-name" lang="ko" value="${escapeHtml(sp.name || '')}" style="${iS}font-weight:800;"></div>
+              <div><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px;" title="편직공장 줄의 생지 컬러 (아래 줄에서 적습니다)">생지 컬러</label><input id="kf-sp-color" readonly value="${escapeHtml((function () { const c = V && K[V] ? knitRowGreigeColor(K[V]) : ''; const all = specGreigeColors(key); return c || all.join(' · ') || YARN_LW; })())}" style="${iS}background:#eef2f7;font-weight:800;color:#1e3a8a;"></div>
               <div><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px;">구분</label><select id="kf-sp-gubun" style="${iS}">${Array.from(new Set(getFabricGubuns().concat([GUBUN_SAMPLE, String(sp.gubun || '')]))).filter(Boolean).map(g => `<option value="${escapeHtml(g)}"${g === String(sp.gubun || GUBUN_BODY) ? ' selected' : ''}>${escapeHtml(g)}</option>`).join('')}</select></div>
               <div><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px;">조직</label><select id="kf-sp-cat" style="${iS}"></select></div>
               <button class="dash-action-btn" id="kf-sp-cat-add" style="padding:7px 10px;font-size:12px;font-weight:700;white-space:nowrap;" title="목록에 없는 조직을 새로 넣습니다">＋ 새 조직</button>
@@ -31322,16 +31365,16 @@ function validateBlendSum(blends, label) {
             <select id="kf-newfac" style="${iS}width:auto;min-width:160px;"><option value="">＋ 편직공장 …</option>${facs.filter(v => !K[v]).map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('')}</select>
           </div>
           ${V ? `<div style="border:1px solid #e2e8f0;border-radius:9px;padding:12px 14px;background:#f8fafc;">
-            <div style="font-size:12.5px;font-weight:800;color:#1e3a8a;margin-bottom:8px;">${escapeHtml(V)}${K[V] ? '' : ' <span style="font-size:11px;color:#b45309;">(새 줄)</span>'}</div>
-            <div style="display:grid;grid-template-columns:1.4fr repeat(7,1fr);gap:8px 10px;">
+            <div style="font-size:12.5px;font-weight:800;color:#1e3a8a;margin-bottom:8px;">${escapeHtml(V)}${(K[V] && !K[V]._new) ? '' : ' <span style="font-size:11px;color:#b45309;">(새 줄)</span>'}</div>
+            <div style="display:grid;grid-template-columns:1.2fr .75fr .85fr .8fr 1.6fr .75fr 1fr;gap:8px 10px;">
               <div><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px;" title="이 줄로 짠 생지의 컬러 — 편직 의뢰서 컬러 칸 · 원사 사용량 · 생지 원장이 이 값을 씁니다">생지 컬러</label><input id="kf-color" lang="ko" list="kf-color-list" autocomplete="off" value="${escapeHtml(k.color || '')}" placeholder="${escapeHtml(knitRowGreigeColor(k))} (자동)" style="${iS}font-weight:800;color:#1e3a8a;"><datalist id="kf-color-list">${(() => { const seen = new Set(); const o = []; const add = c => { const t = String(c || '').trim(); if (!t) return; const kk = yarnColorKey(t); if (!seen.has(kk)) { seen.add(kk); o.push(yarnColorIsLW(t) ? YARN_LW : t); } }; add(YARN_LW); add(knitRowGreigeColor(k)); Object.keys(k.loops || {}).concat(Object.keys(k.pcts || {})).forEach(nm => { const y = yarnNameList().find(x => vendorKey(String(x.name || '')) === vendorKey(nm)); if (y) add(yarnParts(y).color); }); yarnNameList().forEach(y => add(yarnParts(y).color)); return o.map(c => `<option value="${escapeHtml(c)}"></option>`).join(''); })()}</datalist></div>
               <div><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px;">기계인치</label><input id="kf-inch" inputmode="decimal" value="${k.inch == null ? '' : k.inch}" style="${nS}"></div>
-              <div><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px;">침수</label><input id="kf-needles" inputmode="decimal" value="${k.needles == null ? '' : k.needles}" style="${nS}"></div>
+              <div><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px;">침수</label><input id="kf-needles" inputmode="decimal" class="kf-comma" value="${kfNum(k.needles) == null ? '' : kfNum(k.needles).toLocaleString('ko-KR')}" style="${nS}"></div>
               <div><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px;">게이지 (자동)</label><input id="kf-gauge" readonly style="${nS}background:#eef2f7;"></div>
               <div><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px;">기계 이름 (자동)</label><input id="kf-machine" readonly style="${iS}background:#eef2f7;font-weight:800;color:#1e3a8a;"></div>
-              <div><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px;" title="이 공장의 어느 기계에서 짜는지 (직접 적기, 예: 3호기)">기계 (직접)</label><input id="kf-mach" lang="ko" value="${escapeHtml(k.machine || '')}" placeholder="예: 3호기" style="${iS}"></div>
+              <div style="display:none;"><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px;" title="이 공장의 어느 기계에서 짜는지 (직접 적기, 예: 3호기)">기계 (직접)</label><input id="kf-mach" lang="ko" value="${escapeHtml(k.machine || '')}" placeholder="예: 3호기" style="${iS}"></div>
               <div><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px;">편직로스 %</label><input id="kf-loss" inputmode="decimal" value="${k.knit_loss == null ? '' : k.knit_loss}" style="${nS}"></div>
-              <div><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px;">편직료 원/kg</label><input id="kf-fee" inputmode="decimal" value="${k.knit_fee == null ? '' : k.knit_fee}" style="${nS}font-weight:800;"></div>
+              <div><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px;">편직료 원/kg</label><input id="kf-fee" inputmode="decimal" class="kf-comma" value="${kfNum(k.knit_fee) == null ? '' : kfNum(k.knit_fee).toLocaleString('ko-KR')}" style="${nS}font-weight:800;"></div>
             </div>
             <div style="margin-top:10px;"><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px;">비고</label><input id="kf-memo" lang="ko" value="${escapeHtml(k.memo || '')}" style="${iS}"></div>
             <div style="margin-top:12px;display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
@@ -31361,6 +31404,7 @@ function validateBlendSum(blends, label) {
             </div>
             <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px;">
               ${isOwnerUser() && K[V] ? `<button class="dash-action-btn" id="kf-spec-copy" title="품목 · 사종 · 루프장 · 인치/침수만 글자로 복사합니다 (최고관리자만 · 비밀 카톡용 · 저장된 값)" style="font-weight:800;padding:8px 16px;margin-right:auto;">사양표 복사</button>` : ''}
+              <button class="dash-action-btn" id="kf-cancel" style="padding:8px 16px;">취소</button>
               <button class="dash-action-btn" id="kf-save" style="background:#047857;color:#fff;font-weight:800;padding:8px 24px;">저장</button>
             </div>
           </div>` : `<div class="dash-empty" style="padding:22px;">위에서 편직공장을 고르거나 [＋ 편직공장]으로 새 줄을 만드십시오.</div>`}
@@ -31390,6 +31434,14 @@ function validateBlendSum(blends, label) {
         return JSON.stringify(o);
       };
       const screenSnap = V && wrap.querySelector('#kf-inch') ? normC(collect()) : '';
+      // hotfix419: 사종을 넣거나 빼서 다시 그리기 전에 화면 값(인치 · 침수 · 로스 · 편직료 · 컬러 · 방식 · 루프장 · %)을 K[V] 에 담아 둔다 — 새 줄이면 만든다
+      const stash = () => {
+        const cur = collect();
+        if (!K[V]) K[V] = { _new: true, inch: null, needles: null, knit_loss: null, knit_fee: null, loops: {}, pcts: {}, blend_mode: 'loop', memo: '', color: '' };
+        Object.assign(K[V], { inch: cur.inch, needles: cur.needles, knit_loss: cur.knit_loss, knit_fee: cur.knit_fee, memo: cur.memo, color: cur.color, machine: cur.machine, blend_mode: cur.blend_mode,
+          loops: Object.assign({}, K[V].loops || {}, cur.loops), pcts: Object.assign({}, K[V].pcts || {}, cur.pcts) });
+        return cur;
+      };
       const dirty = () => {
         if (!V || !wrap.querySelector('#kf-inch')) return false;
         if (touched) return true;
@@ -31462,9 +31514,13 @@ function validateBlendSum(blends, label) {
       wrap.querySelector('#kf-newyarn')?.addEventListener('change', () => { fillNewYarnColors(); const c = wrap.querySelector('#kf-newyarn-color'); if (c && c.value) wrap.querySelector('#kf-newyarn-loop')?.focus(); else c?.focus(); });
       wrap.querySelector('#kf-newyarn-color')?.addEventListener('change', () => wrap.querySelector('#kf-newyarn-loop')?.focus());
       fillNewYarnList(); fillNewYarnColors();
+      attachPickList(wrap.querySelector('#kf-newyarn'), () => [...(wrap.querySelector('#kf-newyarn-list')?.options || [])].map(o => o.value));   // hotfix419: 글자 검색 목록 상자
       paintBlend();
       const askLeave = () => !dirty() || confirm('고친 값이 아직 저장되지 않았습니다.\n[저장]을 누르지 않고 옮기면 사라집니다.\n\n그래도 옮길까요?');
       wrap.querySelector('#kf-close').addEventListener('click', () => { if (!askLeave()) return; wrap.remove(); if (typeof onClose === 'function') { try { onClose(); } catch (e) {} } });
+      wrap.querySelector('#kf-cancel')?.addEventListener('click', () => wrap.querySelector('#kf-close').click());
+      // hotfix419: 침수 · 편직료는 1,234 로 보인다 (저장은 숫자)
+      wrap.querySelectorAll('.kf-comma').forEach(el => el.addEventListener('blur', () => { const x = kfNum(el.value); el.value = x == null ? '' : x.toLocaleString('ko-KR'); }));
       wrap.querySelectorAll('.kf-tab').forEach(b => b.addEventListener('click', () => { if (!askLeave()) return; V = b.dataset.v; paint(); }));
       wrap.querySelectorAll('.kf-fdel').forEach(b => b.addEventListener('click', async () => {
         const v = b.dataset.v;
@@ -31479,9 +31535,8 @@ function validateBlendSum(blends, label) {
       wrap.querySelectorAll('.kf-ydel').forEach(b => b.addEventListener('click', () => {
         const y = b.dataset.y;
         if (!confirm('[' + y + '] 사종 줄을 이 공장에서 뺍니다. [저장]을 눌러야 서버에 담깁니다.\n\n뺄까요?')) return;
-        const cur = collect(); yarns = yarns.filter(x => x !== y); touched = true;
-        if (K[V]) { K[V].loops = Object.assign({}, K[V].loops || {}); delete K[V].loops[y]; K[V].pcts = Object.assign({}, K[V].pcts || {}); delete K[V].pcts[y]; K[V].blend_mode = cur.blend_mode; }
-        Object.keys(cur.loops).forEach(nm => { if (nm !== y && K[V]) { K[V].loops[nm] = cur.loops[nm]; K[V].pcts[nm] = cur.pcts[nm]; } });
+        stash(); yarns = yarns.filter(x => x !== y); touched = true;
+        delete K[V].loops[y]; delete K[V].pcts[y];
         paint();
       }));
       const addNewYarn = () => {
@@ -31499,8 +31554,8 @@ function validateBlendSum(blends, label) {
         const real = yarnEntryByName(nm).name;
         if (yarns.includes(real)) { toast(`"${real}" 은(는) 이미 있습니다`, 'info'); return; }
         const lp = String(wrap.querySelector('#kf-newyarn-loop')?.value || '').trim(), pc = String(wrap.querySelector('#kf-newyarn-pct')?.value || '').trim();
-        const cur = collect(); yarns.push(real); touched = true;
-        if (K[V]) { K[V].loops = Object.assign({}, K[V].loops || {}, cur.loops); K[V].loops[real] = lp; K[V].pcts = Object.assign({}, K[V].pcts || {}, cur.pcts); K[V].pcts[real] = pc; K[V].blend_mode = cur.blend_mode; }
+        stash(); yarns.push(real); touched = true;
+        K[V].loops[real] = lp; K[V].pcts[real] = pc;
         paint();
         wrap.querySelector('#kf-newyarn')?.focus();
       };
@@ -31538,7 +31593,7 @@ function validateBlendSum(blends, label) {
         btn.disabled = false; btn.textContent = '저장';
         if (ok) { try { await syncCardYarnsFromKnit(key, yarns); } catch (e) { console.warn('[card yarn sync]', e.message); } }   // hotfix399d: 카드 [원사] 반영 (주인 = 편직 설정)
         if (ok) { try { await syncSpecBlendFromKnit(key); } catch (e) { console.warn('[blend sync]', e.message); } }   // hotfix399b: 품목 혼용률 자동
-        if (ok) { Object.assign(K, knitFeeOf(key)); yarns = kfYarnNames(key); touched = false; toast('[' + V + '] 편직 값을 저장했습니다', 'success'); paint(); if (state.uiMode === 'dashboard' && (state.costTab || '') === 'knitfee') renderDashboard(); }
+        if (ok) { Object.assign(K, knitFeeOf(key)); yarns = kfYarnNames(key); cardYarns = kfCardYarnNames(key); touched = false; toast('[' + V + '] 편직 값을 저장했습니다', 'success'); paint(); if (state.uiMode === 'dashboard' && (state.costTab || '') === 'knitfee') renderDashboard(); }
       });
     };
     document.body.appendChild(wrap);
@@ -37555,7 +37610,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
               <div style="flex:1;"><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">컬러 <span style="font-weight:400;color:#9ca3af;font-size:11px;">— 비우면 L/W</span></label>
                 <select id="cp-f-color-sel" style="${st}"><option value="L/W">L/W (로화이트)</option><option value="1%">1%</option><option value="8%">8%</option><option value="13%">13%</option><option value="__custom">직접 입력…</option></select>
                 <input type="text" id="cp-f-color" autocomplete="off" style="${st}margin-top:6px;display:none;" placeholder="컬러 직접 입력 (예: 5%)"></div>
-              <div style="flex:1;"><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">구매처 <span style="font-weight:400;color:#9ca3af;font-size:11px;">— 원사 설정에만 보입니다 · 의뢰서엔 컬러만</span></label>
+              <div style="flex:1;"><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;"><span title="원사 설정에만 보입니다 · 의뢰서엔 컬러만">구매처</span></label>
                 <select id="cp-f-brand" style="${st}" title="거래처 관리의 원사 구매처에서 고릅니다 (가나다·ABC 순)"><option value="">— 선택 —</option></select></div>
             </div>
             <div id="cp-f-fullname" style="font-size:11.5px;color:#2563eb;font-weight:700;margin-top:6px;min-height:16px;"></div></div>
@@ -47345,7 +47400,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix418';
+  const VERSION = 'v2.53 hotfix419';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
