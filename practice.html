@@ -6642,7 +6642,7 @@
         <div class="section-title">추가 정보</div>
         <div class="row row-2">
           <div class="field"><label>납기일</label><input type="text" lang="ko" id="y_delivery" placeholder="지급 / 2026-05-01 등"></div>
-          <div class="field"><label>용도 (필수 · 등록 품목 하나) <span style="font-weight:400;color:#9ca3af;">— 출고처(편직공장) 품목만 뜹니다. 두 품목이면 발주서 두 장</span></label><input type="text" lang="ko" id="y_purpose" list="y-purpose-datalist" autocomplete="off" placeholder="품목을 고르십시오"><datalist id="y-purpose-datalist"></datalist></div>
+          <div class="field"><label title="이 원사가 어느 품목(생지)에 쓰이는지. 원사 재고를 품목별로 묶어 편직 사용량과 맞추는 열쇠라 꼭 고릅니다. 두 품목이면 발주서 두 장">용도 — 어느 품목에 쓰는 원사인지 (필수)</label><input type="text" lang="ko" id="y_purpose" list="y-purpose-datalist" autocomplete="off" placeholder="품목을 고르십시오"><datalist id="y-purpose-datalist"></datalist></div>
         </div>
         <div class="field"><label>메모</label><textarea lang="ko" id="y_notes" placeholder="추가 전달사항"></textarea></div>
       </div>
@@ -8195,6 +8195,16 @@ function addColorRow(data={}) {
   `;
   row.querySelectorAll('input').forEach(inp => inp.addEventListener('input', () => { render(); markDirty(); }));
   attachPickList(row.querySelector('.c-name'), () => { try { refreshFinishColorList(); } catch (_) {} return window.__finishColorOpts || []; });   // hotfix419
+  // hotfix422b: 컬러명은 [품목 컬러 설정]에 있는 것만 — 칸을 나갈 때 목록에 없으면 비운다 (옛 의뢰서에 든 글자는 setFormData 로 들어오니 그대로)
+  row.querySelector('.c-name').addEventListener('blur', () => setTimeout(() => {
+    const el = row.querySelector('.c-name'); if (!el) return; const v = el.value.trim(); if (!v) return;
+    try { refreshFinishColorList(); } catch (_) {}
+    const opts = window.__finishColorOpts || []; if (!opts.length) return;
+    const hit = opts.find(o => vendorKey(o) === vendorKey(v)) || opts.find(o => vendorKey(String(o).split(' #')[0]) === vendorKey(v));
+    if (hit) { if (hit !== v) { el.value = hit; render(); markDirty(); } return; }
+    el.value = ''; render(); markDirty();
+    toast('[' + v + '] 은(는) 이 품목 컬러 목록에 없어 칸을 비웠습니다 — [＋ 품목 컬러 설정]에서 먼저 넣어 주십시오', 'warning');
+  }, 150));
   row.querySelector('.btn-del').addEventListener('click', () => { row.remove(); render(); markDirty(); updateColorEmptyWarning(); });
   container.appendChild(row);
   updateColorEmptyWarning();
@@ -9234,6 +9244,8 @@ function openCodeMapModal() {
     }
     html += `</tbody></table>
       
+      <!-- hotfix422b: 컬러 코드 섹션은 감춤 — 421 뒤 공유코드에 컬러 조각이 없다 (자료 · 코드는 그대로) -->
+      <div style="display:none;">
       <!-- 컬러 코드 섹션 -->
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
         <h3 style="margin:0;">컬러 코드</h3>
@@ -9286,10 +9298,10 @@ function openCodeMapModal() {
         }
       });
     }
-    html += `</tbody></table>
+    html += `</tbody></table></div>
       
       <div style="font-size:11px;color:#888;margin-top:14px;background:#f5f5f5;padding:10px;border-radius:3px;border-left:3px solid #888;">
-        ※ 코드는 영문/숫자/특수문자 조합 가능 (예: US, PS, LW, 8%, BK)<br>
+        ※ 품목 코드는 편직 의뢰서 공유코드의 가운데 조각입니다 (예: PL-US-001 의 US). 영문/숫자 (예: US, PS, US8)<br>
         ※ 한 번 등록하면 다음부터 같은 품목명/컬러명 입력 시 자동으로 코드가 매핑됩니다<br>
         ※ 코드 변경 시 기존에 저장된 의뢰서의 공유코드는 자동 업데이트되지 않습니다 (수동 수정 필요)
       </div>
@@ -11983,6 +11995,8 @@ window.addEventListener('firebase-ready', () => {
   }
   function canAccessView(view) {
     if (!view) return true;
+    // hotfix422b: 비밀번호 변경 단추는 최고관리자만
+    if (view === 'pinChange') return isOwnerUser() && ownerPinIsSet();
     if (isOwnerUser()) return true;
     if (!OWNER_LOCKED_VIEWS.includes(view)) {   // hotfix398: 사람별 예외 (경영 전용 화면은 예외 없음)
       const r = personRule(view);
@@ -12158,7 +12172,8 @@ window.addEventListener('firebase-ready', () => {
     { name: '코드 등록', items: ['vendors', 'yarnSetup', 'knitSetup', 'fabricSpecs', 'cautionDrafts'] },   // hotfix409: procSetup 은 [설정 및 관리]로
     { name: '원가', items: ['costCalc'] },   // hotfix407: 상단 [원가 계산기] 단추를 여기로 옮김
     { name: '의뢰서 규칙', items: ['stampSettings', 'specTol'] },
-    { name: '사람 · 권한', items: ['users', 'permissions'] },
+    // hotfix422b: 비밀번호 변경도 여기 (계정 메뉴에서 옮김)
+    { name: '사람 · 권한', items: ['users', 'permissions', 'pinChange'] },
     { name: '자료 관리', items: ['backup', 'editLog', 'trash'] }
   ];
   const HW_OWNER_ITEMS = HW_OWNER_GROUPS.reduce((a, g) => a.concat(g.items), []);
@@ -12226,6 +12241,8 @@ window.addEventListener('firebase-ready', () => {
     hwCloseAll();
     if (!view) return;
     if (view === 'logout') { signOut(auth); return; }
+    // hotfix422b: 비밀번호 변경은 화면이 아니라 창 (최고관리자 설정 › 사람 · 권한)
+    if (view === 'pinChange') { if (isOwnerUser() && ownerPinIsSet()) openOwnerPinModal(); else toast('경영 자료 비밀번호를 먼저 만드십시오 (위 [경영 자료 비밀번호 만들기])', 'warning'); return; }
     if (state.uiMode !== 'dashboard' && view !== 'daily-report') switchUiMode('dashboard');
     switchDashView(view);
     hwTopPaint();
@@ -12304,8 +12321,6 @@ window.addEventListener('firebase-ready', () => {
               + '<span class="hwcnt">' + escapeHtml(roleLabel(u.role)) + '</span></div>').join('')
           : '<div class="hwme"><span>등록된 사람이 없습니다</span></div>')
       + '<div class="hwline"></div>'
-      + (canAccessView('users') ? '<button type="button" data-hwview="users"><span>사용자 관리</span></button>' : '')
-      + ((isOwnerUser() && ownerPinIsSet()) ? '<button type="button" data-hwlock="change"><span>비밀번호 변경</span></button>' : '')
       + '<button type="button" data-hwview="logout"><span>로그아웃</span></button>'
       + '</div></div>';
     const ownerGroups = HW_OWNER_GROUPS.map(g => ({ name: g.name, items: g.items.filter(v => canAccessView(v)) })).filter(g => g.items.length);   // hotfix402: 묶음 메뉴
@@ -12428,7 +12443,42 @@ window.addEventListener('firebase-ready', () => {
     if (state.uiMode !== 'dashboard') return '작성 화면';
     const v = state.dashView || '';
     if (v === 'costCalc') return '원가 계산기';
+    if (v === 'pinChange') return '비밀번호 변경';
     return VIEW_LABELS[v] || VIEW_LABELS[view] || v;
+  }
+  // hotfix422b: 품목 주의사항 { knitting:[{mark,label,value}], dyeing, processing, post, print } 의 전·후 차이를 사람 말로
+  //   예) "편직 ＋★조직 균일성=전 롤 동일 조직 유지 · ＋★편직 밀도=… / 염색 ★터치: X → O / 가공 －※탈유제"
+  const EDIT_LOG_CAUTION_GROUP = { knitting: '편직', dyeing: '염색', processing: '가공', post: '후가공', print: '나염' };
+  function editLogCautionDiff(before, after) {
+    const B = (before && typeof before === 'object') ? before : {}, A = (after && typeof after === 'object') ? after : {};
+    const groups = Array.from(new Set(Object.keys(EDIT_LOG_CAUTION_GROUP).concat(Object.keys(B), Object.keys(A))));
+    const out = [];
+    groups.forEach(g => {
+      const bl = Array.isArray(B[g]) ? B[g] : [], al = Array.isArray(A[g]) ? A[g] : [];
+      const key = x => String((x && x.label) || '').trim();
+      const val = x => String((x && x.value) || '').trim();
+      const mark = x => String((x && x.mark) || '').trim();
+      const bm = new Map(); bl.forEach(x => { if (key(x)) bm.set(key(x), x); });
+      const am = new Map(); al.forEach(x => { if (key(x)) am.set(key(x), x); });
+      const lines = [];
+      am.forEach((x, k) => { const b = bm.get(k); if (!b) lines.push('＋' + mark(x) + k + (val(x) ? '=' + val(x) : '')); else if (val(b) !== val(x) || mark(b) !== mark(x)) lines.push(mark(x) + k + ': ' + (val(b) || '(없음)') + ' → ' + (val(x) || '(없음)')); });
+      bm.forEach((x, k) => { if (!am.has(k)) lines.push('－' + mark(x) + k); });
+      if (lines.length) out.push((EDIT_LOG_CAUTION_GROUP[g] || g) + ' ' + lines.join(' · '));
+    });
+    return out.join(' / ');
+  }
+  // hotfix422b: 옛 이력에 JSON 으로 남은 주의사항 글자도 보일 때 사람 말로 바꾼다 (자료는 그대로)
+  function editLogPretty(content) {
+    const parts = String(content || '').split(' / ');
+    return parts.map(pt => {
+      const m = pt.match(/^주의사항: (.*) → (.*)$/s);
+      if (!m) return pt;
+      const parse = t => { t = String(t || '').trim(); if (!t || t === '(없음)') return {}; try { return JSON.parse(t); } catch (_) { return null; } };
+      const b = parse(m[1]), a = parse(m[2]);
+      if (b === null || a === null) return pt;
+      const d = editLogCautionDiff(b, a);
+      return '주의사항: ' + (d ? d.split(' / ').join('\n  ') : '(바뀐 줄 없음)');
+    }).join('\n');
   }
   function editLogVal(v) {
     if (v == null || v === '') return '(없음)';
@@ -12450,6 +12500,8 @@ window.addEventListener('firebase-ready', () => {
       if (!b) { out.push({ target: a.name || k, action: '추가', changes: [] }); return; }
       const ch = [];
       keys.forEach(f => {
+        // hotfix422b: 주의사항(무리별 줄 묶음)은 JSON 대신 달라진 줄만 읽기 쉽게
+        if (f === 'cautions') { const t = editLogCautionDiff(b[f], a[f]); if (t) ch.push(labels[f] + ': ' + t); return; }
         const bv = editLogVal(b[f]), av = editLogVal(a[f]);
         if (bv !== av) ch.push(labels[f] + ': ' + bv + ' → ' + av);
       });
@@ -12532,7 +12584,7 @@ window.addEventListener('firebase-ready', () => {
         <td style="text-align:center;font-size:12px;">${escapeHtml(x.screen || '')}</td>
         <td style="font-weight:700;">${escapeHtml(x.target || '')}</td>
         <td style="text-align:center;font-weight:800;color:${actColor};white-space:nowrap;">${escapeHtml(x.action || '')}</td>
-        <td style="font-size:12px;line-height:1.6;white-space:pre-wrap;word-break:break-all;">${escapeHtml(String(x.content || '').split(' / ').join('\n'))}</td>
+        <td style="font-size:12px;line-height:1.6;white-space:pre-wrap;word-break:break-all;">${escapeHtml(editLogPretty(String(x.content || '')))}</td>
         <td><input type="text" class="el-memo" data-el-id="${escapeHtml(x.id || '')}" lang="ko" value="${escapeHtml(x.memo || '')}" placeholder="메모" style="width:100%;box-sizing:border-box;padding:5px 7px;border:1px solid #d1d5db;border-radius:5px;font-size:12px;font-family:inherit;"></td>
         <td style="text-align:center;">${x.seen ? '<span style="font-size:11.5px;color:#9ca3af;">읽음</span>' : `<button class="dash-action-btn el-seen" data-el-id="${escapeHtml(x.id || '')}" style="font-size:11.5px;padding:4px 10px;font-weight:800;color:#3730a3;border-color:#c7d2fe;">확인</button>`}</td>
       </tr>`;
@@ -16742,6 +16794,8 @@ function validateBlendSum(blends, label) {
     const _SETUP_TAB = { knitSetup: 'knitfee', procSetup: 'procfee' };
     state.cdDirty = false;   // hotfix398c: 화면을 옮기면 초안 화면의 "고친 상태"는 푼다
     if (_SETUP_TAB[view]) { state.costTab = _SETUP_TAB[view]; if (view === 'procSetup') state.pfDraft = null; }
+    // hotfix422b: [최고관리자 설정 › 원가 계산기]는 늘 계산기 탭으로 (마지막에 본 편직 설정 탭이 남지 않게)
+    if (view === 'costCalc') state.costTab = 'card';
     const _TYPE_VIEW_MAP = { yarn: '원사', knit: '편직', finish: '염색가공', bt: 'BT' };
     if (_TYPE_VIEW_MAP[view]) {
       state.overviewTypeFilter = _TYPE_VIEW_MAP[view];
@@ -46531,7 +46585,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
       body += `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;gap:8px;flex-wrap:wrap;">
         <div style="font-size:13px;font-weight:700;">입·출고 내역</div>
         ${viewMode === 'list' ? `<span style="display:flex;gap:6px;">
-          <button class="dash-action-btn" id="ship-show-add-out" style="display:none;background:#059669;color:#fff;padding:6px 14px;">+ 새 출고 추가</button>
+          <button class="dash-action-btn" id="ship-show-add-out" style="background:#059669;color:#fff;padding:6px 14px;" title="염/가공 의뢰서의 [생지출고의뢰서]가 자동으로 출고를 적습니다. 그 밖의 출고(반품 · 손으로 보낸 것)를 여기서 적습니다">+ 새 출고 추가</button>
           <button class="dash-action-btn" id="ship-show-add-in" style="background:#2563eb;color:#fff;padding:6px 14px;" title="편직 마감 ± 절 조정 (출고는 염/가공 의뢰서 [생지출고의뢰서]의 몸판/리프 만들기가 자동으로 뺍니다)">+ 새 입고 추가</button>
           ${canStockAdjust() ? `<button class="dash-action-btn" id="ship-show-move" style="background:#1e40af;color:#fff;padding:6px 14px;" title="이 통의 생지를 다른 편직공장으로 옮깁니다 (판매 출고 아님 — 보낸 곳 −, 받은 곳 +)">+ 다른 공장으로 이동</button>` : ''}
         </span>` : ''}
@@ -47044,10 +47098,11 @@ window.addEventListener('beforeunload', e => {
     try { history.pushState({ hiwos: 'app' }, ''); } catch (e) {}
     window.addEventListener('popstate', function () {
       // 작성 중 미저장 경고 (작성 모드에서 변경이 있을 때만)
+      // hotfix422b: 작성 중(저장 안 한 값)이면 뒤로·앞으로 가기로 화면을 옮기지 않는다 — 적던 것이 지워지지 않게 그 자리에 머문다
       if (inWriteMode() && typeof state !== 'undefined' && state && state.isDirty) {
-        const ok = confirm('작성 중인 내용이 저장되지 않았습니다.\n이전 화면으로 나가시겠습니까?');
-        if (!ok) { try { history.pushState({ hiwos: 'app' }, ''); } catch (e) {} return; }
-        state.isDirty = false;  // 확인됨 — 화면 전환 시 중복 경고 방지
+        try { history.pushState({ hiwos: 'app' }, ''); } catch (e) {}
+        try { toast('작성 중인 의뢰서가 있어 이 화면에 머뭅니다 — [저장]하거나 [취소]한 뒤 옮겨 주십시오', 'warning'); } catch (e) {}
+        return;
       }
       goBackInApp();
       try { history.pushState({ hiwos: 'app' }, ''); } catch (e) {}  // 다음 뒤로가기도 앱이 받도록 버퍼 재삽입
@@ -47595,7 +47650,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix422a';
+  const VERSION = 'v2.53 hotfix422b';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
