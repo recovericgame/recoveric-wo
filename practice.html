@@ -570,7 +570,8 @@
   .item-row { display: grid; gap: 6px; margin-bottom: 4px; align-items: center; }
   .item-row input, .item-row select { padding: 4px 6px; font-size: 12px; font-family: inherit; min-width: 0; box-sizing: border-box; width: 100%; }
   .color-row { grid-template-columns: 1fr 70px 70px 30px; }
-  .yarn-row { grid-template-columns: 1.7fr 100px 55px 55px 60px 74px 1fr 30px; }   /* hotfix407: 총kg 칸 줄이고 컬러 칸은 컬러만 */   /* hotfix393: 컬러 칸 · hotfix399: 사종 칸에 구분 고르개가 들어가 넓힘 */
+  .yarn-row { grid-template-columns: 2.4fr 82px 55px 55px 60px 74px 30px; }   /* hotfix422c: 출고처 칸을 발주서 위로 옮기고 사종 넓게 · 컬러 좁게 */
+  .yarn-row .y-dest-wrap { display: none; }   /* hotfix407: 총kg 칸 줄이고 컬러 칸은 컬러만 */   /* hotfix393: 컬러 칸 · hotfix399: 사종 칸에 구분 고르개가 들어가 넓힘 */
   /* hotfix252: 원사 출고처 2단 선택 (구분 → 출고처) */
   .y-dest-wrap { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
   .y-dest-wrap select { width: 100%; font-family: inherit; min-width: 0; }
@@ -6353,6 +6354,7 @@
   .proc-picker .pp-name { border: 1px dashed #94a3b8; background: #fff; border-radius: 12px; padding: 2px 10px; font-size: 12px; cursor: pointer; font-family: inherit; color: #334155; }
   .proc-picker .pp-name.on { border-style: solid; border-color: #047857; background: #ecfdf5; color: #065f46; font-weight: 800; }
   .proc-picker .pp-name.off { color: #94a3b8; border-color: #e2e8f0; cursor: not-allowed; }
+  .proc-picker .pp-name.unreg { color: #64748b; border-style: dotted; }
   .proc-picker .pp-sel { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; min-height: 22px; }
   .proc-picker .pp-badge { display: inline-flex; align-items: center; gap: 4px; border-radius: 12px; padding: 2px 6px 2px 9px; font-size: 12px; font-weight: 800; color: #fff; }
   .proc-picker .pp-badge b { cursor: pointer; font-weight: 900; opacity: .85; padding: 0 3px; }
@@ -6627,13 +6629,13 @@
             <label>★ 원사 LOT 번호 (송장 추적용)</label>
             <input type="text" lang="en" id="y_lot_no" placeholder="저장 시 자동 채번 (예: 001)" style="font-weight:700;letter-spacing:1px;">
           </div>
-          <div class="field"><label>입고 예정일 (선택)</label><input type="date" id="y_arrival"></div>
+          <div class="field"><label>입고 요청일 (선택)</label><input type="date" id="y_arrival"></div>
         </div>
       </div>
       <div class="section">
         <div class="section-title">원사 내역 (박스는 박스수×kg/박스로 자동계산)</div>
         <div class="item-row yarn-row" style="font-size:10px; color:#666;">
-          <div>사종 (구분 → 선택)</div><div>컬러</div><div>수량</div><div>단위</div><div>kg/박스</div><div>총 kg</div><div>출고처 (구분 → 선택)</div><div></div>
+          <div>사종 (구분 → 선택)</div><div>컬러</div><div>수량</div><div>단위</div><div>kg/박스</div><div>총 kg</div><div style="display:none;">출고처</div><div></div>
         </div>
         <div id="yarn-items"></div>
         <button class="btn-add" id="add-yarn">+ 사종 추가</button>
@@ -6641,7 +6643,9 @@
       <div class="section">
         <div class="section-title">추가 정보</div>
         <div class="row row-2">
-          <div class="field"><label>납기일</label><input type="text" lang="ko" id="y_delivery" placeholder="지급 / 2026-05-01 등"></div>
+          <!-- hotfix422c: 납기일은 감춤(입고 요청일로 갈음) · 그 자리에 출고처(구분 → 선택) — 발주서 한 장의 출고처는 하나, 줄마다의 출고처 값은 숨긴 채 여기 값을 따라간다 -->
+          <input type="hidden" id="y_delivery">
+          <div class="field"><label>출고처 (구분 → 선택) <span style="font-weight:400;color:#9ca3af;">— 원사를 받을 편직공장</span></label><div style="display:flex;gap:6px;"><select id="y_dest_cat" title="출고처 구분 — 먼저 고르세요" style="flex:none;width:120px;"></select><select id="y_dest" title="구분에 맞는 출고처에서 선택" style="flex:1;"></select></div></div>
           <div class="field"><label title="이 원사가 어느 품목(생지)에 쓰이는지. 원사 재고를 품목별로 묶어 편직 사용량과 맞추는 열쇠라 꼭 고릅니다. 두 품목이면 발주서 두 장">용도 — 어느 품목에 쓰는 원사인지 (필수)</label><input type="text" lang="ko" id="y_purpose" list="y-purpose-datalist" autocomplete="off" placeholder="품목을 고르십시오"><datalist id="y-purpose-datalist"></datalist></div>
         </div>
         <div class="field"><label>메모</label><textarea lang="ko" id="y_notes" placeholder="추가 전달사항"></textarea></div>
@@ -7843,6 +7847,23 @@ function yarnColorParse(text) {
   return { color: yarnColorIsLW(color) ? (color || brand ? YARN_LW : '') : color, brand };
 }
 let __yColorSeq = 0;
+// hotfix422c: 발주서 위 출고처(구분 → 선택) ↔ 줄의 숨은 출고처. 'down' = 위 값을 모든 줄에, 'up' = 그 줄 값을 위로
+function yarnDestSync(dir, row) {
+  const cat = document.getElementById('y_dest_cat'), dest = document.getElementById('y_dest'); if (!cat || !dest) return;
+  if (!cat.options.length) { cat.innerHTML = yarnDestCatOptionsHTML(''); dest.innerHTML = yarnDestOptionsHTML('', ''); }
+  if (dir === 'up' && row) {
+    const rc = row.querySelector('.y-dest-cat'), rd = row.querySelector('.y-dest'); if (!rc || !rd) return;
+    if (!rd.value) return;
+    cat.innerHTML = yarnDestCatOptionsHTML(rc.value); dest.innerHTML = yarnDestOptionsHTML(rc.value, rd.value); dest.value = rd.value;
+    return;
+  }
+  const rows = Array.from(document.querySelectorAll('#yarn-items .yarn-row')); if (row && !rows.includes(row)) rows.push(row);
+  rows.forEach(r => {
+    const rc = r.querySelector('.y-dest-cat'), rd = r.querySelector('.y-dest'); if (!rc || !rd) return;
+    rc.innerHTML = yarnDestCatOptionsHTML(cat.value); rd.innerHTML = yarnDestOptionsHTML(cat.value, dest.value); rd.value = dest.value;
+  });
+}
+if (typeof window !== 'undefined') window.__yarnDestSync = yarnDestSync;
 function addYarnRow(data={}) {
   const container = document.getElementById('yarn-items');
   const row = document.createElement('div');
@@ -7917,6 +7938,8 @@ function addYarnRow(data={}) {
     render(); markDirty();
   });
   row.querySelector('.y-dest').addEventListener('change', () => { try { refreshYarnPurposeList(); } catch (_) {} });   // hotfix402: 출고처 → 용도 목록
+  // hotfix422c: 줄의 출고처(숨김)는 발주서 위 출고처를 따라간다 (불러온 줄에 값이 있으면 그 값이 위로 올라간다)
+  try { yarnDestSync(data.dest ? 'up' : 'down', row); } catch (_) {}
   try { refreshYarnPurposeList(); } catch (_) {}
   const updateKg = () => {
     const qty = parseFloat(row.querySelector('.y-qty').value) || 0;
@@ -8116,7 +8139,10 @@ function mountProcPicker(host, opts) {
       if (bb) bb.innerHTML = bl.length ? `<span class="pp-bl-lbl">묶음 — 한 번에 담기</span>` + bl.map((b, i) => { const on = !!(host.__bOn || {})[b.name] && b.procs.every(p => host.__procs.includes(p)); return `<button type="button" class="pp-bundle${on ? ' on' : ''}" data-i="${i}" title="${escapeHtml(b.vendor + ' 묶음: ' + b.procs.join(' · '))}">${escapeHtml(b.name)}<small>${escapeHtml(b.procs.join('·'))}</small></button>`; }).join('') : '';
       host.__bundles = bl; }
     const box = host.querySelector('.pp-names');
-    box.innerHTML = names.length ? names.map(r => { const on = host.__procs.includes(r.name); const ok = !set || set.has(r.name) || on; return `<button type="button" class="pp-name${on ? ' on' : ''}${ok ? '' : ' off'}" data-n="${escapeHtml(r.name)}" ${ok ? '' : 'disabled title="' + escapeHtml(vendor) + ' 에 등록되지 않은 공정"'}>${escapeHtml(r.name)}</button>`; }).join('') : '<span class="pp-empty">이 단계의 공정이 없습니다 ([약어 설정]에서 넣습니다)</span>';
+    // hotfix422c: 업체에 등록 안 된 공정도 고를 수 있다(연하게 · 툴팁). 튜브 원단이면 텐타 계열은 못 고르고, 튜브 아니면 튜브가공을 못 고른다
+    const tubeOn = (typeof o.tubeOn === 'function') ? !!o.tubeOn() : null;
+    const tubeBlock = n => tubeOn === null ? false : (tubeOn ? /텐타/.test(n) : n === TUBE_PROC_NAME);
+    box.innerHTML = names.length ? names.map(r => { const on = host.__procs.includes(r.name); const reg = !set || set.has(r.name); const ok = !tubeBlock(r.name) || on; return `<button type="button" class="pp-name${on ? ' on' : ''}${ok ? '' : ' off'}${reg ? '' : ' unreg'}" data-n="${escapeHtml(r.name)}" ${ok ? (reg ? '' : 'title="' + escapeHtml(vendor) + ' 에 등록되지 않은 공정 — 골라도 됩니다 (단가 없음)"') : 'disabled title="' + (tubeOn ? '튜브 원단은 텐타를 할 수 없습니다' : '튜브 원단이 아니면 튜브가공을 고를 수 없습니다') + '"'}>${escapeHtml(r.name)}</button>`; }).join('') : '<span class="pp-empty">이 단계의 공정이 없습니다 ([약어 설정]에서 넣습니다)</span>';
     const hint = host.querySelector('#pp-hint'); if (hint) hint.textContent = vendor ? (set ? `${vendor} 등록 공정 ${names.filter(r => set.has(r.name)).length}개` : `${vendor} 등록 공정 없음 — 전체`) : (o.vendorOf ? '업체(염색처·가공처)를 먼저 고르면 그 업체 공정만 보입니다' : '');
     host.querySelectorAll('.pp-part').forEach(b => b.addEventListener('click', () => { host.__part = b.dataset.part; paint(); }));
     // hotfix405: 묶음은 통째로 담고/빼기. hotfix407: 켜진 묶음은 누른 것만(host.__bOn) — 텐덤 ⊂ 기텐덤 처럼 작은 묶음이 저절로 켜지지 않는다.
@@ -10494,7 +10520,7 @@ function resetForm() {
   
   if (state.currentType === '원사') {
     document.getElementById('y_date').value = today;
-    ['y_supplier','y_delivery','y_purpose','y_notes','y_lot_no','y_arrival'].forEach(id => {
+    ['y_supplier','y_delivery','y_purpose','y_notes','y_lot_no','y_arrival','y_dest_cat','y_dest'].forEach(id => {
       const el = document.getElementById(id); if (el) el.value = '';
     });
     document.getElementById('yarn-items').innerHTML = '';
@@ -15767,8 +15793,8 @@ function specGreigeColors(fid) {
       const procLocked = () => !isOwnerUser();   // hotfix405: 가공 사양 고르개는 최고관리자만 (직원·관리자는 감춤 + 읽기 전용)
       // hotfix422a: 튜브 원단(튜브 ×2 체크)은 가공에 '튜브가공'이 꼭 들어가고 뺄 수 없다 (lockedProcs)
       const tubeLock = id => () => (document.getElementById(id)?.checked && procMaster().rows.some(r => r.name === TUBE_PROC_NAME)) ? [TUBE_PROC_NAME] : [];
-      mountProcPicker(document.getElementById('f_body_proc_picker'), { textId: 'f_body_spec', noteId: 'f_body_spec_note', vendorOf: vendorOfFinish, locked: procLocked, lockedProcs: tubeLock('f_body_spec_tube'), onChange: () => { render(); markDirty(); } });
-      mountProcPicker(document.getElementById('f_rib_proc_picker'), { textId: 'f_rib_spec', noteId: 'f_rib_spec_note', vendorOf: vendorOfFinish, locked: procLocked, lockedProcs: tubeLock('f_rib_spec_tube'), onChange: () => { render(); markDirty(); } });
+      mountProcPicker(document.getElementById('f_body_proc_picker'), { textId: 'f_body_spec', noteId: 'f_body_spec_note', vendorOf: vendorOfFinish, locked: procLocked, lockedProcs: tubeLock('f_body_spec_tube'), tubeOn: () => !!document.getElementById('f_body_spec_tube')?.checked, onChange: () => { render(); markDirty(); } });
+      mountProcPicker(document.getElementById('f_rib_proc_picker'), { textId: 'f_rib_spec', noteId: 'f_rib_spec_note', vendorOf: vendorOfFinish, locked: procLocked, lockedProcs: tubeLock('f_rib_spec_tube'), tubeOn: () => !!document.getElementById('f_rib_spec_tube')?.checked, onChange: () => { render(); markDirty(); } });
       [['f_body_spec_tube', 'f_body_proc_picker'], ['f_rib_spec_tube', 'f_rib_proc_picker']].forEach(([cid, hid]) => { const c = document.getElementById(cid); if (c && !c.dataset.tubeLockBound) { c.dataset.tubeLockBound = '1'; c.addEventListener('change', () => { const h = document.getElementById(hid); if (h && h.__paint) { h.__paint(); if (h.__compose) h.__compose(); } }); } });
       window.__procPickersPaint = () => ['f_body_proc_picker', 'f_rib_proc_picker'].forEach(id => { const h = document.getElementById(id); if (h && h.__paint) h.__paint(); });
       fp.addEventListener('change', e => { const t = e.target; const id = (t && (t.id || (t.dataset && t.dataset.target))) || ''; if (id === 'f_r_dye' || id === 'f_r_proc') setTimeout(() => { window.__procPickersPaint(); if (id === 'f_r_dye') window.__procStdOnVendor(); }, 0); }, true);
@@ -46910,8 +46936,12 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
     // hotfix141: 진행 화면(유형 필터)에서는 화면 이동 없이 그 자리에서 빠른 작성 카드 토글
     const tf = state.overviewTypeFilter || 'all';
     const typeKey = _QA_TYPE_MAP[tf];
+    // hotfix422c: 간이 작성 카드 대신 본 작성 화면으로 (품목 · 컬러 목록 · 코드 · 로트 · 검사가 모두 본 폼과 같게)
     if (state.dashView === 'overview' && typeKey) {
-      toggleQuickAdd(typeKey);
+      switchUiMode('write');
+      switchType(tf);
+      resetForm();
+      try { window.scrollTo(0, 0); } catch (e) {}
       return;
     }
     // 나염 진행: 전용 작성 모달
@@ -46933,6 +46963,13 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
 addYarnRow();
 addKnitRow();
 document.getElementById('y_date').value = todayYMD();
+// hotfix422c: 발주서 위 출고처(구분 → 선택)
+(function bindYarnDestTop() {
+  const cat = document.getElementById('y_dest_cat'), dest = document.getElementById('y_dest'); if (!cat || !dest) return;
+  cat.innerHTML = yarnDestCatOptionsHTML(''); dest.innerHTML = yarnDestOptionsHTML('', '');
+  cat.addEventListener('change', () => { dest.innerHTML = yarnDestOptionsHTML(cat.value, ''); dest.value = ''; yarnDestSync('down'); try { refreshYarnPurposeList(); } catch (_) {} render(); markDirty(); });
+  dest.addEventListener('change', () => { yarnDestSync('down'); try { refreshYarnPurposeList(); } catch (_) {} render(); markDirty(); });
+})();
 document.getElementById('k_date').value = todayYMD();
 document.getElementById('f_date').value = todayYMD();
 document.getElementById('bt_date').value = todayYMD();
@@ -47650,7 +47687,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix422b';
+  const VERSION = 'v2.53 hotfix422c';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
