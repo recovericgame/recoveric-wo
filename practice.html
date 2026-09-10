@@ -8233,7 +8233,8 @@ function addColorRow(data={}) {
   row.querySelector('.c-name').addEventListener('blur', () => setTimeout(() => {
     const el = row.querySelector('.c-name'); if (!el) return; const v = el.value.trim(); if (!v) return;
     try { refreshFinishColorList(); } catch (_) {}
-    const opts = window.__finishColorOpts || []; if (!opts.length) return;
+    const opts = window.__finishColorOpts || [];
+    if (!opts.length) { el.value = ''; render(); markDirty(); toast('컬러는 목록에서만 고를 수 있습니다 — 몸판(또는 리프) 품목과 염색공장을 먼저 고르고, 없으면 [＋ 품목 컬러 설정]에서 넣어 주십시오', 'warning'); return; }
     const hit = opts.find(o => vendorKey(o) === vendorKey(v)) || opts.find(o => vendorKey(String(o).split(' #')[0]) === vendorKey(v));
     if (hit) { if (hit !== v) { el.value = hit; render(); markDirty(); } return; }
     el.value = ''; render(); markDirty();
@@ -8314,9 +8315,17 @@ function itemFidOf(name) {
   return hits.length === 1 ? hits[0] : '';
 }
 // 생지 번호 정리 — 숫자만 남겨 3자리("1"→"001"). 숫자가 아니면 그대로(빈 글자면 '')
+// hotfix422e: select 에 값이 없으면 항목을 만들어 넣고 고른다
+function hwSelectEnsure(sel, val) {
+  if (!sel) return; const v = String(val || '');
+  if (!sel.options) { sel.value = v; return; }
+  if (v && ![...sel.options].some(o => o.value === v)) { const o = document.createElement('option'); o.value = v; o.textContent = v; sel.appendChild(o); }
+  sel.value = v;
+}
 function greigeNoClean(v) {
   const s = String(v == null ? '' : v).trim();
-  if (!s || s === '-') return '';   // hotfix402: '-' = 해당사항없음
+  // hotfix402: '-' = 해당사항없음 · hotfix422e: '없음' 글자도 같다
+  if (!s || s === '-' || /^없음/.test(s)) return '';
   return /^\d{1,3}$/.test(s) ? s.padStart(3, '0') : s;
 }
 // 옛 글자 "프리미엄싱글 001" → { name:'프리미엄싱글', no:'001' } (끝 3자리 숫자만 뗀다)
@@ -10446,7 +10455,8 @@ function setFormData(d, opts={}) {
     
     document.getElementById('f_body_item').value = d.body?.item || '';
     document.getElementById('f_body_gno').value = d.body?.greige_no || '';   // hotfix390
-    document.getElementById('f_receiving').value = d.body?.receiving || '';
+    // hotfix422e: 입고처 값이 목록에 없으면(복사 · 옛 의뢰서 · 목록이 늦게 채워짐) 항목을 만들어 넣어 늘 보이게
+    hwSelectEnsure(document.getElementById('f_receiving'), d.body?.receiving || '');
     document.getElementById('f_body_spec').value = d.body?.spec || '';
   { const h = document.getElementById('f_body_proc_picker'); if (h && h.__set) h.__set(d.body?.spec_procs || [], d.body?.spec_note || ''); if (!(d.body?.spec_procs || []).length) document.getElementById('f_body_spec').value = d.body?.spec || ''; }   // hotfix403
     document.getElementById('f_body_spec_width').value = d.body?.spec_width || '';
@@ -10454,7 +10464,7 @@ function setFormData(d, opts={}) {
     document.getElementById('f_body_spec_tube').checked = !!(d.body?.spec_width_tube);
     document.getElementById('f_rib_item').value = d.rib?.item || '';
     document.getElementById('f_rib_gno').value = d.rib?.greige_no || '';   // hotfix390
-    document.getElementById('f_rib_receiving').value = d.rib?.receiving || '';
+    hwSelectEnsure(document.getElementById('f_rib_receiving'), d.rib?.receiving || '');
     document.getElementById('f_rib_spec').value = d.rib?.spec || '';
   { const h = document.getElementById('f_rib_proc_picker'); if (h && h.__set) h.__set(d.rib?.spec_procs || [], d.rib?.spec_note || ''); if (!(d.rib?.spec_procs || []).length) document.getElementById('f_rib_spec').value = d.rib?.spec || ''; }   // hotfix403
     document.getElementById('f_rib_spec_width').value = d.rib?.spec_width || '';
@@ -15826,7 +15836,7 @@ function specGreigeColors(fid) {
         const vK = vEl && vEl.value ? vendorKey(vEl.value) : '';
         // hotfix392: 남은 절이 있는 생지만, 컬러·남은 절·공장을 같이 보인다
         // hotfix402: 맨 앞에 [해당사항없음] (로트를 관리하지 않는 업체) — 고르면 빈 칸이 된다
-        dl.innerHTML = `<option value="-">없음 (로트 관리 안 함)</option>` + greigeStockList(el.value, itemFidOf(el.value)).filter(r => r.no && r.rem > 0).filter(r => !vK || vendorKey(r.vendor) === vK).map(r => `<option value="${escapeHtml(r.no)}">${escapeHtml(r.color || '-')} · 남은 ${r.rem}절 · ${escapeHtml(r.vendor || '-')}</option>`).join('');
+        dl.innerHTML = `<option value="없음">없음 (로트 관리 안 함)</option>` + greigeStockList(el.value, itemFidOf(el.value)).filter(r => r.no && r.rem > 0).filter(r => !vK || vendorKey(r.vendor) === vK).map(r => `<option value="${escapeHtml(r.no)}">${escapeHtml(r.color || '-')} · 남은 ${r.rem}절 · ${escapeHtml(r.vendor || '-')}</option>`).join('');
       };
       window.__fillGnoLists = () => Object.keys(GNO_PAIRS).forEach(fillGnoList);
       // hotfix422a: 몸판·리프 품목은 목록에서만 고른다 — 글자 검색 목록 상자 + 칸을 나갈 때 등록된 것이 아니면 비우고 [코드 등록 요청]
@@ -16685,6 +16695,14 @@ function validateBlendSum(blends, label) {
         if (noName >= 0) { toast(`컬러 & 수량 ${noName + 1}번째 줄의 컬러명이 비었습니다`, 'error'); return; }
         const zero = cs.findIndex(c => ((parseFloat(c.body) || 0) + (parseFloat(c.rib) || 0)) <= 0);
         if (zero >= 0) { toast(`[${cs[zero].name}] 줄의 절수가 0 입니다 — 몸판 또는 리프 절수를 넣어 주십시오`, 'error'); return; }
+        // hotfix422e: 컬러명은 [품목 컬러 설정]에 등록된 것만 (몸판 · 리프 품목 × 염색공장)
+        try {
+          const dyer = String(d.recipients?.dyeing || '').trim();
+          const allowed = new Set();
+          [d.body?.item, d.rib?.item].forEach(nm => { const fid = nm ? itemFidOf(nm) : ''; if (!fid) return; itemColorList(fid, '', dyer).forEach(c => allowed.add(vendorKey(itemColorLabel(c)))); });
+          const badC = cs.find(c => !allowed.has(vendorKey(c.name)));
+          if (badC) { toast(`[${badC.name}] 은(는) 이 품목 · 염색공장의 컬러 목록에 없습니다 — [＋ 품목 컬러 설정]에서 먼저 넣고 목록에서 고르십시오`, 'error'); return; }
+        } catch (e) { console.warn('[color check]', e.message); }
       }
       if (d.type === 'BT' && !d.recipient) { toast('수신처(염색공장)를 입력하세요', 'error'); return; }
       if (d.type === 'BT' && !d.item) { toast('품명을 입력하세요', 'error'); return; }
@@ -16769,6 +16787,9 @@ function validateBlendSum(blends, label) {
   
   // 모드 전환 (작성 ↔ 대시보드)
   function switchUiMode(mode) {
+    // hotfix422e: 화면을 바꿀 때마다 브라우저 이력에 남겨 뒤로 · 앞으로 가기로 오갈 수 있게 (popstate 로 온 것은 안 남김)
+    window.__switchUiMode = switchUiMode;
+    if (!window.__hwPop && state.uiMode !== mode) { try { history.pushState({ hiwos: mode }, ''); } catch (e) {} }
     state.uiMode = mode;
     document.querySelectorAll('.mode-switch .mode-btn').forEach(b => 
       b.classList.toggle('active', b.dataset.mode === mode));
@@ -47143,14 +47164,16 @@ window.addEventListener('beforeunload', e => {
       }
     }
     try { history.pushState({ hiwos: 'app' }, ''); } catch (e) {}
-    window.addEventListener('popstate', function () {
-      // 작성 중 미저장 경고 (작성 모드에서 변경이 있을 때만)
-      // hotfix422d: 작성 중이어도 묻지 않고 이전 화면으로 간다. 작성 폼은 감춰질 뿐 지워지지 않아, [작성지시서 작성]으로 돌아오면 적던 값이 그대로다 (isDirty 도 그대로 두어 다른 지킴이가 그대로 돈다)
-      if (inWriteMode() && typeof state !== 'undefined' && state && state.isDirty) {
-        try { toast('적던 의뢰서는 [작업지시서 작성] 화면에 그대로 있습니다', 'info'); } catch (e) {}
-      }
-      goBackInApp();
-      try { history.pushState({ hiwos: 'app' }, ''); } catch (e) {}  // 다음 뒤로가기도 앱이 받도록 버퍼 재삽입
+    // hotfix422e: 바닥 화면(진행)도 이력에 한 칸 — 작성 → 뒤로 → 진행 → 앞으로 → 작성이 되게
+    try { history.pushState({ hiwos: (typeof state !== 'undefined' && state && state.uiMode) || 'dashboard' }, ''); } catch (e) {}
+    window.addEventListener('popstate', function (ev) {
+      // hotfix422e: 이력에 적힌 화면(write · dashboard)으로 오간다 — 폼은 감춰질 뿐 지워지지 않아 값이 그대로. 앞으로 가기도 같은 길
+      const st = ev && ev.state && ev.state.hiwos;
+      window.__hwPop = true;
+      try {
+        if (st === 'write' || st === 'dashboard') { if (state.uiMode !== st) { if (window.__switchUiMode) window.__switchUiMode(st); else { const b = document.querySelector('.mode-btn[data-mode="' + st + '"]'); if (b) b.click(); } } }
+        else { goBackInApp(); try { history.replaceState({ hiwos: 'app' }, ''); } catch (e) {} }
+      } finally { window.__hwPop = false; }
     });
   })();
 
@@ -47695,7 +47718,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix422d';
+  const VERSION = 'v2.53 hotfix422e';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
