@@ -8128,7 +8128,8 @@ function mountProcPicker(host, opts) {
       <div class="pp-bundle-box"><div class="pp-bundles"></div></div>
       <div class="pp-sel"><span class="pp-step">고른 공정</span>${host.__procs.length ? host.__procs.map(n => `<span class="pp-badge${lockedSet.has(n) ? ' locked' : ''}" style="background:${PROC_PART_COLOR[procPartOfName(n)] || '#64748b'};" data-n="${escapeHtml(n)}" title="${lockedSet.has(n) ? '튜브 원단은 튜브가공이 꼭 들어갑니다 (뺄 수 없음)' : ''}">${escapeHtml(n)}${lockedSet.has(n) ? '<i>고정</i>' : '<b title="빼기">×</b>'}</span>`).join('') : '<span class="pp-empty">고른 공정이 없습니다 — 위에서 고르십시오</span>'}</div>`;
     const vendor = vendorFor(host.__part); const set = vendor ? procVendorSet(vendor) : null;
-    const names = rowsOf(host.__part);
+    // hotfix422d: 2차 공정 이름 오름차순(한글 · 숫자 순)
+    const names = rowsOf(host.__part).slice().sort((a, b) => String(a.name).localeCompare(String(b.name), 'ko', { numeric: true }));
     // hotfix405: 업체 묶음 — 누르면 묶음의 공정을 한 번에 담는다 (염색처 묶음 + 가공처 묶음)
     { const vs = (typeof o.vendorOf === 'function') ? (o.vendorOf() || {}) : {}; const bl = []; const seenV = new Set();
       [vs.pre, vs.post].forEach(vv => { const vk = vendorKey(vv || ''); if (!vk || seenV.has(vk)) return; seenV.add(vk); procVendorBundles(vv).forEach(b => bl.push(Object.assign({ vendor: vv }, b))); });
@@ -8136,7 +8137,9 @@ function mountProcPicker(host, opts) {
         host.__bOnDirty = false; const full = bl.filter(b => b.procs.length && b.procs.every(p => host.__procs.includes(p)));
         host.__bOn = {}; full.forEach(b => { if (!full.some(o => o !== b && o.procs.length > b.procs.length && b.procs.every(p => o.procs.includes(p)))) host.__bOn[b.name] = true; }); }
       const bb = host.querySelector('.pp-bundles');
-      if (bb) bb.innerHTML = bl.length ? `<span class="pp-bl-lbl">묶음 — 한 번에 담기</span>` + bl.map((b, i) => { const on = !!(host.__bOn || {})[b.name] && b.procs.every(p => host.__procs.includes(p)); return `<button type="button" class="pp-bundle${on ? ' on' : ''}" data-i="${i}" title="${escapeHtml(b.vendor + ' 묶음: ' + b.procs.join(' · '))}">${escapeHtml(b.name)}<small>${escapeHtml(b.procs.join('·'))}</small></button>`; }).join('') : '';
+      // hotfix422d: 튜브 원단이면 텐타가 든 묶음은 못 담는다
+      const tubeNow = (typeof o.tubeOn === 'function') ? !!o.tubeOn() : false;
+      if (bb) bb.innerHTML = bl.length ? `<span class="pp-bl-lbl">묶음 — 한 번에 담기</span>` + bl.map((b, i) => { const on = !!(host.__bOn || {})[b.name] && b.procs.every(p => host.__procs.includes(p)); const tb = tubeNow && b.procs.some(p => /텐타/.test(p)); if (tb) return `<button type="button" class="pp-bundle off" data-i="${i}" disabled title="튜브 원단은 텐타가 든 묶음을 담을 수 없습니다" style="opacity:.45;cursor:not-allowed;"><b>${escapeHtml(b.name)}</b><span>${escapeHtml(b.procs.join('·'))}</span></button>`; return `<button type="button" class="pp-bundle${on ? ' on' : ''}" data-i="${i}" title="${escapeHtml(b.vendor + ' 묶음: ' + b.procs.join(' · '))}">${escapeHtml(b.name)}<small>${escapeHtml(b.procs.join('·'))}</small></button>`; }).join('') : '';
       host.__bundles = bl; }
     const box = host.querySelector('.pp-names');
     // hotfix422c: 업체에 등록 안 된 공정도 고를 수 있다(연하게 · 툴팁). 튜브 원단이면 텐타 계열은 못 고르고, 튜브 아니면 튜브가공을 못 고른다
@@ -8175,8 +8178,13 @@ function mountProcPicker(host, opts) {
 function attachPickList(inp, itemsFn, onPick) {
   if (!inp || inp.dataset.pickBound) return; inp.dataset.pickBound = '1';
   let box = null;
-  const close = () => { document.querySelectorAll('.pick-list').forEach(b => b.remove()); box = null; };
+  // hotfix422d: 내 상자만 닫는다 (다른 칸의 목록 상자를 지우지 않게)
+  const close = () => { if (box && box.isConnected) box.remove(); box = null; };
   const open = () => {
+    // hotfix422d: 목록에서 고른 직후의 input 이벤트로 다시 열리지 않게
+    if (inp.__pickSkip) { inp.__pickSkip = false; return; }
+    // 목록 상자는 한 번에 하나만 — 다른 칸의 상자는 치운다
+    document.querySelectorAll('.pick-list').forEach(b => { if (b !== box) b.remove(); });
     let items = []; try { items = itemsFn() || []; } catch (_) { items = []; }
     const q = vendorKey(inp.value);
     const hits = items.filter(t => !q || vendorKey(t).includes(q)).slice(0, 60);
@@ -8184,7 +8192,7 @@ function attachPickList(inp, itemsFn, onPick) {
     if (!box || !box.isConnected) { close(); box = document.createElement('div'); box.className = 'pick-list'; box.style.cssText = 'position:fixed;z-index:9999;background:#fff;border:1px solid #cbd5e1;border-radius:7px;box-shadow:0 10px 30px rgba(15,23,42,.18);max-height:260px;overflow:auto;font-size:13px;'; document.body.appendChild(box); }
     const r = inp.getBoundingClientRect(); box.style.left = r.left + 'px'; box.style.top = (r.bottom + 2) + 'px'; box.style.minWidth = Math.max(180, r.width) + 'px';
     box.innerHTML = hits.map(t => `<div class="pick-item" style="padding:6px 10px;cursor:pointer;white-space:nowrap;">${escapeHtml(t)}</div>`).join('');
-    box.querySelectorAll('.pick-item').forEach(d => d.addEventListener('mousedown', ev => { ev.preventDefault(); inp.value = d.textContent; close(); inp.dispatchEvent(new Event('input', { bubbles: true })); inp.dispatchEvent(new Event('change', { bubbles: true })); if (typeof onPick === 'function') onPick(d.textContent); }));
+    box.querySelectorAll('.pick-item').forEach(d => d.addEventListener('mousedown', ev => { ev.preventDefault(); inp.value = d.textContent; close(); inp.__pickSkip = true; inp.dispatchEvent(new Event('input', { bubbles: true })); inp.__pickSkip = false; inp.dispatchEvent(new Event('change', { bubbles: true })); if (typeof onPick === 'function') onPick(d.textContent); }));
   };
   inp.addEventListener('focus', open); inp.addEventListener('input', open); inp.addEventListener('click', open);
   inp.addEventListener('blur', () => setTimeout(close, 120));
@@ -15818,7 +15826,7 @@ function specGreigeColors(fid) {
         const vK = vEl && vEl.value ? vendorKey(vEl.value) : '';
         // hotfix392: 남은 절이 있는 생지만, 컬러·남은 절·공장을 같이 보인다
         // hotfix402: 맨 앞에 [해당사항없음] (로트를 관리하지 않는 업체) — 고르면 빈 칸이 된다
-        dl.innerHTML = `<option value="-">해당사항없음 (로트 관리 안 함)</option>` + greigeStockList(el.value, itemFidOf(el.value)).filter(r => r.no && r.rem > 0).filter(r => !vK || vendorKey(r.vendor) === vK).map(r => `<option value="${escapeHtml(r.no)}">${escapeHtml(r.color || '-')} · 남은 ${r.rem}절 · ${escapeHtml(r.vendor || '-')}</option>`).join('');
+        dl.innerHTML = `<option value="-">없음 (로트 관리 안 함)</option>` + greigeStockList(el.value, itemFidOf(el.value)).filter(r => r.no && r.rem > 0).filter(r => !vK || vendorKey(r.vendor) === vK).map(r => `<option value="${escapeHtml(r.no)}">${escapeHtml(r.color || '-')} · 남은 ${r.rem}절 · ${escapeHtml(r.vendor || '-')}</option>`).join('');
       };
       window.__fillGnoLists = () => Object.keys(GNO_PAIRS).forEach(fillGnoList);
       // hotfix422a: 몸판·리프 품목은 목록에서만 고른다 — 글자 검색 목록 상자 + 칸을 나갈 때 등록된 것이 아니면 비우고 [코드 등록 요청]
@@ -26609,11 +26617,12 @@ function validateBlendSum(blends, label) {
       const stockRows = greigeStockList(item, itemFidOf(item)).filter(r => r.no && r.rem > 0);
       const gnoOpts = stockRows.map(r => `<option value="${escapeHtml(r.no)}"${(gno && r.no === greigeNoClean(gno)) ? ' selected' : ''}>${escapeHtml(r.no)} · ${escapeHtml(r.color || '-')} · 남은 ${r.rem}절 · ${escapeHtml(r.vendor || '-')}</option>`).join('');
       const gnoField = `
-      <div style="margin-bottom:9px;">
-        <label style="display:block;font-size:11.5px;font-weight:700;color:#374151;margin-bottom:3px;">생지로트 <span style="font-weight:400;color:#9ca3af;">(재고 있는 편직 생지에서 고르거나 직접 입력)</span></label>
+      <!-- hotfix422d: 생지로트 강조 — 송장 No 를 대신하는 번호라 공장이 이 번호로 찾는다 -->
+      <div style="margin-bottom:9px;padding:8px 10px;border:2px solid #f59e0b;border-radius:8px;background:#fffbeb;">
+        <label style="display:block;font-size:12.5px;font-weight:800;color:#92400e;margin-bottom:3px;">생지로트 <span style="font-weight:400;color:#b45309;font-size:11px;">(송장 No 를 대신합니다 — 공장은 이 번호로 통을 찾습니다 · 재고 있는 편직 생지에서 고르거나 직접 입력)</span></label>
         <div style="display:flex;gap:6px;align-items:center;">
           <input type="text" id="gs-gno-${part}" value="${escapeHtml(gno || '')}" placeholder="001" maxlength="3" inputmode="numeric" lang="ko" autocomplete="off"
-            style="width:90px;box-sizing:border-box;padding:8px 10px;border:1px solid #d1d5db;border-radius:5px;font-size:13px;font-family:var(--font-gothic);font-weight:700;text-align:center;">
+            style="width:110px;box-sizing:border-box;padding:8px 10px;border:2px solid #f59e0b;border-radius:5px;font-size:18px;font-family:var(--font-gothic);font-weight:900;text-align:center;color:#92400e;background:#fff;">
           <select id="gs-gno-${part}-pick" style="flex:1;box-sizing:border-box;padding:8px 10px;border:1px solid #d1d5db;border-radius:5px;font-size:12.5px;font-family:inherit;${stockRows.length ? '' : 'color:#9ca3af;'}">
             <option value="">${stockRows.length ? '— 재고 있는 생지 고르기 —' : '이 품목은 남은 생지가 없습니다 (직접 입력)'}</option>${gnoOpts}
           </select>
@@ -26630,7 +26639,8 @@ function validateBlendSum(blends, label) {
           ${fld('수신처 (편직공장)', `gs-recv-${part}`, recv, '')}
           ${fld('출고처 (염색·가공처)', `gs-dest-${part}`, dest, '미지정 시 직접 입력')}
           ${fld('수량 (절)', `gs-qty-${part}`, qty ? String(qty) : '', '0')}
-          ${fld('송장 No (선택)', `gs-inv-${part}`, prevInv, '예: 001')}
+          <!-- hotfix422d: 송장 No 는 생지로트와 같아 감춤(값은 빈 채 저장) -->
+          <div style="display:none;">${fld('송장 No (선택)', `gs-inv-${part}`, '', '')}</div>
           <div style="margin-bottom:9px;">
             <label style="display:block;font-size:11.5px;font-weight:700;color:#374151;margin-bottom:3px;">메모 (직접 작성)</label>
             <textarea id="gs-note-${part}" rows="2" placeholder="예: 송장에 No 기입해서 보내주세요"
@@ -47135,11 +47145,9 @@ window.addEventListener('beforeunload', e => {
     try { history.pushState({ hiwos: 'app' }, ''); } catch (e) {}
     window.addEventListener('popstate', function () {
       // 작성 중 미저장 경고 (작성 모드에서 변경이 있을 때만)
-      // hotfix422b: 작성 중(저장 안 한 값)이면 뒤로·앞으로 가기로 화면을 옮기지 않는다 — 적던 것이 지워지지 않게 그 자리에 머문다
+      // hotfix422d: 작성 중이어도 묻지 않고 이전 화면으로 간다. 작성 폼은 감춰질 뿐 지워지지 않아, [작성지시서 작성]으로 돌아오면 적던 값이 그대로다 (isDirty 도 그대로 두어 다른 지킴이가 그대로 돈다)
       if (inWriteMode() && typeof state !== 'undefined' && state && state.isDirty) {
-        try { history.pushState({ hiwos: 'app' }, ''); } catch (e) {}
-        try { toast('작성 중인 의뢰서가 있어 이 화면에 머뭅니다 — [저장]하거나 [취소]한 뒤 옮겨 주십시오', 'warning'); } catch (e) {}
-        return;
+        try { toast('적던 의뢰서는 [작업지시서 작성] 화면에 그대로 있습니다', 'info'); } catch (e) {}
       }
       goBackInApp();
       try { history.pushState({ hiwos: 'app' }, ''); } catch (e) {}  // 다음 뒤로가기도 앱이 받도록 버퍼 재삽입
@@ -47687,7 +47695,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix422c';
+  const VERSION = 'v2.53 hotfix422d';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
