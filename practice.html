@@ -14509,8 +14509,50 @@ function specGreigeColors(fid) {
   function yarnEntryByName(name) {
     const key = String(name || '').trim().toLowerCase();
     if (!key) return null;
-    return getCostPrices().yarns.find(y => String((y && y.name) || '').trim().toLowerCase() === key) || null;
+    return getCostPrices().yarns.find(y => String((y && y.name) || '').trim().toLowerCase() === key)
+      || getCostPrices().yarns.find(y => y && Array.isArray(y.aliases) && y.aliases.some(a => String(a || '').trim().toLowerCase() === key))   // hotfix422g: 다른 표기(옛 이름)로도 찾는다
+      || null;
   }
+  // hotfix422g: 사종 이름을 바꾸면 그 이름을 쓰는 곳을 한꺼번에 새 이름으로 — 품목 카드 [원사] 줄 · 편직 설정(루프장 · 직접 % · 합사 · 코드 짝) · 편직 사종 비율 사본.
+  //   의뢰서는 안 건드린다(옛 자료 변환 없음 — 다른 표기 + 사종 코드로 읽힌다). 단가 이력 열쇠도 그대로(옛 이력).
+  async function yarnRenameEverywhere(oldName, newName) {
+    const o = String(oldName || '').trim(), n = String(newName || '').trim();
+    if (!o || !n || o === n || !isOwnerUser()) return { cards: 0, knits: 0 };
+    const same = (a) => String(a || '').trim() === o;
+    // 1) 품목 카드 [원사] 줄
+    const cardMap = {}; let cards = 0;
+    Object.keys(state.fabricCost || {}).forEach(fid => {
+      const c = state.fabricCost[fid]; const ys = (c && Array.isArray(c.yarns)) ? c.yarns : [];
+      if (!ys.some(y => y && same(y.name))) return;
+      const next = ys.map(y => (y && same(y.name)) ? Object.assign({}, y, { name: n, yid: yarnYidOf(n) || y.yid || '' }) : y);
+      cardMap[fid] = { yarns: next }; cards++;
+    });
+    if (cards) { const ok = await saveFabricCostItems(cardMap, '사종 이름 반영(카드) 실패'); if (!ok) return { cards: 0, knits: 0 }; }
+    // 2) 편직 설정 마스터 — loops · pcts · plys · loop_yids 의 열쇠
+    const knitMap = {}; let knits = 0;
+    Object.keys(state.knitFee || {}).forEach(fid => {
+      const K = state.knitFee[fid]; if (!K || typeof K !== 'object') return;
+      let hit = false; const next = {};
+      Object.keys(K).forEach(v => {
+        const k = JSON.parse(JSON.stringify(K[v] || {}));
+        ['loops', 'pcts', 'plys', 'loop_yids'].forEach(f => { if (k[f] && typeof k[f] === 'object' && Object.prototype.hasOwnProperty.call(k[f], o)) { k[f][n] = k[f][o]; delete k[f][o]; hit = true; } });
+        if (k.loop_yids && k.loop_yids[n] === undefined && yarnYidOf(n)) k.loop_yids[n] = yarnYidOf(n);
+        next[v] = k;
+      });
+      if (hit) { knitMap[fid] = next; knits++; }
+    });
+    if (knits) {
+      // merge 로는 옛 열쇠가 서버에 남는다 → 품목 칸을 통째로 바꿔 쓴다 (deleteKnitFeeRow 와 같은 길)
+      const upd = { updated_at: serverTimestamp(), updated_by: state.user?.email || '' };
+      Object.keys(knitMap).forEach(fid => { upd['items.' + fid] = knitMap[fid]; });
+      await updateDoc(doc(db, C('cost_data'), 'knit_fee'), upd);
+      Object.keys(knitMap).forEach(fid => { state.knitFee[fid] = knitMap[fid]; });
+      for (const fid of Object.keys(knitMap)) { try { await knitBlendSync(fid); } catch (e) { console.warn('[knit_blend sync]', e.message); } }
+    }
+    toast('사종 이름을 바꿨습니다: ' + o + ' → ' + n + ' — 품목 카드 ' + cards + '개 · 편직 설정 ' + knits + '개에 반영', 'success');
+    return { cards, knits };
+  }
+  if (typeof window !== 'undefined') window.__yarnRenameEverywhere = yarnRenameEverywhere;
   // hotfix315: 사종 + 업체로 값을 찾는다.
   //   그 업체로 쳐 넣은 마지막 값이 있으면 그것이 이기고, 없으면 사종 마스터 값을 쓴다.
   function yarnEntryFor(name, vendor) {
@@ -14683,6 +14725,25 @@ function specGreigeColors(fid) {
     state._kfMigrating = false;
   }
   const KF_LABEL = { inch: '기계인치', needles: '침수', knit_loss: '편직로스', knit_fee: '편직료', memo: '비고' };
+  const KF_NO_FAC = '(공장 미지정)';   // hotfix422g: 옛 카드 자료의 공장 없는 줄 이름 (원가 계산기의 NO_KNIT 와 같은 글자)
+  // hotfix422g: 합사(가닥 수) — 비우면 1. 원가 계산기 엔진의 plyOf/effThick 와 같은 규칙 (데니아 ×합사 · 수 ÷합사)
+  function kfPlyNum(v) { const x = Math.floor(parseFloat(String(v == null ? '' : v).replace(/,/g, ''))); return (isFinite(x) && x >= 1) ? x : 1; }
+  function kfPlyOf(k, name) { return kfPlyNum(((k && k.plys) || {})[name]); }
+  // hotfix422g: 공장 줄임말 — 거래처명 끝의 "섬유 · 텍스 · 텍스타일 · (주) · 주식회사"를 뗀다 (세원섬유 → 세원, NSC → NSC). 두 글자 아래로 줄면 원래 이름
+  function kfFactoryShort(v) {
+    let t = String(v || '').trim().replace(/\(주\)|주식회사|㈜/g, '').trim();
+    const cut = t.replace(/(섬유|텍스타일|텍스|산업)$/u, '').trim();
+    return (cut.length >= 2 ? cut : t) || String(v || '').trim();
+  }
+  // hotfix422g: 편직공장을 고르면 품목명이 "기본명(공장)" — 이미 다른 공장 꼬리가 붙어 있으면 바꿔 단다
+  function kfAutoItemName(name, factory) {
+    const n = String(name || '').trim(); const f = String(factory || '').trim(); if (!f) return n;
+    const tail = kfFactoryShort(f); if (!tail) return n;
+    const known = Array.from(new Set(knitFactoryList().map(kfFactoryShort).concat(knitFactoryList())));
+    const m = /^(.*)\(([^()]*)\)$/.exec(n);
+    const base = (m && known.includes(String(m[2]).trim())) ? String(m[1]).trim() : n;
+    return base ? (base + '(' + tail + ')') : n;
+  }
   function kfNum(v) { const x = parseFloat(String(v == null ? '' : v).replace(/,/g, '')); return isFinite(x) ? x : null; }
   function kfGauge(inch, needles) { const g = kfNum(needles) / (kfNum(inch) || 1) / 3.14; return isFinite(g) && kfNum(inch) ? g : null; }
   function kfMachine(fid, inch, needles) {
@@ -14731,6 +14792,9 @@ function specGreigeColors(fid) {
     pn.forEach(nm => { const a = kfNum(before && before.pcts && before.pcts[nm]), b = kfNum(after.pcts && after.pcts[nm]); if (a !== b) ch.push('직접 % ' + nm + ': ' + (a == null ? '(없음)' : a) + ' → ' + (b == null ? '(없음)' : b)); });
     const bm = x => (x && x.blend_mode === 'manual') ? '직접 %' : '루프장';
     if (bm(before) !== bm(after) && (before || after.blend_mode === 'manual')) ch.push('혼용율 내는 법: ' + bm(before) + ' → ' + bm(after));
+    // hotfix422g: 합사
+    const yn = Array.from(new Set([].concat(Object.keys((before && before.plys) || {}), Object.keys(after.plys || {}))));
+    yn.forEach(nm => { const a = kfPlyOf(before, nm), b = kfPlyOf(after, nm); if (a !== b) ch.push('합사 ' + nm + ': ' + a + '합 → ' + b + '합'); });
     return ch;
   }
   async function kfHistAdd(fid, factory, changes, memoTag) {
@@ -14761,6 +14825,7 @@ function specGreigeColors(fid) {
       loops: {}, memo: String(row.memo || '').trim(), updated_at: editLogNow(), updated_by: hwMyName() };
     Object.keys(row.loops || {}).forEach(nm => { const x = kfNum(row.loops[nm]); if (x != null) after.loops[nm] = x; });
     after.pcts = {}; Object.keys(row.pcts || {}).forEach(nm => { const x = kfNum(row.pcts[nm]); if (x != null) after.pcts[nm] = x; });   // hotfix399e: 직접 %
+    after.plys = {}; Object.keys(row.plys || {}).forEach(nm => { const x = kfPlyNum(row.plys[nm]); if (x > 1) after.plys[nm] = x; });   // hotfix422g: 합사 (1은 안 적음)
     after.color = String(row.color || '').trim();   // hotfix415: 생지 컬러 (비우면 사종 컬러에서 짐작)
     // hotfix417: 어느 기계에서 짜는지 (직접 적기 — 비우면 기계 이름 자동값만)
     after.machine = String(row.machine || '').trim();
@@ -31256,7 +31321,7 @@ function validateBlendSum(blends, label) {
       <th style="text-align:left;min-width:150px;">품목명</th><th style="min-width:56px;">구분</th><th style="text-align:left;min-width:150px;">사종</th><th style="min-width:64px;">루프장</th>
       <th style="min-width:100px;">편직공장</th><th style="min-width:56px;">기계인치</th><th style="min-width:64px;">침수</th><th style="min-width:60px;">게이지</th><th style="min-width:80px;">기계 이름</th>
       <th style="min-width:56px;">로스 %</th><th style="min-width:76px;">편직료 원/kg</th><th style="text-align:left;min-width:120px;">비고</th><th style="min-width:96px;">마지막 수정</th>
-      <th style="min-width:52px;">복사</th><th style="min-width:52px;">수정</th><th style="min-width:52px;">삭제</th>
+      <th style="min-width:66px;">판매</th><th style="min-width:52px;">수정</th><th style="min-width:76px;">편직 값 삭제</th><!-- hotfix422g: [복사] 열 감춤 · [판매종료] 열 -->
     </tr></thead><tbody>`;
     if (!rows.length) h += `<tr><td colspan="16" style="text-align:center;color:#9ca3af;padding:20px;">${q ? '찾으신 품목이 없습니다.' : '품목이 없습니다.'}</td></tr>`;
     rows.forEach(r => {
@@ -31280,11 +31345,11 @@ function validateBlendSum(blends, label) {
            <td rowspan="${n}" style="text-align:left;vertical-align:top;font-size:12px;color:#475569;">${escapeHtml(k.memo || '')}</td>
            <td rowspan="${n}" style="text-align:center;vertical-align:top;font-size:11.5px;color:#64748b;">${escapeHtml(k.updated_at || '')}${k.updated_by ? '<div style="font-size:10.5px;">' + escapeHtml(k.updated_by) + '</div>' : ''}</td>`
         : `<td rowspan="${n}" colspan="9" style="text-align:center;vertical-align:top;color:#b45309;font-weight:700;">편직 값이 없습니다 — [수정]으로 공장과 값을 넣어 주십시오</td>`;
-      const act = `<td rowspan="${n}" class="col-action" style="vertical-align:top;"><button class="dash-action-btn kf-copy" data-kf-fid="${escapeHtml(r.fid)}" title="이 품목을 통째로 복사해 새 품목을 만듭니다" style="font-size:11px;padding:4px 9px;">복사</button></td>
-        <td rowspan="${n}" class="col-action" style="vertical-align:top;"><button class="dash-action-btn kf-edit" data-kf-fid="${escapeHtml(r.fid)}" data-kf-v="${escapeHtml(r.factory)}" style="font-size:11px;padding:4px 9px;font-weight:800;color:#1e3a8a;border-color:#c7d2fe;">수정</button></td>
+      const act = `<td rowspan="${n}" class="col-action" style="vertical-align:top;">${copyName ? '' : `<button class="dash-action-btn kf-stop" data-kf-fid="${escapeHtml(r.fid)}" data-kf-on="${r.sp.active === false ? '0' : '1'}" title="${r.sp.active === false ? '이 품목을 다시 판매 중으로 켭니다' : '이 품목을 판매 종료로 돌립니다 (자료는 그대로)'}" style="font-size:11px;padding:4px 9px;${r.sp.active === false ? 'color:#166534;border-color:#bbf7d0;' : 'color:#b45309;border-color:#fcd34d;'}">${r.sp.active === false ? '판매 재개' : '판매 종료'}</button>`}</td>
+        <td rowspan="${n}" class="col-action" style="vertical-align:top;"><button class="dash-action-btn kf-edit" data-kf-fid="${escapeHtml(r.fid)}" data-kf-v="${escapeHtml(r.factory)}" title="편직 설정 창 · 품목 디테일 수정 창 중 고릅니다" style="font-size:11px;padding:4px 9px;font-weight:800;color:#1e3a8a;border-color:#c7d2fe;">수정</button></td>
         <td rowspan="${n}" class="col-action" style="vertical-align:top;">${copyName
           ? `<button class="dash-action-btn danger kf-delitem" data-kf-fid="${escapeHtml(r.fid)}" title="복사본 품목을 통째로 지웁니다" style="font-size:11px;padding:4px 9px;">품목 삭제</button>`
-          : (r.factory ? `<button class="dash-action-btn danger kf-del" data-kf-fid="${escapeHtml(r.fid)}" data-kf-v="${escapeHtml(r.factory)}" style="font-size:11px;padding:4px 9px;">삭제</button>` : '')}</td>`;
+          : (r.factory ? `<button class="dash-action-btn danger kf-del" data-kf-fid="${escapeHtml(r.fid)}" data-kf-v="${escapeHtml(r.factory)}" title="이 공장의 편직 값(인치 · 침수 · 로스 · 편직료 · 루프장)을 지웁니다. 품목은 남습니다" style="font-size:11px;padding:4px 9px;">편직 값 삭제</button>` : '')}</td>`;
       yarns.forEach((y, i) => {
         h += `<tr>${i === 0 ? nameCell : ''}
           <td style="text-align:left;">${y ? escapeHtml(y) : '<span style="color:#cbd5e1;">원사 없음</span>'}</td>
@@ -31332,11 +31397,13 @@ function validateBlendSum(blends, label) {
         return { name: r.name, sizeText: '-', loop: '-', contrib: '-', pct: r.pct, compText: comp.map(c => `${c.mat} ${Math.round(c.pct * 10) / 10}%`).join(' · '), partText: comp.map(c => `${c.mat} ${Math.round(r.pct * (c.pct / s2) * 10) / 10}%`).join(' · ') }; });
       return { ok: true, reason: '', rows, text: f.rows.map(r => `${r.mat} ${r.pct}%`).join(' · '), skipped, sumContrib: 100, factory: '', manual: true };
     }
+    const PL = (opts && opts.plys) || {};   // hotfix422g: 합사 — 데니아 ×합사 · 수 ÷합사 (엔진 effThick 와 같은 규칙)
     yarns.forEach(y => {
-      const g = yarnGuessSpec(y); const lp = kfNum(L[y]);
+      const g = yarnGuessSpec(y); const lp = kfNum(L[y]); const py = kfPlyNum(PL[y]);
       if (!g || !g.size) { skipped.push(y); why.push(y + ' 굵기 못 읽음'); return; }
       if (lp == null || lp <= 0) { skipped.push(y); why.push(y + ' 루프장 없음'); return; }
-      list.push({ name: y, size: g.size, unit: g.unit || 'D', loop: lp });
+      const unit = g.unit || 'D';
+      list.push({ name: y, size: (unit === '수') ? g.size / py : g.size * py, unit, loop: lp, ply: py, size0: g.size });
     });
     if (!list.length) return { ok: false, reason: why.length ? why.join(' · ') : '사종·루프장이 없습니다', rows: [], text: '', skipped, sumContrib: 0 };
     const yb = calcYarnBlend(list);
@@ -31346,7 +31413,9 @@ function validateBlendSum(blends, label) {
     const rows = yb.map(r => {
       const ent = yarnEntryByName(r.name); const comp = ent ? yarnCompOf(ent) : []; const s2 = yarnCompSum(comp) || 100;
       const den = (r.unit === '수') ? (5315 / r.size) : r.size;
-      return { name: r.name, sizeText: (r.unit === '수') ? `${r.size}수 → ${Math.round(den * 10) / 10}D` : `${r.size}D`, loop: r.loop, contrib: Math.round(r.contrib), pct: r.pct,
+      const src = list.find(x => x.name === r.name) || {}; const py = src.ply || 1; const s0 = src.size0 != null ? src.size0 : r.size;
+      const plyTxt = py > 1 ? `${s0}${r.unit} ×${py}합 = ` : '';
+      return { name: r.name, sizeText: (r.unit === '수') ? `${plyTxt}${Math.round(r.size * 10) / 10}수 → ${Math.round(den * 10) / 10}D` : `${plyTxt}${Math.round(r.size)}D`, loop: r.loop, contrib: Math.round(r.contrib), pct: r.pct,
         compText: comp.map(c => `${c.mat} ${Math.round(c.pct * 10) / 10}%`).join(' · '),
         partText: comp.map(c => `${c.mat} ${Math.round(r.pct * (c.pct / s2) * 10) / 10}%`).join(' · ') };
     });
@@ -31357,7 +31426,7 @@ function validateBlendSum(blends, label) {
     const K = knitFeeOf(fid); const facs = Object.keys(K); if (!facs.length) return null;
     const yarns = kfYarnNames(fid); if (!yarns.length) return null;
     let best = null;
-    facs.forEach(v => { if (best && best.ok) return; const k = K[v] || {}; const r = knitBlendCalc(yarns, k.loops || {}, { mode: k.blend_mode, pcts: k.pcts }); r.factory = v; if (!best || (r.ok && !best.ok)) best = r; });
+    facs.forEach(v => { if (best && best.ok) return; const k = K[v] || {}; const r = knitBlendCalc(yarns, k.loops || {}, { mode: k.blend_mode, pcts: k.pcts, plys: k.plys }); r.factory = v; if (!best || (r.ok && !best.ok)) best = r; });
     return best;
   }
   // hotfix413: 편직 사종 비율 사본 (settings/knit_blend) — 품목 하나: { [편직공장]: { mode, ok, vendor_vid, yarns:[{name,yid,color,pct}] } }. 루프장·편직료·인치는 넣지 않는다
@@ -31369,8 +31438,8 @@ function validateBlendSum(blends, label) {
       Object.keys(k.loops || {}).concat(Object.keys(k.pcts || {})).forEach(n => { if (n && !names.includes(n)) names.push(n); });
       const list = names.map(n => {
         if (manual) { const p = kfNum((k.pcts || {})[n]); return (p == null || p <= 0) ? null : { name: n, bmode: 'manual', pct_manual: p, size: 0, unit: 'D', loop: 0 }; }
-        const g = yarnGuessSpec(n); const lp = kfNum((k.loops || {})[n]);
-        return (!g || !g.size || lp == null || lp <= 0) ? null : { name: n, size: g.size, unit: g.unit || 'D', loop: lp };
+        const g = yarnGuessSpec(n); const lp = kfNum((k.loops || {})[n]); const py = kfPlyOf(k, n);   // hotfix422g: 합사
+        return (!g || !g.size || lp == null || lp <= 0) ? null : { name: n, size: ((g.unit || 'D') === '수') ? g.size / py : g.size * py, unit: g.unit || 'D', loop: lp };
       }).filter(Boolean);
       const rows = list.length ? calcYarnBlend(list) : [];
       const sumP = rows.reduce((a, r) => a + (r.pct || 0), 0);
@@ -31419,20 +31488,22 @@ function validateBlendSum(blends, label) {
   //   · 카드에 없는 사종 → 굵기·단위는 이름에서 짐작해 새 줄 (단가는 단가표에서 읽으므로 비움)
   //   · 편직 설정에서 뺀 사종 → 카드 줄도 뺀다. 남는 줄의 값(굵기·합사·업체)은 그대로
   //   · 순서는 편직 설정 순서. 바뀐 것이 없으면 저장하지 않는다
-  async function syncCardYarnsFromKnit(fid, names) {
+  async function syncCardYarnsFromKnit(fid, names, plys) {
     const key = String(fid || '').trim(); if (!key || !isOwnerUser()) return false;
     const want = (Array.isArray(names) ? names : []).map(x => String(x || '').trim()).filter(Boolean);
     const prev = getFabricCost(key) || {};
     const rows = (Array.isArray(prev.yarns) ? prev.yarns : []).filter(y => y && y.name);
     const byName = {}; rows.forEach(y => { byName[String(y.name).trim()] = y; });
+    const PL = (plys && typeof plys === 'object') ? plys : null;   // hotfix422g: 편직 설정의 합사가 카드 줄의 합사를 이긴다
+    let plyChanged = false;
     const next = want.map(nm => {
-      if (byName[nm]) return byName[nm];
+      if (byName[nm]) { const y = byName[nm]; if (PL) { const p = kfPlyNum(PL[nm]); if (kfPlyNum(y.ply) !== p) { y.ply = p; plyChanged = true; } } return y; }
       const g = yarnGuessSpec(nm) || {};
-      return { name: nm, size: (g.size == null ? null : g.size), unit: (g.unit === '수' ? '수' : 'D'), ply: 1, loop: null,
+      return { name: nm, size: (g.size == null ? null : g.size), unit: (g.unit === '수' ? '수' : 'D'), ply: PL ? kfPlyNum(PL[nm]) : 1, loop: null,
         bmode: (prev.blend_mode === 'manual' ? 'manual' : 'loop'), pct_manual: null, vendor: '', price: null, ship: null, loss: null,
         yid: yarnYidOf(nm), vendor_vid: '' };
     });
-    const same = rows.length === next.length && rows.every((y, i) => String(y.name).trim() === String(next[i].name).trim());
+    const same = !plyChanged && rows.length === next.length && rows.every((y, i) => String(y.name).trim() === String(next[i].name).trim());
     if (same) return false;
     const ok = await saveFabricCost(key, Object.assign({}, prev, { yarns: next, updated_at: todayYMD() }));
     if (ok) {
@@ -31608,6 +31679,11 @@ function validateBlendSum(blends, label) {
     let cardYarns = kfCardYarnNames(key);   // hotfix387: 카드 [원사]에 있는 사종은 여기서 못 뺀다
     const facs = knitFactoryList();
     let touched = false;   // hotfix387: 사종을 넣거나 빼면 저장 전까지 "고친 상태"
+    // hotfix422g: 편직공장은 하나만 고른다. 공장을 바꾸면 값이 새 공장 줄로 옮겨 가고, 옛 줄은 [저장] 때 지운다. 품목명 · 구분 · 조직도 [저장] 하나로 담는다
+    const dropOnSave = new Set();
+    let pend = { name: String(sp.name || ''), gubun: String(sp.gubun || GUBUN_BODY), cat: String(sp.cat || '') };
+    const readBasics = () => { const n = wrap.querySelector('#kf-sp-name'), g = wrap.querySelector('#kf-sp-gubun'), c = wrap.querySelector('#kf-sp-cat'); if (n) pend.name = n.value; if (g) pend.gubun = g.value; if (c && c.options.length) pend.cat = c.value; return pend; };
+    const basicsChanged = () => { readBasics(); return String(pend.name || '').trim() !== String(sp.name || '').trim() || String(pend.gubun || GUBUN_BODY) !== String(sp.gubun || GUBUN_BODY) || String(pend.cat || '').trim() !== String(sp.cat || '').trim(); };
     const wrap = document.createElement('div');
     wrap.id = 'kf-popup';
     wrap.style.cssText = 'position:fixed;inset:0;z-index:650;background:rgba(15,23,42,.5);display:flex;align-items:flex-start;justify-content:center;padding:40px 16px;';
@@ -31626,17 +31702,19 @@ function validateBlendSum(blends, label) {
           <div style="border:1px solid #c7d2fe;border-radius:9px;padding:10px 14px;background:#eef2ff;margin-bottom:12px;">
             <div style="font-size:12px;font-weight:800;color:#1e3a8a;margin-bottom:6px;">생지 기본 <span style="font-weight:400;color:#64748b;">— 품목명 · 구분 · 조직의 본자리. 품목명을 바꾸면 코드(${escapeHtml(key)})로 이어진 편직 값 · 원가 · 의뢰서가 새 이름을 쓰고, 옛 글자는 다른 표기로 남습니다</span></div>
             <div style="display:grid;grid-template-columns:1.5fr .9fr 1.3fr auto auto;gap:8px 10px;align-items:end;">
-              <div><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px;">품목명</label><input id="kf-sp-name" lang="ko" value="${escapeHtml(sp.name || '')}" style="${iS}font-weight:800;"></div>
-              <div><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px;">구분</label><select id="kf-sp-gubun" style="${iS}">${Array.from(new Set(getFabricGubuns().concat([GUBUN_SAMPLE, String(sp.gubun || '')]))).filter(Boolean).map(g => `<option value="${escapeHtml(g)}"${g === String(sp.gubun || GUBUN_BODY) ? ' selected' : ''}>${escapeHtml(g)}</option>`).join('')}</select></div>
+              <div><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px;">품목명</label><input id="kf-sp-name" lang="ko" value="${escapeHtml(pend.name || '')}" style="${iS}font-weight:800;"></div>
+              <div><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px;">구분</label><select id="kf-sp-gubun" style="${iS}">${Array.from(new Set(getFabricGubuns().concat([GUBUN_SAMPLE, String(sp.gubun || ''), String(pend.gubun || '')]))).filter(Boolean).map(g => `<option value="${escapeHtml(g)}"${g === String(pend.gubun || GUBUN_BODY) ? ' selected' : ''}>${escapeHtml(g)}</option>`).join('')}</select></div>
               <div><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px;">조직</label><select id="kf-sp-cat" style="${iS}"></select></div>
               <button class="dash-action-btn" id="kf-sp-cat-add" style="padding:7px 10px;font-size:12px;font-weight:700;white-space:nowrap;" title="목록에 없는 조직을 새로 넣습니다">＋ 새 조직</button>
-              <button class="dash-action-btn" id="kf-sp-save" style="padding:7px 14px;font-weight:800;background:#1e3a8a;color:#fff;white-space:nowrap;">생지 기본 저장</button>
+              <button class="dash-action-btn" id="kf-sp-save" style="display:none;padding:7px 14px;font-weight:800;background:#1e3a8a;color:#fff;white-space:nowrap;">생지 기본 저장</button><!-- hotfix422g: 감춤 — 아래 [저장] 하나가 생지 기본까지 담는다 -->
             </div>
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px;">
             <span style="font-size:12px;font-weight:800;color:#334155;">편직공장</span>
-            ${Object.keys(K).map(v => `<span style="display:inline-flex;align-items:stretch;"><button class="dash-action-btn kf-tab" data-v="${escapeHtml(v)}" style="padding:5px 12px;font-weight:800;border-radius:7px 0 0 7px;${v === V ? 'background:#1e3a8a;color:#fff;border-color:#1e3a8a;' : ''}">${escapeHtml(v)}${knitFactoryKnown(v) ? '' : ' <span style="font-size:10px;font-weight:400;">(미등록)</span>'}</button><button class="dash-action-btn danger kf-fdel" data-v="${escapeHtml(v)}" title="이 공장 줄을 지웁니다" style="padding:5px 8px;border-radius:0 7px 7px 0;border-left:0;font-weight:800;">x</button></span>`).join('')}
-            <select id="kf-newfac" style="${iS}width:auto;min-width:160px;"><option value="">＋ 편직공장 …</option>${facs.filter(v => !K[v]).map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('')}</select>
+            <select id="kf-fac" style="${iS}width:auto;min-width:200px;font-weight:800;" title="편직공장은 하나만 고릅니다. 고르면 품목명 뒤에 (공장)이 붙습니다"><option value="">— 편직공장 고르기 —</option>${Array.from(new Set(facs.concat(Object.keys(K).filter(v => v && v !== KF_NO_FAC)))).map(v => `<option value="${escapeHtml(v)}"${v === V ? ' selected' : ''}>${escapeHtml(v)}${knitFactoryKnown(v) ? '' : ' (거래처 미등록)'}${(K[v] && !K[v]._new && v !== V) ? ' · 옛 줄' : ''}</option>`).join('')}</select>
+            ${(V && K[V] && !K[V]._new) ? `<button class="dash-action-btn danger kf-fdel" data-v="${escapeHtml(V)}" title="이 공장의 편직 값을 지웁니다 (품목은 남습니다)" style="padding:5px 10px;font-weight:800;">편직 값 삭제</button>` : ''}
+            ${Object.keys(K).filter(v => v !== V && K[v] && !K[v]._new).length ? `<span style="font-size:11px;color:#b45309;">옛 공장 줄 ${Object.keys(K).filter(v => v !== V && K[v] && !K[v]._new).length}개가 더 있습니다 — 목록에서 골라 [편직 값 삭제]로 정리하십시오</span>` : ''}
+            <select id="kf-newfac" style="display:none;"><!-- hotfix422g: 감춤 — 공장은 위 목록 하나로 --><option value=""></option></select>
           </div>
           ${V ? `<div style="border:1px solid #e2e8f0;border-radius:9px;padding:12px 14px;background:#f8fafc;">
             <div style="font-size:12.5px;font-weight:800;color:#1e3a8a;margin-bottom:8px;">${escapeHtml(V)}${(K[V] && !K[V]._new) ? '' : ' <span style="font-size:11px;color:#b45309;">(새 줄)</span>'}</div>
@@ -31657,17 +31735,18 @@ function validateBlendSum(blends, label) {
               <label style="font-size:12px;font-weight:700;display:inline-flex;align-items:center;gap:4px;cursor:pointer;"><input type="radio" name="kf-bmode" class="kf-bmode" value="loop" ${k.blend_mode === 'manual' ? '' : 'checked'}> 루프장으로 계산</label>
               <label style="font-size:12px;font-weight:700;display:inline-flex;align-items:center;gap:4px;cursor:pointer;"><input type="radio" name="kf-bmode" class="kf-bmode" value="manual" ${k.blend_mode === 'manual' ? 'checked' : ''}> 직접 % 넣기</label>
             </div>
-            <div style="display:flex;flex-direction:column;gap:4px;margin-top:6px;max-width:420px;"><!-- hotfix409: 한 줄씩 · 사종 칸 210px 로 붙여서 -->
-              ${yarns.length ? `<div style="display:grid;grid-template-columns:210px 84px 64px 28px;gap:6px;font-size:11px;color:#94a3b8;padding:0 2px;"><span>사종</span><span style="text-align:right;">루프장</span><span style="text-align:right;">직접 %</span><span></span></div>` + yarns.map(y => `<label style="display:grid;grid-template-columns:210px 84px 64px 28px;align-items:center;gap:6px;font-size:12.5px;"><span style="font-weight:700;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(y)}${cardYarns.includes(y) ? '' : ' — [저장]하면 카드 [원사]에도 들어갑니다'}">${escapeHtml(y)}${cardYarns.includes(y) ? '' : ' <span style="font-size:10px;color:#b45309;font-weight:400;">(저장 전)</span>'}</span><input class="kf-loop" data-y="${escapeHtml(y)}" inputmode="decimal" placeholder="루프장" value="${(k.loops || {})[y] == null ? '' : k.loops[y]}" style="${nS}"><input class="kf-pct" data-y="${escapeHtml(y)}" inputmode="decimal" placeholder="%" value="${(k.pcts || {})[y] == null ? '' : k.pcts[y]}" style="${nS}"><button class="dash-action-btn danger kf-ydel" data-y="${escapeHtml(y)}" title="이 사종 줄을 뺍니다 ([저장]하면 카드 [원사]에서도 빠집니다)" style="padding:3px 6px;font-size:11px;">x</button></label>`).join('')
+            <div style="display:flex;flex-direction:column;gap:4px;margin-top:6px;"><!-- hotfix409: 한 줄씩 · hotfix422g: 합사 칸 · 칸 넓힘 -->
+              ${yarns.length ? `<div style="display:grid;grid-template-columns:minmax(220px,1fr) 96px 96px 76px 34px;gap:8px;font-size:11px;color:#94a3b8;padding:0 2px;"><span>사종</span><span style="text-align:right;">루프장</span><span style="text-align:right;">직접 %</span><span style="text-align:right;" title="여러 가닥을 함께 쓰면 가닥 수 (300D 2합 = 600D · 30수 4합 = 7.5수)">합사</span><span></span></div>` + yarns.map(y => `<label style="display:grid;grid-template-columns:minmax(220px,1fr) 96px 96px 76px 34px;align-items:center;gap:8px;font-size:12.5px;"><span style="font-weight:700;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(y)}${cardYarns.includes(y) ? '' : ' — [저장]하면 카드 [원사]에도 들어갑니다'}">${escapeHtml(y)}${cardYarns.includes(y) ? '' : ' <span style="font-size:10px;color:#b45309;font-weight:400;">(저장 전)</span>'}</span><input class="kf-loop" data-y="${escapeHtml(y)}" inputmode="decimal" placeholder="루프장" value="${(k.loops || {})[y] == null ? '' : k.loops[y]}" style="${nS}"><input class="kf-pct" data-y="${escapeHtml(y)}" inputmode="decimal" placeholder="%" value="${(k.pcts || {})[y] == null ? '' : k.pcts[y]}" style="${nS}"><input class="kf-ply" data-y="${escapeHtml(y)}" inputmode="numeric" placeholder="1" title="합사 (가닥 수) — 비우면 1" value="${kfPlyOf(k, y) > 1 ? kfPlyOf(k, y) : ''}" style="${nS}"><button class="dash-action-btn danger kf-ydel" data-y="${escapeHtml(y)}" title="이 사종 줄을 뺍니다 ([저장]하면 카드 [원사]에서도 빠집니다)" style="padding:3px 6px;font-size:11px;">x</button></label>`).join('')
                 : '<span style="font-size:12px;color:#94a3b8;">이 품목에 원사가 없습니다. 아래 [원사 넣기]로 넣어 주십시오.</span>'}
             </div>
-            <div style="margin-top:10px;font-size:12px;font-weight:800;color:#334155;">원사 넣기 <span style="font-weight:400;color:#64748b;">— 구분 → 사종(글자 검색) → 컬러 → 루프장 또는 직접 %. [저장]하면 카드 [원사]에도 들어갑니다</span></div>
-            <div style="display:grid;grid-template-columns:110px 180px 120px 84px 64px auto;gap:6px;align-items:center;margin-top:6px;max-width:640px;">
+            <div style="margin-top:10px;font-size:12px;font-weight:800;color:#334155;">원사 넣기 <span style="font-weight:400;color:#64748b;">— 구분 → 사종(글자 검색) → 컬러 → 루프장 또는 직접 % → 합사. [저장]하면 카드 [원사]에도 들어갑니다</span></div>
+            <div style="display:grid;grid-template-columns:130px minmax(200px,1.4fr) minmax(150px,1fr) 96px 90px 76px auto;gap:8px;align-items:center;margin-top:6px;"><!-- hotfix422g: 칸 넓힘 · 합사 -->
               <select id="kf-newyarn-kind" data-nodirty style="${iS}"><option value="">구분 …</option>${YARN_KINDS.map(k => `<option value="${k}">${escapeHtml(YARN_KIND_LABEL[k] || k)}</option>`).join('')}</select>
               <input id="kf-newyarn" lang="ko" data-nodirty list="kf-newyarn-list" autocomplete="off" placeholder="사종 검색" style="${iS}"><datalist id="kf-newyarn-list"></datalist>
               <select id="kf-newyarn-color" data-nodirty style="${iS}"><option value="">컬러 …</option></select>
               <input id="kf-newyarn-loop" data-nodirty inputmode="decimal" placeholder="루프장" style="${nS}">
               <input id="kf-newyarn-pct" data-nodirty inputmode="decimal" placeholder="%" style="${nS}">
+              <input id="kf-newyarn-ply" data-nodirty inputmode="numeric" placeholder="합사" title="합사 (가닥 수) — 비우면 1" style="${nS}">
               <button class="dash-action-btn" id="kf-newyarn-add" style="font-weight:800;padding:6px 12px;white-space:nowrap;">＋ 넣기</button>
             </div>
             <div style="margin-top:14px;padding:10px 12px;border:1px solid #c7d2fe;border-radius:8px;background:#f5f7ff;">
@@ -31681,7 +31760,7 @@ function validateBlendSum(blends, label) {
               <button class="dash-action-btn" id="kf-cancel" style="padding:8px 16px;">취소</button>
               <button class="dash-action-btn" id="kf-save" style="background:#047857;color:#fff;font-weight:800;padding:8px 24px;">저장</button>
             </div>
-          </div>` : `<div class="dash-empty" style="padding:22px;">위에서 편직공장을 고르거나 [＋ 편직공장]으로 새 줄을 만드십시오.</div>`}
+          </div>` : `<div class="dash-empty" style="padding:22px;">위에서 편직공장을 고르십시오. 고르면 편직 값 칸이 열립니다.</div>`}
         </div></div>`;
       const gz = () => {
         const g = kfGauge(wrap.querySelector('#kf-inch')?.value, wrap.querySelector('#kf-needles')?.value);
@@ -31692,12 +31771,13 @@ function validateBlendSum(blends, label) {
       gz();
       ['#kf-inch', '#kf-needles'].forEach(q => wrap.querySelector(q)?.addEventListener('input', gz));
       const collect = () => {
-        const loops = {}, pcts = {};
+        const loops = {}, pcts = {}, plys = {};
         wrap.querySelectorAll('.kf-loop').forEach(el => { loops[el.dataset.y] = el.value; });
         wrap.querySelectorAll('.kf-pct').forEach(el => { pcts[el.dataset.y] = el.value; });   // hotfix399e
+        wrap.querySelectorAll('.kf-ply').forEach(el => { plys[el.dataset.y] = el.value; });   // hotfix422g: 합사
         const bm = wrap.querySelector('.kf-bmode:checked'); 
         return { inch: wrap.querySelector('#kf-inch').value, needles: wrap.querySelector('#kf-needles').value, knit_loss: wrap.querySelector('#kf-loss').value,
-          knit_fee: wrap.querySelector('#kf-fee').value, memo: wrap.querySelector('#kf-memo').value, color: (wrap.querySelector('#kf-color') || {}).value || '', machine: (wrap.querySelector('#kf-mach') || {}).value || '', loops, pcts, blend_mode: (bm && bm.value === 'manual') ? 'manual' : 'loop' };
+          knit_fee: wrap.querySelector('#kf-fee').value, memo: wrap.querySelector('#kf-memo').value, color: (wrap.querySelector('#kf-color') || {}).value || '', machine: (wrap.querySelector('#kf-mach') || {}).value || '', loops, pcts, plys, blend_mode: (bm && bm.value === 'manual') ? 'manual' : 'loop' };
       };
       // hotfix399: "닫을까요" 는 화면에 보이는 칸이 열 때와 달라졌을 때만 — 저장돼 있던 값 중 화면에 없는 사종 줄 때문에 헛묻지 않는다
       const normC = c => {
@@ -31705,6 +31785,7 @@ function validateBlendSum(blends, label) {
         const o = { inch: kfNum(c.inch), needles: kfNum(c.needles), knit_loss: kfNum(c.knit_loss), knit_fee: kfNum(c.knit_fee), loops: {}, memo: String(c.memo || '').trim(), color: String(c.color || '').trim(), machine: String(c.machine || '').trim() };
         Object.keys(c.loops || {}).sort().forEach(y => { const x = kfNum(c.loops[y]); if (x != null) o.loops[y] = x; });
         o.pcts = {}; Object.keys(c.pcts || {}).sort().forEach(y => { const x = kfNum(c.pcts[y]); if (x != null) o.pcts[y] = x; }); o.blend_mode = c.blend_mode || 'loop';   // hotfix399e
+        o.plys = {}; Object.keys(c.plys || {}).sort().forEach(y => { const x = kfPlyNum(c.plys[y]); if (x > 1) o.plys[y] = x; });   // hotfix422g: 합사
         return JSON.stringify(o);
       };
       const screenSnap = V && wrap.querySelector('#kf-inch') ? normC(collect()) : '';
@@ -31712,12 +31793,14 @@ function validateBlendSum(blends, label) {
       // hotfix419: 사종을 넣거나 빼서 다시 그리기 전에 화면 값(인치 · 침수 · 로스 · 편직료 · 컬러 · 방식 · 루프장 · %)을 K[V] 에 담아 둔다 — 새 줄이면 만든다
       const stash = () => {
         const cur = collect();
-        if (!K[V]) K[V] = { _new: true, inch: null, needles: null, knit_loss: null, knit_fee: null, loops: {}, pcts: {}, blend_mode: 'loop', memo: '', color: '' };
+        if (!K[V]) K[V] = { _new: true, inch: null, needles: null, knit_loss: null, knit_fee: null, loops: {}, pcts: {}, plys: {}, blend_mode: 'loop', memo: '', color: '' };
         Object.assign(K[V], { inch: cur.inch, needles: cur.needles, knit_loss: cur.knit_loss, knit_fee: cur.knit_fee, memo: cur.memo, color: cur.color, machine: cur.machine, blend_mode: cur.blend_mode,
-          loops: Object.assign({}, K[V].loops || {}, cur.loops), pcts: Object.assign({}, K[V].pcts || {}, cur.pcts) });
+          loops: Object.assign({}, K[V].loops || {}, cur.loops), pcts: Object.assign({}, K[V].pcts || {}, cur.pcts), plys: Object.assign({}, K[V].plys || {}, cur.plys) });
+        readBasics();
         return cur;
       };
       const dirty = () => {
+        if (basicsChanged()) return true;   // hotfix422g: 생지 기본 칸(품목명 · 구분 · 조직)도 "닫을까요" 판단에 넣는다
         if (!V || !wrap.querySelector('#kf-inch')) return false;
         if (touched) return true;
         return normC(collect()) !== screenSnap;
@@ -31727,7 +31810,7 @@ function validateBlendSum(blends, label) {
       const paintBlend = () => {
         const box = wrap.querySelector('#kf-blend-auto'), calc = wrap.querySelector('#kf-blend-calc'), now = wrap.querySelector('#kf-blend-now');
         if (!box) return;
-        const c0 = collect(); const b = knitBlendCalc(yarns, c0.loops, { mode: c0.blend_mode, pcts: c0.pcts });
+        const c0 = collect(); const b = knitBlendCalc(yarns, c0.loops, { mode: c0.blend_mode, pcts: c0.pcts, plys: c0.plys });   // hotfix422g: 합사
         const curSpec = getFabricSpecs().find(x => specFid(x) === key) || sp;
         if (now) now.textContent = String(curSpec.blend || '').trim() || '(비어 있음)';
         if (!yarns.length) { box.innerHTML = '<span style="color:#94a3b8;">사종을 넣고 루프장을 적으면 여기서 저절로 나옵니다.</span>'; calc.innerHTML = ''; return; }
@@ -31739,7 +31822,7 @@ function validateBlendSum(blends, label) {
           <tr style="border-top:2px solid #94a3b8;background:#f8fafc;"><td style="padding:3px 6px;font-weight:800;">합계</td><td></td><td></td><td style="padding:3px 6px;text-align:right;">${b.sumContrib}</td><td style="padding:3px 6px;text-align:right;font-weight:800;">100%</td><td></td><td style="padding:3px 6px;font-weight:800;color:#166534;">${escapeHtml(b.text)}</td></tr>
         </table><div style="color:#94a3b8;margin-top:3px;">${b.manual ? '직접 넣은 %가 사종 비율입니다 · 소재 몫 = 사종 비율 × 성분%' : '수(방적사)는 5315 ÷ 수 로 데니어로 바꿉니다 · 몫 = 데니어 × 루프장 · 사종 비율 = 몫 ÷ 합계 · 소재 몫 = 사종 비율 × 성분%'}</div>` : '';
       };
-      wrap.querySelectorAll('.kf-loop, .kf-pct').forEach(el => el.addEventListener('input', paintBlend));
+      wrap.querySelectorAll('.kf-loop, .kf-pct, .kf-ply').forEach(el => el.addEventListener('input', paintBlend));
       // hotfix409: 루프장으로 계산 → 루프장 칸만, 직접 % 넣기 → % 칸만 손댈 수 있다. 바꿀 때 반대쪽에 숫자가 있으면 지울지 묻고, 아니오면 되돌린다
       const kfMode = () => (wrap.querySelector('.kf-bmode:checked')?.value === 'manual' ? 'manual' : 'loop');
       const kfApplyMode = () => {
@@ -31797,11 +31880,24 @@ function validateBlendSum(blends, label) {
       wrap.querySelector('#kf-cancel')?.addEventListener('click', () => wrap.querySelector('#kf-close').click());
       // hotfix419: 침수 · 편직료는 1,234 로 보인다 (저장은 숫자)
       wrap.querySelectorAll('.kf-comma').forEach(el => el.addEventListener('blur', () => { const x = kfNum(el.value); el.value = x == null ? '' : x.toLocaleString('ko-KR'); }));
-      wrap.querySelectorAll('.kf-tab').forEach(b => b.addEventListener('click', () => { if (!askLeave()) return; V = b.dataset.v; paint(); }));
+      // hotfix422g: 공장 하나 고르기 — 이미 값이 있는 공장이면 그 줄을 보이고, 없으면 지금 값을 새 공장 줄로 옮긴다 (옛 줄은 [저장] 때 지움). 품목명 뒤에 (공장)을 붙인다
+      wrap.querySelector('#kf-fac')?.addEventListener('change', ev => {
+        const v = String(ev.target.value || '').trim(); if (!v || v === V) return;
+        if (V && wrap.querySelector('#kf-inch')) stash(); else readBasics();
+        if (!K[v]) {
+          const base = K[V] || null;
+          K[v] = { inch: base ? base.inch : null, needles: base ? base.needles : null, knit_loss: base ? base.knit_loss : null, knit_fee: base ? base.knit_fee : null, memo: base ? (base.memo || '') : '', machine: '', color: '',
+            loops: base ? JSON.parse(JSON.stringify(base.loops || {})) : {}, pcts: base ? JSON.parse(JSON.stringify(base.pcts || {})) : {}, plys: base ? JSON.parse(JSON.stringify(base.plys || {})) : {}, blend_mode: base ? (base.blend_mode || 'loop') : 'loop', _new: true };
+          if (base && base._new) delete K[V]; else if (V && base) dropOnSave.add(V);
+          touched = true;
+        }
+        pend.name = kfAutoItemName(pend.name || sp.name, v);
+        V = v; paint();
+      });
       wrap.querySelectorAll('.kf-fdel').forEach(b => b.addEventListener('click', async () => {
         const v = b.dataset.v;
         if (K[v] && K[v]._new) { delete K[v]; if (V === v) V = Object.keys(K)[0] || ''; paint(); return; }
-        if (!confirm('[' + v + '] 공장 줄을 이 품목에서 뺍니다.\n다른 공장 줄과 다른 품목은 그대로입니다. 이력에는 남습니다.\n\n지울까요?')) return;
+        if (!confirm('[' + v + '] 공장의 편직 값(인치 · 침수 · 로스 · 편직료 · 루프장)을 지웁니다.\n품목과 다른 품목은 그대로입니다. 이력에는 남습니다.\n\n지울까요?')) return;
         const ok = await deleteKnitFeeRow(key, v);
         if (!ok) return;
         delete K[v]; if (V === v) V = Object.keys(K)[0] || '';
@@ -31829,14 +31925,14 @@ function validateBlendSum(blends, label) {
         if (!yarnEntryByName(nm)) { toast(`"${nm}" 은(는) 원사 설정에 없는 사종입니다`, 'warning'); return; }
         const real = yarnEntryByName(nm).name;
         if (yarns.includes(real)) { toast(`"${real}" 은(는) 이미 있습니다`, 'info'); return; }
-        const lp = String(wrap.querySelector('#kf-newyarn-loop')?.value || '').trim(), pc = String(wrap.querySelector('#kf-newyarn-pct')?.value || '').trim();
+        const lp = String(wrap.querySelector('#kf-newyarn-loop')?.value || '').trim(), pc = String(wrap.querySelector('#kf-newyarn-pct')?.value || '').trim(), py = String(wrap.querySelector('#kf-newyarn-ply')?.value || '').trim();
         stash(); yarns.push(real); touched = true;
-        K[V].loops[real] = lp; K[V].pcts[real] = pc;
+        K[V].loops[real] = lp; K[V].pcts[real] = pc; if (!K[V].plys) K[V].plys = {}; K[V].plys[real] = py;
         paint();
-        wrap.querySelector('#kf-newyarn')?.focus();
+        // hotfix422g: 넣은 뒤에는 구분 · 사종 목록 상자를 열지 않는다 (다시 그려서 칸은 비어 있다)
       };
       wrap.querySelector('#kf-newyarn-add')?.addEventListener('click', addNewYarn);
-      ['#kf-newyarn', '#kf-newyarn-loop', '#kf-newyarn-pct'].forEach(q => wrap.querySelector(q)?.addEventListener('keydown', ev => { if (ev.key === 'Enter') { ev.preventDefault(); addNewYarn(); } }));
+      ['#kf-newyarn', '#kf-newyarn-loop', '#kf-newyarn-pct', '#kf-newyarn-ply'].forEach(q => wrap.querySelector(q)?.addEventListener('keydown', ev => { if (ev.key === 'Enter') { ev.preventDefault(); addNewYarn(); } }));
       wrap.querySelector('#kf-newfac').addEventListener('change', ev => {
         const v = String(ev.target.value || '').trim(); if (!v) return;
         if (!askLeave()) { ev.target.value = ''; return; }
@@ -31867,9 +31963,18 @@ function validateBlendSum(blends, label) {
         // hotfix421: 저장 전에 한 번 묻는다 (대표 확정)
         if (!confirm('[' + V + '] 편직 값을 저장하시겠습니까?')) return;
         const btn = wrap.querySelector('#kf-save'); btn.disabled = true; btn.textContent = '저장 중...';
-        const ok = await saveKnitFeeRow(key, V, collect(), { yarnNames: yarns });
+        // hotfix422g: 생지 기본(품목명 · 구분 · 조직)이 바뀌었으면 먼저 담는다 — 실패(같은 이름 등)하면 편직 값도 저장하지 않는다
+        if (basicsChanged()) {
+          const okB = await saveSpecBasics(key, { name: pend.name, gubun: pend.gubun, cat: pend.cat });
+          if (!okB) { btn.disabled = false; btn.textContent = '저장'; return; }
+          const s2 = getFabricSpecs().find(x => specFid(x) === key); if (s2) Object.assign(sp, s2);
+          pend = { name: String(sp.name || ''), gubun: String(sp.gubun || GUBUN_BODY), cat: String(sp.cat || '') };
+        }
+        let ok = await saveKnitFeeRow(key, V, collect(), { yarnNames: yarns });
+        // hotfix422g: 공장을 옮겼으면 옛 공장 줄 · 옛 카드의 "(공장 미지정)" 줄을 지운다 (공장은 하나)
+        if (ok) { const gone = Array.from(new Set(Array.from(dropOnSave).concat(Object.keys(K).filter(v => v !== V && (!v || v === KF_NO_FAC))))); for (const v of gone) { if (v === V) continue; try { await deleteKnitFeeRow(key, v); } catch (e) { console.warn('[kf drop]', e.message); } } dropOnSave.clear(); }
         btn.disabled = false; btn.textContent = '저장';
-        if (ok) { try { await syncCardYarnsFromKnit(key, yarns); } catch (e) { console.warn('[card yarn sync]', e.message); } }   // hotfix399d: 카드 [원사] 반영 (주인 = 편직 설정)
+        if (ok) { try { await syncCardYarnsFromKnit(key, yarns, (knitFeeOf(key)[V] || {}).plys || {}); } catch (e) { console.warn('[card yarn sync]', e.message); } }   // hotfix399d: 카드 [원사] 반영 (주인 = 편직 설정) · hotfix422g: 합사도
         if (ok) { try { await syncSpecBlendFromKnit(key); } catch (e) { console.warn('[blend sync]', e.message); } }   // hotfix399b: 품목 혼용률 자동
         // hotfix421: [저장]하면 창이 닫히고 적던 값이 남지 않는다 (대표 확정 — 품목 디테일 수정 창과 같게). 담아 둔 것도 지운다
         if (ok) {
@@ -31884,13 +31989,14 @@ function validateBlendSum(blends, label) {
     paint();
     // hotfix420: 임시저장 틀 — 공장 줄 값(인치 · 침수 · 로스 · 편직료 · 컬러 · 비고 · 방식 · 사종별 루프장/%)을 자동 보관, 다시 열면 되살릴지 묻는다
     kfH = draftBind({ key: draftKey('knitFee', key),
-      getData: () => { const c = collectNow ? collectNow() : null; return c ? Object.assign({ V, yarns: yarns.slice() }, c) : null; },
+      getData: () => { const c = collectNow ? collectNow() : null; return c ? Object.assign({ V, yarns: yarns.slice(), basics: Object.assign({}, readBasics()) }, c) : null; },
       setData: (d) => {
         if (!d || !d.V) return;
         V = d.V;
-        if (!K[V]) K[V] = { _new: true, inch: null, needles: null, knit_loss: null, knit_fee: null, loops: {}, pcts: {}, blend_mode: 'loop', memo: '', color: '' };
+        if (!K[V]) K[V] = { _new: true, inch: null, needles: null, knit_loss: null, knit_fee: null, loops: {}, pcts: {}, plys: {}, blend_mode: 'loop', memo: '', color: '' };
         Object.assign(K[V], { inch: d.inch, needles: d.needles, knit_loss: d.knit_loss, knit_fee: d.knit_fee, memo: d.memo, color: d.color, machine: d.machine, blend_mode: d.blend_mode,
-          loops: Object.assign({}, K[V].loops || {}, d.loops || {}), pcts: Object.assign({}, K[V].pcts || {}, d.pcts || {}) });
+          loops: Object.assign({}, K[V].loops || {}, d.loops || {}), pcts: Object.assign({}, K[V].pcts || {}, d.pcts || {}), plys: Object.assign({}, K[V].plys || {}, d.plys || {}) });
+        if (d.basics) pend = Object.assign({}, pend, d.basics);
         (Array.isArray(d.yarns) ? d.yarns : []).forEach(y => { if (y && !yarns.includes(y)) yarns.push(y); });
         touched = true; paint();
       },
@@ -32032,9 +32138,26 @@ function validateBlendSum(blends, label) {
       if (ok) toast(nm + ' 을(를) 지웠습니다', 'success');
       renderDashboard();
     }));
-    document.querySelectorAll('#dash-body .kf-edit').forEach(b => b.addEventListener('click', () => openKnitFeePopup(b.dataset.kfFid, b.dataset.kfV, null, () => renderDashboard())));
+    // hotfix422g: [수정] = 편직 설정 창(인치 · 침수 · 루프장 · 편직료) / 품목 디테일 수정 창(폭 · 중량 · 혼용율 · 주의사항) 중 고른다
+    document.querySelectorAll('#dash-body .kf-edit').forEach(b => b.addEventListener('click', async () => {
+      const sp = getFabricSpecs().find(x => specFid(x) === b.dataset.kfFid);
+      const r = window.__kfEditAuto || await askThree('[' + (sp ? sp.name : '') + '] 무엇을 고칠까요?', '편직 설정 — 편직공장 · 기계인치 · 침수 · 로스 · 편직료 · 원사 · 루프장 · 합사\n디테일 설정 — 기준 폭 · 제작 g/y · 혼용율 · 짝 리프 · 주의사항', ['편직 설정', '디테일 설정', '그만두기']);
+      if (r === 'keep') openKnitFeePopup(b.dataset.kfFid, b.dataset.kfV, null, () => renderDashboard());
+      else if (r === 'drop') { state.__fsOpenFid = b.dataset.kfFid; if (typeof window.hwGoView === 'function') window.hwGoView('fabricSpecs'); else { state.dashView = 'fabricSpecs'; renderDashboard(); } }
+    }));
+    // hotfix422g: [판매 종료] / [판매 재개] — 품목 스펙의 판매 여부만 바꾼다 (자료는 그대로)
+    document.querySelectorAll('#dash-body .kf-stop').forEach(b => b.addEventListener('click', async () => {
+      if (!canEditView('fabricSpecs')) { toast('품목을 고치는 권한이 없습니다', 'error'); return; }
+      const specs = JSON.parse(JSON.stringify(getFabricSpecs())); const it = specs.find(x => specFid(x) === b.dataset.kfFid); if (!it) return;
+      const on = it.active !== false;
+      if (!confirm('[' + it.name + '] 을(를) ' + (on ? '판매 종료로 돌릴까요? (의뢰서 목록에서 빠지고, [판매 종료도 보기]에서 다시 켤 수 있습니다)' : '다시 판매 중으로 켤까요?'))) return;
+      it.active = !on; it.updated_at = todayYMD();
+      const ok = await saveFabricSpecs(specs, state.fabricGubuns || []);
+      if (ok) { toast('[' + it.name + '] ' + (on ? '판매 종료' : '판매 재개'), 'success'); if (on && !state.kfClosed) toast('판매 종료 품목은 [판매 종료도 보기]를 켜면 보입니다', 'info'); }
+      renderDashboard();
+    }));
     document.querySelectorAll('#dash-body .kf-del').forEach(b => b.addEventListener('click', async () => {
-      if (!confirm('[' + b.dataset.kfV + '] 줄을 이 품목에서 뺍니다.\n다른 공장 줄과 다른 품목은 그대로입니다. 이력에는 남습니다.\n\n지울까요?')) return;
+      if (!confirm('[' + b.dataset.kfV + '] 공장의 편직 값(인치 · 침수 · 로스 · 편직료 · 루프장)을 지웁니다.\n품목과 다른 품목은 그대로입니다. 이력에는 남습니다.\n\n지울까요?')) return;
       const ok = await deleteKnitFeeRow(b.dataset.kfFid, b.dataset.kfV);
       if (ok) toast('지웠습니다', 'success');
       renderDashboard();
@@ -34055,8 +34178,8 @@ function validateBlendSum(blends, label) {
         <span class="spacer"></span><span class="note" id="loopFrom"></span></div>
       <div style="overflow-x:auto;">
       <table class="t"><thead><tr>
-        <th style="width:112px;">종류</th><th style="min-width:150px;">사종</th>
-        <th style="min-width:140px;">원사업체</th>
+        <th style="width:124px;">종류</th><th style="min-width:340px;">사종</th><!-- hotfix422g: 사종 · 업체 열 넓힘 — 글자가 잘리지 않게 -->
+        <th style="min-width:200px;">원사업체</th>
         <th style="width:78px;">굵기</th><th style="width:70px;">단위</th>
         <th style="width:64px;">합사</th><th style="width:86px;">실굵기</th>
         <th class="colLoop" style="width:82px;">루프장</th><th style="width:86px;">사용량 %</th>
@@ -34572,6 +34695,7 @@ function validateBlendSum(blends, label) {
           const c = getFabricCost(fid) || {};
           const knits = ccKnitsOf(knitFeeHas(fid) ? Object.assign({}, c, { knits: knitFeeOf(fid) }) : c);   // hotfix386: 마스터 먼저
           const knitV = (String(c.knitter || '').trim() && knits[String(c.knitter).trim()]) ? String(c.knitter).trim() : (Object.keys(knits)[0] || '');
+          const kPly = ((knitFeeOf(fid) || {})[knitV] || {}).plys || {};   // hotfix422g: 합사는 편직 설정(마스터) 값이 먼저
           const rawY = (Array.isArray(c.yarns) ? c.yarns : []).filter(y => y && y.name);
           if (knitV) rawY.forEach(y => {
             if (y.loop != null && y.loop !== '' && knits[knitV].loops[y.name] === undefined) knits[knitV].loops[y.name] = y.loop;
@@ -34583,7 +34707,7 @@ function validateBlendSum(blends, label) {
             return {
               kindK: CC_KIND_TO_MOCK[kind] || '기타', name: String(y.name), vendor: String(y.vendor || ''),
               thick: (y.size == null ? '' : y.size), tunit: (y.unit === '수' ? '수' : 'D'),
-              ply: (function () { const v = Math.floor(parseFloat(y.ply)); return (v >= 1 ? v : 1); })(),
+              ply: (function () { if (kPly[y.name] != null) return kfPlyNum(kPly[y.name]); const v = Math.floor(parseFloat(y.ply)); return (v >= 1 ? v : 1); })(),
               price: (e.price == null || isNaN(e.price)) ? '' : e.price,
               ship: isNaN(e.ship) ? yarnShipOf({ kind: kind }) : e.ship,
               loss: isNaN(e.loss) ? yarnLossOf({ kind: kind }) : e.loss
@@ -35141,11 +35265,11 @@ function paintYarnRows(){
         list.forEach(x=>{ if(x.base&&!seen.has(bk(x.base))){seen.add(bk(x.base)); bases.push(x.base);} });
         bases.sort((a,b)=>ccNameSort({name:a},{name:b}));
         const inB=bases.some(b=>bk(b)===bk(base));
-        let h=`<div style="display:flex;gap:4px;"><select class="y" data-k="base" title="사종" style="flex:1.4;min-width:0;">`+(list.length?`<option value="">— 사종 —</option>`:`<option value="">${y.kindK} 로 등록된 사종이 없습니다</option>`)
+        let h=`<div style="display:flex;gap:4px;"><select class="y" data-k="base" title="사종" style="flex:1.2;min-width:150px;">`+(list.length?`<option value="">— 사종 —</option>`:`<option value="">${y.kindK} 로 등록된 사종이 없습니다</option>`)
           +bases.map(b=>`<option value="${b}" ${bk(b)===bk(base)?'selected':''}>${b}</option>`).join('')+(base&&!inB?`<option selected>${base}</option>`:'')+`</select>`;
         const rows=list.filter(x=>bk(x.base)===bk(base)).sort((a,b)=>(a.color==='L/W'?0:1)-(b.color==='L/W'?0:1)||ccNameSort({name:a.color+a.brand},{name:b.color+b.brand}));
         const lab=x=>x.color+(x.brand?' ('+x.brand+')':'');
-        h+=`<select class="y" data-k="name" title="컬러 (브랜드)" style="flex:1;min-width:0;" ${rows.length?'':'disabled'}>`+(rows.length>1?`<option value="">— 컬러 —</option>`:(rows.length?'':`<option value="">—</option>`))
+        h+=`<select class="y" data-k="name" title="컬러 (브랜드)" style="flex:1;min-width:150px;" ${rows.length?'':'disabled'}>`+(rows.length>1?`<option value="">— 컬러 —</option>`:(rows.length?'':`<option value="">—</option>`))
           +rows.map(x=>`<option value="${x.name}" ${x.name===y.name?'selected':''}>${lab(x)}</option>`).join('')+(y.name&&!rows.some(x=>x.name===y.name)&&!ent?`<option selected>${y.name}</option>`:'')+`</select></div>`;
         return h;
       })()}</td>
@@ -37702,16 +37826,21 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
       const c = getFabricCost(editingCostFid) || {};
       // hotfix288: 공장별 사양 밑그림 만들기 — 아직 안 나눈 품목은 옛 칸을 그 편직처 사양으로 읽는다
       fcDraft = {};
-      const K = (c.knits && typeof c.knits === 'object') ? c.knits : null;
+      // hotfix422g: 편직 값의 본자리는 [생지 및 편직 설정](knit_fee). 마스터가 있으면 그 값을 보이고, 없을 때만 옛 카드 칸(knits)을 읽는다
+      const KM = knitFeeHas(editingCostFid) ? knitFeeOf(editingCostFid) : null;
+      const K = (KM && Object.keys(KM).length) ? KM : ((c.knits && typeof c.knits === 'object') ? c.knits : null);
       if (K && Object.keys(K).length) {
-        Object.keys(K).forEach(v => { fcDraft[v] = JSON.parse(JSON.stringify(K[v] || {})); });
+        Object.keys(K).forEach(v => { if (!v || v === KF_NO_FAC) return; const k = JSON.parse(JSON.stringify(K[v] || {})); if (KM) { k.org = k.org || ''; k.blend = k.blend || ''; k.machine = ''; } fcDraft[v] = k; });
+        if (!Object.keys(fcDraft).length) Object.keys(K).forEach(v => { fcDraft[v] = JSON.parse(JSON.stringify(K[v] || {})); });
       } else if (String(c.knitter || '').trim()) {
         fcDraft[String(c.knitter).trim()] = {
           machine: c.machine || '', inch: c.inch, needles: c.needles,
           make_gy: c.make_gy, knit_loss: c.knit_loss, knit_fee: c.knit_fee, blend: ''
         };
       }
-      fcCurVendor = Object.keys(fcDraft)[0] || '';
+      fcCurVendor = (String(c.knitter || '').trim() && fcDraft[String(c.knitter).trim()]) ? String(c.knitter).trim() : (Object.keys(fcDraft)[0] || '');
+      // hotfix422g: 제작중량은 품목 스펙(make_gy) 한 곳 — 스펙에 있으면 그 값이 모든 공장 칸에 보인다
+      { const mg = parseFloat(String((s && s.make_gy) == null ? '' : s.make_gy).replace(/,/g, '')); if (isFinite(mg) && mg > 0) Object.keys(fcDraft).forEach(v => { fcDraft[v].make_gy = mg; }); }
       // hotfix297: 옛 자료는 조직 칸이 없다 — 기계 이름 앞머리가 조직 목록에 있으면 그것으로 잡아 준다
       Object.keys(fcDraft).forEach(v => {
         const k = fcDraft[v] || {};
@@ -43189,6 +43318,12 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
         if (!canEditView('fabricSpecs')) { toast('품목을 고치는 권한이 없습니다 — [권한 설정]의 [고치기] 칸에서 받을 수 있습니다', 'error'); return; }
         openModal(parseInt(b.dataset.idx, 10));
       }));
+      // hotfix422g: [생지 및 편직 설정 › 수정 › 디테일 설정]에서 넘어오면 그 품목의 수정 창을 바로 연다
+      if (state.__fsOpenFid) {
+        const want = String(state.__fsOpenFid); state.__fsOpenFid = '';
+        const idx = getFabricSpecs().findIndex(x => specFid(x) === want);
+        if (idx >= 0 && canEditView('fabricSpecs')) setTimeout(() => { try { openModal(idx); } catch (e) { console.warn('[fs open]', e.message); } }, 30);
+      }
       document.getElementById('fs-modal-close')?.addEventListener('click', closeModalAsk);
       document.getElementById('fs-f-cat-add')?.addEventListener('click', addKnitOrgFromPrompt);
       document.getElementById('fs-modal-cancel')?.addEventListener('click', closeModalAsk);
@@ -44652,13 +44787,27 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
         const gy = raw === '' ? null : parseFloat(raw);
         const specs = JSON.parse(JSON.stringify(getFabricSpecs()));
         const i = specs.findIndex(x => specFid(x) === editingCostFid);
+        // hotfix422g: 제작중량도 품목 스펙(make_gy)에 — 원가 계산기 · 품목 디테일 수정 창이 같은 값을 쓴다
+        const rawM = (document.getElementById('fs-c-makegy')?.value || '').trim();
+        const mgy = rawM === '' ? null : parseFloat(rawM);
         if (i >= 0) {
           const now = (specs[i].gy == null || specs[i].gy === '') ? null : parseFloat(specs[i].gy);
-          if ((gy == null ? null : gy) !== now) {
-            specs[i].gy = gy;
-            await saveFabricSpecs(specs);
-          }
+          const nowM = (specs[i].make_gy == null || specs[i].make_gy === '') ? null : parseFloat(String(specs[i].make_gy).replace(/,/g, ''));
+          let ch = false;
+          if ((gy == null ? null : gy) !== now) { specs[i].gy = gy; ch = true; }
+          if (mgy != null && isFinite(mgy) && mgy > 0 && mgy !== nowM) { specs[i].make_gy = mgy; ch = true; }
+          if (ch) { specs[i].updated_at = todayYMD(); await saveFabricSpecs(specs); }
         }
+        // hotfix422g: 고른 공장의 편직 값(인치 · 침수 · 로스 · 편직료 · 루프장)을 편직 설정 마스터에도 쓴다 — 마지막에 저장한 값이 어디서나 같다
+        try {
+          const V = String(cost.knitter || '').trim(); const pk = (cost.knits || {})[V];
+          if (V && pk) {
+            const cur = (knitFeeOf(editingCostFid) || {})[V] || {};
+            const row = Object.assign({}, cur, { inch: pk.inch, needles: pk.needles, knit_loss: pk.knit_loss, knit_fee: pk.knit_fee, memo: cur.memo || '', machine: cur.machine || '', color: cur.color || '',
+              loops: Object.assign({}, cur.loops || {}, pk.loops || {}), pcts: cur.pcts || {}, plys: cur.plys || {}, blend_mode: (cost.blend_mode === 'manual') ? 'manual' : (cur.blend_mode || 'loop') });
+            await saveKnitFeeRow(editingCostFid, V, row, { quiet: true, yarnNames: (cost.yarns || []).map(y => y.name), tag: '원가 카드' });
+          }
+        } catch (e) { console.warn('[card → knit_fee]', e.message); }
         return true;
       };
       document.getElementById('fc-modal-save')?.addEventListener('click', async () => {
@@ -44906,7 +45055,8 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
             loss: (prev.loss == null ? null : prev.loss),
             last_vendor: prev.last_vendor || '',
             ...(String(prev.yid || '').trim() ? { yid: String(prev.yid).trim() } : {}),   // hotfix391: 코드는 이어간다
-            ...(Array.isArray(prev.aliases) && prev.aliases.length ? { aliases: prev.aliases.slice() } : {}),
+            // hotfix422g: 이름을 바꾸면 옛 이름을 다른 표기에 남긴다 (옛 의뢰서 글자가 이 사종으로 읽힌다)
+            ...((() => { const al = (Array.isArray(prev.aliases) ? prev.aliases : []).map(a => String(a || '').trim()).filter(Boolean); const pn = String(prev.name || '').trim(); if (pn && pn !== name && !al.some(a => a.toLowerCase() === pn.toLowerCase())) al.push(pn); return al.length ? { aliases: Array.from(new Set(al.filter(a => a.toLowerCase() !== name.toLowerCase()))) } : {}; })()),
             comp: comp, comp_auto: false, updated_at: todayYMD(), updated_by: state.user?.email || ''
           };
           list = P.yarns; key = priceKeyYarn(name);
@@ -44937,10 +45087,12 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
           list = P.bundles; key = priceKeyBundle(vendor, procs);
         }
         const prevPrice = (cpIdx >= 0 && list[cpIdx]) ? parseFloat(list[cpIdx].price) : null;
+        const prevYarnName = (cpType === 'yarn' && cpIdx >= 0 && list[cpIdx]) ? String(list[cpIdx].name || '').trim() : '';   // hotfix422g
         if (cpIdx >= 0) list[cpIdx] = entry; else list.push(entry);
         const adds = {};
         if (!setupOnly && (prevPrice == null || prevPrice !== price)) adds[key] = { d: todayYMD(), p: price };
         const ok = await saveCostPrices(P, adds);
+        if (ok && cpType === 'yarn' && prevYarnName && prevYarnName !== String(entry.name || '').trim()) { try { await yarnRenameEverywhere(prevYarnName, String(entry.name).trim()); } catch (e) { toast('사종 이름 일괄 반영 실패: ' + e.message, 'error'); } }   // hotfix422g
         if (ok) { toast('저장했습니다', 'success'); closeCp(); renderDashboard(); }
       });
 
@@ -47719,7 +47871,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix422f';
+  const VERSION = 'v2.53 hotfix422g';
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
