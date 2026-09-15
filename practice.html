@@ -8118,7 +8118,8 @@ function mountProcPicker(host, opts) {
   if (!host) return null;
   const o = opts || {};
   host.__procs = Array.isArray(host.__procs) ? host.__procs : [];
-  host.__part = host.__part || PROC_PARTS[0];
+  const partsOf = () => { const p = (typeof o.parts === 'function') ? o.parts() : o.parts; return (Array.isArray(p) && p.length) ? p.filter(x => PROC_PARTS.includes(x)) : PROC_PARTS.slice(); };   // hotfix424: 보일 대분류만(업체가 하는 단계)
+  host.__part = host.__part || partsOf()[0];
   const textEl = () => o.textId ? document.getElementById(o.textId) : null;
   const noteEl = () => o.noteId ? document.getElementById(o.noteId) : null;
   const vendorFor = part => { const v = (typeof o.vendorOf === 'function') ? (o.vendorOf() || {}) : {}; return part === '후가공' ? (v.post || v.mid || '') : part === '가공' ? (v.mid || v.post || '') : (v.pre || ''); };   // hotfix422i: mid = 가공소
@@ -8138,9 +8139,10 @@ function mountProcPicker(host, opts) {
     host.innerHTML = `<div class="pp-grid">
         <div class="pp-parts pp-parts-v"><div class="pp-step">대분류</div>${(function () {
           // hotfix423: 업체가 단계마다 다르면(염색소 대흥 · 가공소 송원 …) 대분류를 업체별 묶음으로 나눠 보인다 — 묶음 머리에 업체명. 같은 곳이면 묶음 하나
-          const vOf = p => String(vendorFor(p) || '').trim(); const vs = PROC_PARTS.map(vOf); const distinct = Array.from(new Set(vs.filter(Boolean)));
+          const PARTS = partsOf(); if (!PARTS.includes(host.__part)) host.__part = PARTS[0];
+          const vOf = p => String(vendorFor(p) || '').trim(); const vs = PARTS.map(vOf); const distinct = Array.from(new Set(vs.filter(Boolean)));
           let out = ''; let prev = null;
-          PROC_PARTS.forEach((p, i) => { const v = vs[i]; if (distinct.length > 1 && v !== prev) { out += `<div class="pp-vgroup" title="이 업체에서 하는 단계">${escapeHtml(v || '업체 없음')}</div>`; prev = v; }
+          PARTS.forEach((p, i) => { const v = vs[i]; if (distinct.length > 1 && v !== prev) { out += `<div class="pp-vgroup" title="이 업체에서 하는 단계">${escapeHtml(v || '업체 없음')}</div>`; prev = v; }
             const n = host.__procs.filter(x => procPartOfName(x) === p).length; out += `<button type="button" class="pp-part${p === host.__part ? ' on' : ''}" data-part="${escapeHtml(p)}" style="--pc:${PROC_PART_COLOR[p]};">${escapeHtml(p)}${n ? `<span class="n">${n}</span>` : ''}</button>`; });
           return out; })()}</div>
         <div class="pp-right"><div class="pp-step">소분류 — <b style="color:${PROC_PART_COLOR[host.__part] || '#334155'};">${escapeHtml(host.__part)}</b> <span class="pp-hint" id="pp-hint"></span></div><div class="pp-names"></div></div>
@@ -8199,7 +8201,10 @@ function attachPickList(inp, itemsFn, onPick) {
   if (!inp || inp.dataset.pickBound) return; inp.dataset.pickBound = '1';
   let box = null;
   // hotfix422d: 내 상자만 닫는다 (다른 칸의 목록 상자를 지우지 않게)
-  const close = () => { if (box && box.isConnected) box.remove(); box = null; };
+  // hotfix424: 화면(폼)이 스크롤되면 목록 상자가 제자리에 남아 엉뚱한 곳에 떠 있던 것 — 스크롤 · 창 크기 바뀜 때 다시 자리 잡고, 칸이 안 보이면 닫는다
+  const place = () => { if (!box || !box.isConnected) return; const r = inp.getBoundingClientRect(); if (r.bottom < 0 || r.top > window.innerHeight) { close(); return; } box.style.left = r.left + 'px'; box.style.top = (r.bottom + 2) + 'px'; box.style.minWidth = Math.max(180, r.width) + 'px'; };
+  const onScroll = () => place();
+  const close = () => { if (box && box.isConnected) box.remove(); box = null; document.removeEventListener('scroll', onScroll, true); window.removeEventListener('resize', onScroll); };
   const open = () => {
     // hotfix422d: 목록에서 고른 직후의 input 이벤트로 다시 열리지 않게
     if (inp.__pickSkip) { inp.__pickSkip = false; return; }
@@ -8210,7 +8215,8 @@ function attachPickList(inp, itemsFn, onPick) {
     const hits = items.filter(t => !q || vendorKey(t).includes(q)).slice(0, 60);
     if (!hits.length) { close(); return; }
     if (!box || !box.isConnected) { close(); box = document.createElement('div'); box.className = 'pick-list'; box.style.cssText = 'position:fixed;z-index:9999;background:#fff;border:1px solid #cbd5e1;border-radius:7px;box-shadow:0 10px 30px rgba(15,23,42,.18);max-height:260px;overflow:auto;font-size:13px;'; document.body.appendChild(box); }
-    const r = inp.getBoundingClientRect(); box.style.left = r.left + 'px'; box.style.top = (r.bottom + 2) + 'px'; box.style.minWidth = Math.max(180, r.width) + 'px';
+    const r = inp.getBoundingClientRect(); box.style.left = r.left + 'px'; box.style.top = (r.bottom + 2) + 'px'; box.style.minWidth = Math.max(180, r.width) + 'px'; box.style.maxHeight = '260px'; box.style.overflowY = 'auto';
+    document.removeEventListener('scroll', onScroll, true); document.addEventListener('scroll', onScroll, true); window.removeEventListener('resize', onScroll); window.addEventListener('resize', onScroll);
     box.innerHTML = hits.map(t => `<div class="pick-item" style="padding:6px 10px;cursor:pointer;white-space:nowrap;">${escapeHtml(t)}</div>`).join('');
     box.querySelectorAll('.pick-item').forEach(d => d.addEventListener('mousedown', ev => { ev.preventDefault(); inp.value = d.textContent; close(); inp.__pickSkip = true; inp.dispatchEvent(new Event('input', { bubbles: true })); inp.__pickSkip = false; inp.dispatchEvent(new Event('change', { bubbles: true })); if (typeof onPick === 'function') onPick(d.textContent); }));
   };
@@ -15961,7 +15967,11 @@ function specGreigeColors(fid) {
     const dye = String(document.getElementById('f_r_dye')?.value || '').trim(); const dk = vendorKey(dye);
     if (dk) { let best = null; (state.allWorkOrders || []).forEach(wo => { if (!wo || wo.deleted || wo.type !== '염색가공') return; const r = (wo.recipients && wo.recipients.dyeing) || ''; if (vendorKey(r) !== dk) return; const p = wo[part] || {}; const nm = greigeSplit(String(p.item || '')).name; if (!itemHasName(spec, nm)) return; if (!(Array.isArray(p.spec_procs) && p.spec_procs.length) && !String(p.spec_note || '').trim()) return; const at = String(wo.date || '') + '|' + String(wo.wo_number || ''); if (!best || at > best.at) best = { at, procs: p.spec_procs || [], note: p.spec_note || '' }; });
       if (best) return { procs: best.procs, note: best.note, src: dye + ' 마지막 의뢰서' };
-      const bv = spec.std_by_vendor && spec.std_by_vendor[dye]; if (bv && ((bv.procs || []).length || String(bv.note || '').trim())) return { procs: bv.procs || [], note: bv.note || '', src: dye + ' 표준' }; }
+      // hotfix424: 표준은 염색처 · 가공처 · 후가공처 세 업체의 표준 사양을 합친다(품목 디테일에서 업체마다 따로 고른 것). 특이 사항은 · 로 잇는다
+      const procV = String(document.getElementById('f_r_proc')?.value || '').trim(), postV = String(document.getElementById('f_r_post')?.value || '').trim();
+      const keys = Array.from(new Set([dye, procV, postV].filter(Boolean))).filter(k => spec.std_by_vendor && spec.std_by_vendor[k]);
+      const merged = []; const notes = []; keys.forEach(k => { const bv = spec.std_by_vendor[k] || {}; (bv.procs || []).forEach(p => { if (!merged.includes(p)) merged.push(p); }); if (String(bv.note || '').trim()) notes.push(String(bv.note).trim()); });
+      if (merged.length || notes.length) return { procs: merged, note: notes.join(' · '), src: keys.join(' · ') + ' 표준' }; }
     const std = Array.isArray(spec.std_procs) ? spec.std_procs : []; if (std.length || String(spec.std_note || '').trim()) return { procs: std, note: spec.std_note || '', src: '공통 표준' };
     return null;
   }
@@ -15979,6 +15989,8 @@ function specGreigeColors(fid) {
   function autoFillFinishVendorsFromSpec(spec) {
     if (!spec) return false; let did = [];
     const want = { dye: String(spec.dye_vendor || '').trim(), proc: String(spec.fin_vendor || '').trim(), post: String(spec.post_vendor || '').trim() };
+    // hotfix424: 몸판에 없는 곳은 짝 리프 품목의 염색소 · 가공소 · 후가공소로 (리프도 이 의뢰서로 같이 나가므로)
+    try { const rn = String(spec.pair_rib || '').trim(); const rib = rn ? (state.fabricSpecs || []).find(x => x && x.gubun === GUBUN_RIB && String(x.name || '').trim() === rn) : null; if (rib) { want.dye = want.dye || String(rib.dye_vendor || '').trim(); want.proc = want.proc || String(rib.fin_vendor || '').trim(); want.post = want.post || String(rib.post_vendor || '').trim(); } } catch (_) {}
     // 품목에 가공소 · 후가공소가 있으면 그 단계 칸(가공 · 후가공)을 켜서 받는 곳 칸을 만든다
     let reRender = false;
     [['p_proc', want.proc], ['p_post', want.post]].forEach(([id, v]) => { const cb = document.getElementById(id); if (cb && v && !cb.checked) { cb.checked = true; reRender = true; } });
@@ -28273,8 +28285,21 @@ function validateBlendSum(blends, label) {
     { key: 'dyeing',      label: '염색처',        text: wo => (wo.recipients || {}).dyeing,     vid: wo => (wo.recipients_vid || {}).dyeing,     path: 'recipients_vid.dyeing',     types: ['염색가공'] },
     { key: 'processing',  label: '가공처',        text: wo => (wo.recipients || {}).processing, vid: wo => (wo.recipients_vid || {}).processing, path: 'recipients_vid.processing', types: ['염색가공'] },
     { key: 'post',        label: '후가공처',      text: wo => (wo.recipients || {}).post,       vid: wo => (wo.recipients_vid || {}).post,       path: 'recipients_vid.post',       types: ['염색가공'] },
-    { key: 'final',       label: '최종 도착지',   text: wo => wo.final_destination,            vid: wo => wo.final_destination_vid,            path: 'final_destination_vid',     types: ['염색가공'] }
+    { key: 'final',       label: '최종 도착지',   text: wo => wo.final_destination,            vid: wo => wo.final_destination_vid,            path: 'final_destination_vid',     types: ['염색가공', '편직', '원사', '생지출고', '나염', 'BT'] }   // hotfix424: 편직 의뢰서의 최종납품처(창고)도 — 생지가 있는 곳
   ];
+  // hotfix424: 코드 칸이 없는 "글자만" 자리 — 다른 표기(aliases)로 잇는다. 이동 받은 곳(이동 줄 dest) · 편직 설정 열쇠 · 편직 사종 비율 사본 열쇠 · 원가 카드 편직공장 · 품목 디테일 염색소 · 가공소 · 후가공소 · 생지 원장 · 원사 원장
+  function vcmTextOnlySources() {
+    const out = [];   // { text, label }
+    const push = (t, label) => { const s = String(t || '').trim(); if (s) out.push({ text: s, label }); };
+    (state.allWorkOrders || []).forEach(wo => { if (!wo || wo.deleted) return; (Array.isArray(wo.greige_shipments) ? wo.greige_shipments : []).forEach(x => { if (x && x.move && !x.voided && !x.void) push(x.dest, '이동 받은 곳'); }); });
+    const kf = (state.knitFee && typeof state.knitFee === 'object') ? state.knitFee : {}; Object.keys(kf).forEach(fid => Object.keys(kf[fid] || {}).forEach(v => { if (v && v !== KF_NO_FAC) push(v, '편직 설정 공장'); }));
+    const kb = (state.knitBlend && typeof state.knitBlend === 'object') ? state.knitBlend : {}; Object.keys(kb).forEach(fid => Object.keys(kb[fid] || {}).forEach(v => { if (v && v !== KF_NO_FAC) push(v, '편직 사종 비율 공장'); }));
+    const fc = (state.fabricCost && typeof state.fabricCost === 'object') ? state.fabricCost : {}; Object.keys(fc).forEach(fid => { const c = fc[fid] || {}; push(c.knitter, '원가 카드 편직공장'); });
+    (state.fabricSpecs || []).forEach(s => { if (!s) return; push(s.dye_vendor, '품목 염색소'); push(s.fin_vendor, '품목 가공소'); push(s.post_vendor, '품목 후가공소'); });
+    (Array.isArray(state.greigeLedger) ? state.greigeLedger : []).forEach(r => { if (r && !r.void) push(r.vendor, '생지 원장'); });
+    (Array.isArray(state.yarnLedger) ? state.yarnLedger : []).forEach(r => { if (r && !r.void) push(r.vendor, '원사 원장'); });
+    return out;
+  }
   function vcmDocs(list) { return (list || state.allWorkOrders || []).filter(wo => wo && !wo.deleted); }
   // 옛 글자 칸 지문 — 실행 전후가 같아야 한다 (글자를 건드리지 않았다는 증거)
   function vcmFingerprint(docs) {
@@ -28294,6 +28319,7 @@ function validateBlendSum(blends, label) {
       m.count++; m.fields[f.label] = (m.fields[f.label] || 0) + 1;
       if (f.vid(wo)) m.hasVid++;
     }));
+    try { vcmTextOnlySources().forEach(({ text, label }) => { const m = map[text] || (map[text] = { text, count: 0, fields: {}, hasVid: 0 }); m.count++; m.fields[label] = (m.fields[label] || 0) + 1; m.textOnly = (m.textOnly || 0) + 1; }); } catch (e) { console.warn('[vcm text-only]', e.message); }   // hotfix424
     const vs = state.vendors || [];
     Object.values(map).forEach(m => {
       const hits = vs.filter(v => v && vendorHasName(v, m.text));
@@ -28383,8 +28409,17 @@ function validateBlendSum(blends, label) {
       if (Object.keys(upd).length) plan.push({ id: wo.id, upd, n: Object.keys(upd).length });
     });
     const attached = plan.reduce((a, p) => a + p.n, 0);
-    if (!plan.length) { toast('붙일 코드가 없습니다 (전부 같거나 건너뜀)', 'warning'); return; }
-    if (!confirm(`의뢰서 ${plan.length}건 · 자리 ${attached}개에 코드를 붙입니다.\n글자는 그대로 두고 코드 칸만 옆에 붙입니다.\n\n실행할까요?`)) return;
+    // hotfix424: 고른 거래처의 대표명 · 다른 표기가 아닌 글자는 그 거래처의 다른 표기(aliases)로 등록한다 — 코드 칸이 없는 자리(편직 설정 열쇠 · 품목 염색소 · 원장 · 이동 받은 곳)도 이름으로 같은 곳으로 읽히게. 글자 · 문서는 안 건드림, 거래처 설정만 늘어남
+    const aliasAdd = [];   // [text, vid]
+    rows.forEach(m => { const vid = choice[m.text] || ''; if (!vid) return; const v = vendorByVid(vid); if (!v) return; if (!vendorHasName(v, m.text)) aliasAdd.push([m.text, vid]); });
+    if (!plan.length && !aliasAdd.length) { toast('붙일 코드도 새 다른 표기도 없습니다 (전부 같거나 건너뜀)', 'warning'); return; }
+    if (!confirm(`의뢰서 ${plan.length}건 · 자리 ${attached}개에 코드를 붙이고,\n다른 표기 ${aliasAdd.length}개를 거래처 설정에 등록합니다.\n글자 · 문서는 그대로 두고 코드 칸과 거래처의 다른 표기만 더합니다.\n\n실행할까요?`)) return;
+    if (aliasAdd.length) {
+      const list = (state.vendors || []).map(v => Object.assign({}, v));
+      aliasAdd.forEach(([t, vid]) => { const v = list.find(x => String(x.vid || '') === vid || (Array.isArray(x.merged_vids) && x.merged_vids.includes(vid))); if (v) v.aliases = Array.from(new Set((Array.isArray(v.aliases) ? v.aliases : []).concat([t]))); });
+      const okA = await saveVendors(list); if (!okA) { toast('다른 표기 등록에 실패해 멈춥니다', 'error'); return; }
+      if (!plan.length) { toast(`다른 표기 ${aliasAdd.length}개 등록 (붙일 코드 없음)`, 'success'); openVendorCodeMigrate(); return; }
+    }
     const btn = document.getElementById('vcm-run'); if (btn) { btn.disabled = true; btn.textContent = '쓰는 중...'; }
     try {
       for (let i = 0; i < plan.length; i += 400) {
@@ -28958,7 +28993,7 @@ function validateBlendSum(blends, label) {
           <button id="vendor-alias-helper-btn" class="dash-action-btn" style="white-space:nowrap;background:var(--brand-soft);color:var(--brand-deep);border-color:var(--brand-light);font-weight:700;${vEditOn ? '' : 'display:none;'}">표기 통일 도우미</button>
           ${vDelOn ? `<div style="display:flex;gap:6px;align-items:center;white-space:nowrap;">
             <span style="display:none;"><label style="display:inline-flex;align-items:center;gap:5px;font-size:12px;cursor:pointer;color:${codesOn() ? '#047857' : '#6b7280'};font-weight:700;" title="켜면 의뢰서의 거래처를 코드 → 거래처 이름으로 보여 줍니다. 끄면 저장된 글자 그대로."><input type="checkbox" id="vendor-codes-switch"${codesOn() ? ' checked' : ''} style="accent-color:var(--brand);width:15px;height:15px;"> 코드로 보기 ${codesOn() ? '(켜짐)' : '(꺼짐)'}</label></span><!-- hotfix404: 코드로 보기 스위치 감춤 — 켜진 채 둔다(의뢰서 거래처는 코드로 저장, 화면은 이름). 되살리려면 이 span 만 벗긴다 -->
-            <button id="vendor-code-migrate-btn" class="dash-action-btn" style="display:none;white-space:nowrap;font-weight:700;">옛 자료 맞추기</button><!-- hotfix404: 감춤 — 본선 전환 때 옛 의뢰서 거래처 글자를 코드로 잇는 한 번짜리. 전환 스크립트에서 쓴다 -->
+            <button id="vendor-code-migrate-btn" class="dash-action-btn" style="${isOwnerUser() ? '' : 'display:none;'}white-space:nowrap;font-weight:700;background:#fff7ed;border-color:#fed7aa;color:#9a3412;" title="의뢰서 · 편직 설정 · 품목 · 원장에 적힌 옛 업체 표기를 지금 거래처에 잇습니다 — 글자는 그대로, 코드와 다른 표기만 더함">옛 표기 동기화</button><!-- hotfix404: 감춤 — 본선 전환 때 옛 의뢰서 거래처 글자를 코드로 잇는 한 번짜리. 전환 스크립트에서 쓴다 -->
           </div>` : ''}
           </div>
         </div>
@@ -29294,8 +29329,10 @@ function validateBlendSum(blends, label) {
               <div><label style="font-size:11px;font-weight:700;color:#7c2d12;display:block;margin-bottom:3px;">가공소</label><select id="fs-f-v-fin" style="${inputStyle}padding:5px 8px;" title="가공 공정을 맡는 곳 — 염색소와 같으면 같은 업체를 고르십시오"></select></div>
               <div><label style="font-size:11px;font-weight:700;color:#7c2d12;display:block;margin-bottom:3px;">후가공소</label><select id="fs-f-v-post" style="${inputStyle}padding:5px 8px;" title="후가공 공정을 맡는 곳"></select></div>
               <div style="grid-column:1 / -1;font-size:11px;line-height:1.5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"><span id="fs-f-std-vendors-hint" style="color:#94a3b8;"></span> <span id="fs-f-vendors-gate" style="color:#b45309;"></span></div></div>
-            <div id="fs-f-proc-picker" class="proc-picker"></div>
+            <div id="fs-f-std-pickers"><!-- hotfix424: 고른 업체(염색소 · 가공소 · 후가공소)마다 고르개 하나 — 각 업체가 등록한 단계 · 공정에서 고른다 -->
+            <div class="fs-std-one" data-v=""><div class="fs-std-head" style="display:none;"></div><div id="fs-f-proc-picker" class="proc-picker"></div>
             <input type="text" autocomplete="off" lang="ko" id="fs-f-std-note" style="${inputStyle}" placeholder="특이 사항 (예: 텐컴 후 70/72+400)"></div>
+            </div></div>
           <div><label style="font-size:12px;font-weight:700;color:#374151;display:flex;align-items:center;gap:8px;margin-bottom:4px;">혼용률 <span style="font-weight:400;color:#94a3b8;font-size:11px;">거래처에 알리는 값</span>
               <button type="button" class="dash-action-btn" id="fs-f-knit-open" style="margin-left:auto;font-size:11px;padding:3px 10px;font-weight:700;" title="이 품목의 편직 설정(루프장 · 편직공장별 값)을 엽니다. 루프장을 넣으면 혼용율이 원가 계산기에서 저절로 나옵니다">편직 설정 열기</button></label>
             <input type="text" autocomplete="off" id="fs-f-blend" readonly style="${inputStyle}background:#f8fafc;color:#0f172a;font-weight:700;" placeholder="빈칸 — [편직 설정 열기]로 사종·루프장을 넣으면 혼용율이 저절로 계산됩니다">
@@ -43582,11 +43619,29 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
           const hint = document.getElementById('fs-f-std-vendors-hint'); if (hint) hint.textContent = has.length ? '설정된 표준 사양: ' + has.join(' · ') : '아직 설정된 표준 사양 없음';
           const curV = () => String(vs?.value || '');
           const curF = () => String(document.getElementById('fs-f-v-fin')?.value || ''), curP = () => String(document.getElementById('fs-f-v-post')?.value || '');
-          if (h) { if (!h.__set) mountProcPicker(h, { noteId: 'fs-f-std-note', locked: () => !isOwnerUser(), vendorOf: () => ({ pre: curV(), mid: curF() || curV(), post: curP() || curF() || curV() }), onChange: () => { const g = h.__get(); modal.__stdMap[curV()] = { procs: g.procs, note: g.note }; try { modalMarkDirty(modal); } catch (_) {} } }); /* hotfix405: 최고관리자만 */
-            const load = () => { const m = modal.__stdMap[curV()] || { procs: [], note: '' }; h.__set(m.procs, m.note); };
-            load();
-            if (vs && !vs.dataset.bound) { vs.dataset.bound = '1'; vs.addEventListener('change', load); }
-            ['fs-f-v-fin', 'fs-f-v-post'].forEach(id => { const el = document.getElementById(id); if (el && !el.dataset.ppBound) { el.dataset.ppBound = '1'; el.addEventListener('change', () => { try { if (h.__paint) h.__paint(); } catch (_) {} }); } }); } }   // hotfix403 · hotfix406 · 422i
+          // hotfix424: 업체마다 고르개 하나 — 염색소 · 가공소 · 후가공소로 고른 업체(같은 곳은 하나)마다 그 업체가 등록한 단계 · 공정에서 고른다(대흥이 염색 · 가공 다 되면 대흥 고르개에 둘 다). 값은 modal.__stdMap[업체] 에 따로 담긴다. 아무 업체도 없으면 공통('') 하나
+          const paintStdPickers = () => {
+            const wrap = document.getElementById('fs-f-std-pickers'); if (!wrap) return;
+            const vendors = Array.from(new Set([curV(), curF(), curP()].map(x => String(x || '').trim()).filter(Boolean)));
+            const keys = vendors.length ? vendors : [''];
+            const stageOf = v => { const vv = (state.vendors || []).find(x => x && vendorHasName(x, v)); const t = vv ? getVendorTypes(vv) : []; const st = []; if (!v || t.includes('염색처')) st.push('선작업', '염색/물나염'); if (!v || t.includes('가공처')) st.push('가공'); if (!v || t.includes('후가공처')) st.push('후가공'); return st.length ? st : PROC_PARTS.slice(); };   // 거래처 설정의 구분 그대로: 염색처 → 선작업 · 염색, 가공처 → 가공, 후가공처 → 후가공 (구분 없으면 전부)
+            [...wrap.querySelectorAll('.fs-std-one')].forEach(box => { const v = String(box.dataset.v || ''); if (!keys.includes(v) && !box.querySelector('#fs-f-proc-picker')) box.remove(); });
+            keys.forEach((v, i) => {
+              let box = [...wrap.querySelectorAll('.fs-std-one')].find(b => String(b.dataset.v || '') === v);
+              if (!box) {
+                const first = wrap.querySelector('.fs-std-one');
+                if (first && !keys.includes(String(first.dataset.v || ''))) { box = first; box.dataset.v = v; }
+                else { box = document.createElement('div'); box.className = 'fs-std-one'; box.dataset.v = v; box.style.marginTop = '8px'; box.innerHTML = `<div class="fs-std-head"></div><div class="proc-picker" id="fs-f-proc-picker-${i}"></div><input type="text" autocomplete="off" lang="ko" id="fs-f-std-note-${i}" style="width:100%;padding:7px 9px;border:1px solid #d1d5db;border-radius:5px;font-size:13px;font-family:inherit;box-sizing:border-box;" placeholder="특이 사항">`; wrap.appendChild(box); }
+              }
+              const head = box.querySelector('.fs-std-head'); if (head) { head.style.display = (keys.length > 1 || v) ? '' : 'none'; head.innerHTML = `<span style="display:inline-block;font-size:11.5px;font-weight:800;color:#7c2d12;background:#fff7ed;border:1px solid #fed7aa;border-radius:6px;padding:2px 9px;margin:6px 0 4px;">${escapeHtml(v || '공통')} 표준 가공 사양 <span style="font-weight:400;color:#9a3412;">— ${escapeHtml(stageOf(v).join(' · '))}</span></span>`; }
+              const hh = box.querySelector('.proc-picker'); const nn = box.querySelector('input[type=text]');
+              if (hh && !hh.__set) mountProcPicker(hh, { noteId: nn ? nn.id : '', locked: () => !isOwnerUser(), parts: () => stageOf(hh.__vendor || ''), vendorOf: () => ({ pre: hh.__vendor || '', mid: hh.__vendor || '', post: hh.__vendor || '' }), onChange: () => { const g = hh.__get(); modal.__stdMap[hh.__vendor || ''] = { procs: g.procs, note: g.note }; try { modalMarkDirty(modal); } catch (_) {} } });
+              if (hh) { hh.__vendor = v; const m = modal.__stdMap[v] || { procs: [], note: '' }; hh.__set(m.procs, m.note); }
+            });
+          };
+          paintStdPickers();
+          [vs, document.getElementById('fs-f-v-fin'), document.getElementById('fs-f-v-post')].forEach(el => { if (el && !el.dataset.ppBound) { el.dataset.ppBound = '1'; el.addEventListener('change', paintStdPickers); } });
+          }   // hotfix403 · hotfix406 · 422i · 424
         fsPaintGyRange();
         fsPaintBlendAuto(idx < 0 ? '' : specFid(s));
         const sc = s.cautions || {};
@@ -48449,7 +48504,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix423';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …)
+  const VERSION = 'v2.53 hotfix424';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …)
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
