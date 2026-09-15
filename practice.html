@@ -6727,7 +6727,7 @@
               <option value="샘플">샘플</option><option value="재염">재염</option>
             </select>
           </div>
-          <div class="field"><label>최종납품처</label><select class="vendor-select" data-target="f_dest" data-vtype="최종납품처" title="등록된 거래처에서 선택" style="width:100%;padding:9px 10px;border:1px solid #d1d5db;border-radius:6px;font-family:inherit;font-size:13px;background:#fff;color:#374151;cursor:pointer;"><option value="">— 선택 —</option></select><input type="hidden" id="f_dest"></div>
+          <div class="field"><label>최종납품처</label><select class="vendor-select" data-target="f_dest" data-vtype="최종납품처" title="등록된 거래처에서 선택" style="cursor:pointer;"><option value="">— 선택 —</option></select><input type="hidden" id="f_dest"></div><!-- hotfix422i: 옆 칸(발주일 · 생산구분)과 같은 크기로 -->
         </div>
       </div>
       <div class="section">
@@ -8377,11 +8377,14 @@ function greigeNosOf(name, fid, exceptWoId, opts) {
   const nos = new Set();
   list.forEach(wo => {
     if (!wo || wo.deleted || wo.type !== '편직' || wo.id === exceptWoId) return;
-    if (oV != null && greigeLotKeyOf(wo.recipient) !== oV) return;
-    (Array.isArray(wo.items) ? wo.items : []).forEach(it => {
+    const sh = Array.isArray(wo.greige_shipments) ? wo.greige_shipments : [];
+    const atV = oV == null || greigeLotKeyOf(wo.recipient) === oV;   // hotfix422i: 그 곳으로 이동해 들어온 통(move · dest)도 그 곳 로트
+    (Array.isArray(wo.items) ? wo.items : []).forEach((it, idx) => {
       if (!it) return;
+      if (!atV && !sh.some(x => x && x.move && shLive(x) && greigeLotKeyOf(x.dest) === oV && ((x.item_idx != null ? x.item_idx : 0) === idx))) return;
       const same = (id && String(it.item_fid || '') === id) || (!id && k && vendorKey(greigeSplit(it.item).name) === k)
-        || (id && !it.item_fid && k && vendorKey(greigeSplit(it.item).name) === k);
+        || (id && !it.item_fid && k && vendorKey(greigeSplit(it.item).name) === k)
+        || (id && !it.item_fid && itemFidOf(greigeSplit(it.item).name) === id);   // hotfix422i: 옛 의뢰서의 다른 표기(aliases)로도 이 품목 — 품목 매칭
       if (!same) return;
       if (oC != null && greigeColorKeyOf(it.color) !== oC) return;
       const no = greigeNoClean(it.greige_no) || greigeSplit(it.item).no;
@@ -8409,7 +8412,7 @@ function knitLotFind(itemName, fid, greigeNo, factory, color) {
     if (fk && greigeLotKeyOf(wo.recipient) !== fk) return;
     (Array.isArray(wo.items) ? wo.items : []).forEach((it, idx) => {
       if (!it) return;
-      const same = (id && String(it.item_fid || '') === id) || (k && vendorKey(greigeSplit(it.item).name) === k);
+      const same = (id && String(it.item_fid || '') === id) || (k && vendorKey(greigeSplit(it.item).name) === k) || (id && !it.item_fid && itemFidOf(greigeSplit(it.item).name) === id);   // hotfix422i: 다른 표기
       if (!same) return;
       if ((greigeNoClean(it.greige_no) || greigeSplit(it.item).no) !== no) return;
       hits.push({ wo, idx, colorOk: !ck || yarnColorKey(it.color) === ck });
@@ -8420,7 +8423,7 @@ function knitLotFind(itemName, fid, greigeNo, factory, color) {
   return hits[0];
 }
 // hotfix392: 그 품목의 편직 생지 목록 (번호·컬러·남은 절·공장) — 남은 절 = 의뢰 + 입고 − 출고 (예상재고 공식 그대로)
-function greigeStockList(name, fid) {
+function greigeStockList(name, fid, opts) {   // hotfix422i: opts.moved = 이동해 간 곳의 로트 줄도 낸다(의뢰서 입고처 로트 목록용)
   const id = String(fid || '').trim() || itemFidOf(name);
   const k = vendorKey(greigeSplit(name).name || name);
   const list = (typeof state !== 'undefined' && Array.isArray(state.allWorkOrders)) ? state.allWorkOrders : [];
@@ -8431,7 +8434,8 @@ function greigeStockList(name, fid) {
     (Array.isArray(wo.items) ? wo.items : []).forEach((it, idx) => {
       if (!it) return;
       const same = (id && String(it.item_fid || '') === id) || (!id && k && vendorKey(greigeSplit(it.item).name) === k)
-        || (id && !it.item_fid && k && vendorKey(greigeSplit(it.item).name) === k);
+        || (id && !it.item_fid && k && vendorKey(greigeSplit(it.item).name) === k)
+        || (id && !it.item_fid && itemFidOf(greigeSplit(it.item).name) === id);   // hotfix422i: 옛 의뢰서의 다른 표기(aliases)로도 이 품목 — 품목 매칭
       if (!same) return;
       const no = greigeNoClean(it.greige_no) || greigeSplit(it.item).no;
       const mine = sh.filter(x => shLive(x) && ((x.item_idx != null ? x.item_idx : 0) === idx));
@@ -8439,6 +8443,9 @@ function greigeStockList(name, fid) {
       const inJ = mine.reduce((a, x) => a + (x.dir === 'in' ? (parseFloat(x.jul) || 0) : 0), 0);
       const rem = (parseFloat(it.jul) || 0) + inJ - outJ;
       out.push({ no, color: String(it.color || '').trim(), rem, vendor: String(wo.recipient || '').trim(), date: wo.date || '', woId: wo.id, woNo: wo.wo_number || '' });
+      // hotfix422i: 공장 간 이동으로 다른 곳(예: 현일본사)에 가 있는 절은 그 곳의 로트로도 보인다 — 의뢰서 입고처를 그 곳으로 고르면 이 로트가 뜬다
+      const bag = {}; if (opts && opts.moved) mine.forEach(x => { if (x.move && String(x.dest || '').trim()) { const d = String(x.dest).trim(); bag[d] = (bag[d] || 0) + (parseFloat(x.jul) || 0); } });
+      Object.keys(bag).forEach(d => { if (bag[d] > 0) out.push({ no, color: String(it.color || '').trim(), rem: bag[d], vendor: d, date: wo.date || '', woId: wo.id, woNo: wo.wo_number || '', moved: true, from: String(wo.recipient || '').trim() }); });
     });
   });
   return out.sort((a, b) => (b.no || '').localeCompare(a.no || '') || (b.date || '').localeCompare(a.date || ''));
@@ -15736,7 +15743,10 @@ function specGreigeColors(fid) {
     Object.keys(kb).forEach(fid => { const m = kb[fid]; if (!m || typeof m !== 'object') return; if (!Object.keys(m).some(v => vendorKey(v) === fk)) return; const sp = specs.find(x => specFid(x) === fid); if (sp && sp.name) names.add(vendorKey(sp.name)); });
     const list = (typeof state !== 'undefined' && Array.isArray(state.allWorkOrders)) ? state.allWorkOrders : [];
     list.forEach(wo => { if (!wo || wo.deleted || wo.type !== '편직' || vendorKey(wo.recipient) !== fk) return; (Array.isArray(wo.items) ? wo.items : []).forEach(it => { if (it && it.item) names.add(vendorKey(greigeSplit(it.item).name)); }); });
-    return specs.filter(x => x && x.name && names.has(vendorKey(x.name))).map(x => x.name);
+    // hotfix422i: 공장 간 이동으로 이 곳(예: 현일본사 창고)에 들어온 생지도 그 곳 품목이다 — 이동 줄(move · dest)이 살아 있는 통의 품목. 코드(item_fid)가 있으면 코드로, 없으면 이름(다른 표기 포함)으로 맞춘다
+    const fidNames = new Set();
+    list.forEach(wo => { if (!wo || wo.deleted || wo.type !== '편직') return; const sh = Array.isArray(wo.greige_shipments) ? wo.greige_shipments : []; sh.forEach(x => { if (!x || !x.move || !shLive(x) || vendorKey(x.dest) !== fk) return; const it = (wo.items || [])[x.item_idx != null ? x.item_idx : 0]; if (!it || !it.item) return; if (it.item_fid) fidNames.add(String(it.item_fid)); else { const f = itemFidOf(greigeSplit(it.item).name); if (f) fidNames.add(f); else names.add(vendorKey(greigeSplit(it.item).name)); } }); });
+    return specs.filter(x => x && x.name && (names.has(vendorKey(x.name)) || fidNames.has(String(x.fid || '')))).map(x => x.name);
   }
   if (typeof window !== 'undefined') window.knitFactoryItemNames = knitFactoryItemNames;   // hotfix402: 원사 발주서 용도 목록(바깥 스코프)에서도 쓴다
   // 편직 의뢰서 품목 목록 — 수신처를 골랐고 그 공장 품목이 있으면 그것만, 없으면 전부(알림)
@@ -15769,7 +15779,9 @@ function specGreigeColors(fid) {
       const itEl = document.getElementById(rib ? 'f_rib_item' : 'f_body_item'), gEl = document.getElementById(rib ? 'f_rib_gno' : 'f_body_gno');
       if (itEl && mine.length && itEl.value.trim() && !use.some(s => vendorKey(s.name) === vendorKey(itEl.value))) {
         const was = itEl.value; itEl.value = ''; if (gEl) gEl.value = '';
-        try { toast(`"${was}" 은(는) ${fac} 품목이 아니라 ${rib ? '리프' : '몸판'} 품목 칸을 비웠습니다 — 다시 골라 주십시오`, 'warning'); } catch (_) {}
+        // hotfix422i: 리프 품목을 비우면 그 품목에서 저절로 채운 값(혼용율 · 가공 사양 · 폭 · 중량 · 튜브)도 같이 비운다 — 옛 값이 남아 다른 리프에 묻어가지 않게
+        if (rib) { try { ['f_rib_spec_width', 'f_rib_spec_gy', 'f_rib_spec', 'f_rib_spec_note'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; }); const t = document.getElementById('f_rib_spec_tube'); if (t) t.checked = false; const h = document.getElementById('f_rib_proc_picker'); if (h && h.__set) h.__set([], ''); if (typeof renderBlendRows === 'function') renderBlendRows('rib_blends', []); } catch (_) {} }
+        try { toast(`"${was}" 은(는) ${fac} ${rib ? '리프가' : '품목이'} 아니라 ${rib ? '리프 칸(품목 · 혼용율 · 가공 사양 · 폭 · 중량)을' : '몸판 품목 칸을'} 비웠습니다 — 목록에서 다시 골라 주십시오`, 'warning'); } catch (_) {}
         try { render(); markDirty(); } catch (_) {}
       }
       if (hint) hint.textContent = !fac ? `입고처(편직 공장)를 먼저 고르면 그 공장 ${rib ? '리프' : '품목'}만 뜹니다.`
@@ -15866,10 +15878,16 @@ function specGreigeColors(fid) {
   function autoFillRibSpec() {
     const el = document.getElementById('f_rib_item');
     if (!el) return;
+    // hotfix422i: 리프는 목록(그 입고처 리프)에서만 고른다 — 목록에 없는 글자는 비운다 (대표 확정 9/14)
+    { const typed = String(el.value || '').trim(); const list = (window.__partItems && Array.isArray(window.__partItems.rib)) ? window.__partItems.rib : null;
+      if (typed && list && list.length && !list.some(n => vendorKey(n) === vendorKey(typed))) { el.value = ''; const g = document.getElementById('f_rib_gno'); if (g) g.value = ''; try { toast(`리프는 목록에서 골라 주십시오 — "${typed}" 은(는) 목록에 없습니다`, 'warning'); } catch (_) {} return; } }
     const spec = findFabricSpec(el.value);
     if (!spec || spec.gubun !== GUBUN_RIB) return;
+    // hotfix422i: 다른 리프로 바꾸면 앞 리프에서 채운 폭 · 중량 · 튜브 · 혼용율 · 가공 사양을 새 리프 것으로 덮는다(리프가 바뀌었는데 옛 값이 남지 않게). 같은 리프면 비어 있는 칸만
+    const prev = String(el.dataset.ribAuto || ''); const swap = !!prev && vendorKey(prev) !== vendorKey(spec.name); el.dataset.ribAuto = String(spec.name || '');
+    if (swap) { try { const h = document.getElementById('f_rib_proc_picker'); if (h && h.__set) h.__set([], ''); const n = document.getElementById('f_rib_spec_note'); if (n) n.value = ''; } catch (_) {} }
     try { procStdToPicker('f_rib_proc_picker', spec); } catch (e) { console.warn('[std proc]', e.message); }   // hotfix403
-    if (applyRibSpecToForm(spec, false, false)) {
+    if (applyRibSpecToForm(spec, swap, false)) {
       render(); markDirty();
       try { toast(`"${spec.name}" 기준 자동 채움 (필요 시 수정 가능)`, 'info'); } catch (_) {}
     }
@@ -15896,6 +15914,7 @@ function specGreigeColors(fid) {
       if (!confirm(`몸판 "${spec.name}"의 짝 리프는 "${pair.name}" 입니다.\n지금 리프칸의 "${curName}" 을(를) 바꿀까요?\n(리프 폭·중량·튜브·혼용율도 함께 바뀝니다)`)) return false;
     }
     const changed = applyRibSpecToForm(pair, !same, true);
+    try { nEl.dataset.ribAuto = String(pair.name || ''); } catch (_) {}   // hotfix422i
     if (changed) {
       render(); markDirty();
       try { toast(`짝 리프 "${pair.name}" 자동 채움`, 'success'); } catch (_) {}
@@ -15906,7 +15925,7 @@ function specGreigeColors(fid) {
   function autoGnoIfNone(itemId, gnoId, vendorId, spec) {
     const gEl = document.getElementById(gnoId), vEl = document.getElementById(vendorId); if (!gEl || gEl.value.trim() || !spec) return false;
     const fac = String(vEl?.value || '').trim(); if (!fac) return false;
-    const lots = greigeStockList(spec.name, specFid(spec)).filter(r => r.no && r.rem > 0 && vendorKey(r.vendor) === vendorKey(fac));
+    const lots = greigeStockList(spec.name, specFid(spec), { moved: true }).filter(r => r.no && r.rem > 0 && vendorKey(r.vendor) === vendorKey(fac));
     if (lots.length) return false;
     const no = greigeNextNo(spec.name, specFid(spec), null, { vendor: fac });
     gEl.value = no || '001';
@@ -15999,7 +16018,7 @@ function specGreigeColors(fid) {
         const vK = vEl && vEl.value ? vendorKey(vEl.value) : '';
         // hotfix392: 남은 절이 있는 생지만, 컬러·남은 절·공장을 같이 보인다
         // hotfix402: 맨 앞에 [해당사항없음] (로트를 관리하지 않는 업체) — 고르면 빈 칸이 된다
-        dl.innerHTML = `<option value="없음">없음 (로트 관리 안 함)</option>` + greigeStockList(el.value, itemFidOf(el.value)).filter(r => r.no && r.rem > 0).filter(r => !vK || vendorKey(r.vendor) === vK).map(r => `<option value="${escapeHtml(r.no)}">${escapeHtml(r.color || '-')} · 남은 ${r.rem}절 · ${escapeHtml(r.vendor || '-')}</option>`).join('');
+        dl.innerHTML = `<option value="없음">없음 (로트 관리 안 함)</option>` + greigeStockList(el.value, itemFidOf(el.value), { moved: true }).filter(r => r.no && r.rem > 0).filter(r => !vK || vendorKey(r.vendor) === vK).map(r => `<option value="${escapeHtml(r.no)}">${escapeHtml(r.color || '-')} · 남은 ${r.rem}절 · ${escapeHtml(r.vendor || '-')}</option>`).join('');
       };
       window.__fillGnoLists = () => Object.keys(GNO_PAIRS).forEach(fillGnoList);
       // hotfix422a: 몸판·리프 품목은 목록에서만 고른다 — 글자 검색 목록 상자 + 칸을 나갈 때 등록된 것이 아니면 비우고 [코드 등록 요청]
@@ -29247,11 +29266,11 @@ function validateBlendSum(blends, label) {
           </div>
           <div id="fs-f-gy-range" style="display:none;font-size:11px;color:#475569;font-weight:700;margin-top:-6px;min-height:15px;line-height:1.6;"></div><!-- hotfix402: 안내 g/y 범위는 감춤 -->
           <div><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">표준 가공 사양 <span style="font-weight:400;color:#94a3b8;font-size:11px;">염/가공소를 먼저 고르고 그 업체 공정으로 넣습니다 · 업체마다 따로 · 의뢰서에서 염색처 + 품목을 고르면 마지막 저장 가공법 → 없으면 이 값이 들어감 (옛 안내: 의뢰서에서 고칠 수 있음)</span></label>
-            <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap;"><!-- hotfix406: 업체마다 표준 가공 사양 · hotfix422i: 염색소 · 가공소 · 후가공소 따로 고른다(같은 곳이면 같은 업체를 고름). 고른 곳만 주의사항 초안을 쓰고, 의뢰서 염색처 · 가공처 · 후가공처에 저절로 들어간다 -->
-              <span style="font-size:11.5px;font-weight:700;color:#7c2d12;">염색소</span><select id="fs-f-std-vendor" style="${inputStyle}max-width:200px;padding:5px 8px;" title="선작업 · 염색 공정과 표준 가공 사양의 열쇠"></select>
-              <span style="font-size:11.5px;font-weight:700;color:#7c2d12;">가공소</span><select id="fs-f-v-fin" style="${inputStyle}max-width:200px;padding:5px 8px;" title="가공 공정을 맡는 곳 — 염색소와 같으면 같은 업체를 고르십시오"></select>
-              <span style="font-size:11.5px;font-weight:700;color:#7c2d12;">후가공소</span><select id="fs-f-v-post" style="${inputStyle}max-width:200px;padding:5px 8px;" title="후가공 공정을 맡는 곳"></select>
-              <span id="fs-f-std-vendors-hint" style="font-size:11px;color:#94a3b8;"></span><span id="fs-f-vendors-gate" style="font-size:11px;color:#b45309;"></span></div>
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px 10px;margin-bottom:6px;"><!-- hotfix406: 업체마다 표준 가공 사양 · hotfix422i: 염색소 · 가공소 · 후가공소 따로 고른다(같은 곳이면 같은 업체를 고름). 고른 곳만 주의사항 초안을 쓰고, 의뢰서 염색처 · 가공처 · 후가공처에 저절로 들어간다. 세 칸 한 줄 · 안내는 아래 한 줄 -->
+              <div><label style="font-size:11px;font-weight:700;color:#7c2d12;display:block;margin-bottom:3px;">염색소</label><select id="fs-f-std-vendor" style="${inputStyle}padding:5px 8px;" title="선작업 · 염색 공정과 표준 가공 사양의 열쇠"></select></div>
+              <div><label style="font-size:11px;font-weight:700;color:#7c2d12;display:block;margin-bottom:3px;">가공소</label><select id="fs-f-v-fin" style="${inputStyle}padding:5px 8px;" title="가공 공정을 맡는 곳 — 염색소와 같으면 같은 업체를 고르십시오"></select></div>
+              <div><label style="font-size:11px;font-weight:700;color:#7c2d12;display:block;margin-bottom:3px;">후가공소</label><select id="fs-f-v-post" style="${inputStyle}padding:5px 8px;" title="후가공 공정을 맡는 곳"></select></div>
+              <div style="grid-column:1 / -1;font-size:11px;line-height:1.5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"><span id="fs-f-std-vendors-hint" style="color:#94a3b8;"></span> <span id="fs-f-vendors-gate" style="color:#b45309;"></span></div></div>
             <div id="fs-f-proc-picker" class="proc-picker"></div>
             <input type="text" autocomplete="off" lang="ko" id="fs-f-std-note" style="${inputStyle}" placeholder="특이 사항 (예: 텐컴 후 70/72+400)"></div>
           <div><label style="font-size:12px;font-weight:700;color:#374151;display:flex;align-items:center;gap:8px;margin-bottom:4px;">혼용률 <span style="font-weight:400;color:#94a3b8;font-size:11px;">거래처에 알리는 값</span>
@@ -29260,7 +29279,7 @@ function validateBlendSum(blends, label) {
             <div id="fs-f-blend-auto" style="font-size:11.5px;line-height:1.7;margin-top:5px;"></div></div>
           <div id="fs-pair-wrap" style="background:#faf5ff;border:1px solid #e9d5ff;border-radius:8px;padding:11px 12px;">
             <label style="font-size:12px;font-weight:800;color:#6b21a8;display:block;margin-bottom:5px;">짝 리프 <span style="font-weight:400;color:#a78bc4;font-size:11px;">— 이 몸판과 늘 함께 나가는 리프. 지정하면 작업의뢰서에서 몸판만 골라도 리프칸이 같이 채워집니다 (없으면 비워두세요)</span></label>
-            <select id="fs-f-pair" style="${inputStyle}border-color:#d8b4fe;background:#fff;color:#6b21a8;font-weight:700;"><option value="">— 지정 안 함 —</option>${getRibSpecs().map(s => `<option value="${escapeHtml(s.name)}">${escapeHtml(s.name)}</option>`).join('')}</select>
+            <div style="display:flex;gap:8px;align-items:center;"><select id="fs-f-pair" style="${inputStyle}border-color:#d8b4fe;background:#fff;color:#6b21a8;font-weight:700;"><option value="">— 지정 안 함 —</option>${getRibSpecs().map(s => `<option value="${escapeHtml(s.name)}">${escapeHtml(s.name)}</option>`).join('')}</select><button type="button" class="dash-action-btn" id="fs-f-pair-open" style="white-space:nowrap;font-size:11.5px;padding:6px 12px;font-weight:700;background:#f5f3ff;border-color:#d8b4fe;color:#6b21a8;" title="짝 리프도 품목이라 가공소 · 후가공소 · 표준 가공 사양 · 주의사항은 그 리프 품목의 디테일에서 고칩니다 (염색은 몸판과 같이 나감)">리프 디테일 수정</button></div><!-- hotfix422i -->
             <div id="fs-pair-info" style="font-size:11.5px;color:#7c3aed;margin-top:6px;min-height:15px;"></div>
             ${getRibSpecs().length === 0 ? `<div style="font-size:11px;color:#b45309;margin-top:5px;">아직 구분이 [리프]인 품목이 없습니다. 리프 품목을 먼저 등록하면 여기서 고를 수 있습니다.</div>` : ''}
           </div>
@@ -34555,7 +34574,7 @@ function validateBlendSum(blends, label) {
         <div style="flex:0.7;"><label class="f">튜브</label><input type="text" id="f_tube" readonly></div>
         <div style="flex:0.9;"><label class="f">제작중량 g/y</label><input type="text" inputmode="decimal" class="num money" id="f_made" readonly title="품목 스펙의 제작 g/y 입니다. 고치려면 [설정 변경 › 디테일 설정]"></div>
         <div style="flex:0.9;display:none;"><label class="f" id="lab_gy">안내 최고중량 g/y</label><input type="text" inputmode="decimal" class="num money" id="f_gy" readonly title="안내 범위의 최고값 — 원가는 이 값으로 냅니다"><div class="ghost" id="gh_gy"></div></div><!-- hotfix422i: 감춤 — 안내 범위(최저 ~ 최고)만 보인다 -->
-        <div style="flex:1.1;"><label class="f">안내 범위 (최저 ~ 최고)</label><input type="text" id="f_dg" class="num" readonly></div>
+        <div style="flex:1.1;"><label class="f">안내 범위 (최저 ~ 최고)</label><input type="text" id="f_dg" class="num" readonly style="text-align:center;"></div><!-- hotfix422i: 가운데 정렬 -->
       </div>
       <div class="footnote">회색 칸은 원단 기본 스펙 · 편직 설정 자료입니다. 고치려면 <b>[설정 변경]</b>을 누르십시오.
         저장은 이 카드의 돈 칸(원사업체 · 단가 · 운임 · 로스율 · 가공 · 제시단가)만 담습니다. 원가는 안내중량으로 냅니다.</div>
@@ -34569,15 +34588,15 @@ function validateBlendSum(blends, label) {
           <label><input type="radio" name="bmode" value="manual" disabled> 직접 입력</label></span>
         <span class="spacer"></span><span class="note" id="loopFrom"></span></div>
       <div style="overflow-x:auto;">
-      <table class="t" style="min-width:1200px;"><thead><tr><!-- hotfix422h: 표가 화면에 맞춰 줄어들지 않게(가로 스크롤) — 종류 · 사종 · 컬러 · 단위 글자가 안 잘린다 · 422i: 1200 -->
-        <th style="width:108px;">종류</th><th style="min-width:330px;">사종</th><!-- hotfix422i: 원사업체 열 감춤(사종의 브랜드가 곧 업체) · 칸을 줄여 보통 화면에서 가로 스크롤 없이 -->
+      <table class="t" style="min-width:1260px;"><thead><tr><!-- hotfix422h: 표가 화면에 맞춰 줄어들지 않게(가로 스크롤) — 종류 · 사종 · 컬러 · 단위 글자가 안 잘린다 · 422i: 1260 -->
+        <th style="width:118px;">종류</th><th style="min-width:170px;">사종</th><th style="min-width:170px;">컬러 (브랜드)</th><!-- hotfix422i: 원사업체 열 감춤(사종의 브랜드가 곧 업체) · 사종 · 컬러 두 칸 · 칸을 줄여 보통 화면에서 가로 스크롤 없이 -->
         <th style="display:none;">원사업체</th>
-        <th style="width:64px;">굵기</th><th style="width:54px;">단위</th>
-        <th style="width:50px;">합사</th><th style="width:58px;">실굵기</th>
-        <th class="colLoop" style="width:68px;">루프장</th><th style="width:60px;">사용량 %</th>
-        <th style="width:100px;">원사 단가</th><th style="width:50px;">단위</th>
-        <th style="width:82px;">운임</th><th style="width:58px;">로스율 %</th>
-        <th style="width:80px;">kg 환산</th><th style="width:80px;">적용가</th><th style="width:0;display:none;"></th>
+        <th style="width:62px;">굵기</th><th style="width:64px;">단위</th>
+        <th style="width:48px;">합사</th><th style="width:56px;">실굵기</th>
+        <th class="colLoop" style="width:64px;">루프장</th><th style="width:58px;">사용량 %</th>
+        <th style="width:96px;">원사 단가</th><th style="width:50px;">단위</th>
+        <th style="width:78px;">운임</th><th style="width:56px;">로스율 %</th>
+        <th style="width:76px;">kg 환산</th><th style="width:76px;">적용가</th><th style="width:0;display:none;"></th>
       </tr></thead><tbody id="yarnBody"></tbody></table></div>
       <div style="display:flex;align-items:center;gap:10px;margin-top:9px;flex-wrap:wrap;">
         <button class="b s" id="btnAddYarn" style="display:none;">＋ 원사 줄</button><!-- hotfix422i: 감춤 — 원사 줄은 편직 설정 창에서 -->
@@ -35684,7 +35703,7 @@ function paintYarnRows(){
     const list=(YARN_BOOK[y.kindK]||[]).slice().sort(ccNameSort);
     const inList=list.some(x=>x.name===y.name);
     return `<tr data-i="${i}">
-      <td><select class="y" data-k="kindK" disabled title="편직 설정 값">${Object.keys(KINDS).map(k=>`<option value="${k}" ${y.kindK===k?'selected':''}>${k}</option>`).join('')}</select></td><!-- hotfix422i: 기존품목원가 — 종류 · 사종 · 컬러 · 굵기 · 단위 · 합사 · 직접 % 는 편직 설정 값을 보여만 준다 -->
+      <td><select class="y" data-k="kindK" disabled title="편직 설정 값" style="padding:7px 4px 7px 6px;padding-right:16px;">${Object.keys(KINDS).map(k=>`<option value="${k}" ${y.kindK===k?'selected':''}>${k}</option>`).join('')}</select></td><!-- hotfix422i: 기존품목원가 — 종류 · 사종 · 컬러 · 굵기 · 단위 · 합사 · 직접 % 는 편직 설정 값을 보여만 준다 -->
       <td>${(()=>{
         // hotfix396b: 사종(base) → 컬러 (브랜드) 두 단. 저장값은 그대로 합친 이름(y.name)
         const ent=list.find(x=>x.name===y.name)||null;
@@ -35694,12 +35713,12 @@ function paintYarnRows(){
         list.forEach(x=>{ if(x.base&&!seen.has(bk(x.base))){seen.add(bk(x.base)); bases.push(x.base);} });
         bases.sort((a,b)=>ccNameSort({name:a},{name:b}));
         const inB=bases.some(b=>bk(b)===bk(base));
-        let h=`<div style="display:flex;gap:4px;"><select class="y" data-k="base" title="사종 — 편직 설정 값" disabled style="flex:1.1;min-width:150px;">`+(list.length?`<option value="">— 사종 —</option>`:`<option value="">${y.kindK} 로 등록된 사종이 없습니다</option>`)
+        let h=`<select class="y" data-k="base" title="사종 — 편직 설정 값" disabled style="width:100%;min-width:150px;">`+(list.length?`<option value="">— 사종 —</option>`:`<option value="">${y.kindK} 로 등록된 사종이 없습니다</option>`)
           +bases.map(b=>`<option value="${b}" ${bk(b)===bk(base)?'selected':''}>${b}</option>`).join('')+(base&&!inB?`<option selected>${base}</option>`:'')+`</select>`;
         const rows=list.filter(x=>bk(x.base)===bk(base)).sort((a,b)=>(a.color==='L/W'?0:1)-(b.color==='L/W'?0:1)||ccNameSort({name:a.color+a.brand},{name:b.color+b.brand}));
         const lab=x=>x.color+(x.brand?' ('+x.brand+')':'');
-        h+=`<select class="y" data-k="name" title="컬러 (브랜드) · 브랜드 = 원사업체 — 편직 설정 값" disabled style="flex:1;min-width:160px;">`+(rows.length>1?`<option value="">— 컬러 —</option>`:(rows.length?'':`<option value="">—</option>`))
-          +rows.map(x=>`<option value="${x.name}" ${x.name===y.name?'selected':''}>${lab(x)}</option>`).join('')+(y.name&&!rows.some(x=>x.name===y.name)&&!ent?`<option selected>${y.name}</option>`:'')+`</select></div>`;
+        h+=`</td><td><select class="y" data-k="name" title="컬러 (브랜드) · 브랜드 = 원사업체 — 편직 설정 값" disabled style="width:100%;min-width:150px;">`+(rows.length>1?`<option value="">— 컬러 —</option>`:(rows.length?'':`<option value="">—</option>`))
+          +rows.map(x=>`<option value="${x.name}" ${x.name===y.name?'selected':''}>${lab(x)}</option>`).join('')+(y.name&&!rows.some(x=>x.name===y.name)&&!ent?`<option selected>${y.name}</option>`:'')+`</select>`;   // hotfix422i: 사종 · 컬러 두 칸으로
         return h;
       })()}</td>
       <td style="display:none;"><select class="y" data-k="vendor">${(()=>{
@@ -35714,7 +35733,7 @@ function paintYarnRows(){
         return h;
       })()}</select></td>
       <td><input type="text" inputmode="decimal" class="y num money" data-k="thick" value="${iv(y.thick)}" readonly tabindex="-1" title="원사 설정 값"></td>
-      <td><select class="y" data-k="tunit" disabled><option ${y.tunit==='수'?'selected':''}>수</option><option ${y.tunit==='D'?'selected':''}>D</option></select></td>
+      <td><select class="y" data-k="tunit" disabled style="padding:7px 4px;padding-right:16px;"><option ${y.tunit==='수'?'selected':''}>수</option><option ${y.tunit==='D'?'selected':''}>D</option></select></td>
       <td><input type="text" inputmode="numeric" class="y num money" data-k="ply" value="${iv(plyOf(y))}" readonly tabindex="-1" title="합사 — 편직 설정 값"></td>
       <td class="r small" data-c="eff" style="font-weight:800;color:#334155;">${effLabel(y)||'-'}</td>
       <td class="colLoop"><input type="text" inputmode="decimal" class="y num money" data-k="loop" value="${iv(L[y.name])}" readonly tabindex="-1" title="루프장은 [편직료 설정]에서 고칩니다">${g&&g.loop!==undefined?`<div class="ghost">직전 ${iv(g.loop)}</div>`:''}</td>
@@ -43806,6 +43825,13 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
         if (state.__fsReturn) { const v = state.__fsReturn; state.__fsReturn = ''; setTimeout(() => { if (typeof window.hwGoView === 'function') window.hwGoView(v); }, 0); } };
       // hotfix420: 닫기 · 취소는 고친 값이 있으면 세 갈래(담아 두고 닫기 · 버리고 닫기 · 그냥 있기)
       const closeModalAsk = async () => { const H = state.__fsDraft; if (H && !(await H.askLeave())) return; closeModal(); };
+      // hotfix422i: [리프 디테일 수정] — 고른 짝 리프 품목의 디테일 창으로 (지금 창은 묻고 닫는다)
+      document.getElementById('fs-f-pair-open')?.addEventListener('click', async () => {
+        const nm = String(document.getElementById('fs-f-pair')?.value || '').trim(); if (!nm) { toast('짝 리프를 먼저 고르십시오', 'warning'); return; }
+        const rib = getFabricSpecs().find(x => String(x.name || '').trim() === nm && x.gubun === GUBUN_RIB); if (!rib || !specFid(rib)) { toast('리프 품목을 찾지 못했습니다', 'error'); return; }
+        const H = state.__fsDraft; if (H && !(await H.askLeave())) return; closeModal();
+        state.__fsOpenFid = specFid(rib); if (typeof window.hwGoView === 'function') window.hwGoView('fabricSpecs'); else { state.dashView = 'fabricSpecs'; renderDashboard(); }
+      });
       document.getElementById('fs-add-btn')?.addEventListener('click', () => {
         if (!canEditView('fabricSpecs')) { toast('품목을 넣고 고치는 권한이 없습니다 — [권한 설정]의 [고치기] 칸에서 받을 수 있습니다', 'error'); return; }
         openModal(-1);
