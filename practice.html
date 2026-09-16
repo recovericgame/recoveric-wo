@@ -7106,15 +7106,20 @@ function __withWriteTimeout(fn) {
     if (!p || typeof p.then !== 'function') return p; // 비동기 아니면 그대로
     // hotfix189: 타임아웃이 이겨도 실제 쓰기는 백그라운드에서 계속 동기화됨 → 늦은 실패는 조용히 흡수(미처리 거부 방지)
     p.catch(() => {});
-    const timeout = new Promise((_, reject) =>
-      setTimeout(() => {
+    // hotfix429: 시계를 끄지 않아 쓰기가 1초에 끝나도 10초 뒤 "저장이 잠시 지연됩니다"가 늘 떴다 — 쓰기가 끝나면(성공 · 실패) 시계를 끈다. 진짜 10초를 넘긴 쓰기에만 안내
+    let timer = null;
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        timer = null;
         const err = new Error('저장 응답 지연 — 로컬에 보관되었으며 인터넷 회복 시 자동 반영됩니다.');
         err.__hiwosWriteTimeout = true;
         reject(err);
         // hotfix189: 지속성 도입으로 입력은 보관·자동 동기화됨 → 안심 문구(info)로 순화.
         try { if (typeof window.toast === 'function') window.toast('저장이 잠시 지연됩니다 — 입력 내용은 보관되며 인터넷이 회복되면 자동 반영됩니다.', 'info'); } catch (_) {}
-      }, TIMEOUT_MS)
-    );
+      }, TIMEOUT_MS);
+    });
+    const stop = () => { if (timer) { clearTimeout(timer); timer = null; } };
+    p.then(stop, stop);
     return Promise.race([p, timeout]);
   };
 }
@@ -48624,7 +48629,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix428';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …)
+  const VERSION = 'v2.53 hotfix429';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …)
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
