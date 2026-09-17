@@ -8418,6 +8418,30 @@ function itemHasName(sp, name) {
   if (!sp || !k) return false;
   return vendorKey(sp.name) === k || (Array.isArray(sp.aliases) ? sp.aliases : []).some(a => vendorKey(a) === k);
 }
+/* hotfix434: 파생 품목 — 한 생지로 여러 판매 품목을 낸다(대표 확정 9/17: RS-850T ← 4S클래스 …). 품목에 greige_fids(원래 생지의 품목 코드, 편직공장마다 하나씩 N개)를 적는다.
+   비어 있으면 "자기가 곧 생지"(지금까지의 모든 품목 = 그대로). 파생 품목은 편직 설정 · 생지 재고 · 로트 · 원사 사용량을 원래 생지의 것으로 쓰고, 폭 · 중량 · 가공 · 컬러 · 짝 리프는 자기 것이다.
+   규칙: 자기 자신 · 없는 코드 · 그 자신이 파생인 품목(사슬)은 원래 생지로 치지 않는다. 글자 · 문서는 절대 안 고친다 — 읽을 때 잇는다 */
+function specGreigeFids(sp) {
+  if (!sp || !Array.isArray(sp.greige_fids) || !sp.greige_fids.length) return [];
+  const specs = (typeof state !== 'undefined' && Array.isArray(state.fabricSpecs)) ? state.fabricSpecs : [];
+  const me = String(sp.fid || ''); const out = [];
+  sp.greige_fids.forEach(f => { const id = String(f || '').trim(); if (!id || id === me || out.includes(id)) return; const g = specs.find(x => x && String(x.fid || '') === id); if (!g) return; if (Array.isArray(g.greige_fids) && g.greige_fids.length) return; out.push(id); });
+  return out;
+}
+function specIsDerived(sp) { return specGreigeFids(sp).length > 0; }
+/* 이 품목의 생지가 담긴 통을 찾을 때 볼 품목 코드 — [자기(옛 통), 원래 생지 …] */
+function itemSourceFids(name, fid) {
+  const id = String(fid || '').trim() || itemFidOf(name); if (!id) return [];
+  return [id].concat(specGreigeFids(itemByFid(id)));
+}
+/* 편직 값을 읽어 올 원래 생지(첫 번째) — 파생이 아니면 '' */
+function specPrimaryGreige(fid) { const id = String(fid || '').trim(); if (!id) return ''; return specGreigeFids(itemByFid(id))[0] || ''; }
+/* 이 생지를 첫 번째 원래 생지로 쓰는 파생 품목 코드들 */
+function specDerivedOf(fid) {
+  const id = String(fid || '').trim(); if (!id) return [];
+  const specs = (typeof state !== 'undefined' && Array.isArray(state.fabricSpecs)) ? state.fabricSpecs : [];
+  return specs.filter(x => x && x.fid && specGreigeFids(x)[0] === id).map(x => String(x.fid));
+}
 // 글자(이름·다른 표기와 정확히 같음) → 코드. 둘 이상 맞거나 못 찾으면 ''
 function itemFidOf(name) {
   if (!vendorKey(name)) return '';
@@ -8503,6 +8527,7 @@ function knitLotFind(itemName, fid, greigeNo, factory, color) {
   const k = vendorKey(greigeSplit(itemName).name || itemName);
   const no = greigeNoClean(greigeNo); const fk = greigeLotKeyOf(factory); const ck = color ? yarnColorKey(color) : '';
   if (!no) return null;
+  const srcs = itemSourceFids(itemName, fid);   /* hotfix434 */
   const list = ((typeof state !== 'undefined' && Array.isArray(state.allWorkOrders)) ? state.allWorkOrders : []);
   const hits = [];
   list.forEach(wo => {
@@ -8510,20 +8535,24 @@ function knitLotFind(itemName, fid, greigeNo, factory, color) {
     if (fk && !vendorSameAs(wo.recipient, wo.vendor_vid, factory) && !vendorSameAs(wo.final_destination, wo.final_destination_vid, factory)) return;   // hotfix423
     (Array.isArray(wo.items) ? wo.items : []).forEach((it, idx) => {
       if (!it) return;
-      const same = (id && String(it.item_fid || '') === id) || (k && vendorKey(greigeSplit(it.item).name) === k) || (id && !it.item_fid && itemFidOf(greigeSplit(it.item).name) === id);   // hotfix422i: 다른 표기
+      const itF = String(it.item_fid || '') || itemFidOf(greigeSplit(it.item).name);
+      const same = (id && String(it.item_fid || '') === id) || (k && vendorKey(greigeSplit(it.item).name) === k) || (id && !it.item_fid && itemFidOf(greigeSplit(it.item).name) === id)   // hotfix422i: 다른 표기
+        || (srcs.length > 1 && itF && srcs.includes(itF));   /* hotfix434: 파생 품목 → 원래 생지의 통 */
       if (!same) return;
       if ((greigeNoClean(it.greige_no) || greigeSplit(it.item).no) !== no) return;
-      hits.push({ wo, idx, colorOk: !ck || yarnColorKey(it.color) === ck });
+      hits.push({ wo, idx, colorOk: !ck || yarnColorKey(it.color) === ck, rank: (srcs.indexOf(itF) < 0 ? 0 : srcs.indexOf(itF)), srcFid: itF });
     });
   });
   if (!hits.length) return null;
-  hits.sort((a, b) => (b.colorOk - a.colorOk) || String(b.wo.date || '').localeCompare(String(a.wo.date || '')));
+  hits.sort((a, b) => (b.colorOk - a.colorOk) || (a.rank - b.rank) || String(b.wo.date || '').localeCompare(String(a.wo.date || '')));
+  if (new Set(hits.map(h => h.srcFid || '')).size > 1) hits[0].ambiguous = true;   /* hotfix434: 같은 곳 · 같은 로트 번호가 두 생지에 있음 — 자기 통 → 원래 생지 차례로 고른다 */
   return hits[0];
 }
 // hotfix392: 그 품목의 편직 생지 목록 (번호·컬러·남은 절·공장) — 남은 절 = 의뢰 + 입고 − 출고 (예상재고 공식 그대로)
 function greigeStockList(name, fid, opts) {   // hotfix422i: opts.moved = 이동해 간 곳의 로트 줄도 낸다(의뢰서 입고처 로트 목록용)
   const id = String(fid || '').trim() || itemFidOf(name);
   const k = vendorKey(greigeSplit(name).name || name);
+  const srcs = itemSourceFids(name, fid);   /* hotfix434 */
   const list = (typeof state !== 'undefined' && Array.isArray(state.allWorkOrders)) ? state.allWorkOrders : [];
   const out = [];
   list.forEach(wo => {
@@ -8533,7 +8562,8 @@ function greigeStockList(name, fid, opts) {   // hotfix422i: opts.moved = 이동
       if (!it) return;
       const same = (id && String(it.item_fid || '') === id) || (!id && k && vendorKey(greigeSplit(it.item).name) === k)
         || (id && !it.item_fid && k && vendorKey(greigeSplit(it.item).name) === k)
-        || (id && !it.item_fid && itemFidOf(greigeSplit(it.item).name) === id);   // hotfix422i: 옛 의뢰서의 다른 표기(aliases)로도 이 품목 — 품목 매칭
+        || (id && !it.item_fid && itemFidOf(greigeSplit(it.item).name) === id)   // hotfix422i: 옛 의뢰서의 다른 표기(aliases)로도 이 품목 — 품목 매칭
+        || (srcs.length > 1 && srcs.includes(String(it.item_fid || '') || itemFidOf(greigeSplit(it.item).name)));   /* hotfix434: 파생 품목 → 원래 생지의 통 */
       if (!same) return;
       const no = greigeNoClean(it.greige_no) || greigeSplit(it.item).no;
       const mine = sh.filter(x => shLive(x) && ((x.item_idx != null ? x.item_idx : 0) === idx));
@@ -8693,7 +8723,7 @@ function refreshYarnPurposeList() {
   const names = new Set();
   facs.forEach(f => { try { (window.knitFactoryItemNames ? window.knitFactoryItemNames(f) : []).forEach(n => names.add(n)); } catch (_) {} });
   const specs = (typeof state !== 'undefined' && Array.isArray(state.fabricSpecs)) ? state.fabricSpecs : [];
-  const all = specs.filter(x => x && x.name && x.active !== false).map(x => x.name);
+  const all = specs.filter(x => x && x.name && x.active !== false && !specIsDerived(x)).map(x => x.name);   /* hotfix434: 파생 품목은 용도에 안 나온다 */
   const use = names.size ? all.filter(n => names.has(n)) : all;
   dl.innerHTML = use.map(n => `<option value="${escapeHtml(n)}"></option>`).join('');
   const el = document.getElementById('y_purpose');
@@ -13712,6 +13742,7 @@ window.addEventListener('firebase-ready', () => {
       gsm: (function () { const v = parseFloat(String(it.gsm == null ? '' : it.gsm).replace(/,/g, '')); return (v > 0) ? v : null; })(),   // hotfix400: 최종 스퀘어 중량 g/㎡
       blend: String(it.blend || '').trim(),
       pair_rib: String(it.pair_rib || '').trim(),
+      ...(Array.isArray(it.greige_fids) && it.greige_fids.map(f => String(f || '').trim()).filter(Boolean).length ? { greige_fids: Array.from(new Set(it.greige_fids.map(f => String(f || '').trim()).filter(Boolean))) } : {}),   /* hotfix434: 원래 생지(품목 코드) */
       ...(String(it.abbr || '').trim() ? { abbr: String(it.abbr).trim().toUpperCase() } : {}),   // hotfix392: 공유코드용 줄임말
       active: it.active !== false,
       // hotfix390: 다른 표기 — 옛 의뢰서에 적힌 글자를 이 품목으로 잇는 열쇠 (옛 자료 맞추기에서 고르면 자동 등록)
@@ -14927,12 +14958,13 @@ function specGreigeColors(fid) {
     return out;
   }
   function knitFeeOf(fid) {
-    const key = String(fid || '').trim(); if (!key) return {};
+    const key0 = String(fid || '').trim(); if (!key0) return {};
+    const key = specPrimaryGreige(key0) || key0;   /* hotfix434: 파생 품목 → 원래 생지의 편직 값. 파생 품목에 남아 있던 옛 편직 값은 지우지 않고 감춘다 */
     const m = (state.knitFee && typeof state.knitFee === 'object') ? state.knitFee[key] : null;
     if (m && typeof m === 'object') return JSON.parse(JSON.stringify(m));   // hotfix387: 빈 것도 마스터 값
     return knitFeeFromCost(getFabricCost(key));
   }
-  function knitFeeHas(fid) { const m = (state.knitFee || {})[String(fid || '').trim()]; return !!(m && typeof m === 'object'); }
+  function knitFeeHas(fid) { const m = (state.knitFee || {})[specPrimaryGreige(fid) || String(fid || '').trim()]; return !!(m && typeof m === 'object'); }
   // 처음 한 번 — 마스터 문서가 아예 없을 때만 카드 값을 옮겨 담는다. 옛 칸은 손대지 않는다
   async function knitFeeMigrate() {
     if (!isOwnerUser() || !state.fabricCostLoaded || !state.knitFeeLoaded || state.knitFeeDocExists || state._kfMigrating) return;
@@ -14996,7 +15028,7 @@ function specGreigeColors(fid) {
     return g == null ? '' : String((sp && sp.cat) || '') + Math.round(g) + 'G';
   }
   function kfCardYarnNames(fid) {
-    const c = getFabricCost(fid) || {};
+    const c = getFabricCost(specPrimaryGreige(fid) || fid) || {};   /* hotfix434 */
     return (Array.isArray(c.yarns) ? c.yarns : []).filter(y => y && y.name).map(y => String(y.name));
   }
   // hotfix387: 카드 [원사] 줄 + 마스터 루프장에만 있는 사종 (팝업에서 [＋ 사종]으로 넣은 것)
@@ -15065,6 +15097,7 @@ function specGreigeColors(fid) {
   async function saveKnitFeeRow(fid, factory, row, opts) {
     if (!isOwnerUser()) { toast('최고관리자만 고칠 수 있습니다', 'error'); return false; }
     const key = String(fid || '').trim(), V = String(factory || '').trim();
+    if (key && specPrimaryGreige(key)) return true;   /* hotfix434: 파생 품목 — 편직 값의 주인은 원래 생지. 여기서는 아무것도 안 쓴다 */
     if (!key || !V) { toast('품목과 편직공장이 있어야 합니다', 'error'); return false; }
     const cur = knitFeeOf(key);
     const before = cur[V] || null;
@@ -15103,6 +15136,7 @@ function specGreigeColors(fid) {
   async function deleteKnitFeeRow(fid, factory) {
     if (!isOwnerUser()) return false;
     const key = String(fid || '').trim(), V = String(factory || '').trim();
+    if (key && specPrimaryGreige(key)) { toast('파생 품목입니다 — 편직 값은 원래 생지에서 고칩니다', 'warning'); return false; }   /* hotfix434 */
     const next = knitFeeOf(key); if (!next[V]) return true;
     delete next[V];
     try {
@@ -15909,7 +15943,7 @@ function specGreigeColors(fid) {
   // hotfix399: 편직공장이 만들고 있는 품목 이름들 — 편직료 마스터(최고관리자만 읽음) ∪ 그 공장으로 낸 편직 의뢰서
   // hotfix431: 리프 품목이 있는 곳 목록 (리프 입고처 고르개용)
   if (typeof window !== 'undefined') window.__ribPlaces = () => { const ribs = new Set(getRibSpecs().map(r => vendorKey(r.name))); return (state.vendors || []).filter(v => v && v.name && v.active !== false).map(v => String(v.name).trim()).filter(n => { try { return knitFactoryItemNames(n).some(x => ribs.has(vendorKey(x))); } catch (_) { return false; } }); };
-  function knitFactoryItemNames(factory) {
+  function knitFactoryItemNames(factory, o434) {
     const fk = vendorKey(String(factory || '').trim()); if (!fk) return [];
     const names = new Set();
     const specs = (typeof state !== 'undefined' && Array.isArray(state.fabricSpecs)) ? state.fabricSpecs : [];
@@ -15926,7 +15960,11 @@ function specGreigeColors(fid) {
     // hotfix422i: 공장 간 이동으로 이 곳(예: 현일본사 창고)에 들어온 생지도 그 곳 품목이다 — 이동 줄(move · dest)이 살아 있는 통의 품목. 코드(item_fid)가 있으면 코드로, 없으면 이름(다른 표기 포함)으로 맞춘다
     const fidNames = new Set();
     list.forEach(wo => { if (!wo || wo.deleted || wo.type !== '편직') return; const sh = Array.isArray(wo.greige_shipments) ? wo.greige_shipments : []; sh.forEach(x => { if (!x || !x.move || !shLive(x) || !vendorSameAs(x.dest, x.dest_vid, factory)) return; const it = (wo.items || [])[x.item_idx != null ? x.item_idx : 0]; if (!it || !it.item) return; if (it.item_fid) fidNames.add(String(it.item_fid)); else { const f = itemFidOf(greigeSplit(it.item).name); if (f) fidNames.add(f); else names.add(vendorKey(greigeSplit(it.item).name)); } }); });
-    const out = specs.filter(x => x && x.name && (names.has(vendorKey(x.name)) || fidNames.has(String(x.fid || '')))).map(x => x.name);
+    let out = specs.filter(x => x && x.name && (names.has(vendorKey(x.name)) || fidNames.has(String(x.fid || '')))).map(x => x.name);
+    /* hotfix434: 파생 품목 — 염/가공 의뢰서(o434.derived)는 원래 생지가 이 곳에 있으면 파생 품목도 목록에. 편직 의뢰서 · 원사 용도는 파생 품목을 뺀다(생지로만 짠다) */
+    { const hereF = new Set(specs.filter(x => x && x.fid && out.includes(x.name)).map(x => String(x.fid)));
+      if (o434 && o434.derived) specs.forEach(x => { if (x && x.name && !out.includes(x.name) && specGreigeFids(x).some(g => hereF.has(g))) out.push(x.name); });
+      else out = out.filter(n => !specIsDerived(specs.find(x => x && x.name === n))); }
     // hotfix424: 품목으로 등록되지 않은 옛 이름(예: 컴미8% · C립_로화이트)으로 적힌 재고도 목록에 그대로 보인다 — 품목 디테일의 [옛 자료 맞추기]로 품목에 이으면 그 품목 이름으로 합쳐진다
     const known = new Set(out.map(vendorKey)); const rawSeen = new Set();
     list.forEach(wo => { if (!wo || wo.deleted || wo.type !== '편직') return; const here = vendorSameAs(wo.recipient, wo.vendor_vid, factory) || vendorSameAs(wo.final_destination, wo.final_destination_vid, factory) || (Array.isArray(wo.greige_shipments) ? wo.greige_shipments : []).some(x => x && x.move && shLive(x) && vendorSameAs(x.dest, x.dest_vid, factory)); if (!here) return;
@@ -15938,7 +15976,7 @@ function specGreigeColors(fid) {
   function refreshKnitFacItemList() {
     const dl = document.getElementById('knit-fac-item-datalist'); const hint = document.getElementById('k_item_hint'); if (!dl) return;
     const fac = String(document.getElementById('k_recipient')?.value || '').trim();
-    const all = getFabricSpecs().filter(s => specIsOnSale(s));
+    const all = getFabricSpecs().filter(s => specIsOnSale(s) && !specIsDerived(s));   /* hotfix434: 편직 의뢰서는 생지로만 */
     const mine = fac ? knitFactoryItemNames(fac) : [];
     const mk = new Set(mine.map(vendorKey));
     const use = mine.length ? all.filter(s => mk.has(vendorKey(s.name))) : all;
@@ -15955,7 +15993,7 @@ function specGreigeColors(fid) {
       // hotfix422a: 기본은 생산 중(판매 중) 품목만, [샘플도] 체크면 구분이 샘플인 것도
       const showSample = !!document.getElementById(rib ? 'f_rib_showsample' : 'f_body_showsample')?.checked;
       const all = (rib ? getRibSpecs().filter(s => specIsOnSale(s)) : getFabricSpecs().filter(s => s.gubun !== GUBUN_RIB && specIsOnSale(s))).filter(s => showSample || s.gubun !== GUBUN_SAMPLE);
-      const mine = fac ? knitFactoryItemNames(fac) : [];
+      const mine = fac ? knitFactoryItemNames(fac, { derived: true }) : [];   /* hotfix434 */
       const mk = new Set(mine.map(vendorKey));
       const use = mine.length ? all.filter(s => mk.has(vendorKey(s.name))) : all;
       // hotfix424: 품목으로 등록되지 않은 옛 이름의 재고(예: 컴미8%)도 그 곳 목록에 그대로 보인다 — 몸판만(리프는 등록 품목만). 고르면 자동 채움은 없고 글자만 들어간다
@@ -25441,6 +25479,7 @@ function validateBlendSum(blends, label) {
     if (!gsWo || !gsWo.id) return null;
     const hit = knitLotFind(gsWo.gs_item, gsWo.gs_item_fid, gsWo.gs_greige_no, gsWo.recipient, gsWo.gs_color);
     if (!hit) return null;
+    if (hit.ambiguous) { try { toast('같은 곳에 같은 로트 번호(' + greigeNoClean(gsWo.gs_greige_no) + ')의 생지가 둘 있습니다 — [' + String(((hit.wo.items || [])[hit.idx] || {}).item || '') + '] 통에서 뺍니다. 다르면 [생지 생산 및 재고]에서 고쳐 주십시오', 'warning'); } catch (_) {} }   /* hotfix434 */
     const { wo, idx } = hit; const it = (wo.items || [])[idx] || {};
     const jul = parseFloat(gsWo.gs_qty) || 0; if (!jul) return null;
     const sh = Array.isArray(wo.greige_shipments) ? wo.greige_shipments.slice() : [];
@@ -29541,6 +29580,12 @@ function validateBlendSum(blends, label) {
               <button type="button" class="dash-action-btn" id="fs-f-knit-open" style="margin-left:auto;font-size:11px;padding:3px 10px;font-weight:700;" title="이 품목의 편직 설정(루프장 · 편직공장별 값)을 엽니다. 루프장을 넣으면 혼용율이 원가 계산기에서 저절로 나옵니다">편직 설정 열기</button></label>
             <input type="text" autocomplete="off" id="fs-f-blend" readonly style="${inputStyle}background:#f8fafc;color:#0f172a;font-weight:700;" placeholder="빈칸 — [편직 설정 열기]로 사종·루프장을 넣으면 혼용율이 저절로 계산됩니다">
             <div id="fs-f-blend-auto" style="font-size:11.5px;line-height:1.7;margin-top:5px;"></div></div>
+          <div id="fs-greige-wrap" style="display:none;background:#f0f9ff;border:1px solid #bae6fd;border-radius:8px;padding:11px 12px;">
+            <label style="font-size:12px;font-weight:800;color:#075985;display:block;margin-bottom:5px;">원래 생지 <span style="font-weight:400;color:#64748b;font-size:11px;">— 최고관리자만 보입니다. 이 품목이 다른 생지를 가공해 내는 품목이면 그 생지를 고릅니다(편직공장마다 하나씩). 고르면 편직 설정 · 생지 재고 · 로트 · 원사 사용량은 그 생지의 것을 쓰고, 폭 · 중량 · 가공 · 컬러는 이 품목 것입니다. 비우면 이 품목이 곧 생지입니다</span></label>
+            <div id="fs-greige-chips" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px;"></div>
+            <select id="fs-greige-add" style="${inputStyle}"></select>
+            <div id="fs-greige-info" style="font-size:11.5px;color:#b45309;margin-top:5px;"></div>
+          </div>
           <div id="fs-pair-wrap" style="background:#faf5ff;border:1px solid #e9d5ff;border-radius:8px;padding:11px 12px;">
             <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px;"><label style="font-size:12px;font-weight:800;color:#6b21a8;flex:1;margin:0;">짝 리프 <span style="font-weight:400;color:#a78bc4;font-size:11px;">— 이 몸판과 늘 함께 나가는 리프. 지정하면 작업의뢰서에서 몸판만 골라도 리프칸이 같이 채워집니다</span></label><button type="button" class="dash-action-btn" id="fs-pair-toggle" style="font-size:11px;padding:4px 10px;font-weight:700;background:#fff;border-color:#d8b4fe;color:#6b21a8;white-space:nowrap;">짝 리프 지정</button></div><!-- hotfix422i: 리프 없는 몸판은 접어 둔다 -->
             <div id="fs-pair-body">
@@ -31729,6 +31774,7 @@ function validateBlendSum(blends, label) {
     const fv = String(state.kfFactory || '').trim();
     getFabricSpecs().slice().sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'ko', { numeric: true })).forEach(sp => {
       const fid = specFid(sp); if (!fid) return;
+      if (specIsDerived(sp)) return;   /* hotfix434: 파생 품목은 생지 표에 안 나온다(품목 디테일에서 본다) */
       if (!state.kfClosed && sp.active === false && !/\(복사\)$/.test(String(sp.name || ''))) return;   // hotfix387: 판매 중만 (복사본은 늘 보임)
       // hotfix417: 샘플(구분 샘플 · 이름이 "(샘플)"로 시작)은 [샘플도 보기]를 켜야 보인다 · 구분 걸러 보기
       const isSample = String(sp.gubun || '') === GUBUN_SAMPLE || /^\(샘플\)/.test(String(sp.name || '').trim());
@@ -32260,6 +32306,8 @@ function validateBlendSum(blends, label) {
   // hotfix422i: 신규품목원가는 별도 창이 아니라 편직 설정 창(newItem 모드)으로 — 대표 지시 9/11 (편직 설정 → 디테일 설정 흐름 그대로)
   function openKnitFeePopup(fid, factory, yarnNames, onClose, opts) {
     if (!canAccessView('knitSetup')) { toast('편직 설정 권한이 없습니다', 'error'); return; }   // hotfix398
+    /* hotfix434: 파생 품목 → 원래 생지의 편직 설정 창 */
+    { const g0 = (opts && opts.newItem) ? '' : specPrimaryGreige(fid); if (g0) { const me0 = itemByFid(fid), gs0 = itemByFid(g0); toast('[' + String((me0 || {}).name || '') + '] 은(는) 원래 생지 [' + String((gs0 || {}).name || '') + '] 의 편직 설정을 씁니다 — 그 창을 엽니다', 'info'); return openKnitFeePopup(g0, Object.keys(knitFeeOf(g0))[0] || '', null, onClose, opts); } }
     // hotfix421: [+ 생지 추가]에서 열린 창
     const fromNew = !!(opts && opts.fromNew);
     // hotfix422i: [신규품목원가] — 품목이 아직 없는 채로 이 창을 연다(품목명 · 구분(기본 샘플) · 조직 · 편직공장 · 편직 값 · 원사 줄). [신규품목저장] 때 품목 스펙(F 자동)을 먼저 만들고 그 다음은 보통 저장과 같다
@@ -32698,8 +32746,9 @@ function validateBlendSum(blends, label) {
         // hotfix422g: 공장을 옮겼으면 옛 공장 줄 · 옛 카드의 "(공장 미지정)" 줄을 지운다 (공장은 하나)
         if (ok) { const gone = Array.from(new Set(Array.from(dropOnSave).concat(Object.keys(K).filter(v => v !== V && (!v || v === KF_NO_FAC))))); for (const v of gone) { if (v === V) continue; try { await deleteKnitFeeRow(key, v); } catch (e) { console.warn('[kf drop]', e.message); } } dropOnSave.clear(); }
         btn.disabled = false; btn.textContent = '저장';
-        if (ok) { try { await syncCardYarnsFromKnit(key, yarns, (knitFeeOf(key)[V] || {}).plys || {}, renames); Object.keys(renames).forEach(k => delete renames[k]); } catch (e) { console.warn('[card yarn sync]', e.message); } }   // hotfix399d: 카드 [원사] 반영 (주인 = 편직 설정) · hotfix422g: 합사도 · hotfix422h: 바꾼 사종은 값을 이어 받는다
+        if (ok) { try { await syncCardYarnsFromKnit(key, yarns, (knitFeeOf(key)[V] || {}).plys || {}, renames); for (const d434 of specDerivedOf(key)) { try { await syncCardYarnsFromKnit(d434, yarns, (knitFeeOf(key)[V] || {}).plys || {}, renames); } catch (e2) { console.warn('[derived yarn sync]', e2.message); } } Object.keys(renames).forEach(k => delete renames[k]); } catch (e) { console.warn('[card yarn sync]', e.message); } }   // hotfix399d: 카드 [원사] 반영 (주인 = 편직 설정) · hotfix422g: 합사도 · hotfix422h: 바꾼 사종은 값을 이어 받는다
         if (ok) { try { await syncSpecBlendFromKnit(key); } catch (e) { console.warn('[blend sync]', e.message); } }   // hotfix399b: 품목 혼용률 자동
+        if (ok && !document.querySelector('#fs-modal.show')) { for (const d434 of specDerivedOf(key)) { try { await syncSpecBlendFromKnit(d434); } catch (e) { console.warn('[derived blend]', e.message); } } }   /* hotfix434: 파생 품목 혼용률도 같이 */
         // hotfix421: [저장]하면 창이 닫히고 적던 값이 남지 않는다 (대표 확정 — 품목 디테일 수정 창과 같게). 담아 둔 것도 지운다
         if (ok) {
           if (opts && opts.newItem && state.dashView === 'costCalc') { state.ccMode = 'exist'; state.ccCardFid = key; }   // hotfix422i: 신규품목원가 → 그 품목이 기존품목원가로 열린다
@@ -43926,6 +43975,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
         });
         FS_CAUTION_STAGES.forEach(k => fillFsCautions(k, pre[k]));   // hotfix398b: 편직 · 나염 포함
         fillFsCautionCopySelect(idx);
+        modal.__greige = (idx >= 0 && s && Array.isArray(s.greige_fids)) ? s.greige_fids.map(f => String(f || '').trim()).filter(Boolean) : []; fsGreigePaint();   /* hotfix434 */
         { const kb = document.getElementById('fs-f-knit-open'); if (kb) kb.style.display = (idx >= 0 && specFid(s)) ? '' : 'none'; const kb2 = document.getElementById('fs-f-knit-open2'); if (kb2) kb2.style.display = (idx >= 0 && specFid(s)) ? '' : 'none'; const kb3 = document.getElementById('fs-f-knit-open3'); if (kb3) kb3.style.display = (idx >= 0 && specFid(s)) ? '' : 'none'; }   // hotfix398b: 새 품목은 저장 뒤에 연다 · hotfix422h: 품목명 옆 단추도
         modal.classList.add('show');
         setTimeout(() => document.getElementById('fs-f-name').focus(), 50);
@@ -44078,6 +44128,24 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
       }
       document.getElementById('fs-f-knit-open2')?.addEventListener('click', () => document.getElementById('fs-f-knit-open')?.click());   // hotfix422h: 품목명 옆 [편직 설정 열기]
       document.getElementById('fs-f-knit-open3')?.addEventListener('click', () => document.getElementById('fs-f-knit-open')?.click());   // hotfix422h: 아래 단추 줄
+      /* hotfix434: 원래 생지 고르개 — 후보 = 같은 갈래(몸판끼리 · 리프끼리)의 "자기가 생지"인 품목. 자기 자신 · 파생 품목 · 이미 고른 것은 빠진다 */
+      function fsGreigePaint() {
+        const wrapG = document.getElementById('fs-greige-wrap'); if (!wrapG) return;
+        const me = (editingSpecIdx >= 0) ? getFabricSpecs()[editingSpecIdx] : null; const myFid = me ? specFid(me) : '';
+        wrapG.style.display = isOwnerUser() ? '' : 'none';
+        const cur = (modal.__greige || []).filter(f => f && f !== myFid);
+        const chips = document.getElementById('fs-greige-chips'), sel = document.getElementById('fs-greige-add'), info = document.getElementById('fs-greige-info');
+        chips.innerHTML = cur.map(f => { const g = itemByFid(f); return `<span style="display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;background:#e0f2fe;color:#075985;font-size:12px;font-weight:800;">${escapeHtml(g ? g.name : f + ' (없는 품목)')}<button type="button" class="fs-greige-x" data-f="${escapeHtml(f)}" title="원래 생지에서 뺍니다" style="border:0;background:none;color:#b91c1c;font-weight:800;cursor:pointer;">x</button></span>`; }).join('') || '<span style="font-size:12px;color:#94a3b8;">없음 — 이 품목이 곧 생지입니다</span>';
+        const isRibNow = (document.getElementById('fs-f-gubun')?.value || '') === GUBUN_RIB;
+        const usedBy = myFid ? getFabricSpecs().filter(x => Array.isArray(x.greige_fids) && x.greige_fids.includes(myFid)).map(x => x.name) : [];
+        const cands = getFabricSpecs().filter(x => specFid(x) && specFid(x) !== myFid && !cur.includes(specFid(x)) && !(Array.isArray(x.greige_fids) && x.greige_fids.length) && ((x.gubun === GUBUN_RIB) === isRibNow)).sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'ko', { numeric: true }));
+        sel.innerHTML = '<option value="">＋ 원래 생지 고르기 …</option>' + cands.map(x => `<option value="${escapeHtml(specFid(x))}">${escapeHtml(x.name)}${x.active === false ? ' (판매 종료)' : ''}</option>`).join('');
+        sel.disabled = usedBy.length > 0;
+        info.textContent = usedBy.length ? '이 품목은 이미 다른 품목의 원래 생지입니다 (' + usedBy.slice(0, 5).join(' · ') + ') — 생지는 파생 품목이 될 수 없습니다' : (cur.length ? '[저장]하면 이 품목은 편직 의뢰서 · 원사 발주 용도 · 생지 및 편직 설정 표에 안 나오고, 염/가공 의뢰서에서 원래 생지의 로트를 씁니다. 이 품목에 있던 옛 편직 값 · 옛 편직 의뢰서는 지워지지 않습니다' : '');
+        chips.querySelectorAll('.fs-greige-x').forEach(b => b.addEventListener('click', () => { modal.__greige = (modal.__greige || []).filter(f => f !== b.dataset.f); fsGreigePaint(); }));
+      }
+      document.getElementById('fs-greige-add')?.addEventListener('change', ev => { const f = String(ev.target.value || '').trim(); if (!f) return; modal.__greige = (modal.__greige || []).filter(x => x !== f).concat([f]); fsGreigePaint(); });
+      document.getElementById('fs-f-gubun')?.addEventListener('change', () => { try { fsGreigePaint(); } catch (_) {} });
       document.getElementById('fs-f-knit-open')?.addEventListener('click', () => {
         const sp = (editingSpecIdx >= 0) ? getFabricSpecs()[editingSpecIdx] : null;
         const fid = sp ? specFid(sp) : '';
@@ -44237,6 +44305,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
           std_note: String(((modal.__stdMap || {})[''] || {}).note || '').trim(),
           std_by_vendor: (function () { const o = {}; Object.keys(modal.__stdMap || {}).forEach(k => { if (!k) return; const v = modal.__stdMap[k]; if ((v.procs || []).length || String(v.note || '').trim()) o[k] = { procs: v.procs.slice(), note: String(v.note || '').trim() }; }); return o; })(),   // hotfix406: 업체별
           pair_rib: (document.getElementById('fs-f-pair')?.value || '').trim(),
+          greige_fids: (modal.__greige || []).slice(),   /* hotfix434: 원래 생지 */
           abbr: (document.getElementById('fs-f-abbr')?.value || '').trim().toUpperCase(),   // hotfix392: 공유코드용 줄임말
           updated_at: todayYMD()
         };
@@ -48772,7 +48841,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix433';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …)
+  const VERSION = 'v2.53 hotfix434';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …)
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
