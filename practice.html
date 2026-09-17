@@ -15094,10 +15094,13 @@ function specGreigeColors(fid) {
   }
   function kfNum(v) { const x = parseFloat(String(v == null ? '' : v).replace(/,/g, '')); return isFinite(x) ? x : null; }
   function kfGauge(inch, needles) { const g = kfNum(needles) / (kfNum(inch) || 1) / 3.14; return isFinite(g) && kfNum(inch) ? g : null; }
+  /* hotfix437: 기계 이름의 게이지는 0.5 단위로 반올림한다(대표 확정 9/17) — 20.54 → 20.5G · 20.8 → 21G · 19.75 → 20G. 게이지 칸(20.54)은 그대로 */
+  function kfGaugeHalf(g) { const x = Number(g); if (!isFinite(x)) return ''; const h = Math.round(x * 2) / 2; return (h % 1 === 0) ? String(h) : h.toFixed(1); }
+  if (typeof window !== 'undefined') window.__kfGaugeHalf = kfGaugeHalf;
   function kfMachine(fid, inch, needles) {
     const sp = getFabricSpecs().find(x => specFid(x) === String(fid || '').trim());
     const g = kfGauge(inch, needles);
-    return g == null ? '' : String((sp && sp.cat) || '') + Math.round(g) + 'G';
+    return g == null ? '' : String((sp && sp.cat) || '') + kfGaugeHalf(g) + 'G';
   }
   function kfCardYarnNames(fid) {
     const c = getFabricCost(specPrimaryGreige(fid) || fid) || {};   /* hotfix434 */
@@ -31878,7 +31881,7 @@ function validateBlendSum(blends, label) {
       <label style="display:flex;align-items:center;gap:5px;font-size:12.5px;color:#475569;cursor:pointer;"><input type="checkbox" id="kf-sample"${state.kfSample ? ' checked' : ''} style="width:15px;height:15px;">샘플도 보기</label>
       <span style="font-size:11.5px;color:#94a3b8;">${rows.length}줄</span>
       <span style="flex:1;"></span>
-      ${isOwnerUser() ? `<button class="dash-action-btn" id="kf-add-item" style="background:#1e3a8a;color:#fff;font-weight:800;padding:6px 14px;" title="새 생지(품목)를 등록합니다 — 품목명 · 구분 · 조직 · 편직공장을 넣고 바로 편직 값을 적습니다">+ 생지 추가</button>` : ''}
+      ${isOwnerUser() ? `<button class="dash-action-btn" id="kf-add-item" style="background:#1e3a8a;color:#fff;font-weight:800;padding:6px 14px;" title="새 생지(품목)를 등록합니다 — 품목명 · 구분 · 조직 · 편직공장을 넣고 바로 편직 값을 적습니다">+ 생지 추가</button><button class="dash-action-btn" id="kf-gm-btn" style="font-weight:800;padding:6px 14px;background:#e0f2fe;border-color:#7dd3fc;color:#075985;" title="한 생지로 여러 품목을 낼 때 — 생지를 고르고, 그 생지에서 나오는 품목들을 한 번에 묶습니다">원래 생지 묶기</button>` : ''}
       <button class="dash-action-btn" id="kf-csv-out" style="font-weight:700;padding:6px 14px;">CSV 내려받기${state.kfFactory ? ' (' + escapeHtml(state.kfFactory) + ')' : ''}</button>
       <button class="dash-action-btn" id="kf-csv-in" style="font-weight:700;padding:6px 14px;" title="업체가 채워 보낸 CSV를 올려 채워진 칸만 덮어씁니다">CSV 올려 고치기</button>
       <input type="file" id="kf-csv-file" accept=".csv,text/csv" style="display:none;">
@@ -32134,6 +32137,110 @@ function validateBlendSum(blends, label) {
   //   아닌 사람은 settings/code_requests 에 요청을 남기고, 만들 수 있는 사람 화면 위 오른쪽에 "코드 요청 N" 종이 뜬다
   //   settings/code_requests { items: [{ id, name, part, by, by_email, at, done, done_by, done_at }] } — 직원도 씀 (보안규칙 hotfix422a)
   // ============================================================
+  // ============================================================
+  // hotfix438: [원래 생지 묶기] — 생지를 고르고, 그 생지에서 나오는 품목들을 한 번에 묶는 창 (대표 지시 9/17: 하나씩 해서는 세월이 걸린다)
+  //   화면에서는 고치기만 하고, [저장] 한 번에 settings/fabric_specs 를 한 번 쓴다: greige_fids · 품목명 뒤 공장(옛 이름은 다른 표기) · 짝 리프 이름 따라가기 · 혼용률(원래 생지 것)
+  //   그 뒤 품목마다 이력 · 원가 카드 [원사] 줄 · 직원용 혼용 사본을 맞춘다. 글자 · 의뢰서 · 편직 값은 안 건드린다
+  // ============================================================
+  function greigeMapNow() { const m = {}; getFabricSpecs().forEach(x => { const f = specFid(x); const g = f ? specGreigeFids(x)[0] : ''; if (f && g) m[f] = g; }); return m; }
+  function greigeFacOf(g) { return g ? (Object.keys(knitFeeOf(g)).find(v => v && v !== KF_NO_FAC) || '') : ''; }
+  /* 저장할 품목 목록을 만든다(순수 계산 — 쓰지 않는다). pend = { 파생 fid: 생지 fid } 전체 그림 */
+  function greigeMapPlan(pend) {
+    const before = greigeMapNow(); const list = getFabricSpecs().map(x => Object.assign({}, x)); const by = {}; list.forEach(x => { const f = specFid(x); if (f) by[f] = x; });
+    const changes = [], warns = [];
+    Array.from(new Set(Object.keys(before).concat(Object.keys(pend)))).forEach(f => {
+      const a = before[f] || '', b = pend[f] || ''; if (a === b) return; const it = by[f]; if (!it) return;
+      const ch = { fid: f, from: a, to: b, oldName: String(it.name || ''), newName: String(it.name || ''), notes: [] };
+      if (b) {
+        const g = by[b]; if (!g || pend[b] || b === f) { warns.push('[' + ch.oldName + '] — 원래 생지로 쓸 수 없는 품목입니다'); return; }
+        if (Object.keys(pend).some(k => pend[k] === f)) { warns.push('[' + ch.oldName + '] — 이미 다른 품목의 원래 생지라 파생 품목이 될 수 없습니다'); return; }
+        it.greige_fids = [b];
+        const fac = greigeFacOf(b); const nn = fac ? kfAutoItemName(ch.oldName, fac) : ch.oldName;
+        if (nn && nn !== ch.oldName) { if (list.some(x => x !== it && String(x.name || '').trim() === nn)) warns.push('[' + ch.oldName + '] — 새 이름 [' + nn + '] 이(가) 이미 있어 이름은 그대로 둡니다'); else { it.aliases = Array.from(new Set((Array.isArray(it.aliases) ? it.aliases : []).concat([ch.oldName]).map(x => String(x || '').trim()).filter(x => x && x !== nn))); list.forEach(x => { if (String(x.pair_rib || '').trim() === ch.oldName) x.pair_rib = nn; }); it.name = nn; ch.newName = nn; } }
+        try { const bl = blendFromKnitFee(b); if (bl && bl.ok && bl.text && String(it.blend || '').trim() !== bl.text) { it.blend = bl.text; ch.notes.push('혼용률 ' + bl.text); } } catch (e) {}
+      } else { delete it.greige_fids; }
+      it.updated_at = todayYMD(); changes.push(ch);
+    });
+    return { list, changes, warns };
+  }
+  async function greigeMapSave(pend) {
+    if (!isOwnerUser()) { toast('최고관리자만 고칠 수 있습니다', 'error'); return null; }
+    const plan = greigeMapPlan(pend); if (!plan.changes.length) { toast('바뀐 것이 없습니다', 'info'); return plan; }
+    const ok = await saveFabricSpecs(plan.list, state.fabricGubuns || []); if (!ok) return null;
+    for (const ch of plan.changes) {
+      const gname = id => String((itemByFid(id) || {}).name || id || '');
+      const lines = [ch.to ? ('원래 생지: ' + (ch.from ? gname(ch.from) : '(없음 — 자기가 생지)') + ' → ' + gname(ch.to)) : ('원래 생지: ' + gname(ch.from) + ' → (없음 — 다시 생지)')];
+      if (ch.newName !== ch.oldName) lines.push('품목명: ' + ch.oldName + ' → ' + ch.newName);
+      try { await kfHistAdd(ch.fid, '', lines.concat(ch.notes), '원래 생지'); } catch (e) { console.warn('[greige hist]', e.message); }
+      if (ch.to) { try { const fac = greigeFacOf(ch.to); await syncCardYarnsFromKnit(ch.fid, kfYarnNames(ch.to), ((knitFeeOf(ch.to)[fac] || {}).plys) || {}, {}); } catch (e) { console.warn('[greige yarn sync]', e.message); } }
+      try { await knitBlendSync(ch.fid); } catch (e) { console.warn('[greige blend copy]', e.message); }
+    }
+    return plan;
+  }
+  function openGreigeMapModal(preFid) {
+    if (!isOwnerUser()) { toast('최고관리자만 쓸 수 있습니다', 'error'); return; }
+    document.getElementById('gm-popup')?.remove();
+    const pend = greigeMapNow(); let selG = String(preFid || '').trim(); if (selG && pend[selG]) selG = pend[selG];
+    const K = s => vendorKey(String(s || ''));
+    const specs = () => getFabricSpecs().filter(x => specFid(x));
+    const nameOf = f => String((itemByFid(f) || {}).name || f);
+    const findByName = (t, pool) => { const k = K(t); if (!k) return null; const hit = pool.filter(x => K(x.name) === k || (Array.isArray(x.aliases) && x.aliases.some(a => K(a) === k))); return hit.length === 1 ? hit[0] : null; };
+    const isSrc = f => Object.keys(pend).some(k => pend[k] === f);
+    const gPool = () => specs().filter(x => !pend[specFid(x)]).sort((a, b) => String(a.name).localeCompare(String(b.name), 'ko', { numeric: true }));
+    const dPool = () => { const g = itemByFid(selG); if (!g) return []; const rib = g.gubun === GUBUN_RIB; return specs().filter(x => specFid(x) !== selG && !isSrc(specFid(x)) && pend[specFid(x)] !== selG && ((x.gubun === GUBUN_RIB) === rib)).sort((a, b) => String(a.name).localeCompare(String(b.name), 'ko', { numeric: true })); };
+    const wrap = document.createElement('div'); wrap.id = 'gm-popup';
+    wrap.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:10050;display:flex;align-items:flex-start;justify-content:center;overflow:auto;padding:26px 12px;';
+    document.body.appendChild(wrap);
+    const iS = 'width:100%;padding:8px 10px;border:1px solid #cbd5e1;border-radius:7px;font-size:13px;font-family:inherit;';
+    const paint = () => {
+      const g = itemByFid(selG); const fac = greigeFacOf(selG); const mine = Object.keys(pend).filter(k => pend[k] === selG);
+      const groups = {}; Object.keys(pend).forEach(k => { (groups[pend[k]] = groups[pend[k]] || []).push(k); });
+      const plan = greigeMapPlan(pend);
+      wrap.innerHTML = `<div style="background:#fff;border-radius:12px;max-width:860px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,.35);">
+        <div style="display:flex;align-items:center;gap:10px;padding:14px 18px;border-bottom:2px solid #1e3a8a;"><strong style="font-size:15px;color:#1e3a8a;">원래 생지 묶기</strong><span style="font-size:11.5px;color:#64748b;">한 생지로 여러 품목을 낼 때 — 생지를 고르고, 그 생지에서 나오는 품목을 넣습니다. [저장] 전에는 아무것도 바뀌지 않습니다</span><span style="flex:1;"></span><button class="dash-action-btn" id="gm-close" style="padding:4px 12px;">닫기</button></div>
+        <div style="padding:16px 18px;">
+          <div style="display:grid;grid-template-columns:1fr 1.4fr;gap:14px;">
+            <div style="border:1px solid #bae6fd;background:#f0f9ff;border-radius:9px;padding:12px;">
+              <div style="font-size:12.5px;font-weight:800;color:#075985;margin-bottom:6px;">① 생지 고르기</div>
+              <input id="gm-g" lang="ko" autocomplete="off" list="gm-g-dl" placeholder="생지 이름 검색 …" value="${escapeHtml(g ? g.name : '')}" style="${iS}font-weight:800;"><datalist id="gm-g-dl">${gPool().map(x => `<option value="${escapeHtml(x.name)}"></option>`).join('')}</datalist>
+              <div style="font-size:11.5px;color:#475569;margin-top:6px;line-height:1.7;">${g ? '편직공장 <strong>' + escapeHtml(fac || '(편직 설정 없음)') + '</strong> · ' + escapeHtml(g.gubun || '') + ' · ' + escapeHtml(g.cat || '') : '파생 품목이 아닌 품목만 생지로 고를 수 있습니다'}</div>
+            </div>
+            <div style="border:1px solid #e2e8f0;background:#f8fafc;border-radius:9px;padding:12px;">
+              <div style="font-size:12.5px;font-weight:800;color:#334155;margin-bottom:6px;">② 이 생지에서 나오는 품목 ${g ? '(' + mine.length + ')' : ''}</div>
+              <div id="gm-chips" style="display:flex;flex-wrap:wrap;gap:6px;min-height:30px;margin-bottom:8px;">${g ? (mine.map(f => { const c = plan.changes.find(x => x.fid === f); return `<span class="gm-chip" data-f="${escapeHtml(f)}" style="display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;background:${c ? '#fef3c7' : '#e0f2fe'};color:#0f172a;font-size:12px;font-weight:700;">${escapeHtml(nameOf(f))}${c && c.newName !== c.oldName ? ' <span style="color:#92400e;font-weight:800;">→ ' + escapeHtml(c.newName) + '</span>' : ''}<button type="button" class="gm-x" data-f="${escapeHtml(f)}" title="이 생지에서 뺍니다" style="border:0;background:none;color:#b91c1c;font-weight:800;cursor:pointer;">x</button></span>`; }).join('') || '<span style="font-size:12px;color:#94a3b8;">아직 없음</span>') : '<span style="font-size:12px;color:#94a3b8;">먼저 왼쪽에서 생지를 고르십시오</span>'}</div>
+              <div style="display:flex;gap:6px;"><input id="gm-d" lang="ko" autocomplete="off" list="gm-d-dl" placeholder="품목 이름 검색 … (쉼표로 여러 개: RS-400S, 물나염싱글)" style="${iS}"${g ? '' : ' disabled'}><datalist id="gm-d-dl">${dPool().map(x => `<option value="${escapeHtml(x.name)}">${pend[specFid(x)] ? '지금 ' + escapeHtml(nameOf(pend[specFid(x)])) + ' 소속 — 넣으면 옮김' : ''}</option>`).join('')}</datalist><button class="dash-action-btn" id="gm-add" style="font-weight:800;padding:6px 14px;white-space:nowrap;"${g ? '' : ' disabled'}>넣기</button></div>
+              <div style="font-size:11px;color:#64748b;margin-top:6px;line-height:1.6;">넣으면 품목명 뒤에 생지의 편직공장이 붙습니다(옛 이름은 다른 표기로 남아 옛 의뢰서와 이어집니다). 노란 이름표 = 아직 저장 안 된 것.</div>
+            </div>
+          </div>
+          ${plan.warns.length ? `<div style="margin-top:10px;background:#fff7ed;border:1px solid #fdba74;border-radius:8px;padding:8px 12px;font-size:12px;color:#9a3412;">${plan.warns.map(escapeHtml).join('<br>')}</div>` : ''}
+          <div style="margin-top:14px;font-size:12.5px;font-weight:800;color:#334155;">묶음 한눈에 (${Object.keys(groups).length}개 생지 · ${Object.keys(pend).length}개 품목)</div>
+          <div id="gm-groups" style="margin-top:6px;max-height:260px;overflow:auto;border:1px solid #e2e8f0;border-radius:8px;">${Object.keys(groups).sort((a, b) => nameOf(a).localeCompare(nameOf(b), 'ko', { numeric: true })).map(gf => `<div class="gm-row" data-g="${escapeHtml(gf)}" style="display:grid;grid-template-columns:34% 1fr;gap:10px;padding:7px 12px;border-bottom:1px solid #f1f5f9;font-size:12.5px;cursor:pointer;${gf === selG ? 'background:#e0f2fe;' : ''}"><div style="font-weight:800;color:#0f172a;">${escapeHtml(nameOf(gf))}</div><div style="color:#334155;">${groups[gf].map(f => escapeHtml(nameOf(f))).join(' · ')}</div></div>`).join('') || '<div style="padding:14px;text-align:center;color:#94a3b8;font-size:12.5px;">아직 묶은 것이 없습니다</div>'}</div>
+          <div style="display:flex;gap:8px;justify-content:flex-end;align-items:center;margin-top:14px;"><span id="gm-msg" style="font-size:12px;color:#92400e;font-weight:700;">${plan.changes.length ? '저장 안 된 변경 ' + plan.changes.length + '건' : ''}</span><button class="dash-action-btn" id="gm-cancel" style="padding:8px 16px;">닫기</button><button class="dash-action-btn" id="gm-save" style="background:#047857;color:#fff;font-weight:800;padding:8px 24px;"${plan.changes.length ? '' : ' disabled'}>저장</button></div>
+        </div></div>`;
+      const close = () => { if (greigeMapPlan(pend).changes.length && !confirm('저장하지 않은 변경이 있습니다. 그래도 닫을까요?')) return; wrap.remove(); };
+      wrap.querySelector('#gm-close').addEventListener('click', close); wrap.querySelector('#gm-cancel').addEventListener('click', close);
+      wrap.querySelector('#gm-g').addEventListener('change', ev => { const t = String(ev.target.value || '').trim(); if (!t) { selG = ''; paint(); return; } const hit = findByName(t, gPool()); if (!hit) { toast('[' + t + '] 생지를 찾지 못했습니다 — 목록에서 골라 주십시오(파생 품목은 생지가 될 수 없습니다)', 'warning'); ev.target.value = g ? g.name : ''; return; } selG = specFid(hit); paint(); setTimeout(() => wrap.querySelector('#gm-d')?.focus(), 30); });
+      const addNow = () => { const el = wrap.querySelector('#gm-d'); const parts = String((el && el.value) || '').split(/[,\n，、]+/).map(x => x.trim()).filter(Boolean); if (!parts.length || !selG) return; const miss = []; let n = 0; parts.forEach(t => { const hit = findByName(t, dPool()); if (!hit) { miss.push(t); return; } pend[specFid(hit)] = selG; n++; }); if (miss.length) toast('찾지 못했거나 넣을 수 없는 품목: ' + miss.join(' · '), 'warning'); paint(); setTimeout(() => wrap.querySelector('#gm-d')?.focus(), 30); };
+      wrap.querySelector('#gm-add').addEventListener('click', addNow);
+      wrap.querySelector('#gm-d').addEventListener('change', addNow);
+      wrap.querySelector('#gm-d').addEventListener('keydown', ev => { if (ev.key === 'Enter') { ev.preventDefault(); addNow(); } });
+      wrap.querySelectorAll('.gm-x').forEach(b => b.addEventListener('click', () => { delete pend[b.dataset.f]; paint(); }));
+      wrap.querySelectorAll('.gm-row').forEach(r => r.addEventListener('click', () => { selG = r.dataset.g; paint(); }));
+      wrap.querySelector('#gm-save').addEventListener('click', async () => {
+        const p = greigeMapPlan(pend); if (!p.changes.length) return;
+        const link = p.changes.filter(c => c.to).length, un = p.changes.filter(c => !c.to).length, ren = p.changes.filter(c => c.newName !== c.oldName).length;
+        if (!confirm('원래 생지 묶음을 저장하시겠습니까?\n\n묶음 ' + link + '건 · 풀기 ' + un + '건 · 품목명 뒤 공장 붙음 ' + ren + '건\n\n편직 값 · 의뢰서 · 재고 자료는 건드리지 않습니다. 묶인 품목은 편직 의뢰서 · 원사 발주 용도에 안 나오고, 염/가공 의뢰서에서 원래 생지의 로트를 씁니다.')) return;
+        const btn = wrap.querySelector('#gm-save'); btn.disabled = true; btn.textContent = '저장 중...';
+        const done = await greigeMapSave(pend);
+        if (!done) { btn.disabled = false; btn.textContent = '저장'; return; }
+        toast('원래 생지 묶음을 저장했습니다 — ' + done.changes.length + '건', 'success');
+        Object.keys(pend).forEach(k => delete pend[k]); Object.assign(pend, greigeMapNow());
+        paint(); try { if (state.dashView === 'knitSetup' || state.dashView === 'fabricSpecs') renderDashboard(); } catch (e) {}
+      });
+    };
+    paint();
+  }
+  if (typeof window !== 'undefined') window.__greigeMap = { open: openGreigeMapModal, plan: greigeMapPlan, now: greigeMapNow };
   function codeRequestsOpen() { return (Array.isArray(state.codeRequests) ? state.codeRequests : []).filter(r => r && !r.done); }
   function canMakeItemCode() { return isOwnerUser() || canAccessView('knitSetup'); }
   async function saveCodeRequests(items) {
@@ -32377,7 +32484,8 @@ function validateBlendSum(blends, label) {
   // hotfix422i: 신규품목원가는 별도 창이 아니라 편직 설정 창(newItem 모드)으로 — 대표 지시 9/11 (편직 설정 → 디테일 설정 흐름 그대로)
   function openKnitFeePopup(fid, factory, yarnNames, onClose, opts) {
     if (!canAccessView('knitSetup')) { toast('편직 설정 권한이 없습니다', 'error'); return; }   // hotfix398
-    /* hotfix436: 원래 생지는 이 창의 [생지 기본] 아래에서 고른다(대표 지시 9/17 — 생지의 본자리는 생지 및 편직 설정). 파생 품목도 자기 창이 열린다 */
+    /* hotfix438: 파생 품목의 [편직 설정]은 곧바로 원래 생지의 편직 설정 화면을 연다(대표 지시 9/17 — 사이에 안내 상자 · 단추를 두지 않는다). 묶고 푸는 곳은 [원래 생지 묶기] 창 */
+    { const g0 = (opts && opts.newItem) ? '' : specPrimaryGreige(fid); if (g0) { if (isOwnerUser()) toast('[' + String((itemByFid(fid) || {}).name || '') + '] 의 편직 설정 = 원래 생지 [' + String((itemByFid(g0) || {}).name || '') + ']', 'info'); return openKnitFeePopup(g0, Object.keys(knitFeeOf(g0)).find(v => v && v !== KF_NO_FAC) || '', null, onClose, opts); } }
     // hotfix421: [+ 생지 추가]에서 열린 창
     const fromNew = !!(opts && opts.fromNew);
     // hotfix422i: [신규품목원가] — 품목이 아직 없는 채로 이 창을 연다(품목명 · 구분(기본 샘플) · 조직 · 편직공장 · 편직 값 · 원사 줄). [신규품목저장] 때 품목 스펙(F 자동)을 먼저 만들고 그 다음은 보통 저장과 같다
@@ -32413,7 +32521,7 @@ function validateBlendSum(blends, label) {
         <div style="font-weight:800;color:#075985;">이 품목은 원래 생지 [${escapeHtml(g.name || pendG)}] 을(를) 가공해 내는 품목입니다</div>
         <div>편직 설정 · 생지 재고 · 로트 · 원사 사용량은 원래 생지의 것을 씁니다. 폭 · 중량 · 가공 · 컬러 · 짝 리프는 이 품목의 [품목 디테일]에서 넣습니다.</div>
         <div style="color:#475569;">편직공장 <strong>${escapeHtml(gv || '-')}</strong> · 기계 ${k.inch == null ? '-' : escapeHtml(String(k.inch)) + '인치'} / ${k.needles == null ? '-' : escapeHtml(String(k.needles)) + '침'} · 사종 ${ys.length ? escapeHtml(ys.join(' · ')) : '-'}</div>
-        <div style="margin-top:6px;"><button class="dash-action-btn" id="kf-g-open" style="font-weight:800;padding:6px 14px;">원래 생지 편직 설정 열기</button></div></div>`;
+        <div style="color:#475569;">[저장]한 뒤 이 품목의 [편직 설정]을 누르면 곧바로 원래 생지의 편직 설정 화면이 열립니다.</div></div>`;
     };
     const readBasics = () => { const n = wrap.querySelector('#kf-sp-name'), g = wrap.querySelector('#kf-sp-gubun'), c = wrap.querySelector('#kf-sp-cat'); if (n) pend.name = n.value; if (g) pend.gubun = g.value; if (c && c.options.length) pend.cat = c.value; return pend; };
     const basicsChanged = () => { readBasics(); return String(pend.name || '').trim() !== String(sp.name || '').trim() || String(pend.gubun || GUBUN_BODY) !== String(sp.gubun || GUBUN_BODY) || String(pend.cat || '').trim() !== String(sp.cat || '').trim(); };
@@ -32463,8 +32571,8 @@ function validateBlendSum(blends, label) {
             </div>
             ${isOwnerUser() ? `<div style="margin-top:8px;display:grid;grid-template-columns:1.5fr 2.2fr;gap:8px 10px;align-items:end;"><!-- hotfix436: 원래 생지 -->
               <div><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px;" title="이 품목이 다른 생지를 가공해 내는 품목이면 그 생지를 고릅니다. 비우면 이 품목이 곧 생지입니다. 최고관리자에게만 보입니다">원래 생지</label>
-                <select id="kf-sp-greige" data-nodirty style="${iS}font-weight:800;color:#075985;"${gUsedBy().length ? ' disabled' : ''}><option value="">— 없음 (이 품목이 곧 생지) —</option>${gCands().concat((pendG && !gCands().some(x => specFid(x) === pendG) && itemByFid(pendG)) ? [itemByFid(pendG)] : []).map(x => `<option value="${escapeHtml(specFid(x))}"${specFid(x) === pendG ? ' selected' : ''}>${escapeHtml(x.name)}${x.active === false ? ' (판매 종료)' : ''}</option>`).join('')}</select></div>
-              <div style="font-size:11px;color:#64748b;line-height:1.6;padding-bottom:4px;">${gUsedBy().length ? '이 품목은 이미 다른 품목의 원래 생지입니다 (' + escapeHtml(gUsedBy().slice(0, 4).join(' · ')) + ') — 생지는 파생 품목이 될 수 없습니다' : '한 생지로 여러 품목을 낼 때(예: RS-850T ← 4S클래스) 고릅니다. 고르면 품목명 뒤에 원래 생지의 공장이 붙고, 편직 · 생지 재고 · 원사 수량은 원래 생지에서 관리됩니다'}</div>
+                <input id="kf-sp-greige" data-nodirty lang="ko" autocomplete="off" list="kf-sp-greige-dl" placeholder="생지 이름 검색 … (비우면 이 품목이 곧 생지)" value="${escapeHtml(pendG ? String((itemByFid(pendG) || {}).name || '') : '')}" style="${iS}font-weight:800;color:#075985;"${gUsedBy().length ? ' disabled' : ''}><datalist id="kf-sp-greige-dl">${gCands().map(x => `<option value="${escapeHtml(x.name)}">${x.active === false ? '판매 종료' : ''}</option>`).join('')}</datalist></div>
+              <div style="font-size:11px;color:#64748b;line-height:1.6;padding-bottom:4px;">${gUsedBy().length ? '<strong style="color:#075985;">이 생지에서 나오는 품목 ' + gUsedBy().length + '개</strong> — ' + escapeHtml(gUsedBy().slice(0, 8).join(' · ')) + (gUsedBy().length > 8 ? ' …' : '') + ' <button class="dash-action-btn" id="kf-gm-open" style="padding:2px 9px;font-size:11px;font-weight:800;margin-left:4px;">원래 생지 묶기</button>' : '한 생지로 여러 품목을 낼 때(예: RS-850T ← 4S클래스) 고릅니다. 고르면 품목명 뒤에 원래 생지의 공장이 붙고, 편직 · 생지 재고 · 원사 수량은 원래 생지에서 관리됩니다'}</div>
             </div>` : ''}
           </div>
           <div style="display:${gMode() ? 'none' : 'flex'};gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px;">
@@ -32522,10 +32630,12 @@ function validateBlendSum(blends, label) {
       /* hotfix436: 원래 생지 고르기 — 고르면 품목명 뒤에 그 생지의 공장을 붙이고(생지와 같은 규칙) 아래를 안내 상자로 바꾼다. 저장 전에는 아무것도 안 쓴다 */
       wrap.querySelector('#kf-sp-greige')?.addEventListener('change', ev => {
         if (V && wrap.querySelector('#kf-inch') && !gMode()) { try { stash(); } catch (_) {} } else readBasics();
-        pendG = String(ev.target.value || '').trim(); touched = true;
+        { const t = String(ev.target.value || '').trim(); const hit = t ? gCands().filter(x => vendorKey(x.name) === vendorKey(t) || (Array.isArray(x.aliases) && x.aliases.some(a => vendorKey(a) === vendorKey(t)))) : []; if (t && hit.length !== 1) { toast('[' + t + '] 생지를 찾지 못했습니다 — 목록에서 골라 주십시오', 'warning'); ev.target.value = pendG ? String((itemByFid(pendG) || {}).name || '') : ''; return; } pendG = t ? specFid(hit[0]) : ''; }   /* hotfix438: 글자 검색 */
+        touched = true;
         const gf = gFacOf(pendG); if (pendG && gf) pend.name = kfAutoItemName(pend.name || sp.name, gf);
         paint();
       });
+      wrap.querySelector('#kf-gm-open')?.addEventListener('click', () => { if (dirty() && !confirm('고친 값이 아직 저장되지 않았습니다.\n[저장]을 누르지 않고 옮기면 사라집니다.\n\n그래도 [원래 생지 묶기] 창을 열까요?')) return; if (kfH) kfH.flush(); const g = key; wrap.remove(); openGreigeMapModal(g); });
       wrap.querySelector('#kf-g-open')?.addEventListener('click', () => { if (!pendG) return; if (dirty() && !confirm('고친 값이 아직 저장되지 않았습니다.\n[저장]을 누르지 않고 옮기면 사라집니다.\n\n그래도 원래 생지 창을 열까요?')) return; if (kfH) kfH.flush(); const g = pendG; wrap.remove(); openKnitFeePopup(g, gFacOf(g), null, onClose); });
       ['#kf-inch', '#kf-needles'].forEach(q => wrap.querySelector(q)?.addEventListener('input', gz));
       const collect = () => {
@@ -33018,6 +33128,7 @@ function validateBlendSum(blends, label) {
     document.getElementById('kf-gubun')?.addEventListener('change', ev => { state.kfGubun = ev.target.value || ''; renderDashboard(); });
     document.getElementById('kf-sample')?.addEventListener('change', ev => { state.kfSample = !!ev.target.checked; renderDashboard(); });
     document.getElementById('kf-add-item')?.addEventListener('click', () => openKnitNewItemModal());
+    document.getElementById('kf-gm-btn')?.addEventListener('click', () => openGreigeMapModal(''));   /* hotfix438 */
     document.querySelectorAll('#dash-body .kf-delitem').forEach(b => b.addEventListener('click', async () => {
       const sp = getFabricSpecs().find(x => specFid(x) === b.dataset.kfFid);
       const nm = sp ? sp.name : '이 품목';
@@ -36502,7 +36613,7 @@ function recalc(){
 
   const g=n(K.needle)/(n(K.inch)||1)/3.14;
   $('k_gauge').value=isFinite(g)?(Math.trunc(g*100)/100).toFixed(2):'';
-  $('k_mname').value=(D.org||'')+Math.round(g)+'G';
+  $('k_mname').value=(D.org||'')+(isFinite(g)?(((Math.round(g*2)/2)%1===0)?String(Math.round(g*2)/2):(Math.round(g*2)/2).toFixed(1)):'')+'G';   /* hotfix437: 0.5 단위 */
   $('rGreige').textContent=won(C.gr);
   $('whyKnit').textContent=`(1) ${won(C.yt)} ÷ ((100 − ${dec(n(K.kloss))})/100) + ${won(K.kfee)} = ${won(C.gr)}`;
 
@@ -38432,7 +38543,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
       const o = String(org || '').trim();
       if (!o) return '';
       const g = calcGage(inch, needles);
-      return g == null ? o : (o + ' ' + Math.round(g) + 'G');
+      return g == null ? o : (o + ' ' + (((Math.round(g * 2) / 2) % 1 === 0) ? String(Math.round(g * 2) / 2) : (Math.round(g * 2) / 2).toFixed(1)) + 'G');   /* hotfix437: 0.5 단위 */
     }
     function fcOrgOptions(cur) {
       const c = String(cur || '').trim();
@@ -48954,7 +49065,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix436';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …)
+  const VERSION = 'v2.53 hotfix438';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …)
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
