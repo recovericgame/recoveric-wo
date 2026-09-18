@@ -8937,12 +8937,16 @@ function printUnitOf(method) { const k = String(method || '').trim(); const hit 
 function itemPrintsOf(fid) { const k = String(fid || '').trim(); const m = (typeof state !== 'undefined' && state.itemPrints && typeof state.itemPrints === 'object') ? state.itemPrints : {}; return (k && Array.isArray(m[k])) ? m[k].filter(r => r && String(r.cid || '').trim()) : []; }
 function printCleanRow(r, st) {
   const method = String(r.method || '').trim() || '일반나염'; const water = method === '물나염';
-  const kind = String(r.kind || '').trim() || (water ? '물나염' : ''); const design = String(r.design || '').trim() || (water ? '무지' : '');   /* 무늬가 없는 물나염: 구분 "물나염" · 디자인 "무지" */
+  const kind = String(r.kind || '').trim() || (water ? '물나염' : ''); const design = String(r.design || '').trim() || (water ? '무지' : ''); const pcolor = String(r.print_color || '').trim() || (water ? '무지' : '');   /* hotfix442: 물나염 나염컬러가 비면 "무지"(ERP 는 필수 칸) */   /* 무늬가 없는 물나염: 구분 "물나염" · 디자인 "무지" */
   const ext = (r.ext_codes && typeof r.ext_codes === 'object') ? r.ext_codes : null;
-  return { ...(nidNum(r.nid) ? { nid: String(r.nid).trim() } : {}), cid: String(r.cid || '').trim(), kind, design, print_color: String(r.print_color || '').trim(), method,
+  return { ...(nidNum(r.nid) ? { nid: String(r.nid).trim() } : {}), cid: String(r.cid || '').trim(), kind, design, print_color: pcolor, method,
     printer: String(r.printer || '').trim(), printer_vid: String(r.printer_vid || '').trim(), ...(r.active === false ? { active: false } : {}), ...(ext && Object.keys(ext).length ? { ext_codes: ext } : {}),
     updated_at: r.updated_at || String((st && st.at) || ''), updated_by: r.updated_by || String((st && st.by) || '') };
 }
+/* hotfix442: 물나염을 염색 컬러 없이 생지에 바로 찍는 줄 — 바탕 컬러(cid) 자리에 고정 글자. 물나염 전용 · ERP 로 넘길 때는 "N-color" */
+const PRINT_BASE_GREIGE = 'GREIGE';
+function printBaseIsGreige(cid) { return String(cid || '').trim() === PRINT_BASE_GREIGE; }
+function printRowBad(r) { return (r && printBaseIsGreige(r.cid) && String(r.method || '').trim() !== '물나염') ? '바탕 없음(생지)은 물나염에서만 고를 수 있습니다' : ''; }
 function printRowKey(r) { return [String(r.cid || '').trim(), vendorKey(r.kind), vendorKey(r.design), vendorKey(r.print_color), String(r.method || '').trim()].join('|'); }
 function assignPrintIds(itemsMap, writes, last) {
   const used = new Set(); const W = writes || {}; let mx = parseInt(last, 10) || 0;
@@ -8969,6 +8973,39 @@ function specClonePlan(specs, itemsMap, srcFid, newName, mode) {   /* hotfix441:
   const colors = !all ? [] : (Array.isArray((itemsMap || {})[src.fid]) ? itemsMap[src.fid] : []).filter(c => c && (String(c.bt_no || '').trim() || String(c.name || '').trim()))
     .map(c => { const o = JSON.parse(JSON.stringify(c)); delete o.cid; o.ext_code = ''; delete o.updated_at; delete o.updated_by; return o; });   /* 새 줄이므로 C코드는 새로 붙는다 */
   return { err: '', mode: all ? 'all' : 'knit', from: String(src.name || ''), fromFid: String(src.fid), spec, colors, derived: Array.isArray(src.greige_fids) && src.greige_fids.length > 0 };
+}
+/* hotfix442: [복제] 원래 생지 계획(계산만 · 확정서 v4 15장) — "원래 생지는 공장을 따라간다". 원래 생지 값을 그대로 복사하지 않는다.
+   kind: 'greige'(생지 자신 — 원래 생지는 비움 · family = 딸린 파생 품목을 같이 만들 때의 이름) · 'derived-same'(같은 공장 — 같은 원래 생지) · 'derived-pair'(다른 공장 — 짝 생지) · 'blocked'(짝 생지 없음 → 복제를 막는다)
+   state 를 읽지 않는다(받은 specs 만) · 아무것도 쓰지 않는다 */
+function specCloneGreigePlan(specs, srcFid, tgtFactory, newName, shortOf, factories) {
+  const list = (Array.isArray(specs) ? specs : []).filter(x => x && typeof x === 'object'); const id = String(srcFid || '').trim();
+  const src = list.find(x => String(x.fid || '').trim() === id);
+  const out = { kind: 'blocked', greigeFid: '', greigeFids: [], pairName: '', needFid: '', family: [], err: '' };
+  if (!src) { out.err = '복제할 품목을 찾지 못했습니다'; return out; }
+  const sh = typeof shortOf === 'function' ? shortOf : (x => String(x || '')); const tgt = String(tgtFactory || '').trim(); let tgtTail = tgt ? String(sh(tgt) || '').trim() : '';
+  const facs = (Array.isArray(factories) ? factories : []).map(f => String(f || '').trim()).filter(Boolean); if (tgt && !facs.includes(tgt)) facs.push(tgt);
+  const known = new Set(); facs.forEach(f => { known.add(vendorKey(f)); known.add(vendorKey(sh(f))); });
+  const split = nm => { const n = String(nm || '').trim(); const m = /^(.*)\(([^()]*)\)$/.exec(n); return (m && known.has(vendorKey(m[2]))) ? { base: String(m[1]).trim(), tail: String(m[2]).trim() } : { base: n, tail: '' }; };
+  if (!tgtTail) { const nt = split(newName).tail; if (nt && vendorKey(nt) !== vendorKey(split(src.name).tail)) tgtTail = nt; }   /* 공장을 안 고르고 이름 꼬리만 (대철)로 바꿔 적은 경우도 다른 공장으로 본다 */
+  const byFid = f => list.find(x => String(x.fid || '').trim() === String(f || '').trim());
+  const isGreige = sp => !(Array.isArray(sp.greige_fids) && sp.greige_fids.some(f => String(f || '').trim()));   /* 원래 생지 칸이 빈 품목 */
+  const gOf = sp => { const me = String(sp.fid || '').trim(); const o = []; (Array.isArray(sp.greige_fids) ? sp.greige_fids : []).forEach(f => { const k = String(f || '').trim(); if (!k || k === me || o.includes(k)) return; const g = byFid(k); if (!g || !isGreige(g)) return; o.push(k); }); return o; };   /* specGreigeFids 와 같은 규칙: 자기 자신 · 없는 코드 · 사슬은 버린다 */
+  const byName = nm => { const k = vendorKey(nm); return k ? list.find(x => vendorKey(x.name) === k || (Array.isArray(x.aliases) && x.aliases.some(a => vendorKey(a) === k))) : null; };
+  const mine = gOf(src);
+  if (!mine.length) {   /* 생지 자신 */
+    out.kind = 'greige';
+    if (tgtTail) { const seen = new Set([vendorKey(newName)]);
+      list.filter(x => x.fid && gOf(x)[0] === id).forEach(d => { const nm = split(d.name).base + '(' + tgtTail + ')'; const k = vendorKey(nm);
+        const exists = !!byName(nm) || seen.has(k); seen.add(k); out.family.push({ fromFid: String(d.fid), fromName: String(d.name || ''), name: nm, exists }); }); }
+    return out;
+  }
+  /* 파생 품목 */
+  const same = !tgtTail || mine.some(f => vendorKey(split(byFid(f).name).tail) === vendorKey(tgtTail));
+  if (same) { const keep = tgtTail ? mine.filter(f => vendorKey(split(byFid(f).name).tail) === vendorKey(tgtTail)) : mine.slice(); out.kind = 'derived-same'; out.greigeFids = keep; out.greigeFid = keep[0]; out.pairName = String(byFid(keep[0]).name || ''); return out; }
+  for (const f of mine) { const nm = split(byFid(f).name).base + '(' + tgtTail + ')'; const hit = byName(nm);
+    if (hit && hit.fid && String(hit.fid) !== id && isGreige(hit)) { out.kind = 'derived-pair'; out.greigeFid = String(hit.fid); out.greigeFids = [String(hit.fid)]; out.pairName = String(hit.name || ''); return out; } }
+  out.kind = 'blocked'; out.needFid = mine[0]; out.pairName = split(byFid(mine[0]).name).base + '(' + tgtTail + ')'; out.err = '짝 생지가 없어 복제할 수 없습니다';
+  return out;
 }
 /* hotfix441: [복제] 편직 값 계획(계산만) — rows = 원본 품목의 { 편직공장: 값 }. 다른 공장을 골랐고 원본 줄이 하나로 정해지면 그 줄을 새 공장 이름으로, 아니면 있는 줄을 공장 이름 그대로 */
 function cloneKnitPlan(rows, srcName, tgtFactory, shortOf) {
@@ -31521,6 +31558,7 @@ function validateBlendSum(blends, label) {
     const key = String(fid || '').trim(); if (!key) { toast('품목 코드가 없습니다', 'error'); return false; }
     const st = { at: editLogNow(), by: hwMyName() };
     const clean = (rows || []).map(r => printCleanRow(r, st)).filter(r => r.cid);
+    const badRow = clean.map(printRowBad).find(Boolean); if (badRow) { toast(badRow, 'warning'); return false; }   /* hotfix442 */
     const nidR = assignPrintIds(state.itemPrints, { [key]: clean }, state.itemPrintLast);
     try {
       await setDoc(doc(db, C('settings'), 'item_prints'), { items: { [key]: clean }, nid_last: nidR.last, updated_at: serverTimestamp(), updated_by: state.user?.email || '' }, { merge: true });
@@ -31536,12 +31574,12 @@ function validateBlendSum(blends, label) {
     const items = getFabricSpecs().filter(s => specIsOnSale(s)).map(s => String(s.name || '').trim()).filter(Boolean).sort((a, b) => a.localeCompare(b, 'ko'));
     const colors = itemColorsOf(fid); const okColors = colors.filter(c => cidNum(c.cid) && c.active !== false); const noCid = colors.filter(c => !cidNum(c.cid)).length;
     const rows = itemPrintsOf(fid); const owner = isOwnerUser();
-    const colorText = cid => { const c = colors.find(x => String(x.cid || '') === String(cid || '')); return c ? itemColorLabel(c) + (c.dyer ? ' · ' + c.dyer : '') : '(없는 컬러 ' + cid + ')'; };
+    const colorText = cid => { if (printBaseIsGreige(cid)) return '바탕 없음 (생지)'; const c = colors.find(x => String(x.cid || '') === String(cid || '')); return c ? itemColorLabel(c) + (c.dyer ? ' · ' + c.dyer : '') : '(없는 컬러 ' + cid + ')'; };
     const ed = S.edit ? (rows.find(r => r.nid === S.edit) || null) : null;
     const kinds = printKinds(), methods = printMethods(); const curM = ed ? ed.method : methods[0].name;
     const opt = (list, cur, blank) => (blank ? `<option value="">${escapeHtml(blank)}</option>` : '') + list.map(x => `<option value="${escapeHtml(x)}"${x === cur ? ' selected' : ''}>${escapeHtml(x)}</option>`).join('');
     let h = `<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px;margin-bottom:12px;font-size:12.5px;color:#475569;line-height:1.8;">
-      나염 한 줄 = <strong>바탕 컬러(원단 코드) × 나염구분 × 나염디자인 × 나염컬러 × 나염방식</strong>. 단위는 방식이 정합니다(물나염 = kg · 일반나염 = yd). 물나염에 무늬가 없으면 구분 "물나염" · 디자인 "무지"로 채워집니다.
+      나염 한 줄 = <strong>바탕 컬러(원단 코드) × 나염구분 × 나염디자인 × 나염컬러 × 나염방식</strong>. 단위는 방식이 정합니다(물나염 = kg · 일반나염 = yd). 물나염에 무늬가 없으면 구분 "물나염" · 디자인 "무지" · 나염컬러 "무지"로 채워집니다. 물나염을 염색 없이 생지에 바로 찍을 때는 바탕 컬러에서 "바탕 없음 (생지)"를 고릅니다(물나염 전용).
       <div style="margin-top:6px;display:flex;gap:8px;flex-wrap:wrap;">${ipCanCfg() ? `<button class="dash-action-btn" id="ip-cfg-kinds" style="font-weight:800;padding:6px 14px;background:#f5f3ff;border-color:#c4b5fd;color:#5b21b6;">나염 구분 설정</button><button class="dash-action-btn" id="ip-cfg-methods" style="font-weight:800;padding:6px 14px;background:#f5f3ff;border-color:#c4b5fd;color:#5b21b6;">나염 방식 설정</button>` : ''}</div>
     </div>`;
     h += `<div style="display:grid;grid-template-columns:minmax(260px,1.2fr) 2fr;gap:12px;align-items:end;margin-bottom:12px;">
@@ -31561,9 +31599,9 @@ function validateBlendSum(blends, label) {
           <td style="${tdS}text-align:center;white-space:nowrap;"><button class="dash-action-btn ip-edit" data-nid="${escapeHtml(r.nid || '')}" style="padding:3px 8px;font-size:11px;">수정</button> <button class="dash-action-btn ip-off" data-nid="${escapeHtml(r.nid || '')}" style="padding:3px 8px;font-size:11px;">${r.active === false ? '재개' : '중지'}</button>${owner ? ` <button class="dash-action-btn danger ip-del" data-nid="${escapeHtml(r.nid || '')}" style="padding:3px 8px;font-size:11px;">삭제</button>` : ''}</td></tr>`;
       });
       if (!rows.length) h += `<tr><td colspan="10" style="text-align:center;color:#9ca3af;padding:12px;">이 품목에 넣은 나염이 아직 없습니다.</td></tr>`;
-      const colorOpts = (ed && !okColors.some(c => c.cid === ed.cid) ? [{ cid: ed.cid, label: colorText(ed.cid) }] : []).concat(okColors.map(c => ({ cid: c.cid, label: itemColorLabel(c) + (c.dyer ? ' · ' + c.dyer : '') })));
-      if (!okColors.length && !ed) h += `<tr id="ip-nocolor"><td colspan="10" style="padding:14px;text-align:center;background:#fffbeb;color:#92400e;font-size:13px;line-height:1.8;"><strong>이 품목에는 바탕으로 고를 컬러가 아직 없습니다.</strong> 나염은 염색 컬러(원단 코드) 위에 매달리므로, 먼저 [품목 컬러 설정]에 이 품목의 컬러를 넣어야 합니다.<br><button class="dash-action-btn" id="ip-go-colors" style="margin-top:6px;font-weight:800;padding:6px 16px;background:#1e3a8a;color:#fff;">[품목 컬러 설정]으로 가서 이 품목 컬러 넣기</button></td></tr>`;
-      else h += `<tr id="ip-new" style="background:${ed ? '#eff6ff' : '#f0fdf4'};"><td style="${tdS}text-align:center;font-size:11px;font-weight:800;color:#1e40af;">${ed ? escapeHtml(ed.nid) : '새 줄'}</td>
+      const colorOpts = (ed && !okColors.some(c => c.cid === ed.cid) ? [{ cid: ed.cid, label: colorText(ed.cid) }] : []).concat(okColors.map(c => ({ cid: c.cid, label: itemColorLabel(c) + (c.dyer ? ' · ' + c.dyer : '') }))).concat((ed && printBaseIsGreige(ed.cid)) ? [] : [{ cid: PRINT_BASE_GREIGE, label: '바탕 없음 (생지) — 물나염 전용' }]);   /* hotfix442 */
+      if (!okColors.length && !ed) h += `<tr id="ip-nocolor"><td colspan="10" style="padding:14px;text-align:center;background:#fffbeb;color:#92400e;font-size:13px;line-height:1.8;"><strong>이 품목에는 바탕으로 고를 컬러가 아직 없습니다.</strong> 나염은 염색 컬러(원단 코드) 위에 매달리므로, 먼저 [품목 컬러 설정]에 이 품목의 컬러를 넣어야 합니다. <span id="ip-greige-hint">(물나염을 염색 없이 생지에 바로 찍는 줄만은 아래 새 줄에서 "바탕 없음 (생지)"를 골라 넣을 수 있습니다.)</span><br><button class="dash-action-btn" id="ip-go-colors" style="margin-top:6px;font-weight:800;padding:6px 16px;background:#1e3a8a;color:#fff;">[품목 컬러 설정]으로 가서 이 품목 컬러 넣기</button></td></tr>`;
+      h += `<tr id="ip-new" style="background:${ed ? '#eff6ff' : '#f0fdf4'};"><td style="${tdS}text-align:center;font-size:11px;font-weight:800;color:#1e40af;">${ed ? escapeHtml(ed.nid) : '새 줄'}</td>
         <td style="${tdS}"><select id="ip-cid" style="${iS}"><option value="">바탕 컬러 고르기</option>${colorOpts.map(o => `<option value="${escapeHtml(o.cid)}"${ed && ed.cid === o.cid ? ' selected' : ''}>${escapeHtml(o.label)}</option>`).join('')}</select></td>
         <td style="${tdS}"><select id="ip-kind" style="${iS}">${opt(ed && ed.kind && !kinds.includes(ed.kind) ? [ed.kind].concat(kinds) : kinds, ed ? ed.kind : '', '구분')}</select></td>
         <td style="${tdS}"><input id="ip-design" lang="ko" autocomplete="off" value="${escapeHtml(ed ? ed.design : '')}" placeholder="나염디자인" style="${iS}"></td>
@@ -31589,12 +31627,13 @@ function validateBlendSum(blends, label) {
     document.getElementById('ip-go-colors')?.addEventListener('click', () => { const I = icSel(); I.gubun = ''; I.item = S.item; I.showOff = false; if (typeof window.hwGoView === 'function') window.hwGoView('itemColors'); });   /* hotfix441 */
     const mSel = document.getElementById('ip-method'), kSel = document.getElementById('ip-kind'), dIn = document.getElementById('ip-design');
     const onMethod = () => { const m = mSel.value; document.getElementById('ip-unit').textContent = printUnitOf(m);
-      if (m === '물나염') { if (!kSel.value && Array.from(kSel.options).some(o => o.value === '물나염')) kSel.value = '물나염'; if (!dIn.value.trim()) dIn.value = '무지'; } };
+      if (m === '물나염') { if (!kSel.value && Array.from(kSel.options).some(o => o.value === '물나염')) kSel.value = '물나염'; if (!dIn.value.trim()) dIn.value = '무지'; const pc = document.getElementById('ip-pcolor'); if (pc && !pc.value.trim()) pc.value = '무지'; } };
     mSel?.addEventListener('change', onMethod);
     document.getElementById('ip-cancel')?.addEventListener('click', () => { S.edit = ''; rerender(); });
     document.getElementById('ip-add')?.addEventListener('click', async () => {
       const row = { cid: document.getElementById('ip-cid').value, kind: kSel.value, design: dIn.value.trim(), print_color: document.getElementById('ip-pcolor').value.trim(), method: mSel.value, printer: document.getElementById('ip-printer').value };
       if (!row.cid) { toast('바탕 컬러를 고르십시오', 'warning'); return; }
+      { const badMsg = printRowBad(row); if (badMsg) { toast(badMsg, 'warning'); return; } }   /* hotfix442 */
       const water = row.method === '물나염';
       if (!water && !row.kind) { toast('나염구분을 고르십시오', 'warning'); return; }
       if (!water && !row.design) { toast('나염디자인을 넣으십시오', 'warning'); return; }
@@ -31603,7 +31642,7 @@ function validateBlendSum(blends, label) {
       const rows = rowsAll(); const st = { at: editLogNow(), by: hwMyName() }; const cl = printCleanRow(row, st);
       const dup = rows.find(r => printRowKey(r) === printRowKey(cl) && r.nid !== S.edit);
       if (dup) { toast(`같은 나염 줄이 이미 있습니다 (${dup.nid})`, 'warning'); return; }
-      if (S.edit) { const i = rows.findIndex(r => r.nid === S.edit); if (i < 0) { S.edit = ''; rerender(); return; } rows[i] = Object.assign({}, rows[i], row, { kind: cl.kind, design: cl.design, updated_at: st.at, updated_by: st.by }); }
+      if (S.edit) { const i = rows.findIndex(r => r.nid === S.edit); if (i < 0) { S.edit = ''; rerender(); return; } rows[i] = Object.assign({}, rows[i], row, { kind: cl.kind, design: cl.design, print_color: cl.print_color, updated_at: st.at, updated_by: st.by }); }
       else rows.push(row);
       if (await saveItemPrints(fid, rows)) { toast(S.edit ? '고쳤습니다' : '나염 줄을 넣었습니다', 'success'); S.edit = ''; rerender(); }
     });
@@ -31669,13 +31708,15 @@ function validateBlendSum(blends, label) {
     document.body.appendChild(wrap); paint();
   }
   /* hotfix440: 품목 [복제] 창 — 계획(specClonePlan · 계산만) → 품목 문서 한 번 + 컬러 문서 한 번 */
-  function openSpecCloneModal(srcFid) {
+  function openSpecCloneModal(srcFid, preset) {   /* hotfix442: preset = { factory } — [원래 생지부터 복제]에서 공장을 미리 골라 연다 */
     if (!canEditView('fabricSpecs')) { toast('품목을 고칠 권한이 없습니다', 'error'); return; }
     const src = itemByFid(srcFid); if (!src) { toast('품목을 찾지 못했습니다', 'error'); return; }
     document.getElementById('fsc-popup')?.remove();
     const facs = knitFactoryList(); const owner = isOwnerUser(); let mode = '';
     const derived = !!specPrimaryGreige(srcFid);
-    const knitOk = owner && !derived && !!state.knitFeeLoaded; const cardOk = owner && !!state.fabricCostLoaded;
+    if (derived && !owner) { toast('이 품목은 최고관리자가 복제합니다', 'warning'); return; }   /* hotfix442: 파생 품목 복제는 최고관리자만 — 원래 생지 · 짝 생지 이름을 다른 사람 화면에 안 찍는다 */
+    let fam = false;
+    const knitOk = owner && !derived && !!state.knitFeeLoaded; const cardOk = owner && !derived && !!state.fabricCostLoaded;   /* 파생 품목은 편직 값 · 원사를 복사하지 않는다(짝 생지 것을 읽는다) */
     const wrap = document.createElement('div'); wrap.id = 'fsc-popup';
     wrap.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:9000;display:flex;align-items:center;justify-content:center;';
     const iS = 'width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #d1d5db;border-radius:7px;font-size:13px;font-family:inherit;';
@@ -31685,8 +31726,9 @@ function validateBlendSum(blends, label) {
       <div style="padding:16px 18px;display:flex;flex-direction:column;gap:11px;">
         <div><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:5px;">1. 무엇을 복사할지 먼저 고르십시오</label>
           <div style="display:flex;gap:10px;">${card('knit', '편직 자료만 복사', '품목(구분 · 조직 · 폭 · 중량 · 튜브 · 혼용률 · 짝 리프) + 기계 사양(인치 · 침수 · 게이지) + 원사')}${card('all', '컬러까지 전체 복사', '편직 자료 전부 + 이 품목의 컬러 전체(염색공장 · B/T No · 컬러명) + 가공 사양 · 주의사항')}</div></div>
-        <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:9px 12px;font-size:12px;color:#475569;line-height:1.7;"><strong>어느 쪽이든 복사하지 않는 것</strong>: 편직 의뢰서 · 통 · 재고 · 이력 · 품목 코드 · 다른 표기 · 원래 생지 묶음 · 염색/가공 단가</div>
+        <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:9px 12px;font-size:12px;color:#475569;line-height:1.7;"><strong>어느 쪽이든 복사하지 않는 것</strong>: 편직 의뢰서 · 통 · 재고 · 이력 · 품목 코드 · 다른 표기 · ${derived ? '편직 값 · 원사(원래 생지 것을 읽습니다)' : '원래 생지 묶음'} · 염색/가공 단가</div>
         <div><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px;">2. 다른 편직공장 (고르면 이름 뒤 공장이 바뀌고, 편직 값도 그 공장 이름으로 들어갑니다)</label><select id="fsc-fac" style="${iS}"><option value="">고르지 않음</option>${facs.map(f => `<option value="${escapeHtml(f)}">${escapeHtml(f)}</option>`).join('')}</select></div>
+        ${owner ? '<div id="fsc-greige" style="display:none;background:#fefce8;border:1px solid #fde68a;border-radius:8px;padding:9px 12px;font-size:12.5px;color:#713f12;line-height:1.7;"></div>' : ''}
         <div><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px;">3. 새 품목명</label><input id="fsc-name" lang="ko" autocomplete="off" value="${escapeHtml(src.name)}" style="${iS}"></div>
         <div id="fsc-sum" style="font-size:12.5px;color:#334155;line-height:1.7;"></div><div id="fsc-err" style="font-size:12.5px;color:#b91c1c;font-weight:700;min-height:16px;"></div>
         <div style="display:flex;gap:8px;justify-content:flex-end;"><button class="dash-action-btn" id="fsc-cancel">취소</button><button class="dash-action-btn" id="fsc-ok" disabled style="background:#1e3a8a;color:#fff;font-weight:800;padding:7px 18px;opacity:.45;">복제</button></div>
@@ -31694,40 +31736,67 @@ function validateBlendSum(blends, label) {
     document.body.appendChild(wrap);
     const nameEl = wrap.querySelector('#fsc-name'), errEl = wrap.querySelector('#fsc-err'), sumEl = wrap.querySelector('#fsc-sum'), facEl = wrap.querySelector('#fsc-fac'), okEl = wrap.querySelector('#fsc-ok');
     const planNow = () => specClonePlan(getFabricSpecs(), state.itemColors, srcFid, nameEl.value, mode || 'knit');
+    const gEl = wrap.querySelector('#fsc-greige');
+    const greigeNow = () => specCloneGreigePlan(getFabricSpecs(), srcFid, facEl.value, nameEl.value, kfFactoryShort, knitFactoryList());
+    const showGreige = gp => {
+      if (!gEl) return; let g = '';
+      if (gp.kind === 'derived-same') g = `<strong>원래 생지</strong>: ${escapeHtml(gp.pairName)} 에 그대로 묶습니다 (같은 공장).`;
+      else if (gp.kind === 'derived-pair') g = `<strong>원래 생지</strong>: ${escapeHtml(gp.pairName)} 에 묶습니다 (고른 공장의 짝 생지).`;
+      else if (gp.kind === 'blocked' && derived) g = `<strong style="color:#b91c1c;">짝 생지 ${escapeHtml(gp.pairName)} 이(가) 아직 없어 복제할 수 없습니다.</strong> 원래 생지를 먼저 그 공장으로 복제하십시오. <button class="dash-action-btn" id="fsc-go-greige" style="margin-left:6px;font-weight:800;padding:4px 12px;background:#1e3a8a;color:#fff;">원래 생지부터 복제</button>`;
+      else if (gp.kind === 'greige') { const n = specDerivedOf(srcFid).length;
+        if (n) { const mk = gp.family.filter(f => !f.exists), sk = gp.family.filter(f => f.exists);
+          g = `<label style="display:flex;gap:7px;align-items:center;cursor:pointer;font-weight:700;"><input type="checkbox" id="fsc-family"${fam ? ' checked' : ''}${gp.family.length ? '' : ' disabled'}> 이 생지에서 나오는 품목 ${n}개도 같이 복제</label>`
+            + (!gp.family.length ? '<div style="font-size:11.5px;color:#92400e;">다른 편직공장을 고르면 켤 수 있습니다 (딸린 품목 이름 뒤에 그 공장이 붙습니다).</div>'
+              : (fam ? `<div id="fsc-family-list" style="font-size:12px;margin-top:4px;">만들 품목 ${mk.length}개: ${mk.map(f => escapeHtml(f.name)).join(' · ') || '없음'}${sk.length ? `<br><span style="color:#b45309;">이미 있어 건너뛰는 품목 ${sk.length}개: ${sk.map(f => escapeHtml(f.name)).join(' · ')}</span>` : ''}<br>새 생지에 묶어서 만듭니다. 편직 값 · 원사는 새 생지 것을 읽습니다.</div>` : '')); } }
+      gEl.innerHTML = g; gEl.style.display = g ? '' : 'none';
+      gEl.querySelector('#fsc-family')?.addEventListener('change', ev => { fam = !!ev.target.checked; show(); });
+      gEl.querySelector('#fsc-go-greige')?.addEventListener('click', () => { const need = gp.needFid, f = facEl.value; wrap.remove(); openSpecCloneModal(need, { factory: f }); });
+    };
     const knitNow = () => knitOk ? cloneKnitPlan(knitFeeOf(srcFid), src.name, facEl.value, kfFactoryShort) : [];
     const cardYarns = () => { const c = cardOk ? (getFabricCost(srcFid) || {}) : {}; return Array.isArray(c.yarns) ? c.yarns.filter(y => y && y.name) : []; };
     const show = () => {
       wrap.querySelectorAll('.fsc-mode').forEach(b => { const on = b.dataset.mode === mode; b.style.borderColor = on ? '#1e3a8a' : '#e5e7eb'; b.style.background = on ? '#eff6ff' : '#fff'; });
       const p = planNow(); const sameName = vendorKey(nameEl.value) === vendorKey(src.name);
-      errEl.textContent = (p.err && !sameName) ? p.err : '';
-      const ready = !!mode && !p.err; okEl.disabled = !ready; okEl.style.opacity = ready ? '1' : '.45';
+      const gp = greigeNow(); if (!gp.family.length) fam = false; showGreige(gp); const blocked = derived && gp.kind === 'blocked';
+      errEl.textContent = (p.err && !sameName) ? p.err : (blocked ? '짝 생지가 없어 복제할 수 없습니다' : '');
+      const ready = !!mode && !p.err && !blocked; okEl.disabled = !ready; okEl.style.opacity = ready ? '1' : '.45';
       if (!mode) { sumEl.textContent = '위에서 복사 방식을 먼저 고르십시오.'; return; }
       if (sameName) { sumEl.textContent = '새 품목명을 원래 이름과 다르게 넣으십시오 (다른 편직공장을 고르면 저절로 바뀝니다).'; return; }
       if (p.err) { sumEl.textContent = ''; return; }
       const kn = knitNow(); const lines = ['새 품목 1개'];
       lines.push(kn.length ? `편직 값 ${kn.length}줄 (${kn.map(k => k.from === k.to ? k.to : k.from + ' → ' + k.to).join(' · ')})` : (owner ? (derived ? '편직 값 없음 (이 품목은 다른 생지의 값을 읽는 품목입니다)' : '편직 값 없음') : '편직 값 · 원사는 최고관리자가 복제할 때만 따라갑니다'));
-      if (owner) lines.push(`원사 ${cardYarns().length}줄`);
+      if (owner && !derived) lines.push(`원사 ${cardYarns().length}줄`);
+      if (fam && gp.kind === 'greige') lines.push(`딸린 품목 ${gp.family.filter(f => !f.exists).length}개`);
       if (mode === 'all') { lines.push(`컬러 ${p.colors.length}줄`); lines.push('가공 사양 ' + (((p.spec.std_procs || []).length || Object.keys(p.spec.std_by_vendor || {}).length) ? '있음' : '없음')); }
       sumEl.textContent = lines.join(' · ');
     };
     wrap.querySelectorAll('.fsc-mode').forEach(b => b.addEventListener('click', () => { mode = b.dataset.mode; show(); }));
     facEl.addEventListener('change', ev => { if (ev.target.value) nameEl.value = kfAutoItemName(src.name, ev.target.value); show(); });
-    nameEl.addEventListener('input', show); show();
+    nameEl.addEventListener('input', show);
+    if (preset && preset.factory && facs.includes(preset.factory)) { facEl.value = preset.factory; nameEl.value = kfAutoItemName(src.name, preset.factory); }
+    show();
     wrap.querySelector('#fsc-cancel').addEventListener('click', () => wrap.remove());
     okEl.addEventListener('click', async () => {
       if (!mode) return; const p = planNow(); if (p.err) { errEl.textContent = p.err; return; }
       const kn = knitNow(); const ys = cardYarns(); const srcYarnNames = knitOk ? kfYarnNames(srcFid) : [];
+      const gp = greigeNow(); if (derived && (gp.kind === 'blocked' || !gp.greigeFids.length)) { errEl.textContent = '짝 생지가 없어 복제할 수 없습니다'; return; }
+      if (derived) p.spec.greige_fids = gp.greigeFids.slice();   /* hotfix442: 원래 생지 값을 그대로 복사하지 않는다 — 같은 공장이면 같은 생지 · 다른 공장이면 짝 생지 */
+      const famPlans = (owner && fam && gp.kind === 'greige') ? gp.family.filter(f => !f.exists).map(f => specClonePlan(getFabricSpecs(), state.itemColors, f.fromFid, f.name, mode)).filter(x => !x.err) : [];
       okEl.disabled = true; p.spec.updated_at = todayYMD();
-      const ok = await saveFabricSpecs(getFabricSpecs().map(x => ({ ...x })).concat([p.spec])); if (!ok) { okEl.disabled = false; return; }
+      const nextSpecs = getFabricSpecs().map(x => ({ ...x })).concat([p.spec]).concat(famPlans.map(x => x.spec));
+      if (famPlans.length) { assignFabricIds(nextSpecs); famPlans.forEach(x => { x.spec.greige_fids = [p.spec.fid]; x.spec.updated_at = todayYMD(); }); }   /* 새 생지의 품목 코드를 미리 정해 딸린 품목을 묶는다 — 품목 문서는 한 번만 쓴다 */
+      const ok = await saveFabricSpecs(nextSpecs); if (!ok) { okEl.disabled = false; return; }
       const made = getFabricSpecs().find(x => vendorKey(x.name) === vendorKey(p.spec.name)); const nf = made ? specFid(made) : '';
       const bad = [];
       if (nf && ys.length) { const okY = await saveFabricCost(nf, { yarns: JSON.parse(JSON.stringify(ys)), updated_at: todayYMD() }); if (!okY) bad.push('원사'); }   /* 원가 카드에서는 원사 줄만 — 염색 · 가공 단가는 안 따라간다 */
       if (nf) for (const k of kn) { const okK = await saveKnitFeeRow(nf, k.to, k.row, { quiet: true, tag: '복제', yarnNames: srcYarnNames }); if (!okK) bad.push('편직 값(' + k.to + ')'); }
       if (nf && p.mode === 'all' && p.colors.length) { const okC = await saveItemColors(nf, p.colors); if (!okC) bad.push('컬러'); }
+      for (const x of famPlans) { if (x.mode === 'all' && x.colors.length && x.spec.fid) { const okF = await saveItemColors(x.spec.fid, x.colors); if (!okF) bad.push('컬러(' + x.spec.name + ')'); } }
       wrap.remove();
-      toast(bad.length ? `${p.spec.name} 은(는) 만들었으나 ${bad.join(' · ')} 복사에 실패했습니다` : `${p.spec.name} (${nf}) 을(를) 만들었습니다 — ${p.mode === 'all' ? '컬러까지 전체' : '편직 자료만'}`, bad.length ? 'warning' : 'success'); renderDashboard();
+      toast(bad.length ? `${p.spec.name} 은(는) 만들었으나 ${bad.join(' · ')} 복사에 실패했습니다` : `${p.spec.name} (${nf}) 을(를) 만들었습니다 — ${p.mode === 'all' ? '컬러까지 전체' : '편직 자료만'}${famPlans.length ? ' · 딸린 품목 ' + famPlans.length + '개' : ''}`, bad.length ? 'warning' : 'success'); renderDashboard();
     });
   }
+  if (typeof window !== 'undefined') window.__a442 = { greigePlan: specCloneGreigePlan, printRowBad, PRINT_BASE_GREIGE };
   if (typeof window !== 'undefined') window.__a440 = { clonePlan: specClonePlan, cloneKnitPlan, openClone: openSpecCloneModal, cidFillPlan, assignColorIds, assignPrintIds, printUnitOf, printCleanRow };
   const CD_STAGES = [['knitting', '편직', '편직 의뢰서'], ['dyeing', '염색', '염/가공 의뢰서'], ['processing', '가공', '염/가공 의뢰서'], ['post', '후가공', '염/가공 의뢰서'], ['print', '나염', '나염 의뢰서 (400에서 연결)']];
   function cdBuiltin(k) { return k === 'knitting' ? DEFAULT_KNIT_CAUTIONS : (DEFAULT_CAUTIONS[k] || []); }
@@ -49539,7 +49608,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix441';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …)
+  const VERSION = 'v2.53 hotfix442';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …)
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
