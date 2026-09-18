@@ -31169,6 +31169,7 @@ function validateBlendSum(blends, label) {
     let h = `<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px;margin-bottom:12px;font-size:12.5px;color:#475569;line-height:1.8;">
       <strong>품목 → 염색공장</strong>을 위에서 한 번 고르고, 아래 표에 <strong>B/T No → 컬러명</strong> 순서로 이어서 넣습니다 (컬러명 칸에서 Enter 를 누르면 저장되고 다음 줄로). B/T No 는 염색공장이 부르는 번호를 그대로 적습니다. 의뢰서에는 "컬러명 #B/T No"(예: 프진먹색 #451A)로 찍힙니다.<br>
       의뢰서 컬러 칸은 이 표에서 고르게 됩니다 (편직업체 → 품목 → 염색공장 순으로 걸러서). 줄 지우기는 최고관리자만 됩니다.
+      <div style="margin-top:6px;"><button class="dash-action-btn" id="ic-xlsx-btn" style="font-weight:800;padding:6px 14px;background:#ecfdf5;border-color:#6ee7b7;color:#065f46;" title="품목별 컬러 입력표(xlsx)를 한 번에 올립니다 — 올리기 전에 미리 보기에서 품목 · 염색공장을 맞춰 봅니다">컬러 xlsx 올리기</button><input type="file" id="ic-xlsx-file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" style="display:none;"> <span style="font-size:11.5px;color:#64748b;">열: 품목명 · 염색공장 · B/T No · 컬러명 · 비고 — 있는 줄은 그대로 두고 없는 줄만 더합니다(지우지 않습니다)</span></div>
     </div>`;
     h += `<div style="display:grid;grid-template-columns:130px 1.4fr 1fr auto;gap:12px;align-items:end;margin-bottom:12px;">
       <div><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px;">구분</label><select id="ic-gubun" style="${iS}"><option value="">전체</option>${gubuns.map(g => `<option value="${escapeHtml(g)}"${S.gubun === g ? ' selected' : ''}>${escapeHtml(g)}</option>`).join('')}</select></div>
@@ -31200,8 +31201,121 @@ function validateBlendSum(blends, label) {
     h += `</tbody></table></div>`;
     return h;
   }
+  // ============================================================
+  // hotfix439(422j): [품목 컬러 설정 › 컬러 xlsx 올리기] — 입력표(품목명 · 염색공장 · B/T No · 컬러명 · 비고)를 미리 보고 한 번에 넣는다
+  //   품목: 이름 · 다른 표기 → "_8%" 는 " / 8%" 로도 → 뒤의 (공장)을 뗀 이름으로도 찾는다(같은 판매 품목이 공장별로 여럿이면 전부에). 못 찾으면 미리 보기에서 고르거나 건너뛴다
+  //   염색공장: 목록에 없는 공장은 "기타" + 비고에 이름(유원 · 주영 …) → 거래처에서 찾고, 못 찾으면 미리 보기에서 고른다(안 고르면 글자 그대로 담는다 — 잃지 않는다)
+  //   더하기만 한다: 같은 품목 · 염색공장 · B/T No(없으면 컬러명)가 이미 있으면 컬러명만 맞추고, 없는 줄만 더한다. 쓰기는 바뀐 품목만 묶어 한 번(merge)
+  // ============================================================
+  function icXlsxBaseName(n) { return String(n || '').trim().replace(/\s*\([^()]*\)\s*$/, '').trim(); }
+  function icXlsxPlanOf(rows, itemMap, dyerMap) {
+    itemMap = itemMap || {}; dyerMap = dyerMap || {};
+    if (!Array.isArray(rows) || rows.length < 2) return { err: '빈 파일입니다' };
+    const hk = h => String(h == null ? '' : h).replace(/\s+/g, ''); const head = (rows[0] || []).map(hk); const find = re => head.findIndex(h => re.test(h));
+    const ix = { item: find(/^품목명/), dyer: find(/^염색공장|^염색처/), bt: find(/^B\/?TNo|^BTNo|^B\/T/i), name: find(/^컬러명|^컬러$/), note: find(/^비고/) };
+    if (ix.item < 0 || ix.name < 0 || ix.bt < 0) return { err: '컬러 입력표가 아닙니다 — [품목명] · [B/T No] · [컬러명] 열이 있어야 합니다' };
+    const str = v => (typeof v === 'number') ? String(v) : String(v == null ? '' : v).trim(); const cell = (r, i) => (i >= 0 && r[i] != null) ? r[i] : '';
+    const K = v => vendorKey(String(v || '')); const specs = getFabricSpecs().filter(x => specFid(x));
+    const dyers = (state.vendors || []).filter(v => v && v.name && vendorTypesNorm(v).some(t => t === '염색처' || t === '가공처'));
+    const REMARK = /없음|없슴|미정|확인/;
+    const resolveItem = raw => {
+      if (Object.prototype.hasOwnProperty.call(itemMap, raw)) { const m = itemMap[raw]; if (m === '__skip') return { fids: [], how: 'skip' }; const sp = specs.find(x => specFid(x) === m); if (sp) return { fids: [m], how: 'map' }; }
+      const tryNames = [raw]; const mm = /^(.*)_(\d+(?:\.\d+)?%.*)$/.exec(raw); if (mm) { tryNames.push(mm[1].trim() + ' / ' + mm[2].trim()); tryNames.push(mm[1].trim() + '/' + mm[2].trim()); }
+      for (const t of tryNames) { const hit = specs.filter(sp => itemHasName(sp, t)); if (hit.length === 1) return { fids: [specFid(hit[0])], how: t === raw ? 'name' : 'variant' }; if (hit.length > 1) return { fids: hit.map(specFid), how: 'multi' }; }
+      for (const t of tryNames) { const hit = specs.filter(sp => K(icXlsxBaseName(sp.name)) === K(t) || (Array.isArray(sp.aliases) && sp.aliases.some(a => K(icXlsxBaseName(a)) === K(t)))); if (hit.length) return { fids: hit.map(specFid), how: hit.length > 1 ? 'multi' : 'base' }; }
+      return { fids: [], how: 'none' };
+    };
+    const resolveDyer = label => {
+      if (!label) return { name: '', how: 'empty' };
+      if (Object.prototype.hasOwnProperty.call(dyerMap, label) && dyerMap[label]) return { name: dyerMap[label], how: 'map' };
+      const k = K(label); let hit = dyers.filter(v => K(v.name) === k || (Array.isArray(v.aliases) && v.aliases.some(a => K(a) === k)));
+      if (hit.length !== 1) { const h2 = dyers.filter(v => vendorIsActive(v) && K(v.name).indexOf(k) === 0); if (h2.length === 1) hit = h2; }
+      return hit.length === 1 ? { name: String(hit[0].name).trim(), how: 'vendor' } : { name: label, how: 'text' };
+    };
+    const groups = {}, dyerLabels = {}; let total = 0;
+    for (let i = 1; i < rows.length; i++) {
+      const r = rows[i] || []; const item = str(cell(r, ix.item)), name = str(cell(r, ix.name)), bt = str(cell(r, ix.bt)); if (!item || (!name && !bt)) continue;
+      const dRaw = str(cell(r, ix.dyer)), note = str(cell(r, ix.note));
+      let label = dRaw; if (!dRaw || dRaw === '기타') { const tok = note.split(/[,，、·]+/).map(x => x.trim()).filter(x => x && !REMARK.test(x) && !/^[A-Za-z]$/.test(x) && !/코드/.test(x)); label = tok[0] || '';   /* "B/T NO 없음" · "A,B 코드 없음" 같은 메모는 공장 이름이 아니다 */ }
+      total++; (groups[item] = groups[item] || { raw: item, rows: [] }).rows.push({ label, bt, name });
+      dyerLabels[label] = (dyerLabels[label] || 0) + 1;
+    }
+    const dyerRes = {}; Object.keys(dyerLabels).forEach(l => { dyerRes[l] = Object.assign({ label: l, n: dyerLabels[l] }, resolveDyer(l)); });
+    const writes = {}; let add = 0, upd = 0, same = 0, skip = 0, dupInFile = 0; const items = [];
+    Object.keys(groups).forEach(raw => {
+      const g = groups[raw]; const res = resolveItem(raw); const it = { raw, n: g.rows.length, fids: res.fids, how: res.how, names: res.fids.map(f => String((itemByFid(f) || {}).name || f)), add: 0, upd: 0, same: 0 };
+      items.push(it); if (!res.fids.length) { skip += g.rows.length; return; }
+      res.fids.forEach(fid => {
+        const list = (writes[fid] || ((state.itemColors && Array.isArray(state.itemColors[fid])) ? state.itemColors[fid] : [])).map(c => Object.assign({}, c)); let touched = false;
+        const keyOf = c => K(c.dyer) + '|' + (String(c.bt_no || '').trim() ? 'b:' + String(c.bt_no).trim().toLowerCase() : 'n:' + K(c.name));
+        const seen = new Set();
+        g.rows.forEach(rw => {
+          const dn = dyerRes[rw.label].name; const c = { yarn_color: '', dyer: dn, bt_no: rw.bt, name: rw.name, ext_code: '' }; const k = keyOf(c);
+          if (seen.has(k)) { if (fid === res.fids[0]) dupInFile++; return; } seen.add(k);
+          const ex = list.find(x => keyOf(x) === k);
+          if (ex) { if (rw.name && String(ex.name || '').trim() !== rw.name) { ex.name = rw.name; ex.updated_at = editLogNow(); ex.updated_by = hwMyName(); touched = true; it.upd++; upd++; } else { it.same++; same++; } return; }
+          c.updated_at = editLogNow(); c.updated_by = hwMyName(); list.push(c); touched = true; it.add++; add++;
+        });
+        if (touched) writes[fid] = list;
+      });
+    });
+    items.sort((a, b) => (a.fids.length ? 1 : 0) - (b.fids.length ? 1 : 0) || a.raw.localeCompare(b.raw, 'ko', { numeric: true }));
+    return { items, dyers: Object.keys(dyerRes).map(k => dyerRes[k]).sort((a, b) => (a.how === 'text' ? 0 : 1) - (b.how === 'text' ? 0 : 1) || b.n - a.n), writes, total, add, upd, same, skip, dupInFile };
+  }
+  async function icXlsxApply(plan) {
+    if (!canAccessView('itemColors')) { toast('품목 컬러를 고칠 권한이 없습니다', 'error'); return false; }
+    const fids = Object.keys(plan.writes || {}); if (!fids.length) { toast('더할 줄이 없습니다', 'info'); return true; }
+    const clean = {}; fids.forEach(f => { clean[f] = plan.writes[f].map(c => ({ yarn_color: String(c.yarn_color || '').trim(), dyer: String(c.dyer || '').trim(), bt_no: String(c.bt_no || '').trim(), name: String(c.name || '').trim(), ext_code: String(c.ext_code || '').trim(), updated_at: c.updated_at || editLogNow(), updated_by: c.updated_by || hwMyName() })).filter(c => c.bt_no || c.name); });
+    try {
+      await setDoc(doc(db, C('settings'), 'item_colors'), { items: clean, updated_at: serverTimestamp(), updated_by: state.user?.email || '' }, { merge: true });
+      if (!state.itemColors || typeof state.itemColors !== 'object') state.itemColors = {};
+      fids.forEach(f => { state.itemColors[f] = clean[f]; });
+      try { refreshFinishColorList(); } catch (_) {}
+      return true;
+    } catch (e) { toast('품목 컬러 올리기 실패: ' + e.message, 'error'); return false; }
+  }
+  function openIcXlsxPreview(rows, fileName) {
+    document.getElementById('icx-popup')?.remove();
+    const itemMap = {}, dyerMap = {};
+    const wrap = document.createElement('div'); wrap.id = 'icx-popup';
+    wrap.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:10050;display:flex;align-items:flex-start;justify-content:center;overflow:auto;padding:26px 12px;';
+    document.body.appendChild(wrap);
+    const iS = 'width:100%;box-sizing:border-box;padding:5px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:12.5px;font-family:inherit;';
+    const specs = getFabricSpecs().filter(x => specFid(x)).sort((a, b) => String(a.name).localeCompare(String(b.name), 'ko', { numeric: true }));
+    const dyerNames = Array.from(new Set((state.vendors || []).filter(v => v && v.name && vendorIsActive(v) && vendorTypesNorm(v).some(t => t === '염색처' || t === '가공처')).map(v => String(v.name).trim()))).sort((a, b) => a.localeCompare(b, 'ko'));
+    const howTxt = { name: '이름 같음', variant: '"_%" → " / %"', base: '(공장) 뗀 이름', multi: '같은 이름 품목 전부', map: '직접 고름', skip: '건너뜀', none: '품목 없음' };
+    const paint = () => {
+      const plan = icXlsxPlanOf(rows, itemMap, dyerMap);
+      if (plan.err) { wrap.innerHTML = `<div style="background:#fff;border-radius:12px;padding:24px;max-width:520px;"><div style="font-weight:800;color:#991b1b;margin-bottom:10px;">${escapeHtml(plan.err)}</div><button class="dash-action-btn" id="icx-close">닫기</button></div>`; wrap.querySelector('#icx-close').addEventListener('click', () => wrap.remove()); return; }
+      const noItem = plan.items.filter(x => !x.fids.length && x.how !== 'skip'); const txtDyer = plan.dyers.filter(d => d.how === 'text');
+      wrap.innerHTML = `<div style="background:#fff;border-radius:12px;max-width:980px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,.35);">
+        <div style="display:flex;align-items:center;gap:10px;padding:14px 18px;border-bottom:2px solid #065f46;"><strong style="font-size:15px;color:#065f46;">컬러 xlsx 올리기 — 미리 보기</strong><span style="font-size:11.5px;color:#64748b;">${escapeHtml(fileName || '')}</span><span style="flex:1;"></span><button class="dash-action-btn" id="icx-close" style="padding:4px 12px;">닫기</button></div>
+        <div style="padding:16px 18px;">
+          <div id="icx-sum" style="background:${noItem.length ? '#fff7ed' : '#f0fdf4'};border:1px solid ${noItem.length ? '#fdba74' : '#86efac'};border-radius:9px;padding:10px 14px;font-size:13px;line-height:1.8;color:#0f172a;">파일 ${plan.total}줄 · 품목 ${plan.items.length}개 → <strong>새로 더함 ${plan.add}줄</strong> · 컬러명 맞춤 ${plan.upd}줄 · 이미 있음 ${plan.same}줄${plan.dupInFile ? ' · 파일 안 겹침 ' + plan.dupInFile + '줄(하나로)' : ''}${plan.skip ? ` · <strong style="color:#9a3412;">품목을 못 찾아 빠지는 줄 ${plan.skip}줄</strong>` : ''}<br><span style="font-size:11.5px;color:#64748b;">지우는 줄은 없습니다. [반영]을 누르기 전에는 아무것도 바뀌지 않습니다.</span></div>
+          ${plan.dyers.length ? `<div style="margin-top:12px;font-size:12.5px;font-weight:800;color:#334155;">염색공장 맞추기 ${txtDyer.length ? `<span style="color:#9a3412;">— 거래처에서 못 찾은 이름 ${txtDyer.length}개 (고르지 않으면 글자 그대로 담깁니다)</span>` : ''}</div>
+          <div style="margin-top:6px;display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:6px 12px;">${plan.dyers.map(d => `<div style="display:grid;grid-template-columns:110px 1fr;gap:6px;align-items:center;font-size:12.5px;"><span style="font-weight:700;color:${d.how === 'text' ? '#9a3412' : '#334155'};">${escapeHtml(d.label || '(빈 칸)')} <span style="color:#94a3b8;font-weight:400;">${d.n}</span></span><input class="icx-dyer" data-l="${escapeHtml(d.label)}" list="icx-dyer-dl" lang="ko" autocomplete="off" value="${escapeHtml(d.how === 'text' ? '' : d.name)}" placeholder="${d.label ? '염색공장 검색 …' : '(염색공장 없음)'}" style="${iS}${d.how === 'text' ? 'border-color:#fdba74;background:#fff7ed;' : ''}"></div>`).join('')}</div><datalist id="icx-dyer-dl">${dyerNames.map(n => `<option value="${escapeHtml(n)}"></option>`).join('')}</datalist>` : ''}
+          <div style="margin-top:14px;font-size:12.5px;font-weight:800;color:#334155;">품목 맞추기 ${noItem.length ? `<span style="color:#9a3412;">— 못 찾은 품목 ${noItem.length}개 (기존 품목을 고르거나 비워 두면 그 줄은 빠집니다)</span>` : ''}</div>
+          <div style="margin-top:6px;max-height:340px;overflow:auto;border:1px solid #e2e8f0;border-radius:8px;">${plan.items.map(x => `<div class="icx-item" data-raw="${escapeHtml(x.raw)}" style="display:grid;grid-template-columns:1.1fr 1.5fr 110px 1fr;gap:8px;align-items:center;padding:6px 10px;border-bottom:1px solid #f1f5f9;font-size:12.5px;${x.fids.length ? '' : 'background:#fff7ed;'}"><div style="font-weight:800;">${escapeHtml(x.raw)} <span style="color:#94a3b8;font-weight:400;">${x.n}줄</span></div><div style="color:${x.fids.length ? '#0f172a' : '#9a3412'};">${x.fids.length ? '→ ' + escapeHtml(x.names.join(' · ')) : '품목 없음'} <span style="color:#94a3b8;font-size:11px;">${x.fids.length || x.how === 'skip' ? escapeHtml(howTxt[x.how] || '') : ''}</span></div><div style="font-size:11.5px;color:#475569;">${x.fids.length ? '더함 ' + x.add + ' · 있음 ' + x.same + (x.upd ? ' · 맞춤 ' + x.upd : '') : ''}</div><input class="icx-map" data-raw="${escapeHtml(x.raw)}" list="icx-item-dl" lang="ko" autocomplete="off" placeholder="${x.fids.length ? '다른 품목으로 바꾸기 …' : '기존 품목 검색 …'}" value="${escapeHtml(x.how === 'map' ? x.names[0] : '')}" style="${iS}"></div>`).join('')}</div><datalist id="icx-item-dl">${specs.map(s => `<option value="${escapeHtml(s.name)}"></option>`).join('')}</datalist>
+          <div style="display:flex;gap:8px;justify-content:flex-end;align-items:center;margin-top:14px;"><button class="dash-action-btn" id="icx-cancel" style="padding:8px 16px;">취소</button><button class="dash-action-btn" id="icx-apply" style="background:#047857;color:#fff;font-weight:800;padding:8px 24px;"${(plan.add + plan.upd) ? '' : ' disabled'}>반영 (${plan.add + plan.upd}줄)</button></div>
+        </div></div>`;
+      wrap.querySelector('#icx-close').addEventListener('click', () => wrap.remove()); wrap.querySelector('#icx-cancel').addEventListener('click', () => wrap.remove());
+      wrap.querySelectorAll('.icx-dyer').forEach(el => el.addEventListener('change', () => { const l = el.dataset.l, t = el.value.trim(); if (!t) delete dyerMap[l]; else if (dyerNames.some(n => vendorKey(n) === vendorKey(t))) dyerMap[l] = dyerNames.find(n => vendorKey(n) === vendorKey(t)); else { toast('[' + t + '] 염색공장을 거래처에서 찾지 못했습니다 — 목록에서 골라 주십시오', 'warning'); el.value = ''; return; } paint(); }));
+      wrap.querySelectorAll('.icx-map').forEach(el => el.addEventListener('change', () => { const raw = el.dataset.raw, t = el.value.trim(); if (!t) delete itemMap[raw]; else { const hit = specs.filter(sp => itemHasName(sp, t)); if (hit.length !== 1) { toast('[' + t + '] 품목을 찾지 못했습니다 — 목록에서 골라 주십시오', 'warning'); el.value = ''; return; } itemMap[raw] = specFid(hit[0]); } paint(); }));
+      wrap.querySelector('#icx-apply').addEventListener('click', async () => {
+        const p = icXlsxPlanOf(rows, itemMap, dyerMap);
+        if (!confirm('품목 컬러 ' + (p.add + p.upd) + '줄을 반영하시겠습니까?\n\n새로 더함 ' + p.add + '줄 · 컬러명 맞춤 ' + p.upd + '줄 · 품목 ' + Object.keys(p.writes).length + '개' + (p.skip ? '\n품목을 못 찾아 빠지는 줄 ' + p.skip + '줄' : '') + '\n\n지우는 줄은 없습니다.')) return;
+        const b = wrap.querySelector('#icx-apply'); b.disabled = true; b.textContent = '반영 중...';
+        const ok = await icXlsxApply(p); if (!ok) { b.disabled = false; b.textContent = '반영'; return; }
+        toast('품목 컬러 ' + (p.add + p.upd) + '줄을 반영했습니다 (품목 ' + Object.keys(p.writes).length + '개)', 'success'); wrap.remove(); try { renderDashboard(); } catch (e) {}
+      });
+    };
+    paint();
+  }
+  if (typeof window !== 'undefined') window.__icXlsx = { planOf: icXlsxPlanOf, open: openIcXlsxPreview };
   function bindItemColorsDash() {
     const body = document.getElementById('dash-body'); if (!body) return;
+    document.getElementById('ic-xlsx-btn')?.addEventListener('click', () => document.getElementById('ic-xlsx-file')?.click());   /* hotfix439 */
+    document.getElementById('ic-xlsx-file')?.addEventListener('change', async ev => { const f = ev.target.files && ev.target.files[0]; ev.target.value = ''; if (!f) return; try { const buf = await f.arrayBuffer(); const rows = await xlsxFirstSheetRows(buf); openIcXlsxPreview(rows, f.name); } catch (e) { toast('xlsx 를 읽지 못했습니다: ' + e.message, 'error'); } });
     const S = icSel();
     const rerender = () => renderDashboard();
     const bindSel = (id, k) => { const el = document.getElementById(id); if (!el) return; el.addEventListener('change', () => { S[k] = el.value.trim(); rerender(); }); el.addEventListener('keydown', ev => { if (ev.key === 'Enter') { ev.preventDefault(); S[k] = el.value.trim(); rerender(); } }); };
@@ -49065,7 +49179,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix438';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …)
+  const VERSION = 'v2.53 hotfix439';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …)
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
