@@ -6517,6 +6517,8 @@
     #preview-container.d-scaled .wo-doc { position: absolute; top: 0; left: var(--desk-left, 0px); margin: 0; transform: scale(var(--desk-scale, 1)); transform-origin: top left; }
   }
   @media (min-width: 769px) and (max-width: 1500px) { #main-app.app { --side-col: 270px; } body.hwside-off #main-app.app { --side-col: 340px; } }
+  /* hotfix448: 나염작지는 입력 칸이 넓어야 한다(디자인 이미지 + 조합표) — 나염을 고른 동안만 작성 띠를 줄이고 입력을 넓힌다. 종이는 그만큼 더 줄어 보인다 */
+  @media (min-width: 769px) { #main-app.app:has(.type-btn.active[data-type="나염"]) { --side-col: 250px; grid-template-columns: var(--side-col) minmax(660px, 60fr) 6px minmax(320px, 40fr); } }
   @media print { html body #preview-container.d-scaled .wo-doc { position: static !important; transform: none !important; } }
   .hwstock .hwdrop { top: calc(50% + 20px); border-radius: 9px; border-top: 1px solid #e2e8f0; min-width: 170px; }
   /* ============================================================
@@ -13848,6 +13850,7 @@ window.addEventListener('firebase-ready', () => {
         const d = snap.data();
         const items = (d.items || []).filter(it => it && it.name);
         state.fabricSpecs = items.length ? items : SEED_FABRIC_SPECS.slice();
+        state.fabricFidLast = Math.max(Number(state.fabricFidLast) || 0, parseInt(d.fid_last, 10) || 0);   /* hotfix448: 품목 코드 마지막 번호(없던 옛 문서는 0 → 지금 있는 가장 큰 번호부터) */
         state.fabricGubuns = Array.isArray(d.gubuns) ? d.gubuns.filter(Boolean) : FIXED_GUBUNS.slice();
         FIXED_GUBUNS.forEach(g => { if (!state.fabricGubuns.includes(g)) state.fabricGubuns.push(g); });   // hotfix399f: 샘플이 없던 옛 문서
       } else {
@@ -14177,14 +14180,17 @@ window.addEventListener('firebase-ready', () => {
       toast('같은 품목명이 있습니다 — 품목명은 겹치지 않게 해주세요', 'error');
       return false;
     }
+    const fidLast = cleaned.reduce((m, it) => { const x = /^F(\d{4,})$/.exec(String(it.fid || '')); return x ? Math.max(m, parseInt(x[1], 10) || 0) : m; }, Math.max(0, Number(state.fabricFidLast) || 0));   /* hotfix448: 마지막 번호 — 줄어들지 않는다 */
     await setDoc(doc(db, C('settings'), 'fabric_specs'), {
       items: cleaned,
       gubuns: gClean,
+      fid_last: fidLast,
       updated_at: serverTimestamp(),
       updated_by: state.user?.email || 'unknown'
     });
     state.fabricSpecs = cleaned;
     state.fabricGubuns = gClean;
+    state.fabricFidLast = fidLast;
     // hotfix383: 달라진 것만 이력에 남긴다 (코드가 있으면 코드로, 없으면 이름으로 짝을 맞춘다)
     logEdits('fabricSpecs', editLogDiff('fabricSpecs', prevSpecs, cleaned,
       x => String(x.fid || '').trim() || ('n:' + String(x.name || '').trim().toLowerCase())));
@@ -15026,7 +15032,9 @@ function specGreigeColors(fid) {
   // 품목 고정 코드 — 없는 품목에만 새로 붙인다. 한 번 붙으면 절대 바뀌지 않는다.
   function assignFabricIds(list) {
     const used = new Set();
-    let max = 0;
+    /* hotfix448(코드 규칙 "다시 안 씀"): 마지막 번호(fid_last)를 기억해, 가장 큰 번호의 품목을 지운 뒤에도 그 번호를 새 품목에 다시 주지 않는다 — 지운 품목의 코드를 가진 옛 의뢰서 · 재고 줄이 엉뚱한 새 품목으로 읽히는 것을 막는다. 합쳐서 없어진 코드(merged_fids)도 쓴 것으로 친다 */
+    let max = Math.max(0, (typeof state !== 'undefined' && state && Number(state.fabricFidLast)) || 0);
+    (list || []).forEach(it => { (it && Array.isArray(it.merged_fids) ? it.merged_fids : []).forEach(f => { const k = String(f || '').trim(); if (!k) return; used.add(k); const m = /^F(\d{4,})$/.exec(k); if (m) max = Math.max(max, parseInt(m[1], 10) || 0); }); });
     (list || []).forEach(it => {
       const f = String((it && it.fid) || '').trim();
       if (!f) return;
@@ -31990,7 +31998,7 @@ function validateBlendSum(blends, label) {
     });
   }
   if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') document.addEventListener('click', ev => { const b = ev.target && ev.target.closest ? ev.target.closest('.kf-clone-btn') : null; if (!b) return; ev.stopPropagation(); if (b.dataset.fid) openSpecCloneModal(b.dataset.fid); else toast('품목 코드가 없는 줄입니다', 'warning'); });   /* hotfix443: [복제]를 품목(생지) 코드 화면에도 */
-  if (typeof window !== 'undefined') window.__a442 = { greigePlan: specCloneGreigePlan, printRowBad, PRINT_BASE_GREIGE };
+  if (typeof window !== 'undefined') window.__a442 = { greigePlan: specCloneGreigePlan, printRowBad, PRINT_BASE_GREIGE, saveSpecs: (items) => saveFabricSpecs(items) };
   if (typeof window !== 'undefined') window.__a440 = { clonePlan: specClonePlan, cloneKnitPlan, openClone: openSpecCloneModal, cidFillPlan, assignColorIds, assignPrintIds, printUnitOf, printCleanRow };
   const CD_STAGES = [['knitting', '편직', '편직 의뢰서'], ['dyeing', '염색', '염/가공 의뢰서'], ['processing', '가공', '염/가공 의뢰서'], ['post', '후가공', '염/가공 의뢰서'], ['print', '나염', '나염 의뢰서 (400에서 연결)']];
   function cdBuiltin(k) { return k === 'knitting' ? DEFAULT_KNIT_CAUTIONS : (DEFAULT_CAUTIONS[k] || []); }
@@ -40660,12 +40668,31 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
     </div>`;
   }
 
+  /* hotfix448(확정서 v4 1-6 · 194줄): 나염작지의 줄을 [나염 코드](N 마스터)에서 고른다 — 고르면 원단명 · 원단컬러 · 나염컬러가 채워지고 줄에 코드(nid · item_fid · cid)가 같이 저장된다.
+     직접 적은 줄(코드 없음)과 옛 나염작지는 그대로 된다. 출력물의 글자 · 모양은 안 바뀐다(코드는 출력물에 안 찍는다) */
+  function npPrintCodeList() {
+    const out = []; const m = (state.itemPrints && typeof state.itemPrints === 'object') ? state.itemPrints : {};
+    Object.keys(m).forEach(fid => { const it = itemByFid(fid); if (!it || !it.name) return;
+      (Array.isArray(m[fid]) ? m[fid] : []).forEach(r => { if (!r || !r.nid || r.active === false) return;
+        const base = printBaseIsGreige(r.cid) ? { name: '생지', label: '바탕 없음(생지)' } : (() => { const c = itemColorByCid(r.cid); const row = c && c.row; return { name: row ? (row.name || row.bt_no || '') : '', label: row ? itemColorLabel(row) : '(지워진 컬러)' }; })();
+        out.push({ nid: String(r.nid), fid, item: String(it.name), cid: String(r.cid || ''), base: base.name, print_color: String(r.print_color || ''), design: String(r.design || ''), method: String(r.method || ''), printer: String(r.printer || ''),
+          label: r.nid + ' · ' + it.name + ' · ' + base.label + ' · ' + [r.kind, r.design, r.print_color].filter(Boolean).join('/') + ' · ' + (r.method || '') }); }); });
+    return out.sort((a, b) => a.nid.localeCompare(b.nid));
+  }
+  function npApplyPrintCode(row, nid) {   /* 계산만: 줄 하나에 코드 값을 채운 새 줄을 돌려준다 */
+    const hit = npPrintCodeList().find(x => x.nid === String(nid || '')); const r = Object.assign({}, row);
+    if (!hit) { delete r.nid; delete r.item_fid; delete r.cid; return r; }
+    r.nid = hit.nid; r.item_fid = hit.fid; r.cid = hit.cid; r.fabric = hit.item;
+    if (hit.base) { r.fabric_color = hit.base; const hx = PRINT_COLOR_MAP[hit.base]; if (hx) r.fabric_hex = hx; }
+    if (hit.print_color) { r.print_color = hit.print_color; const hx2 = PRINT_COLOR_MAP[hit.print_color]; if (hx2) r.print_hex = hx2; }
+    return r;
+  }
   function renderPrintRow(row, i) {
     const supplyOpts = PRINT_SUPPLY.map(s => `<option value="${s}"${row.supply === s ? ' selected' : ''}>${s}</option>`).join('');
     return `<tr data-i="${i}">
       <td style="text-align:center;color:#888;padding:6px 4px;">${i + 1}</td>
       <td style="padding:6px 5px;"><select class="np-supply" data-i="${i}" style="width:100%;padding:8px 6px;border:1px solid #d0d5dd;border-radius:6px;font-size:12.5px;">${supplyOpts}</select></td>
-      <td style="padding:6px 5px;"><input type="text" class="np-fabric" data-i="${i}" value="${escapeHtml(row.fabric || '')}" placeholder="나염용원단명" style="width:100%;padding:8px 9px;border:1px solid #d0d5dd;border-radius:6px;font-size:12.5px;"></td>
+      <td style="padding:6px 5px;"><input type="text" class="np-fabric" data-i="${i}" value="${escapeHtml(row.fabric || '')}" placeholder="나염용원단명" style="width:100%;padding:8px 9px;border:1px solid #d0d5dd;border-radius:6px;font-size:12.5px;">${(() => { const list = npPrintCodeList(); if (!list.length) return ''; return `<select class="np-nid" data-i="${i}" title="[나염 코드]에 넣어 둔 줄에서 고르면 원단명 · 원단컬러 · 나염컬러가 채워집니다" style="width:100%;margin-top:4px;padding:5px 6px;border:1px solid ${row.nid ? '#a78bfa' : '#d0d5dd'};border-radius:6px;font-size:11.5px;color:${row.nid ? '#5b21b6' : '#64748b'};background:${row.nid ? '#f5f3ff' : '#fff'};"><option value="">나염 코드에서 고르기 (직접 적어도 됩니다)</option>${list.map(x => `<option value="${escapeHtml(x.nid)}"${row.nid === x.nid ? ' selected' : ''}>${escapeHtml(x.label)}</option>`).join('')}</select>`; })()}</td>
       <td style="padding:6px 5px;">${printColorInput('fabcolor', i, row.fabric_color, row.fabric_hex)}</td>
       <td style="padding:6px 5px;">${printColorInput('printcolor', i, row.print_color, row.print_hex)}</td>
       <td style="padding:6px 5px;"><input type="number" class="np-qty" data-i="${i}" value="${row.qty === '' || row.qty == null ? '' : row.qty}" placeholder="절" style="width:60px;padding:8px 9px;border:1px solid #d0d5dd;border-radius:6px;font-size:12.5px;text-align:right;"></td>
@@ -40745,7 +40772,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
           <thead><tr style="background:#eef4fd;">
             <th style="border:1px solid #d0d5dd;padding:9px 6px;width:30px;">No</th>
             <th style="border:1px solid #d0d5dd;padding:9px 6px;width:100px;">공급처</th>
-            <th style="border:1px solid #d0d5dd;padding:9px 6px;">나염용원단명</th>
+            <th style="border:1px solid #d0d5dd;padding:9px 6px;min-width:180px;">나염용원단명</th>
             <th style="border:1px solid #d0d5dd;padding:9px 6px;width:128px;">원단컬러</th>
             <th style="border:1px solid #d0d5dd;padding:9px 6px;width:128px;">나염컬러</th>
             <th style="border:1px solid #d0d5dd;padding:9px 6px;width:70px;">수량(절)</th>
@@ -40795,6 +40822,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
       const q = sel => tr.querySelector(sel);
       r.supply = q('.np-supply')?.value || '본사';
       r.fabric = q('.np-fabric')?.value || '';
+      if (r.nid) { const __it = itemByFid(r.item_fid); if (!__it || String(__it.name || '').trim() !== String(r.fabric || '').trim()) { delete r.nid; delete r.item_fid; delete r.cid; } }   /* hotfix448: 원단명을 손으로 바꾸면 코드를 뗀다 — 글자와 코드가 서로 다른 것을 가리키면 안 된다 */
       r.fabric_color = q('.np-fabcolor-name')?.value || '';
       r.fabric_hex = q('.np-fabcolor-hex')?.value || '#ffffff';
       r.print_color = q('.np-printcolor-name')?.value || '';
@@ -40811,6 +40839,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
   }
 
   function bindPrintRowEvents() {
+    document.querySelectorAll('#np-rows .np-nid').forEach(sel => sel.addEventListener('change', () => { syncPrintDraftFromForm(); const i = parseInt(sel.dataset.i, 10); if (!__printDraft.rows[i]) return; __printDraft.rows[i] = npApplyPrintCode(__printDraft.rows[i], sel.value); const hit = npPrintCodeList().find(x => x.nid === sel.value); if (hit && hit.design && hit.design !== '무지' && !String(__printDraft.design_name || '').trim()) { __printDraft.design_name = hit.design; const dn = document.getElementById('np-design-name'); if (dn) dn.value = hit.design; } rerenderPrintRows(); }));   /* hotfix448 */
     document.querySelectorAll('#np-rows .np-row-del').forEach(btn => {
       btn.addEventListener('click', () => {
         syncPrintDraftFromForm();
@@ -49802,7 +49831,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix447';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …)
+  const VERSION = 'v2.53 hotfix448';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …)
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
