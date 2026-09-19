@@ -13905,10 +13905,14 @@ window.addEventListener('firebase-ready', () => {
     }, err => console.warn('[yarn_names sub]', err.message));
     // hotfix158: 거래처(업체) 마스터 구독 — 작지 업체 선택용 사전 입력 데이터
     onSnapshot(doc(db, C('settings'), 'vendors'), snap => {
+      const __prevV = JSON.stringify(state.vendors || []);
       state.vendors = (snap.exists() && Array.isArray(snap.data().items)) ? snap.data().items.filter(v => v && v.name) : [];
+      state.vendorTypesExtra = (snap.exists() && Array.isArray(snap.data().types_extra)) ? snap.data().types_extra.map(t => String(t || '').trim()).filter(Boolean) : [];   /* hotfix449 */
+      state.vendorVidLast = Math.max(Number(state.vendorVidLast) || 0, (snap.exists() && parseInt(snap.data().vid_last, 10)) || 0);
       if (typeof refreshVendorDatalist === 'function') refreshVendorDatalist();
       if (typeof refreshVendorSelects === 'function') refreshVendorSelects();
-      if (state.uiMode === 'dashboard' && state.dashView === 'vendors') renderDashboard();
+      { const box = document.getElementById('vendor-f-types'); const typing = !!(box && box.offsetParent !== null);   /* hotfix449: 업체 목록이 그대로이고(구분만 더했을 때) 입력 칸이 열려 있으면 다시 그리지 않는다 — 적던 값이 날아가지 않게 */
+        if (state.uiMode === 'dashboard' && state.dashView === 'vendors' && !(typing && __prevV === JSON.stringify(state.vendors || []))) renderDashboard(); }
     }, err => console.warn('[vendors sub]', err.message));
     // hotfix83: 규격 허용치 구독 (대표 보고 판정 기준)
     onSnapshot(doc(db, C('settings'), 'spec_tolerance'), snap => {
@@ -14706,7 +14710,7 @@ function specGreigeColors(fid) {
     const prevVendors = Array.isArray(state.vendors) ? state.vendors : [];   // hotfix383: 수정 이력용 옛 목록
     // hotfix389: 거래처 코드(vid, V0001…) — 한 번 붙으면 이름을 바꿔도 고정. 없는 줄은 옛 목록에서 같은 이름을 찾아 잇고, 그래도 없으면 새 번호.
     const usedVids = new Set();
-    let vidMax = 0;
+    let vidMax = Math.max(0, Number(state.vendorVidLast) || 0);   /* hotfix449: 업체코드 마지막 번호 — 지운 번호를 다시 안 쓴다 */
     [...prevVendors, ...(items || [])].forEach(v => { const m = /^V(\d{4,})$/.exec(String(v && v.vid || '')); if (m) vidMax = Math.max(vidMax, parseInt(m[1], 10)); });
     const nextVid = () => 'V' + String(++vidMax).padStart(4, '0');
     const cleaned = (items || []).map(v => {
@@ -14741,13 +14745,43 @@ function specGreigeColors(fid) {
     }).filter(v => v.name);
     await setDoc(doc(db, C('settings'), 'vendors'), {
       items: cleaned,
+      types_extra: Array.isArray(state.vendorTypesExtra) ? state.vendorTypesExtra.slice() : [],   /* hotfix449: 통째로 쓰는 문서 — 더한 구분이 지워지지 않게 같이 싣는다 */
+      vid_last: vidMax,
       updated_at: serverTimestamp(),
       updated_by: state.user?.email || 'unknown'
     });
-    state.vendors = cleaned;
+    state.vendors = cleaned; state.vendorVidLast = vidMax;
     logEdits('vendors', editLogDiff('vendors', prevVendors, cleaned, x => String(x.name || '').trim().toLowerCase()));   // hotfix383
     return true;
   }
+  /* hotfix449: 더한 업체구분 저장 — 문서의 다른 칸(items)은 건드리지 않게 merge 로 types_extra 만 쓴다 */
+  async function saveVendorTypesExtra(list) {
+    if (!canEditView('vendors')) { toast('업체코드를 고치는 권한이 없습니다', 'error'); return false; }
+    const clean = Array.from(new Set((list || []).map(t => String(t || '').trim()).filter(t => t && !VENDOR_TYPES.includes(t))));
+    try { await setDoc(doc(db, C('settings'), 'vendors'), { types_extra: clean, updated_at: serverTimestamp(), updated_by: state.user?.email || 'unknown' }, { merge: true }); }
+    catch (e) { toast('구분 저장 실패: ' + e.message, 'error'); return false; }
+    state.vendorTypesExtra = clean; return true;
+  }
+  if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') document.addEventListener('click', async ev => {
+    const t = ev.target && ev.target.closest ? ev.target : null; if (!t) return;
+    const add = t.closest('#vendor-type-add'), del = t.closest('.vendor-type-del'); if (!add && !del) return;
+    ev.preventDefault(); ev.stopPropagation();
+    const box = document.getElementById('vendor-f-types'); if (!box) return;
+    if (add) {
+      const inp = document.getElementById('vendor-type-new'); const p = vendorTypeAddPlan(vendorTypeList(), inp ? inp.value : '');
+      if (p.err) { toast(p.err, 'warning'); if (inp) inp.focus(); return; }
+      const ok = await saveVendorTypesExtra((state.vendorTypesExtra || []).concat([p.name])); if (!ok) return;
+      /* 적던 업체 값이 날아가지 않게 화면을 다시 그리지 않고 체크 칸만 끼워 넣는다(체크된 채로 · [기타] 앞) */
+      const lab = document.createElement('label'); lab.style.cssText = 'display:inline-flex;align-items:center;gap:5px;font-size:13px;cursor:pointer;color:var(--ui-text);';
+      lab.innerHTML = '<input type="checkbox" class="vendor-type-cb" value="' + escapeHtml(p.name) + '" checked style="accent-color:var(--brand);width:15px;height:15px;"> ' + escapeHtml(p.name) + ' <button type="button" class="vendor-type-del" data-type="' + escapeHtml(p.name) + '" title="더한 구분 지우기 (쓰는 업체가 없을 때만)" style="border:0;background:none;color:#94a3b8;cursor:pointer;font-size:13px;padding:0 2px;">×</button>';
+      const etc = Array.from(box.querySelectorAll('.vendor-type-cb')).find(c => c.value === '기타'); box.insertBefore(lab, etc ? etc.closest('label') : document.getElementById('vendor-type-addbox'));
+      if (inp) inp.value = ''; toast('구분 "' + p.name + '"을(를) 더했습니다', 'success'); return;
+    }
+    const name = String(del.dataset.type || '').trim(); const users = (state.vendors || []).filter(v => (Array.isArray(v.types) ? v.types : []).includes(name));
+    if (users.length) { toast('이 구분을 쓰는 업체가 ' + users.length + '곳 있어 지울 수 없습니다 (' + users.slice(0, 3).map(v => v.name).join(' · ') + (users.length > 3 ? ' …' : '') + ')', 'warning'); return; }
+    const ok2 = await saveVendorTypesExtra((state.vendorTypesExtra || []).filter(x => x !== name)); if (!ok2) return;
+    const lab2 = del.closest('label'); if (lab2) lab2.remove(); toast('구분 "' + name + '"을(를) 지웠습니다', 'success');
+  });
   // hotfix389: 기능 스위치 저장 (최고관리자만) — settings/features. 상자 하나 = 저장 함수 하나.
   async function saveFeatures(patch) {
     if (!isOwnerUser()) { toast('기능 스위치는 최고관리자만 바꿀 수 있습니다', 'error'); return false; }
@@ -28807,7 +28841,21 @@ function validateBlendSum(blends, label) {
 
   // hotfix158: 거래처(업체) 관리 화면 (관리자 전용) — 작지 업체 선택용 사전 등록 CRUD
   let editingVendorIdx = -1;
-  const VENDOR_TYPES = ['염색처', '가공처', '후가공처', '편직처', '나염공장', '원사 구매처', '최종납품처', '기타'];   // hotfix399b: 출고처 · 본사·창고 → 최종납품처로 합침 (옛 자료는 읽을 때 바꿔 읽는다)
+  const VENDOR_TYPES = ['염색처', '가공처', '후가공처', '편직처', '나염공장', '원사 구매처', '최종납품처', '기타'];
+/* hotfix449(대표 지시 9/19): 업체구분을 화면에서 더할 수 있다 — 더한 구분은 settings/vendors 문서 안 types_extra 에(새 문서 · settings/lists 안 씀). 기본 8개는 의뢰서의 고르개(염색처 · 편직처 · 나염공장 …)가 쓰는 말이라 이름을 못 바꾸고 못 지운다. 더한 구분은 표시 · 검색 · 분류용 */
+function vendorTypeList() {
+  const extra = (typeof state !== 'undefined' && state && Array.isArray(state.vendorTypesExtra)) ? state.vendorTypesExtra : [];
+  const out = VENDOR_TYPES.filter(t => t !== '기타');
+  extra.forEach(t => { const k = String(t || '').trim(); if (k && !out.includes(k) && k !== '기타') out.push(k); });
+  ((typeof state !== 'undefined' && state && Array.isArray(state.vendors)) ? state.vendors : []).forEach(v => (Array.isArray(v && v.types) ? v.types : []).forEach(t => { const k = String(t || '').trim(); if (k && !out.includes(k) && k !== '기타' && !(typeof VTYPE_OLD_TO_NEW !== 'undefined' && VTYPE_OLD_TO_NEW[k])) out.push(k); }));   /* 옛 자료에만 있는 구분도 보이게 — 다만 399b 에서 [최종납품처]로 바꿔 읽는 옛 이름(출고처 · 본사·창고)은 되살리지 않는다 */
+  out.push('기타'); return out;
+}
+function vendorTypeAddPlan(list, name) {   /* 계산만 */
+  const k = String(name || '').replace(/\s+/g, ' ').trim(); const cur = Array.isArray(list) ? list : [];
+  if (!k) return { err: '구분 이름을 적어 주십시오' }; if (k.length > 12) return { err: '구분 이름은 12자까지입니다' }; if (/[,<>"']/.test(k)) return { err: '쉼표 · 따옴표 · 꺾쇠는 쓸 수 없습니다' };
+  if (cur.some(t => String(t).replace(/\s+/g, '').toLowerCase() === k.replace(/\s+/g, '').toLowerCase())) return { err: '이미 있는 구분입니다: ' + k };
+  return { name: k };
+}   // hotfix399b: 출고처 · 본사·창고 → 최종납품처로 합침 (옛 자료는 읽을 때 바꿔 읽는다)
   // hotfix161: 한 업체가 여러 공정(예: 대흥섬유=염색+가공)을 겸할 수 있음 → 구분을 복수 저장(types[]).
   //   구형 단일 type(string) 저장분은 [type] 배열로 자동 승격해 읽는다.
   function getVendorTypes(v) { return vendorTypesNorm(v); }   // hotfix399b: 옛 구분 이름을 바꿔 읽는 공용 함수로
@@ -29678,8 +29726,10 @@ function validateBlendSum(blends, label) {
           <div style="margin-bottom:12px;">
             <label style="${lblS}">구분 <span style="font-weight:400;color:#9ca3af;">(여러 개 선택 가능 — 예: 대흥섬유는 염색처·가공처 함께)</span></label>
             <div id="vendor-f-types" style="display:flex;flex-wrap:wrap;gap:8px 16px;margin-top:6px;">
-              ${VENDOR_TYPES.map(t => `<label style="display:inline-flex;align-items:center;gap:5px;font-size:13px;cursor:pointer;color:var(--ui-text);"><input type="checkbox" class="vendor-type-cb" value="${escapeHtml(t)}" style="accent-color:var(--brand);width:15px;height:15px;"> ${escapeHtml(t)}</label>`).join('')}
+              ${vendorTypeList().map(t => `<label style="display:inline-flex;align-items:center;gap:5px;font-size:13px;cursor:pointer;color:var(--ui-text);"><input type="checkbox" class="vendor-type-cb" value="${escapeHtml(t)}" style="accent-color:var(--brand);width:15px;height:15px;"> ${escapeHtml(t)}${VENDOR_TYPES.includes(t) ? '' : ` <button type="button" class="vendor-type-del" data-type="${escapeHtml(t)}" title="더한 구분 지우기 (쓰는 업체가 없을 때만)" style="border:0;background:none;color:#94a3b8;cursor:pointer;font-size:13px;padding:0 2px;">×</button>`}</label>`).join('')}
+              <span id="vendor-type-addbox" style="display:inline-flex;align-items:center;gap:5px;"><input type="text" id="vendor-type-new" lang="ko" maxlength="12" placeholder="새 구분 이름" style="width:120px;padding:5px 8px;border:1px solid #d1d5db;border-radius:8px;font-size:12.5px;font-family:inherit;"><button type="button" class="dash-action-btn" id="vendor-type-add" style="font-weight:800;padding:5px 12px;color:#1d4ed8;border-color:#93c5fd;background:#eff6ff;">＋ 구분 추가</button></span>
             </div>
+            <div style="font-size:11.5px;color:#94a3b8;margin-top:5px;">더한 구분은 업체를 나눠 보고 찾는 데 씁니다. 의뢰서의 공장 고르개는 기본 구분(염색처 · 가공처 · 후가공처 · 편직처 · 나염공장 · 원사 구매처 · 최종납품처)을 따릅니다.</div>
           </div>
           <div id="vendor-f-yk-wrap" style="margin-bottom:12px;display:none;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 12px;">
             <label style="${lblS}">취급 원사 <span style="font-weight:400;color:#9ca3af;">(여러 개 선택 가능 — 원사 구매처일 때만 씁니다)</span></label>
@@ -32602,10 +32652,19 @@ function validateBlendSum(blends, label) {
     });
     return out;
   }
+  /* hotfix450(대표 지시 9/19): 품목(생지) 코드 표 — 머리글에서 바로 거르고 줄 세운다. 품목(생지)명 = 찾기 칸 + 줄 세우기 · 구분 / 제작처 = 머리글 고르개 + 줄 세우기.
+     위쪽 거르개(품목 찾기 · 편직공장 · 구분)와 같은 값(state.kfQ · kfFactory · kfGubun)을 쓴다 — 어느 쪽에서 바꿔도 같이 바뀐다. 계산만(아무것도 안 씀) */
+  function kfSortRows(rows, sort) {
+    const s = (sort && sort.key) ? sort : null; if (!s) return rows;
+    const val = r => s.key === 'gubun' ? String(r.sp.gubun || GUBUN_BODY) + '\u0001' + String(r.sp.cat || '') : (s.key === 'factory' ? (String(r.factory || '') || '\uffff') : String(r.sp.name || ''));   /* 공장이 없는 줄은 늘 맨 뒤쪽 */
+    const dir = s.dir === -1 ? -1 : 1;
+    return rows.map((r, i) => ({ r, i })).sort((a, b) => { const c = val(a.r).localeCompare(val(b.r), 'ko', { numeric: true }); return c ? c * dir : (String(a.r.sp.name || '').localeCompare(String(b.r.sp.name || ''), 'ko', { numeric: true }) || (a.i - b.i)); }).map(x => x.r);
+  }
+  function kfSortMark(key) { const s = state.kfSort; return (s && s.key === key) ? (s.dir === -1 ? ' ▼' : ' ▲') : ' <span style="color:#cbd5e1;">↕</span>'; }
   function renderKnitFeeTab() {
     if (!canAccessView('knitSetup')) return `<div class="dash-empty">최고관리자와 [권한 설정]에서 허용한 사람만 볼 수 있는 화면입니다.</div>`;   // hotfix398
     if (!state.fabricCostLoaded || !state.knitFeeLoaded) return `<div class="dash-empty">편직료 자료를 읽는 중입니다…</div>`;
-    const rows = kfRowsAll();
+    const rows = kfSortRows(kfRowsAll(), state.kfSort);
     const q = String(state.kfQ || '').trim();
     const iS = 'padding:6px 9px;border:1px solid #d1d5db;border-radius:7px;font-size:13px;font-family:inherit;';
     let h = `<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px;margin-bottom:12px;font-size:12.5px;color:#475569;line-height:1.8;">
@@ -32626,8 +32685,13 @@ function validateBlendSum(blends, label) {
       <input type="file" id="kf-csv-file" accept=".csv,text/csv" style="display:none;">
     </div>
     <div class="dash-table-wrap"><table class="dash-table"><thead><tr>
-      <th style="text-align:left;min-width:150px;" title="ERP 이름: 품목(생지)명">품목(생지)명</th><th style="min-width:56px;" title="ERP 이름: 유형">구분</th><th style="text-align:left;min-width:150px;">사종</th><th style="min-width:64px;">루프장</th>
-      <th style="min-width:100px;" title="ERP 이름: 제작처(업체명)">제작처(편직공장)</th><th style="min-width:56px;">기계인치</th><th style="min-width:64px;">침수</th><th style="min-width:60px;">게이지</th><th style="min-width:80px;">기계 이름</th>
+      <th style="text-align:left;min-width:170px;" title="ERP 이름: 품목(생지)명"><span class="kf-sort" data-key="name" style="cursor:pointer;" title="누르면 품목(생지)명 순서로 줄 세웁니다 (▲ → ▼ → 원래대로)">품목(생지)명${kfSortMark('name')}</span>
+        <div style="margin-top:4px;"><input type="text" lang="ko" id="kf-hq" value="${escapeHtml(q)}" placeholder="이름 · 코드로 거르기" style="width:100%;box-sizing:border-box;padding:4px 7px;border:1px solid ${q ? '#60a5fa' : '#d1d5db'};border-radius:6px;font-size:12px;font-weight:400;font-family:inherit;background:${q ? '#eff6ff' : '#fff'};"></div></th>
+      <th style="min-width:84px;" title="ERP 이름: 유형"><span class="kf-sort" data-key="gubun" style="cursor:pointer;" title="누르면 구분 순서로 줄 세웁니다">구분${kfSortMark('gubun')}</span>
+        <div style="margin-top:4px;"><select id="kf-hgubun" style="width:100%;padding:3px 4px;border:1px solid ${state.kfGubun ? '#60a5fa' : '#d1d5db'};border-radius:6px;font-size:12px;font-weight:400;font-family:inherit;background:${state.kfGubun ? '#eff6ff' : '#fff'};"><option value="">전체</option>${Array.from(new Set(getFabricGubuns().concat([GUBUN_SAMPLE]))).map(g => `<option value="${escapeHtml(g)}"${g === state.kfGubun ? ' selected' : ''}>${escapeHtml(g)}</option>`).join('')}</select></div></th>
+      <th style="text-align:left;min-width:150px;">사종</th><th style="min-width:64px;">루프장</th>
+      <th style="min-width:118px;" title="ERP 이름: 제작처(업체명)"><span class="kf-sort" data-key="factory" style="cursor:pointer;" title="누르면 제작처 순서로 줄 세웁니다">제작처(편직공장)${kfSortMark('factory')}</span>
+        <div style="margin-top:4px;"><select id="kf-hfactory" style="width:100%;padding:3px 4px;border:1px solid ${state.kfFactory ? '#60a5fa' : '#d1d5db'};border-radius:6px;font-size:12px;font-weight:400;font-family:inherit;background:${state.kfFactory ? '#eff6ff' : '#fff'};"><option value="">전체</option>${knitFactoryList().map(v => `<option value="${escapeHtml(v)}"${v === state.kfFactory ? ' selected' : ''}>${escapeHtml(v)}</option>`).join('')}<option value="${KF_UNREG}"${state.kfFactory === KF_UNREG ? ' selected' : ''}>(거래처 미등록)</option></select></div></th><th style="min-width:56px;">기계인치</th><th style="min-width:64px;">침수</th><th style="min-width:60px;">게이지</th><th style="min-width:80px;">기계 이름</th>
       <th style="min-width:56px;">로스 %</th><th style="min-width:76px;">편직료 원/kg</th><th style="text-align:left;min-width:120px;">비고</th><th style="min-width:96px;">마지막 수정</th>
       <th style="min-width:66px;">판매</th><th style="min-width:52px;">수정</th><th style="min-width:76px;">편직 값 삭제</th><!-- hotfix422g: [복사] 열 감춤 · [판매종료] 열 -->
     </tr></thead><tbody>`;
@@ -33862,6 +33926,11 @@ function validateBlendSum(blends, label) {
       bindKnitFeeTab._t = setTimeout(() => { state.kfQ = q.value; renderDashboard(); const el = document.getElementById('kf-q'); if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); } }, 260);
     });
     document.getElementById('kf-factory')?.addEventListener('change', ev => { state.kfFactory = ev.target.value; renderDashboard(); });
+    /* hotfix450: 머리글 거르개 · 줄 세우기 — 위쪽 거르개와 같은 값 */
+    document.getElementById('kf-hfactory')?.addEventListener('change', ev => { state.kfFactory = ev.target.value; renderDashboard(); });
+    document.getElementById('kf-hgubun')?.addEventListener('change', ev => { state.kfGubun = ev.target.value || ''; renderDashboard(); });
+    { const hq = document.getElementById('kf-hq'); if (hq) { hq.addEventListener('click', ev => ev.stopPropagation()); hq.addEventListener('input', () => { clearTimeout(bindKnitFeeTab._t2); bindKnitFeeTab._t2 = setTimeout(() => { state.kfQ = hq.value; renderDashboard(); const el = document.getElementById('kf-hq'); if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); } }, 260); }); } }
+    document.querySelectorAll('#dash-body .kf-sort').forEach(el => el.addEventListener('click', () => { const k = el.dataset.key; const s = state.kfSort; state.kfSort = (!s || s.key !== k) ? { key: k, dir: 1 } : (s.dir === 1 ? { key: k, dir: -1 } : null); renderDashboard(); }));
     document.getElementById('kf-closed')?.addEventListener('change', ev => { state.kfClosed = !!ev.target.checked; renderDashboard(); });
     // hotfix417: 구분 · 샘플도 보기 · [+ 생지 추가]
     document.getElementById('kf-gubun')?.addEventListener('change', ev => { state.kfGubun = ev.target.value || ''; renderDashboard(); });
@@ -36389,7 +36458,7 @@ function validateBlendSum(blends, label) {
       orgs: () => getKnitOrgs().slice(),
       vendors: () => (state.vendors || []).map(v => ({
         name: String((v && v.name) || '').trim(),
-        parts: VENDOR_TYPES.filter(t => vendorTypeMatch(v, t)),
+        parts: vendorTypeList().filter(t => vendorTypeMatch(v, t)),
         // hotfix324: 원사 구매처가 다루는 원사 구분 ('면' | '포리' | '기타'). 비면 모든 사종에 나온다
         kinds: (Array.isArray(v && v.yarn_kinds) ? v.yarn_kinds : []).map(k => String(k || '').trim()).filter(Boolean),
         alias: [].concat(Array.isArray(v && v.aliases) ? v.aliases : [], Array.isArray(v && v.alias) ? v.alias : [])
@@ -49831,7 +49900,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix448';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …)
+  const VERSION = 'v2.53 hotfix450';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …)
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
