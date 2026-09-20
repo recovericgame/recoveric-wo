@@ -6631,7 +6631,7 @@
     <div class="hwright" id="hwtop-right"></div>
   </div>
   <!-- hotfix443: 왼쪽 카테고리(확정서 v4 12장) — 위쪽 메뉴를 이리로 옮김. 식별자(data-hwview)는 그대로 -->
-  <nav class="hwside" id="hwside" aria-label="메뉴"><div class="hwside-head"><span>HIWOS</span><small>메뉴</small></div><div class="hwside-nav" id="hwside-nav"></div></nav>
+  <nav class="hwside" id="hwside" aria-label="메뉴"><div class="hwside-head" id="hwside-head-home"><span>HIWOS</span><small>메뉴</small></div><div class="hwside-nav" id="hwside-nav"></div></nav>
   <div class="hwside-bg" id="hwside-bg"></div>
   <aside class="sidebar">
     <!-- hotfix375: 왼쪽 맨 위에 늘 붙어 있는 제목 -->
@@ -12619,12 +12619,12 @@ window.addEventListener('firebase-ready', () => {
       // v2.34: 스탬프 마스터 시드(없을 시) + 실시간 구독 시작
       seedStampMastersIfNeeded().then(() => subscribeStampMasters());
       resetForm();
-      // hotfix457(대표 지시 9/20): 로그인 뒤 처음 열리는 화면은 누구나 [일일 체크 및 전송]
-      //   (옛 v2.50 줄은 최고관리자·관리자만 작성 화면에 남겼다 — 그 예외를 없앤다)
-      //   그 화면을 못 보는 계정은 hwBootView() 가 전체 대시보드로 돌리고, 그때만 염색가공 거르개를 켠다
-      state.dashView = hwBootView();
-      if (state.dashView !== 'daily-report') state.overviewTypeFilter = '염색가공';
+      // hotfix458(대표 지적 9/20): [일일 체크 및 전송]은 화면이 아니라 창(모달)이다.
+      //   457에서 화면 이름으로 넣었더니 뒤가 빈 화면으로 나왔다 → 뒤 화면은 [염색/가공 현황]으로 두고 그 위에 창을 연다
+      state.overviewTypeFilter = '염색가공';
+      state.dashView = 'overview';
       switchUiMode('dashboard');
+      try { if (canAccessView('daily-report') && typeof openDailyReportModal === 'function') setTimeout(openDailyReportModal, 250); } catch (_) {}
     } else {
       state.user = null;
       document.getElementById('login-screen').style.display = 'flex';
@@ -13061,7 +13061,7 @@ window.addEventListener('firebase-ready', () => {
   function hwSideLabel(v) { return HW_ERP_LABEL[v] || hwLabel(v); }
   /* 화면 제목도 ERP 이름으로(글자만) — "거래처 설정 (설정 및 관리)" → "업체코드 (기준정보관리)" */
   /* hotfix451: 화면 제목 = 화면 이름 (그 화면이 들어 있는 왼쪽 카테고리 이름) — 옮긴 자리를 늘 같이 보여 준다 */
-  function hwBootView() { try { return canAccessView('daily-report') ? 'daily-report' : 'overview'; } catch (e) { return 'overview'; } }   /* hotfix451 */
+  function hwBootView() { return 'overview'; }   /* hotfix458: 첫 화면은 염색/가공 현황. [일일 체크 및 전송]은 화면이 아니라 창이라 화면 이름으로 쓰면 뒤가 빈다 */
   function hwErpTitle(view, title) {
     const t = String(title || ''); const g = HW_SIDE.find(x => (x.items || []).includes(view)); if (!g) return t;
     const base = HW_ERP_LABEL[view] || hwLabel(view);
@@ -13325,6 +13325,12 @@ window.addEventListener('firebase-ready', () => {
     window.addEventListener('resize', () => { clearTimeout(hwSideApply._t); hwSideApply._t = setTimeout(hwTopPaint, 150); });
     const home = document.getElementById('hwtop-home');
     if (home) home.addEventListener('click', e => { e.stopPropagation(); hwCloseAll(); hwGoHome(); });
+    // hotfix458(대표 지시 9/20): 왼쪽 [HIWOS 메뉴] 머리와 모바일 위 제목도 누르면 첫 화면(염색/가공 현황)으로
+    ['hwside-head-home', 'm-topbar-title'].forEach(id => {
+      const el = document.getElementById(id); if (!el) return;
+      el.style.cursor = 'pointer'; el.title = '누르면 첫 화면(염색/가공 현황)으로 갑니다';
+      el.addEventListener('click', e => { e.stopPropagation(); hwCloseAll(); hwGoHome(); });
+    });
     document.addEventListener('click', () => hwCloseAll());
     window.addEventListener('resize', () => {
       clearTimeout(hwTopInit._r);
@@ -42949,6 +42955,11 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
     return !!(m && m.classList.contains('show'));
   }
   function renderDashboard() {
+    if (state.dashView === 'daily-report') {   // hotfix458: 창 이름이 화면 이름 자리에 들어오면 뒤 화면을 염색/가공 현황으로 두고 창을 연다
+      state.dashView = 'overview'; state.overviewTypeFilter = '염색가공';
+      try { if (typeof syncSidebarActive === 'function') syncSidebarActive(); } catch (_) {}
+      try { if (typeof openDailyReportModal === 'function') setTimeout(openDailyReportModal, 0); } catch (_) {}
+    }
     state.__leaveGuard = null;   // hotfix407: 그리는 화면이 임시저장 틀에 붙어 있으면 bind 에서 다시 건다
     if (fcModalIsOpen()) {
       state.__fcPendingRender = true;
