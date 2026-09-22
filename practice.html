@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="HIWOS">
 <meta name="mobile-web-app-capable" content="yes">
-<title>RECOVERIC HIWOS v2.51 step3 hotfix9</title>
+<title>RECOVERIC HIWOS v2.53 hotfix463</title>
 
 <!-- PWA Manifest (인라인 data URL) -->
 <link rel="manifest" id="pwa-manifest">
@@ -576,7 +576,23 @@
   .y-dest-wrap { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
   .y-dest-wrap select { width: 100%; font-family: inherit; min-width: 0; }
   .y-dest-wrap .y-dest-cat { font-size: 11px; background: #f8fafc; color: #334155; font-weight: 700; }
-  .knit-row { grid-template-columns: 1.7fr 64px 56px 60px 1.2fr 28px; }   /* hotfix454: 공유코드 칸 감춤(값은 그대로 생김) · 비고 → 예상 총 생산량 */
+  .knit-row { grid-template-columns: 1.7fr 64px 56px 60px 1.2fr 28px; }
+  /* hotfix462(대표 지적 9/20): 품목(생지) 코드 표 — 화면 배율이 몇 %든 [판매 · 수정 · 편직 값 삭제]가 오른쪽에 붙어 늘 보인다. 칸 폭도 줄인다 */
+  .dash-table-wrap:has(> .kf-table) { overflow-x: auto; max-width: 100%; }
+  #dashboard-panel:has(.kf-table), .dashboard-panel:has(.kf-table), #dash-body:has(.kf-table) { min-width: 0 !important; max-width: 100%; box-sizing: border-box; }
+  /* 대시보드 틀이 작성 화면의 고정 칸(340 · 420 · 6 · 340px)을 그대로 물려받아 1106px 밑으로 줄지 않았다 — 이 표에서는 한 칸으로 편다 */
+  .main-app:has(.kf-table), #main-app:has(.kf-table) { grid-template-columns: minmax(0, 1fr) !important; grid-auto-columns: 0 !important; }
+  .main-app:has(.kf-table) > #dashboard-panel, .main-app:has(.kf-table) > .dashboard-panel, #main-app:has(.kf-table) > .dashboard-panel { grid-column: 1 / -1 !important; }
+  .kf-table { font-size: 12.5px; }
+  .kf-table th, .kf-table td { padding: 6px 7px; }
+  .kf-table td.kf-yn { white-space: normal; word-break: keep-all; min-width: 130px; max-width: 200px; line-height: 1.35; }
+  .kf-table .kf-st1, .kf-table .kf-st2, .kf-table .kf-st3 { position: sticky; z-index: 2; background: #fff; box-sizing: border-box; }
+  .kf-table thead .kf-st1, .kf-table thead .kf-st2, .kf-table thead .kf-st3 { z-index: 3; background: #f8fafc; }
+  .kf-table .kf-st1 { right: 0; width: 92px; min-width: 92px; max-width: 92px; }
+  .kf-table .kf-st2 { right: 92px; width: 64px; min-width: 64px; max-width: 64px; }
+  .kf-table .kf-st3 { right: 156px; width: 76px; min-width: 76px; max-width: 76px; box-shadow: -6px 0 8px -6px rgba(15,23,42,.22); }
+  .kf-table .kf-st1 .dash-action-btn, .kf-table .kf-st2 .dash-action-btn, .kf-table .kf-st3 .dash-action-btn { padding: 4px 6px !important; font-size: 11px !important; }
+  .kf-table .kf-st2 .dash-action-btn { display: block; margin: 0 auto 4px !important; }   /* hotfix454: 공유코드 칸 감춤(값은 그대로 생김) · 비고 → 예상 총 생산량 */
   /* number input spinner 제거 */
   .item-row input[type="number"]::-webkit-outer-spin-button,
   .item-row input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
@@ -8665,6 +8681,79 @@ function greigeNoClean(v) {
   return /^\d{1,3}$/.test(s) ? s.padStart(3, '0') : s;
 }
 // 옛 글자 "프리미엄싱글 001" → { name:'프리미엄싱글', no:'001' } (끝 3자리 숫자만 뗀다)
+// hotfix462(대표 지적 9/20 — "다이아"가 ㄷㅏㅇㅣㅇㅏ 로 풀림): 한글을 조합하는 도중에는 입력 처리(목록 다시 그리기 · 커서 옮기기)를 하지 않는다.
+//   조합이 끝나는 순간(compositionend) 한 번만 입력 처리를 돌린다. 모든 칸에 똑같이 적용된다
+(function hwImeGuard() {
+  if (typeof document === 'undefined' || document.__hwImeGuard) return; document.__hwImeGuard = true;
+  document.addEventListener('compositionstart', e => { if (e.target) e.target.__composing = true; }, true);
+  document.addEventListener('compositionend', e => { const el = e.target; if (!el) return; el.__composing = false; setTimeout(() => { try { el.dispatchEvent(new Event('input', { bubbles: true })); } catch (_) {} }, 0); }, true);
+  document.addEventListener('input', e => { if (e.isComposing || (e.target && e.target.__composing)) e.stopPropagation(); }, true);
+  try { const ssr = HTMLInputElement.prototype.setSelectionRange; HTMLInputElement.prototype.setSelectionRange = function () { if (this.__composing) return; return ssr.apply(this, arguments); }; } catch (_) {}
+})();
+// hotfix463(대표 지시 9/20): 모든 팝업(창)은 제목 줄을 잡아 자유롭게 옮길 수 있다.
+//   창 안의 칸 · 단추 · 목록을 누르는 것은 그대로고, 창 맨 위 64px 빈자리를 끌면 따라 움직인다. 화면 밖으로 다 나가지 않게 가장자리는 조금 남긴다
+(function hwDragModals() {
+  if (typeof document === 'undefined' || document.__hwDragModals) return; document.__hwDragModals = true;
+  const isOverlay = el => { if (!el || el.nodeType !== 1) return false; let cs; try { cs = getComputedStyle(el); } catch (_) { return false; }
+    if (cs.position !== 'fixed' || !el.firstElementChild) return false; const r = el.getBoundingClientRect();
+    return r.width >= window.innerWidth * 0.9 && r.height >= window.innerHeight * 0.9; };
+  const boxOf = t => { let el = t; while (el && el !== document.body) { if (isOverlay(el.parentElement)) { const r = el.getBoundingClientRect(); if (r.width > 40 && r.width < window.innerWidth * 0.995) return el; } el = el.parentElement; } return null; };
+  const NOPE = 'input,select,textarea,button,a,label,option,[contenteditable="true"]';
+  const HANDLE = 64;
+  const onHandle = (box, y) => (y - box.getBoundingClientRect().top) <= HANDLE;
+  function apply(box, nx, ny) {
+    const r = box.getBoundingClientRect();
+    const left = r.left - (parseFloat((box.dataset.hwDrag || '0,0').split(',')[0]) || 0);
+    const top = r.top - (parseFloat((box.dataset.hwDrag || '0,0').split(',')[1]) || 0);
+    nx = Math.max(-(left + r.width - 90), Math.min(window.innerWidth - left - 90, nx));
+    ny = Math.max(-top + 4, Math.min(window.innerHeight - top - 60, ny));
+    box.style.transform = 'translate(' + Math.round(nx) + 'px,' + Math.round(ny) + 'px)';
+    box.dataset.hwDrag = Math.round(nx) + ',' + Math.round(ny);
+    const ov = box.parentElement; if (ov) ov.dataset.hwDrag = box.dataset.hwDrag;
+  }
+  let d = null;
+  document.addEventListener('pointerdown', e => {
+    if (e.button !== 0) return;
+    const t = e.target; if (!t || !t.closest || t.closest(NOPE)) return;
+    const box = boxOf(t); if (!box || !onHandle(box, e.clientY)) return;
+    const cur = (box.dataset.hwDrag || '0,0').split(',').map(Number);
+    d = { box, x: e.clientX, y: e.clientY, ox: cur[0] || 0, oy: cur[1] || 0 };
+    box.style.cursor = 'grabbing'; box.style.userSelect = 'none';
+    try { e.preventDefault(); } catch (_) {}
+  }, true);
+  document.addEventListener('pointermove', e => {
+    if (!d) { const t = e.target; if (t && t.closest && !t.closest(NOPE)) { const b = boxOf(t); if (b) b.style.cursor = onHandle(b, e.clientY) ? 'move' : ''; } return; }
+    apply(d.box, d.ox + (e.clientX - d.x), d.oy + (e.clientY - d.y));
+  }, true);
+  const end = () => { if (!d) return; d.box.style.cursor = ''; d.box.style.userSelect = ''; d = null; };
+  document.addEventListener('pointerup', end, true); document.addEventListener('pointercancel', end, true);
+  // 창 안을 다시 그려도(내용이 바뀌어도) 옮겨 둔 자리를 지킨다
+  try {
+    new MutationObserver(ms => ms.forEach(m => {
+      const ov = m.target; if (!ov || !ov.dataset || !ov.dataset.hwDrag) return;
+      const box = ov.firstElementChild; if (!box || box.dataset.hwDrag === ov.dataset.hwDrag) return;
+      const p = ov.dataset.hwDrag.split(','); box.dataset.hwDrag = ov.dataset.hwDrag;
+      box.style.transform = 'translate(' + p[0] + 'px,' + p[1] + 'px)';
+    })).observe(document.body, { childList: true, subtree: true });
+  } catch (_) {}
+})();
+// hotfix462(대표 지시 9/20): 품목명 · 사종명의 띄어쓰기는 "_" 로 — 이름이 같아 보여도 달라 헷갈리는 일을 막는다.
+//   앞뒤 공백은 지우고, 공백은 "_" 하나로, "_" 옆 공백은 "_" 에 합친다. 이미 "_" 인 자리는 그대로 둔다
+function nameUs(s) { return String(s == null ? '' : s).replace(/[\u00a0\u3000\t]/g, ' ').trim().replace(/ *_ */g, '_').replace(/ +/g, '_'); }
+function nameSimKey(s) { return nameUs(s).toLowerCase().replace(/[_\-()\[\]（）·.,/ ]/g, ''); }
+function nameLev1(a, b) { if (Math.abs(a.length - b.length) > 1) return false; let i = 0, j = 0, d = 0; while (i < a.length && j < b.length) { if (a[i] === b[j]) { i++; j++; continue; } if (++d > 1) return false; if (a.length > b.length) i++; else if (b.length > a.length) j++; else { i++; j++; } } return d + (a.length - i) + (b.length - j) <= 1; }
+// 비슷한 이름 — 기호 · 띄어쓰기 · 대소문자를 빼고 같거나, 한쪽이 다른 쪽을 품거나(3글자 이상), 한 글자만 다른 것(4글자 이상)
+function nameSimilarList(name, pool, skip) {
+  const k = nameSimKey(name); if (!k) return [];
+  const sk = new Set((skip || []).map(x => String(x || '').trim()).filter(Boolean));
+  const out = [];
+  const strip = s => nameSimKey(String(s || '').replace(/[(（][^()（）]*[)）]/g, ''));   // 괄호 안(공장 · 구매처)은 빼고도 견준다
+  const near = (a, b) => !!a && !!b && (a === b || (Math.min(a.length, b.length) >= 3 && (a.includes(b) || b.includes(a))) || (Math.min(a.length, b.length) >= 4 && nameLev1(a, b)));
+  const kb = strip(name);
+  (pool || []).forEach(p => { const pn = String(p || '').trim(); if (!pn || sk.has(pn) || pn === String(name || '').trim()) return; const pk = nameSimKey(pn); if (!pk) return;
+    if (near(pk, k) || near(strip(pn), kb)) out.push(pn); });
+  return Array.from(new Set(out)).slice(0, 12);
+}
 function greigeSplit(text) {
   const s = String(text || '').trim();
   const m = /^(.*?)\s*(\d{3})$/.exec(s);
@@ -9146,7 +9235,7 @@ function specCloneGreigePlan(specs, srcFid, tgtFactory, newName, shortOf, factor
   if (!mine.length) {   /* 생지 자신 */
     out.kind = 'greige';
     if (tgtTail) { const seen = new Set([vendorKey(newName)]);
-      list.filter(x => x.fid && gOf(x)[0] === id).forEach(d => { const nm = split(d.name).base + '(' + tgtTail + ')'; const k = vendorKey(nm);
+      list.filter(x => x.fid && gOf(x)[0] === id).forEach(d => { const nm = nameUs(split(d.name).base) + '(' + tgtTail + ')'; const k = vendorKey(nm);   /* hotfix462: 새로 만드는 품목 이름도 띄어쓰기 → _ */
         const exists = !!byName(nm) || seen.has(k); seen.add(k); out.family.push({ fromFid: String(d.fid), fromName: String(d.name || ''), name: nm, exists }); }); }
     return out;
   }
@@ -15852,6 +15941,17 @@ function specGreigeColors(fid) {
     const K = knitFeeOf(fid);
     Object.keys(K).forEach(v => Object.keys((K[v] && K[v].loops) || {}).forEach(nm => { if (nm && !a.includes(nm)) a.push(nm); }));
     return a;
+  }
+  /* hotfix462(대표 지적 9/20 — 옛 자료가 되살아남): 한 공장의 원사 줄은 그 공장 값에서만 읽는다.
+     예전에는 모든 공장 줄 + 원가 카드 [원사]를 합쳐 보여 줘서, 옛 공장 줄의 옛 사종 이름(TC30 · 75/36 …)이 새 공장 창에 다시 나오고,
+     [x]로 지워 저장해도 다른 공장 줄에서 또 끌려 나왔다. 그 공장 값에 원사가 하나도 없을 때만 원가 카드 [원사]를 본보기로 쓴다 (읽기만) */
+  function kfYarnNamesFor(fid, V) {
+    const K = knitFeeOf(fid); const e = K[String(V || '').trim()];
+    const own = [];
+    if (e && typeof e === 'object') ['loops', 'pcts', 'plys', 'loop_parts'].forEach(f => Object.keys((e[f] && typeof e[f] === 'object') ? e[f] : {}).forEach(nm => { nm = String(nm || '').trim(); if (nm && !own.includes(nm)) own.push(nm); }));
+    if (!own.length) return kfCardYarnNames(fid);
+    const card = kfCardYarnNames(fid).filter(nm => own.includes(nm));   // 카드 차례를 지키되 카드에만 있는 이름은 뺀다
+    return card.concat(own.filter(nm => !card.includes(nm)));
   }
   // 복사본(이름 미정)을 통째로 지운다 — 원단 스펙 · 원가 · 편직 마스터. 이력은 남긴다
   async function deleteCopiedItem(fid) {
@@ -33029,8 +33129,17 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
       const yarns = kfYarnNames(fid);
       const fs = Object.keys(K).filter(v => !fv || (fv === KF_UNREG ? !knitFactoryKnown(v) : v === fv));
       const mine = [];
-      if (!fs.length) { if (!fv) mine.push({ sp, fid, factory: '', k: null, yarns }); }
-      else fs.forEach(v => mine.push({ sp, fid, factory: v, k: K[v], yarns, fromCard: !knitFeeHas(fid) }));
+      /* hotfix462(대표 지적 9/20 — 노블PK(동해)가 두 줄로 늘어남): 한 품목은 한 공장(9/17 확정)이라 표도 품목마다 한 줄.
+         공장 줄이 둘 이상 남아 있으면 거래처에 등록된 공장 → 가장 최근에 고친 줄을 대표로 보이고, 나머지는 그 칸 안에 "옛 공장 줄"로 보여 지울 수 있게 한다(저절로 지우지 않는다) */
+      let fs2 = fs;
+      if (!fv && fs.length > 1) {
+        const rank = v => [knitFactoryKnown(v) ? 1 : 0, String((K[v] || {}).updated_at || '')];
+        const main = fs.slice().sort((a, b) => { const x = rank(a), y = rank(b); return (y[0] - x[0]) || y[1].localeCompare(x[1]); })[0];
+        fs2 = [main];
+        mine.__others = fs.filter(v => v !== main);
+      }
+      if (!fs2.length) { if (!fv) mine.push({ sp, fid, factory: '', k: null, yarns }); }
+      else fs2.forEach(v => mine.push({ sp, fid, factory: v, k: K[v], yarns: kfYarnNamesFor(fid, v), fromCard: !knitFeeHas(fid), others: mine.__others || [] }));   /* hotfix462: 공장 줄마다 제 원사만 */
       if (!mine.length) return;
       const gg = specPrimaryGreige(fid);   /* hotfix461: [생지] 보기에서는 파생 줄을 제 생지 아래에 접어 둔다 */
       if (kfView() === 'greige' && gg) { (kids[gg] = kids[gg] || []).push.apply(kids[gg], mine.map(x => Object.assign({}, x, { child: true }))); return; }
@@ -33089,15 +33198,15 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
       <label style="display:flex;align-items:center;gap:5px;font-size:12.5px;color:#475569;cursor:pointer;"><input type="checkbox" id="kf-sample"${state.kfSample ? ' checked' : ''} style="width:15px;height:15px;">샘플도 보기</label>
       <span style="font-size:11.5px;color:#94a3b8;">${rows.length}줄</span>
       <span style="flex:1;"></span>
-      ${isOwnerUser() ? `<button class="dash-action-btn" id="kf-add-item" style="background:#1e3a8a;color:#fff;font-weight:800;padding:6px 14px;" title="새 생지(품목)를 등록합니다 — 품목명 · 구분 · 조직 · 편직공장을 넣고 바로 편직 값을 적습니다">+ 생지 추가</button><button class="dash-action-btn" id="kf-gm-btn" style="font-weight:800;padding:6px 14px;background:#e0f2fe;border-color:#7dd3fc;color:#075985;" title="한 생지로 여러 품목을 낼 때 — 생지를 고르고, 그 생지에서 나오는 품목들을 한 번에 묶습니다">원래 생지 묶기</button>` : ''}
+      ${isOwnerUser() ? `<button class="dash-action-btn" id="kf-add-item" style="background:#1e3a8a;color:#fff;font-weight:800;padding:6px 14px;" title="새 생지(품목)를 등록합니다 — 품목명 · 구분 · 조직 · 편직공장을 넣고 바로 편직 값을 적습니다">+ 생지 추가</button><button class="dash-action-btn" id="kf-gm-btn" style="font-weight:800;padding:6px 14px;background:#e0f2fe;border-color:#7dd3fc;color:#075985;" title="한 생지로 여러 품목을 낼 때 — 생지를 고르고, 그 생지에서 나오는 품목들을 한 번에 묶습니다">원래 생지 묶기</button><button class="dash-action-btn" id="kf-us-btn" style="font-weight:700;padding:6px 12px;" title="품목명의 띄어쓰기를 한꺼번에 &quot;_&quot; 로 바꿉니다 — 먼저 보여 드리고 묻습니다">띄어쓰기 → _</button>` : ''}
       <button class="dash-action-btn" id="kf-csv-out" style="font-weight:700;padding:6px 14px;">CSV 내려받기${state.kfFactory ? ' (' + escapeHtml(state.kfFactory) + ')' : ''}</button>
       <button class="dash-action-btn" id="kf-csv-in" style="font-weight:700;padding:6px 14px;" title="업체가 채워 보낸 CSV를 올려 채워진 칸만 덮어씁니다">CSV 올려 고치기</button>
       <input type="file" id="kf-csv-file" accept=".csv,text/csv" style="display:none;">
     </div>
-    <div class="dash-table-wrap"><table class="dash-table"><thead><tr>
-      <th style="text-align:left;min-width:170px;" title="ERP 이름: 품목(생지)명"><span class="kf-sort" data-key="name" style="cursor:pointer;" title="누르면 품목(생지)명 순서로 줄 세웁니다 (▲ → ▼ → 원래대로)">품목(생지)명${kfSortMark('name')}</span>
+    <div class="dash-table-wrap"><table class="dash-table kf-table"><thead><tr>
+      <th style="text-align:left;min-width:150px;" title="ERP 이름: 품목(생지)명"><span class="kf-sort" data-key="name" style="cursor:pointer;" title="누르면 품목(생지)명 순서로 줄 세웁니다 (▲ → ▼ → 원래대로)">품목(생지)명${kfSortMark('name')}</span>
         <div style="margin-top:4px;"><input type="text" lang="ko" id="kf-hq" value="${escapeHtml(q)}" placeholder="이름 · 코드로 거르기" style="width:100%;box-sizing:border-box;padding:4px 7px;border:1px solid ${q ? '#60a5fa' : '#d1d5db'};border-radius:6px;font-size:12px;font-weight:400;font-family:inherit;background:${q ? '#eff6ff' : '#fff'};"></div></th>
-      ${isOwnerUser() ? `<th style="min-width:120px;" title="${kfView() === 'greige' ? '이 생지에서 나오는 파생 품목. 누르면 바로 아래에 펼쳐집니다' : '이 품목이 어느 생지에서 나오는지. 최고관리자에게만 보입니다'}"><span class="kf-sort" data-key="greige" style="cursor:pointer;">${kfView() === 'greige' ? '파생 품목' : '원래생지'}${kfSortMark('greige')}</span>
+      ${isOwnerUser() ? `<th style="min-width:92px;" title="${kfView() === 'greige' ? '이 생지에서 나오는 파생 품목. 누르면 바로 아래에 펼쳐집니다' : '이 품목이 어느 생지에서 나오는지. 최고관리자에게만 보입니다'}"><span class="kf-sort" data-key="greige" style="cursor:pointer;">${kfView() === 'greige' ? '파생 품목' : '원래생지'}${kfSortMark('greige')}</span>
         <div style="margin-top:4px;"><select id="kf-hgreige" style="width:100%;padding:3px 4px;border:1px solid ${state.kfGreige ? '#60a5fa' : '#d1d5db'};border-radius:6px;font-size:12px;font-weight:400;font-family:inherit;background:${state.kfGreige ? '#eff6ff' : '#fff'};"><option value="">전체</option><option value="__none"${state.kfGreige === '__none' ? ' selected' : ''}>(이 품목이 생지)</option>${kfGreigeOptions().map(o => `<option value="${escapeHtml(o.fid)}"${o.fid === state.kfGreige ? ' selected' : ''}>${escapeHtml(o.name)}</option>`).join('')}</select></div></th>` : ''}
       <th style="min-width:84px;" title="ERP 이름: 유형"><span class="kf-sort" data-key="gubun" style="cursor:pointer;" title="누르면 구분 순서로 줄 세웁니다">구분${kfSortMark('gubun')}</span>
         <div style="margin-top:4px;"><select id="kf-hgubun" style="width:100%;padding:3px 4px;border:1px solid ${state.kfGubun ? '#60a5fa' : '#d1d5db'};border-radius:6px;font-size:12px;font-weight:400;font-family:inherit;background:${state.kfGubun ? '#eff6ff' : '#fff'};"><option value="">전체</option>${Array.from(new Set(getFabricGubuns().concat([GUBUN_SAMPLE]))).map(g => `<option value="${escapeHtml(g)}"${g === state.kfGubun ? ' selected' : ''}>${escapeHtml(g)}</option>`).join('')}</select></div></th>
@@ -33105,8 +33214,8 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
         <div style="margin-top:4px;"><select id="kf-hcat" style="width:100%;padding:3px 4px;border:1px solid ${state.kfCat ? '#60a5fa' : '#d1d5db'};border-radius:6px;font-size:12px;font-weight:400;font-family:inherit;background:${state.kfCat ? '#eff6ff' : '#fff'};"><option value="">전체</option>${kfCatOptions().map(c => `<option value="${escapeHtml(c)}"${c === state.kfCat ? ' selected' : ''}>${escapeHtml(c)}</option>`).join('')}</select></div></th>
       <th style="text-align:left;min-width:150px;">사종</th><th style="min-width:64px;">루프장</th>
       <th style="min-width:118px;" title="ERP 이름: 제작처(업체명) — 편직공장"><span class="kf-sort" data-key="factory" style="cursor:pointer;" title="누르면 제작처 순서로 줄 세웁니다">제작공장${kfSortMark('factory')}</span>
-        <div style="margin-top:4px;"><select id="kf-hfactory" style="width:100%;padding:3px 4px;border:1px solid ${state.kfFactory ? '#60a5fa' : '#d1d5db'};border-radius:6px;font-size:12px;font-weight:400;font-family:inherit;background:${state.kfFactory ? '#eff6ff' : '#fff'};"><option value="">전체</option>${knitFactoryList().map(v => `<option value="${escapeHtml(v)}"${v === state.kfFactory ? ' selected' : ''}>${escapeHtml(v)}</option>`).join('')}<option value="${KF_UNREG}"${state.kfFactory === KF_UNREG ? ' selected' : ''}>(거래처 미등록)</option></select></div></th><th style="min-width:56px;">기계인치</th><th style="min-width:64px;">침수</th><th style="min-width:60px;">게이지</th>      ${kfCanSeeFee() ? '<th style="min-width:56px;">로스 %</th><th style="min-width:76px;">편직료 원/kg</th>' : ''}<th style="text-align:left;min-width:120px;">비고</th><th style="min-width:96px;">마지막 수정</th>
-      ${kfCanAct() ? '<th style="min-width:66px;">판매</th><th style="min-width:52px;">수정</th><th style="min-width:76px;">편직 값 삭제</th>' : ''}<!-- hotfix422g: [복사] 열 감춤 · [판매종료] 열 -->
+        <div style="margin-top:4px;"><select id="kf-hfactory" style="width:100%;padding:3px 4px;border:1px solid ${state.kfFactory ? '#60a5fa' : '#d1d5db'};border-radius:6px;font-size:12px;font-weight:400;font-family:inherit;background:${state.kfFactory ? '#eff6ff' : '#fff'};"><option value="">전체</option>${knitFactoryList().map(v => `<option value="${escapeHtml(v)}"${v === state.kfFactory ? ' selected' : ''}>${escapeHtml(v)}</option>`).join('')}<option value="${KF_UNREG}"${state.kfFactory === KF_UNREG ? ' selected' : ''}>(거래처 미등록)</option></select></div></th><th style="min-width:56px;">기계인치</th><th style="min-width:64px;">침수</th><th style="min-width:60px;">게이지</th>      ${kfCanSeeFee() ? '<th style="min-width:56px;">로스 %</th><th style="min-width:76px;">편직료 원/kg</th>' : ''}<th style="text-align:left;min-width:70px;">비고</th><th style="min-width:84px;">마지막 수정</th>
+      ${kfCanAct() ? '<th class="kf-st3">판매</th><th class="kf-st2">수정</th><th class="kf-st1">편직 값 삭제</th>' : ''}<!-- hotfix422g: [복사] 열 감춤 · [판매종료] 열 -->
     </tr></thead><tbody>`;
     if (!rows.length) h += `<tr><td colspan="${kfColCount()}" style="text-align:center;color:#9ca3af;padding:20px;">${q ? '찾으신 품목이 없습니다.' : '품목이 없습니다.'}</td></tr>`;
     rows.forEach(r => {
@@ -33128,7 +33237,7 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
       <td rowspan="${n}" style="text-align:center;vertical-align:top;font-size:12px;color:#475569;">${escapeHtml(r.sp.cat || '-')}</td>`;
       const g = kfGauge(k.inch, k.needles);
       const fac = r.factory
-        ? `<td rowspan="${n}" style="text-align:center;font-weight:700;vertical-align:top;${dimS}">${dimS ? '<span style="font-style:normal;color:#cbd5e1;">← </span>' : ''}${escapeHtml(r.factory)}${knitFactoryKnown(r.factory) ? '' : '<div style="font-size:10px;color:#b45309;font-weight:700;">(거래처 미등록)</div>'}${r.fromCard ? '<div style="font-size:10px;color:#94a3b8;font-weight:400;">카드 값</div>' : ''}</td>
+        ? `<td rowspan="${n}" style="text-align:center;font-weight:700;vertical-align:top;${dimS}">${dimS ? '<span style="font-style:normal;color:#cbd5e1;">← </span>' : ''}${escapeHtml(r.factory)}${knitFactoryKnown(r.factory) ? '' : '<div style="font-size:10px;color:#b45309;font-weight:700;">(거래처 미등록)</div>'}${r.fromCard ? '<div style="font-size:10px;color:#94a3b8;font-weight:400;">카드 값</div>' : ''}${(r.others || []).length && !specPrimaryGreige(r.fid) ? `<div class="kf-oldfac" style="margin-top:5px;font-size:10.5px;font-weight:700;color:#b45309;font-style:normal;line-height:1.5;">옛 공장 줄 ${r.others.length}개${r.others.map(o => `<div>${escapeHtml(o)}${knitFactoryKnown(o) ? '' : ' (미등록)'}${kfCanAct() ? ` <button class="dash-action-btn danger kf-del" data-kf-fid="${escapeHtml(r.fid)}" data-kf-v="${escapeHtml(o)}" title="이 품목의 옛 공장 줄 [${escapeHtml(o)}] 의 편직 값을 지웁니다. 품목과 위 줄은 그대로입니다" style="font-size:10px;padding:1px 6px;">지우기</button>` : ''}</div>`).join('')}</div>` : ''}</td>
            <td rowspan="${n}" style="text-align:right;vertical-align:top;${dimS}">${kfNumTxt(k.inch)}</td>
            <td rowspan="${n}" style="text-align:right;vertical-align:top;${dimS}">${kfMoney(k.needles)}</td>
            <td rowspan="${n}" style="text-align:right;vertical-align:top;font-weight:700;${dimS || 'color:#1e3a8a;'}">${g == null ? '-' : (Math.trunc(g * 100) / 100).toFixed(2)}</td>
@@ -33137,9 +33246,9 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
            <td rowspan="${n}" style="text-align:left;vertical-align:top;font-size:12px;color:#475569;">${escapeHtml(String(r.sp.knit_memo || '') || k.memo || '')}${(String(r.sp.knit_memo || '').trim() && String(k.memo || '').trim()) ? `<div style="font-size:10.5px;color:#94a3b8;">원래 생지 비고: ${escapeHtml(k.memo)}</div>` : ''}</td>
            <td rowspan="${n}" style="text-align:center;vertical-align:top;font-size:11.5px;color:#64748b;">${escapeHtml(k.updated_at || '')}${k.updated_by ? '<div style="font-size:10.5px;">' + escapeHtml(k.updated_by) + '</div>' : ''}</td>`
         : `<td rowspan="${n}" colspan="${5 + (kfCanSeeFee() ? 2 : 0)}" style="text-align:center;vertical-align:top;color:#b45309;font-weight:700;">편직 값이 없습니다 — [수정]으로 공장과 값을 넣어 주십시오</td>`;
-      const act = !kfCanAct() ? '' : `<td rowspan="${n}" class="col-action" style="vertical-align:top;">${copyName ? '' : `<button class="dash-action-btn kf-stop" data-kf-fid="${escapeHtml(r.fid)}" data-kf-on="${r.sp.active === false ? '0' : '1'}" title="${r.sp.active === false ? '이 품목을 다시 판매 중으로 켭니다' : '이 품목을 판매 종료로 돌립니다 (자료는 그대로)'}" style="font-size:11px;padding:4px 9px;${r.sp.active === false ? 'color:#166534;border-color:#bbf7d0;' : 'color:#b45309;border-color:#fcd34d;'}">${r.sp.active === false ? '판매 재개' : '판매 종료'}</button>`}</td>
-        <td rowspan="${n}" class="col-action" style="vertical-align:top;">${specPrimaryGreige(r.fid) ? `<button class="dash-action-btn kf-rename" data-fid="${escapeHtml(r.fid)}" title="파생 품목의 이름을 고칩니다 (편직 값은 원래 생지 것이라 여기서 안 바뀝니다)" style="font-size:11px;padding:4px 9px;font-weight:800;color:#075985;border-color:#bae6fd;margin-bottom:4px;">이름</button><br>` : ''}<button class="dash-action-btn kf-edit" data-kf-fid="${escapeHtml(r.fid)}" data-kf-v="${escapeHtml(r.factory)}" title="편직 설정 창 · 품목 디테일 수정 창 중 고릅니다" style="font-size:11px;padding:4px 9px;font-weight:800;color:#1e3a8a;border-color:#c7d2fe;">수정</button>${(typeof canEditView === 'function' && canEditView('fabricSpecs')) ? ` <button class="dash-action-btn kf-clone-btn" data-fid="${escapeHtml(r.fid)}" title="이 품목(생지)을 통째로 복사해 새 품목을 만듭니다 (재고 · 통은 복사 안 함)" style="font-size:11px;padding:4px 9px;margin-top:4px;">복제</button>` : ''}</td>
-        <td rowspan="${n}" class="col-action" style="vertical-align:top;">${copyName
+      const act = !kfCanAct() ? '' : `<td rowspan="${n}" class="col-action kf-st3" style="vertical-align:top;">${copyName ? '' : `<button class="dash-action-btn kf-stop" data-kf-fid="${escapeHtml(r.fid)}" data-kf-on="${r.sp.active === false ? '0' : '1'}" title="${r.sp.active === false ? '이 품목을 다시 판매 중으로 켭니다' : '이 품목을 판매 종료로 돌립니다 (자료는 그대로)'}" style="font-size:11px;padding:4px 9px;${r.sp.active === false ? 'color:#166534;border-color:#bbf7d0;' : 'color:#b45309;border-color:#fcd34d;'}">${r.sp.active === false ? '판매 재개' : '판매 종료'}</button>`}</td>
+        <td rowspan="${n}" class="col-action kf-st2" style="vertical-align:top;">${specPrimaryGreige(r.fid) ? `<button class="dash-action-btn kf-rename" data-fid="${escapeHtml(r.fid)}" title="파생 품목의 이름을 고칩니다 (편직 값은 원래 생지 것이라 여기서 안 바뀝니다)" style="font-size:11px;padding:4px 9px;font-weight:800;color:#075985;border-color:#bae6fd;margin-bottom:4px;">이름</button><br>` : ''}<button class="dash-action-btn kf-edit" data-kf-fid="${escapeHtml(r.fid)}" data-kf-v="${escapeHtml(r.factory)}" title="편직 설정 창 · 품목 디테일 수정 창 중 고릅니다" style="font-size:11px;padding:4px 9px;font-weight:800;color:#1e3a8a;border-color:#c7d2fe;">수정</button>${(typeof canEditView === 'function' && canEditView('fabricSpecs')) ? ` <button class="dash-action-btn kf-clone-btn" data-fid="${escapeHtml(r.fid)}" title="이 품목(생지)을 통째로 복사해 새 품목을 만듭니다 (재고 · 통은 복사 안 함)" style="font-size:11px;padding:4px 9px;margin-top:4px;">복제</button>` : ''}</td>
+        <td rowspan="${n}" class="col-action kf-st1" style="vertical-align:top;">${copyName
           ? `<button class="dash-action-btn danger kf-delitem" data-kf-fid="${escapeHtml(r.fid)}" title="복사본 품목을 통째로 지웁니다" style="font-size:11px;padding:4px 9px;">품목 삭제</button>`
           : (specPrimaryGreige(r.fid)
             /* hotfix460(대표 지적 9/20): 파생 품목 줄의 편직 값은 원래 생지에서 빌려 온 것이라 여기서 지울 수 없었다(누르면 안내만 떴다).
@@ -33148,7 +33257,7 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
             : (r.factory ? `<button class="dash-action-btn danger kf-del" data-kf-fid="${escapeHtml(r.fid)}" data-kf-v="${escapeHtml(r.factory)}" title="이 공장의 편직 값(인치 · 침수 · 로스 · 편직료 · 루프장)을 지웁니다. 품목은 남습니다" style="font-size:11px;padding:4px 9px;">편직 값 삭제</button>` : ''))}</td>`;
       yarns.forEach((y, i) => {
         h += `<tr${r.child ? ' style="background:#f8fafc;"' : ''}>${i === 0 ? nameCell : ''}
-          <td style="text-align:left;${dimS}">${y ? escapeHtml(y) : '<span style="color:#cbd5e1;">원사 없음</span>'}</td>
+          <td class="kf-yn" style="text-align:left;${dimS}">${y ? escapeHtml(y) : '<span style="color:#cbd5e1;">원사 없음</span>'}</td>
           <td style="text-align:right;${dimS}">${!y ? '-' : ((k.blend_mode === 'manual' && k.pcts && kfNum(k.pcts[y]) != null) ? `<span style="font-weight:700;${dimS || 'color:#7c3aed;'}">${kfNum(k.pcts[y])}%</span>` : (kfLoopParts(k, y) ? escapeHtml(kfPartsText(kfLoopParts(k, y), 'loop')) : (k.loops ? kfNumTxt(k.loops[y]) : '-')))}</td>
           ${i === 0 ? fac + act : ''}</tr>`;
       });
@@ -33338,7 +33447,7 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
     const i = list.findIndex(x => specFid(x) === key);
     if (i < 0) { toast('품목을 찾지 못했습니다', 'error'); return false; }
     const cur = list[i];
-    const prevName = String(cur.name || '').trim(), name = String(vals.name || '').trim();
+    const prevName = String(cur.name || '').trim(), name = nameUs(vals.name);   /* hotfix462: 띄어쓰기 → _ */
     const gubun = String(vals.gubun || cur.gubun || GUBUN_BODY).trim(), cat = String(vals.cat || '').trim();
     if (!name) { toast('품목명을 넣어 주십시오', 'error'); return false; }
     if (name !== prevName && list.some((x, j) => j !== i && String(x.name || '').trim() === name)) { toast('이미 [' + name + '] 이(가) 있습니다', 'error'); return false; }
@@ -33397,6 +33506,67 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
     return true;
   }
   if (typeof window !== 'undefined') window.__hf461 = { saveSpecBasics, kfView, kfKidsOf, specs: () => getFabricSpecs(), fidOf: specFid };   /* hotfix461: 검사용 */
+  /* hotfix462(대표 지시 9/20): 이름 칸 — 띄어쓰기를 치면 바로 "_", 칸을 나갈 때 비슷한 이름이 있으면 한 번 알린다 */
+  const NAME_US_IDS = { 'kf-sp-name': 'item', 'fs-f-name': 'item', 'fsc-name': 'item', 'kn-name': 'item', 'cp-f-name': 'yarn' };
+  function nameUsPool(kind) { try { return kind === 'yarn' ? (getCostPrices().yarns || []).map(y => y && y.name) : getFabricSpecs().map(x => x && x.name); } catch (_) { return []; } }
+  function nameSimilarAlert(v, kind, skip) {
+    const hits = nameSimilarList(v, nameUsPool(kind), skip);
+    if (hits.length) alert('비슷한 ' + (kind === 'yarn' ? '사종' : '품목') + ' 이름이 이미 있습니다. 같은 것이 아닌지 한 번 확인해 주십시오.\n\n' + hits.map(h => '· ' + h).join('\n') + '\n\n지금 적은 이름: ' + v + '\n\n다른 것이 맞으면 그대로 저장하시면 됩니다.');
+    return hits;
+  }
+  document.addEventListener('input', e => {
+    const el = e.target; if (!el || !NAME_US_IDS[el.id] || e.isComposing) return;
+    const v = String(el.value || ''); if (!/[ \u00a0\u3000\t]/.test(v)) return;
+    const pos = el.selectionStart;
+    const nv = v.replace(/[\u00a0\u3000\t]/g, ' ').replace(/^ +/, '').replace(/ *_ */g, '_').replace(/ /g, '_');
+    if (nv !== v) { el.value = nv; try { const p = Math.max(0, Math.min(nv.length, (pos || 0) - (v.length - nv.length))); el.setSelectionRange(p, p); } catch (_) {} }
+  }, true);
+  document.addEventListener('focusin', e => { const el = e.target; if (el && NAME_US_IDS[el.id] && el.dataset.nameOrig == null) el.dataset.nameOrig = el.value; }, true);
+  document.addEventListener('focusout', e => {
+    const el = e.target; if (!el || !NAME_US_IDS[el.id]) return;
+    const v = nameUs(el.value); if (v !== el.value) { el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })); }
+    if (!v || v === el.dataset.nameOrig || el.dataset.simWarned === v) return;
+    el.dataset.simWarned = v;
+    setTimeout(() => nameSimilarAlert(v, NAME_US_IDS[el.id], [el.dataset.nameOrig || '']), 30);
+  }, true);
+  // 옛 이름 한꺼번에 — 미리 보여 주고 한 번 묻는다. 옛 이름은 다른 표기로 남는다(옛 의뢰서 · 재고와 이어짐). 코드는 안 바뀐다
+  function nameUsPlan(names) {
+    const taken = new Set(names.map(x => String(x || '').trim())); const plan = [], skip = [];
+    names.forEach((o0, i) => { const o = String(o0 || '').trim(); const n = nameUs(o); if (!o || n === o) return; if (taken.has(n)) { skip.push(o + ' → ' + n + ' (이미 있는 이름이라 건너뜀)'); return; } plan.push({ i, o, n }); taken.add(n); });
+    return { plan, skip };
+  }
+  function nameUsAsk(what, plan, skip) {
+    return confirm(what + ' ' + plan.length + '개의 띄어쓰기를 "_" 로 바꿉니다.\n\n' + plan.slice(0, 25).map(p => p.o + '  →  ' + p.n).join('\n') + (plan.length > 25 ? '\n… 외 ' + (plan.length - 25) + '개' : '') + (skip.length ? '\n\n건너뜀 ' + skip.length + '개:\n' + skip.slice(0, 8).join('\n') : '') + '\n\n옛 이름은 다른 표기로 남아 옛 의뢰서 · 재고와 그대로 이어집니다. 코드는 바뀌지 않습니다.\n\n바꿀까요?');
+  }
+  async function nameUsBulkItems() {
+    if (!isOwnerUser()) { toast('최고관리자만 쓸 수 있습니다', 'error'); return 0; }
+    const list = getFabricSpecs().map(x => Object.assign({}, x));
+    const { plan, skip } = nameUsPlan(list.map(x => x.name));
+    if (!plan.length) { toast('띄어쓰기가 있는 품목명이 없습니다', 'info'); return 0; }
+    if (!nameUsAsk('품목명', plan, skip)) return 0;
+    plan.forEach(p => { const it = list[p.i];
+      it.aliases = Array.from(new Set((Array.isArray(it.aliases) ? it.aliases : []).concat([p.o]).map(a => String(a || '').trim()).filter(a => a && a !== p.n)));
+      list.forEach(x => { if (String(x.pair_rib || '').trim() === p.o) x.pair_rib = p.n; });
+      it.name = p.n; it.updated_at = todayYMD(); });
+    const ok = await saveFabricSpecs(list, state.fabricGubuns || []); if (!ok) return 0;
+    for (const p of plan) { try { await kfHistAdd(specFid(list[p.i]), '', ['품목명: ' + p.o + ' → ' + p.n + ' (띄어쓰기 → _)'], '생지 기본'); } catch (_) {} }
+    toast('품목명 ' + plan.length + '개를 바꿨습니다', 'success');
+    return plan.length;
+  }
+  async function nameUsBulkYarns() {
+    if (!isOwnerUser()) { toast('최고관리자만 쓸 수 있습니다', 'error'); return 0; }
+    const P = JSON.parse(JSON.stringify(getCostPrices())); const list = Array.isArray(P.yarns) ? P.yarns : [];
+    const { plan, skip } = nameUsPlan(list.map(y => y && y.name));
+    if (!plan.length) { toast('띄어쓰기가 있는 사종 이름이 없습니다', 'info'); return 0; }
+    if (!nameUsAsk('사종 이름', plan, skip)) return 0;
+    plan.forEach(p => { const y = list[p.i]; y.aliases = Array.from(new Set((Array.isArray(y.aliases) ? y.aliases : []).concat([p.o]).map(a => String(a || '').trim()).filter(a => a && a !== p.n))); y.name = p.n; });
+    const ok = await saveCostPrices(P, []); if (!ok) return 0;
+    let cards = 0, knits = 0;
+    for (const p of plan) { try { const r = await yarnRenameEverywhere(p.o, p.n, { quiet: true }); cards += (r && r.cards) || 0; knits += (r && r.knits) || 0; } catch (e) { console.warn('[name_us yarn]', e.message); } }
+    toast('사종 이름 ' + plan.length + '개를 바꿨습니다 — 품목 카드 ' + cards + '곳 · 편직 설정 ' + knits + '곳에 새 이름을 넣었습니다', 'success');
+    return plan.length;
+  }
+  if (typeof window !== 'undefined') window.__hf462 = { nameUsBulkItems, nameUsBulkYarns, nameUs, nameSimilarList, yarnsFor: kfYarnNamesFor, openKnit: openKnitFeePopup };
   // ============================================================
   // hotfix422a: 코드 등록 요청 — 의뢰서에서 없는 품목을 적으면, 코드를 만들 수 있는 사람(knitSetup 허용)은 바로 [+ 생지 추가]로,
   //   아닌 사람은 settings/code_requests 에 요청을 남기고, 만들 수 있는 사람 화면 위 오른쪽에 "코드 요청 N" 종이 뜬다
@@ -33848,7 +34018,7 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
     let V = String(factory || '').trim();
     if (!V || !K[V]) V = K[V] ? V : (V || '');
     // hotfix422i: 사종 줄은 늘 마스터(카드 [원사] + 편직 루프장)에서 읽는다 — 카드가 넘긴 옛 목록이 사라진 사종을 되살리지 않게(4번째 원사가 생기던 문제)
-    let yarns = newItem ? [] : kfYarnNames(key);
+    let yarns = newItem ? [] : kfYarnNamesFor(key, V);   /* hotfix462: 이 공장 값에서만 */
     let cardYarns = kfCardYarnNames(key);   // hotfix387: 카드 [원사]에 있는 사종은 여기서 못 뺀다
     const facs = knitFactoryList();
     let touched = false;   // hotfix387: 사종을 넣거나 빼면 저장 전까지 "고친 상태"
@@ -34339,7 +34509,7 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
         // hotfix421: [저장]하면 창이 닫히고 적던 값이 남지 않는다 (대표 확정 — 품목 디테일 수정 창과 같게). 담아 둔 것도 지운다
         if (ok) {
           if (opts && opts.newItem && state.dashView === 'costCalc') { state.ccMode = 'exist'; state.ccCardFid = key; }   // hotfix422i: 신규품목원가 → 그 품목이 기존품목원가로 열린다
-          Object.assign(K, knitFeeOf(key)); yarns = kfYarnNames(key); cardYarns = kfCardYarnNames(key); touched = false; if (kfH) { kfH.drop(); }
+          Object.assign(K, knitFeeOf(key)); yarns = kfYarnNamesFor(key, V); cardYarns = kfCardYarnNames(key);   /* hotfix462 */ touched = false; if (kfH) { kfH.drop(); }
           toast(gNow ? (savedG ? '원래 생지를 저장했습니다 — ' + String((itemByFid(savedG) || {}).name || '') : '원래 생지를 비웠습니다 — 이 품목은 다시 생지입니다') : '[' + V + '] 편직 값을 저장했습니다', 'success');
           // hotfix422i: 창이 팍 꺼지지 않게 — [저장 완료]를 잠깐 보여 주고 부드럽게 사라진다 (대표 요청 9/14)
           try { btn.disabled = true; btn.textContent = '저장 완료'; btn.style.background = '#16a34a'; const box = wrap.firstElementChild; if (box) { box.style.transition = 'box-shadow .25s'; box.style.boxShadow = '0 0 0 3px #86efac, 0 24px 60px rgba(15,23,42,.35)'; } await new Promise(r => setTimeout(r, 420)); wrap.style.transition = 'opacity .35s'; wrap.style.opacity = '0'; await new Promise(r => setTimeout(r, 350)); } catch (_) {}
@@ -34552,6 +34722,7 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
     }));
     /* hotfix461: 거르개 · 파생 펼치기 · 파생 품목명 고치기 */
     document.querySelectorAll('#dash-body .kf-viewbtn').forEach(b => b.addEventListener('click', () => { state.kfView = b.dataset.kfview; renderDashboard(); }));
+    document.getElementById('kf-us-btn')?.addEventListener('click', async () => { const n = await nameUsBulkItems(); if (n) renderDashboard(); });   /* hotfix462 */
     document.querySelectorAll('#dash-body .kf-kids').forEach(b => b.addEventListener('click', () => {
       if (!state.kfOpen || typeof state.kfOpen !== 'object') state.kfOpen = {};
       const f = b.dataset.fid; if (state.kfOpen[f]) delete state.kfOpen[f]; else state.kfOpen[f] = true;
@@ -34567,7 +34738,8 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
       const gg = specPrimaryGreige(fid); const fac = gg ? greigeFacOf(gg) : '';
       const known = Array.from(new Set(knitFactoryList().map(kfFactoryShort).concat(knitFactoryList())));
       const mt = /^(.*)\(([^()]*)\)$/.exec(cur); const curTail = (mt && known.includes(String(mt[2]).trim())) ? String(mt[2]).trim() : '';
-      const typed = String(inp).trim();
+      const typed = nameUs(inp);   /* hotfix462 */
+      if (nameSimilarList(typed, getFabricSpecs().map(x => x.name), [cur].concat(Array.isArray(sp.aliases) ? sp.aliases : [])).length) { if (!confirm('비슷한 품목 이름이 이미 있습니다:\n\n' + nameSimilarList(typed, getFabricSpecs().map(x => x.name), [cur]).map(h => '· ' + h).join('\n') + '\n\n그래도 [' + typed + '] 으로 바꿀까요?')) return; }
       const mi = /^(.*)\(([^()]*)\)$/.exec(typed); const typedTail = (mi && known.includes(String(mi[2]).trim())) ? String(mi[2]).trim() : '';
       const want = typedTail ? typed : ((curTail || kfFactoryShort(fac) || '') ? (typed + '(' + (curTail || kfFactoryShort(fac)) + ')') : typed);
       if (!want) { toast('품목명을 넣어 주십시오', 'error'); return; }
@@ -35743,7 +35915,7 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
       ${own ? `<button class="dash-action-btn" id="cp-add-yarn" style="background:#1e3a8a;color:#fff;font-weight:700;padding:6px 14px;">＋ 사종 추가</button>
       <button class="dash-action-btn" id="cp-yarn-guess-all" style="padding:6px 12px;">이름 보고 성분 채우기</button>
       <button class="dash-action-btn" id="yarn-code-migrate-btn" style="padding:6px 12px;font-weight:700;" title="저장된 원사 의뢰서의 사종 글자 옆에 사종 코드(Y0001…)를 붙입니다 (글자는 그대로)">옛 자료 맞추기</button>
-      <button class="dash-action-btn" id="yarn-stale-btn" style="padding:6px 12px;font-weight:700;" title="다른 표기(옛 이름)로 아직 저장된 품목 카드 [원사] 줄 · 편직 설정 · 사종 비율 사본을 세어 보이고 새 이름으로 맞춥니다">옛 이름 남은 자료 찾기</button>` : ''}
+      <button class="dash-action-btn" id="yarn-stale-btn" style="padding:6px 12px;font-weight:700;" title="다른 표기(옛 이름)로 아직 저장된 품목 카드 [원사] 줄 · 편직 설정 · 사종 비율 사본을 세어 보이고 새 이름으로 맞춥니다">옛 이름 남은 자료 찾기</button><button class="dash-action-btn" id="yarn-us-btn" style="padding:6px 12px;font-weight:700;" title="사종 이름의 띄어쓰기를 한꺼번에 &quot;_&quot; 로 바꿉니다 — 먼저 보여 드리고 묻습니다. 카드 · 편직 설정의 이름도 따라갑니다">띄어쓰기 → _</button>` : ''}
       <input type="text" id="cp-search" lang="ko" autocomplete="off" placeholder="사종 이름 검색" value="${escapeHtml(state.costSearch || '')}"
         style="margin-left:auto;min-width:200px;max-width:300px;padding:7px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;font-family:inherit;">
       ${state.costSearch ? `<button class="dash-action-btn" id="cp-search-clear" style="font-size:11px;padding:5px 10px;">지우기</button>` : ''}
@@ -40520,7 +40692,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
         <div class="dash-modal-head"><span id="cp-modal-title">단가 추가</span><button class="dash-modal-close" id="cp-modal-close">✕</button></div>
         <div style="padding:16px;display:flex;flex-direction:column;gap:11px;">
           <div id="cp-f-name-wrap"><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">사종</label>
-            <input type="text" id="cp-f-name" autocomplete="off" style="${st}" placeholder="예: CM30수 · DTY 150/48">
+            <input type="text" id="cp-f-name" autocomplete="off" style="${st}" placeholder="예: CM30수 · DTY_150/48 (띄어쓰기는 _ 로 바뀝니다)">
             <div style="display:flex;gap:8px;margin-top:8px;">
               <div style="flex:1;"><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">컬러 <span style="font-weight:400;color:#9ca3af;font-size:11px;">— L/W 면 비움 · 선염 컬러만 (134% 같은 규격 글자는 컬러가 아닙니다)</span></label>
                 <select id="cp-f-color-sel" style="${st}"><option value="L/W">L/W (로화이트)</option><option value="1%">1%</option><option value="8%">8%</option><option value="13%">13%</option><option value="__custom">직접 입력…</option></select>
@@ -47634,6 +47806,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
       // hotfix290: 성분이 비어 있는 사종만 이름을 보고 한꺼번에 채운다. 채운 값은 [확인 필요]로 남는다.
       document.getElementById('yarn-code-migrate-btn')?.addEventListener('click', () => openYarnCodeMigrate());   // hotfix391
       document.getElementById('yarn-stale-btn')?.addEventListener('click', () => openYarnStaleModal());   // hotfix422h
+      document.getElementById('yarn-us-btn')?.addEventListener('click', async () => { const f = (window.__hf462 || {}).nameUsBulkYarns; if (typeof f !== 'function') return; const n = await f(); if (n) renderDashboard(); });   // hotfix462: 띄어쓰기 → _
       document.getElementById('cp-yarn-guess-all')?.addEventListener('click', async () => {
         const P = JSON.parse(JSON.stringify(getCostPrices()));
         const hit = [];
@@ -50521,7 +50694,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix453';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …)
+  const VERSION = 'v2.53 hotfix463';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
