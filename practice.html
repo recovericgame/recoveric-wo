@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="HIWOS">
 <meta name="mobile-web-app-capable" content="yes">
-<title>RECOVERIC HIWOS v2.53 hotfix468</title>
+<title>RECOVERIC HIWOS v2.53 hotfix469</title>
 
 <!-- PWA Manifest (인라인 data URL) -->
 <link rel="manifest" id="pwa-manifest">
@@ -8685,6 +8685,35 @@ function greigeNoClean(v) {
   return /^\d{1,3}$/.test(s) ? s.padStart(3, '0') : s;
 }
 // 옛 글자 "프리미엄싱글 001" → { name:'프리미엄싱글', no:'001' } (끝 3자리 숫자만 뗀다)
+// hotfix469(대표 지적 9/23 — 사종 검색 칸에 목록이 두 겹으로 뜸): 목록(datalist)을 다시 채우면 브라우저가 열려 있던 옛 목록을 닫지 않고
+//   새 목록을 하나 더 띄운다. 그래서 ① 내용이 그대로면 아예 건드리지 않고 ② 그 칸에 글자를 넣고 있는 중이면 칸을 나갈 때까지 미룬다.
+//   한 자리만 고치지 않고 모든 창의 모든 목록에 한꺼번에 걸린다
+(function hwListGuard() {
+  if (typeof document === 'undefined' || typeof HTMLDataListElement === 'undefined' || document.__hwListGuard) return;
+  document.__hwListGuard = true;
+  try {
+    const d = Object.getOwnPropertyDescriptor(Element.prototype, 'innerHTML');
+    if (!d || !d.set) return;
+    Object.defineProperty(HTMLDataListElement.prototype, 'innerHTML', {
+      configurable: true,
+      get() { return d.get.call(this); },
+      set(v) {
+        try {
+          if (d.get.call(this) === v) return;   // 같은 목록이면 다시 그리지 않는다
+          const ae = document.activeElement;
+          if (this.id && ae && ae.tagName === 'INPUT' && ae.getAttribute('list') === this.id) {
+            /* 그 칸에 목록이 열려 있는 중이다 — 목록을 그대로 갈면 옛 목록이 닫히지 않고 하나 더 뜬다.
+               잠깐 칸에서 목록을 떼었다 붙여 옛 목록을 닫고 새 목록을 단다. 값은 바로 들어간다(뒤 처리가 목록을 읽어도 새 값이 보인다) */
+            d.set.call(this, v);
+            try { ae.removeAttribute('list'); const id = this.id; requestAnimationFrame(() => { try { if (document.getElementById(id) === this || document.querySelector('datalist#' + CSS.escape(id))) ae.setAttribute('list', id); } catch (_) { ae.setAttribute('list', id); } }); } catch (_) {}
+            return;
+          }
+        } catch (_) {}
+        d.set.call(this, v);
+      }
+    });
+  } catch (e) { console.warn('[list guard]', e && e.message); }
+})();
 // hotfix462(대표 지적 9/20 — "다이아"가 ㄷㅏㅇㅣㅇㅏ 로 풀림): 한글을 조합하는 도중에는 입력 처리(목록 다시 그리기 · 커서 옮기기)를 하지 않는다.
 //   조합이 끝나는 순간(compositionend) 한 번만 입력 처리를 돌린다. 모든 칸에 똑같이 적용된다
 (function hwImeGuard() {
@@ -16081,6 +16110,11 @@ function specGreigeColors(fid) {
     // hotfix417: 어느 기계에서 짜는지 (직접 적기 — 비우면 기계 이름 자동값만)
     after.machine = String(row.machine || '').trim();
     after.blend_mode = (row.blend_mode === 'manual') ? 'manual' : 'loop';
+    /* hotfix469(대표 지적 9/23 — 품목 복제 때 원사 구분이 안 따라감): 줄에서 고른 구분을 같이 담는다.
+       원사 설정에 있는 사종은 그 사종의 구분을 쓰고, 설정에 없는 사종은 여기 담긴 구분을 쓴다. 복제 · 공장 옮김 때 같이 따라간다 */
+    after.kinds = {};
+    { const src = (row.kinds && typeof row.kinds === 'object') ? row.kinds : ((before && before.kinds) || {});
+      Object.keys(src).forEach(nm => { const kv = String(src[nm] || '').trim(); if (kv) after.kinds[nm] = kv; }); }
     // hotfix391: 루프장 사종 이름 → 코드 짝 (loops 는 이름 열쇠 그대로, 옆에 loop_yids 로 병기)
     after.loop_yids = {}; Object.keys(after.loops).forEach(nm => { const id = yarnYidOf(nm); if (id) after.loop_yids[nm] = id; });
     after.vendor_vid = vendorVidOf(V);
@@ -34154,7 +34188,8 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
       const isNew = !y; const exact = y ? ((getCostPrices().yarns || []).find(x => x && String(x.name || '').trim() === String(y).trim()) || null) : null;
       const ent = exact || (y ? yarnEntryByName(y) : null);   // 이름이 다른 표기(옛 이름)면 그 사종 — 줄에는 옛 글자 그대로 두고 컬러에서 새 이름을 고르면 바뀐다
       const stale = !!(y && !exact && ent);
-      const pt = exact ? yarnParts(exact) : { base: String(y || ''), color: '', brand: '' }; const kd = ent ? String(ent.kind || '기타') : '';
+      const pt = exact ? yarnParts(exact) : { base: String(y || ''), color: '', brand: '' };
+      const kd = ent ? String(ent.kind || '기타') : String(((K[V] || {}).kinds || {})[y] || '');   /* hotfix469: 원사 설정에 없는 사종은 담아 둔 구분을 쓴다 */
       const k = K[V] || {}; const dlId = isNew ? 'kf-newyarn-list' : 'kf-rl-' + i; const pre = (y && !cardYarns.includes(y));
       const xp = (y && Array.isArray((k.loop_parts || {})[y]) && k.loop_parts[y].length >= 2) ? k.loop_parts[y] : null;   /* hotfix433: 같은 원사 자리별 값(편집 중에는 화면 글자 그대로) */
       const v0 = (f, d) => { const x = xp ? (xp[0] || {})[f] : d; return x == null ? '' : x; };
@@ -34268,9 +34303,11 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
           const p0 = kfPlyNum(plys[y]); const sl = kfPartsSum(arr, 'loop', p0), sp = kfPartsSum(arr, 'pct', p0);
           loops[y] = sl == null ? '' : String(sl); pcts[y] = sp == null ? '' : String(sp);
         });
-        const bm = wrap.querySelector('.kf-bmode:checked'); 
+        const kinds = {};   /* hotfix469: 줄에서 고른 구분도 같이 담는다 */
+      wrap.querySelectorAll('.kf-yrow').forEach(r => { const y = String(r.dataset.y || '').trim(); const kv = String((r.querySelector('.kf-rk') || {}).value || '').trim(); if (y && kv) kinds[y] = kv; });
+      const bm = wrap.querySelector('.kf-bmode:checked'); 
         return { inch: wrap.querySelector('#kf-inch').value, needles: wrap.querySelector('#kf-needles').value, knit_loss: wrap.querySelector('#kf-loss').value,
-          knit_fee: wrap.querySelector('#kf-fee').value, memo: wrap.querySelector('#kf-memo').value, color: (wrap.querySelector('#kf-color') || {}).value || '', machine: (wrap.querySelector('#kf-mach') || {}).value || '', loops, pcts, plys, loop_parts, blend_mode: (bm && bm.value === 'manual') ? 'manual' : 'loop' };
+          knit_fee: wrap.querySelector('#kf-fee').value, memo: wrap.querySelector('#kf-memo').value, color: (wrap.querySelector('#kf-color') || {}).value || '', machine: (wrap.querySelector('#kf-mach') || {}).value || '', loops, pcts, plys, kinds, loop_parts, blend_mode: (bm && bm.value === 'manual') ? 'manual' : 'loop' };
       };
       // hotfix399: "닫을까요" 는 화면에 보이는 칸이 열 때와 달라졌을 때만 — 저장돼 있던 값 중 화면에 없는 사종 줄 때문에 헛묻지 않는다
       const normC = c => {
@@ -34289,7 +34326,7 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
         const cur = collect();
         if (!K[V]) K[V] = { _new: true, inch: null, needles: null, knit_loss: null, knit_fee: null, loops: {}, pcts: {}, plys: {}, blend_mode: 'loop', memo: '', color: '' };
         Object.assign(K[V], { inch: cur.inch, needles: cur.needles, knit_loss: cur.knit_loss, knit_fee: cur.knit_fee, memo: cur.memo, color: cur.color, machine: cur.machine, blend_mode: cur.blend_mode,
-          loops: Object.assign({}, K[V].loops || {}, cur.loops), pcts: Object.assign({}, K[V].pcts || {}, cur.pcts), plys: Object.assign({}, K[V].plys || {}, cur.plys), loop_parts: JSON.parse(JSON.stringify(cur.loop_parts || {})) });
+          loops: Object.assign({}, K[V].loops || {}, cur.loops), pcts: Object.assign({}, K[V].pcts || {}, cur.pcts), plys: Object.assign({}, K[V].plys || {}, cur.plys), kinds: Object.assign({}, K[V].kinds || {}, cur.kinds || {}), loop_parts: JSON.parse(JSON.stringify(cur.loop_parts || {})) });   /* hotfix469 */
         readBasics();
         return cur;
       };
@@ -34471,7 +34508,7 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
         if (!K[v]) {
           const base = K[V] || null;
           K[v] = { inch: base ? base.inch : null, needles: base ? base.needles : null, knit_loss: base ? base.knit_loss : null, knit_fee: base ? base.knit_fee : null, memo: base ? (base.memo || '') : '', machine: '', color: '',
-            loops: base ? JSON.parse(JSON.stringify(base.loops || {})) : {}, pcts: base ? JSON.parse(JSON.stringify(base.pcts || {})) : {}, plys: base ? JSON.parse(JSON.stringify(base.plys || {})) : {}, loop_parts: base ? JSON.parse(JSON.stringify(base.loop_parts || {})) : {}, blend_mode: base ? (base.blend_mode || 'loop') : 'loop', _new: true };
+            loops: base ? JSON.parse(JSON.stringify(base.loops || {})) : {}, pcts: base ? JSON.parse(JSON.stringify(base.pcts || {})) : {}, plys: base ? JSON.parse(JSON.stringify(base.plys || {})) : {}, kinds: base ? JSON.parse(JSON.stringify(base.kinds || {})) : {},   /* hotfix469 */ loop_parts: base ? JSON.parse(JSON.stringify(base.loop_parts || {})) : {}, blend_mode: base ? (base.blend_mode || 'loop') : 'loop', _new: true };
           if (base && base._new) delete K[V]; else if (V && base) dropOnSave.add(V);
           touched = true;
         }
@@ -34615,7 +34652,11 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
           // hotfix422i: 창이 팍 꺼지지 않게 — [저장 완료]를 잠깐 보여 주고 부드럽게 사라진다 (대표 요청 9/14)
           try { btn.disabled = true; btn.textContent = '저장 완료'; btn.style.background = '#16a34a'; const box = wrap.firstElementChild; if (box) { box.style.transition = 'box-shadow .25s'; box.style.boxShadow = '0 0 0 3px #86efac, 0 24px 60px rgba(15,23,42,.35)'; } await new Promise(r => setTimeout(r, 150)); wrap.style.transition = 'opacity .16s'; wrap.style.opacity = '0'; await new Promise(r => setTimeout(r, 160)); } catch (_) {}   /* hotfix467: 저장 뒤 창이 더 빨리 사라진다 (770ms → 310ms) */
           wrap.remove(); if (typeof onClose === 'function') { try { onClose(); } catch (e) {} } if (state.uiMode === 'dashboard' && (state.costTab || '') === 'knitfee') renderDashboard();
-          setTimeout(() => { bgAfterSave().then(() => { try { if (state.uiMode === 'dashboard' && state.dashView === 'knitSetup' && !document.querySelector('#fs-modal.show') && !document.getElementById('kf-popup')) renderDashboard(); } catch (_) {} }); }, 0);   /* hotfix467: 뒤 정리는 창을 닫고 나서. 다른 창이 떠 있으면 다시 그리지 않는다 */
+          setTimeout(() => { bgAfterSave().then(() => { try {   /* hotfix467 · hotfix469: 뒤 정리가 끝나면 보고 있는 화면만 조용히 다시 그린다. 다른 창이 떠 있으면 건드리지 않는다 */
+            if (document.querySelector('#fs-modal.show') || document.getElementById('kf-popup') || state.uiMode !== 'dashboard') return;
+            if (state.dashView === 'knitSetup') renderDashboard();
+            else if (state.dashView === 'costCalc') { renderDashboard(); try { if (typeof repaintCostCalc === 'function') repaintCostCalc(); } catch (_) {} }
+          } catch (_) {} }); }, 0);
           if (goDetail) { state.__fsOpenFid = key; if (state.dashView === 'costCalc') { state.ccCardFid = key; state.__fsReturn = 'costCalc'; } if (typeof window.hwGoView === 'function') window.hwGoView('fabricSpecs'); else { state.dashView = 'fabricSpecs'; renderDashboard(); } return; }
           // hotfix421: [+ 생지 추가]에서 온 창이면 "새로운 품목을 더 입력하시겠습니까?" → 확인이면 빈 생지 추가 창을 다시 연다
           if (fromNew) { const more = confirm('데이터를 저장했습니다.\n새로운 품목을 더 입력하시겠습니까?'); if (more && typeof openKnitNewItemModal === 'function') openKnitNewItemModal(); }
@@ -50809,7 +50850,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix468';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
+  const VERSION = 'v2.53 hotfix469';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
