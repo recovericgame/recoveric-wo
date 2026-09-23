@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="HIWOS">
 <meta name="mobile-web-app-capable" content="yes">
-<title>RECOVERIC HIWOS v2.53 hotfix465</title>
+<title>RECOVERIC HIWOS v2.53 hotfix468</title>
 
 <!-- PWA Manifest (인라인 data URL) -->
 <link rel="manifest" id="pwa-manifest">
@@ -12724,13 +12724,14 @@ window.addEventListener('firebase-ready', () => {
       state.overviewTypeFilter = '염색가공';
       state.dashView = 'overview';
       switchUiMode('dashboard');
+      const fromUrl = (window.__hf466 && typeof window.__hf466.hwBootFromUrl === 'function') ? window.__hf466.hwBootFromUrl() : false;   /* hotfix466: 새 창으로 연 화면 */
       try {
         if (canAccessView('daily-report') && typeof openDailyReportModal === 'function') {
           const _d = new Date();
           const _today = _d.getFullYear() + '-' + String(_d.getMonth() + 1).padStart(2, '0') + '-' + String(_d.getDate()).padStart(2, '0');
           const _key = 'hiwos_daily_modal_' + LINE + ((state.user && state.user.email) || '');
           let _last = null; try { _last = localStorage.getItem(_key); } catch (_) { _last = null; }
-          if (_last !== _today) {
+          if (_last !== _today && !fromUrl) {   /* hotfix466: 새 창으로 연 화면에서는 일일 체크 창을 띄우지 않는다 */
             try { localStorage.setItem(_key, _today); } catch (_) {}
             setTimeout(openDailyReportModal, 250);
           }
@@ -13203,7 +13204,9 @@ window.addEventListener('firebase-ready', () => {
   }
   function hwSidePaint(cur) {
     const host = document.getElementById('hwside-nav'); if (!host) return;
-    const fold = hwSideFold(); let h = '';
+    const fold = hwSideFold();
+    /* hotfix466: 왼쪽 메뉴 맨 위 [새 창으로 열기] 스위치 */
+    let h = '<label class="hwside-newtab" style="display:flex;align-items:center;gap:7px;margin:2px 8px 8px;padding:7px 9px;border:1px solid #cbd5e1;border-radius:8px;background:#f8fafc;font-size:12px;font-weight:700;color:#334155;cursor:pointer;" title="켜 두면 메뉴를 누를 때마다 새 창(새 탭)으로 열립니다. 지금 보고 있는 화면은 그대로 남습니다. 꺼 두어도 Ctrl(⌘)을 누른 채 누르거나 마우스 가운데 단추로 누르면 새 창으로 열립니다"><input type="checkbox" id="hwside-newtab"' + (hwNewTabOn() ? ' checked' : '') + '><span>새 창으로 열기</span></label>';
     HW_SIDE.forEach((g, gi) => {
       const items = (g.items || []).filter(v => canAccessView(v)); if (!g.acts && !items.length) return;
       h += '<div class="hwside-grp' + (gi === 0 ? ' first' : '') + (fold[g.key] ? ' fold' : '') + '" data-sgrp="' + g.key + '"><button type="button" class="hwside-gh" data-sfold="' + g.key + '"><span>' + escapeHtml(g.name) + '</span><span class="hwcaret"></span></button><div class="hwside-items">'
@@ -13212,8 +13215,15 @@ window.addEventListener('firebase-ready', () => {
         + '</div></div>';
     });
     host.innerHTML = h;
-    host.querySelectorAll('[data-hwview]').forEach(b => b.addEventListener('click', e => { e.stopPropagation(); document.body.classList.remove('hwside-peek'); hwGo(b.dataset.hwview); }));
-    host.querySelectorAll('[data-hwside]').forEach(b => b.addEventListener('click', e => { e.stopPropagation(); hwSideAct(b.dataset.hwside); }));
+    { const nt = host.querySelector('#hwside-newtab'); if (nt) nt.addEventListener('change', e => { e.stopPropagation(); hwNewTabSet(nt.checked); toast(nt.checked ? '이제 메뉴를 누르면 새 창으로 열립니다' : '이제 메뉴를 누르면 이 화면에서 바뀝니다', 'success'); }); }   /* hotfix466 */
+    host.querySelectorAll('[data-hwview]').forEach(b => {   /* hotfix466 */
+      const go = e => { e.stopPropagation(); if (e.type === 'auxclick' && e.button !== 1) return; if (hwWantNew(e)) { e.preventDefault(); hwOpenNew(b.dataset.hwview); return; } document.body.classList.remove('hwside-peek'); hwGo(b.dataset.hwview); };
+      b.addEventListener('click', go); b.addEventListener('auxclick', go);
+    });
+    host.querySelectorAll('[data-hwside]').forEach(b => {   /* hotfix466 */
+      const go = e => { e.stopPropagation(); if (e.type === 'auxclick' && e.button !== 1) return; if (hwWantNew(e)) { e.preventDefault(); hwOpenNew(b.dataset.hwside); return; } hwSideAct(b.dataset.hwside); };
+      b.addEventListener('click', go); b.addEventListener('auxclick', go);
+    });
     host.querySelectorAll('[data-sfold]').forEach(b => b.addEventListener('click', e => { e.stopPropagation(); const f = hwSideFold(); f[b.dataset.sfold] = !f[b.dataset.sfold]; hwSideStore('hiwos.side.fold', JSON.stringify(f)); b.parentElement.classList.toggle('fold', !!f[b.dataset.sfold]); }));
     hwSideApply();
     { const dt = document.getElementById('dash-title'); if (dt && state.uiMode === 'dashboard') { const t2 = hwErpTitle(cur, dt.textContent.trim()); if (t2 && t2 !== dt.textContent.trim()) dt.textContent = t2; } }   /* hotfix451: 제목 = 이름 (카테고리) */
@@ -13278,6 +13288,39 @@ window.addEventListener('firebase-ready', () => {
     hwTopPaint();
   }
   window.hwGoView = (v) => hwGo(v);   // hotfix419: 의뢰서 폼(바깥)에서 화면 이동
+  /* hotfix466(직원 제안 · 대표 지시 9/23): 지금 보고 있는 화면을 그대로 두고 다른 화면을 새 창(새 탭)으로 연다.
+     왼쪽 메뉴 맨 위 [새 창으로 열기] 스위치를 켜 두면 메뉴를 누를 때마다 새 탭이 열린다.
+     스위치를 꺼 두어도 Ctrl(맥은 ⌘)을 누른 채 누르거나 마우스 가운데 단추로 누르면 새 탭으로 열린다 */
+  function hwNewTabOn() { try { return hwSideStore('hiwos.newtab') === '1'; } catch (_) { return false; } }
+  function hwNewTabSet(on) { try { hwSideStore('hiwos.newtab', on ? '1' : '0'); } catch (_) {} }
+  function hwWantNew(e) { return !!(e && (e.ctrlKey || e.metaKey || e.button === 1 || e.which === 2)) || hwNewTabOn(); }
+  function hwOpenNew(target) {
+    const t = String(target || '').trim(); if (!t) return false;
+    try {
+      const base = String(location.href).split('#')[0].split('?')[0];
+      const w = window.open(base + '?v=' + encodeURIComponent(t), '_blank');
+      if (!w) { toast('브라우저가 새 창을 막았습니다 — 주소창 오른쪽의 팝업 허용을 켜 주십시오', 'error'); return false; }
+      toast('새 창으로 열었습니다 — 이 화면은 그대로 둡니다', 'success');
+      return true;
+    } catch (e) { console.warn('[새 창]', e.message); return false; }
+  }
+  window.hwSideActGo = (a) => hwSideAct(a);   // hotfix466: 주소로 들어온 작업지시서 이동
+  // 주소에 ?v=… 가 붙어 있으면 그 화면으로 연다 (새 창으로 열기)
+  function hwBootFromUrl() {
+    let t = '';
+    try { t = new URLSearchParams(location.search).get('v') || ''; } catch (_) { t = ''; }
+    if (!t) return false;
+    try { history.replaceState(null, '', String(location.href).split('#')[0].split('?')[0]); } catch (_) {}
+    setTimeout(() => {
+      try {
+        if (t.indexOf('wo:') === 0) hwSideAct(t);
+        else if (canAccessView(t)) hwGo(t);
+        else toast('그 화면을 볼 권한이 없습니다', 'error');
+      } catch (e) { console.warn('[새 창 이동]', e.message); }
+    }, 350);
+    return true;
+  }
+  if (typeof window !== 'undefined') window.__hf466 = { hwBootFromUrl, hwNewTabOn, hwNewTabSet, hwWantNew, hwOpenNew };
   function hwGo(view) {
     hwCloseAll();
     if (!view) return;
@@ -13372,7 +13415,8 @@ window.addEventListener('firebase-ready', () => {
       if (!btn) return;
       if (btn.dataset.hwview) {                     // 하위가 없는 단추 (원가 계산기)
         btn.dataset.hwbound = '1';
-        btn.addEventListener('click', e => { e.stopPropagation(); hwGo(btn.dataset.hwview); });
+        { const go = e => { e.stopPropagation(); if (e.type === 'auxclick' && e.button !== 1) return; if (hwWantNew(e)) { e.preventDefault(); hwOpenNew(btn.dataset.hwview); return; } hwGo(btn.dataset.hwview); };   /* hotfix466 */
+        btn.addEventListener('click', go); btn.addEventListener('auxclick', go); }
         return;
       }
       btn.addEventListener('click', e => {          // 누르면 고정. 다시 누르면 닫힌다
@@ -13403,7 +13447,8 @@ window.addEventListener('firebase-ready', () => {
     document.querySelectorAll('#hwtop [data-hwview]').forEach(b => {
       if (b.dataset.hwbound === '1') return;
       b.dataset.hwbound = '1';
-      b.addEventListener('click', e => { e.stopPropagation(); hwGo(b.dataset.hwview); });
+      { const go = e => { e.stopPropagation(); if (e.type === 'auxclick' && e.button !== 1) return; if (hwWantNew(e)) { e.preventDefault(); hwOpenNew(b.dataset.hwview); return; } hwGo(b.dataset.hwview); };   /* hotfix466 */
+        b.addEventListener('click', go); b.addEventListener('auxclick', go); }
     });
     document.querySelectorAll('#hwtop [data-hwlock]').forEach(b => {
       b.addEventListener('click', e => {
@@ -16401,7 +16446,8 @@ function specGreigeColors(fid) {
         // hotfix391: 사종 이름·코드·구분·다른 표기만 떼어 직원도 읽는 사본에 적는다 (단가·운임·로스 없음)
         const names = (next.yarns || []).filter(y => y && y.name).map(y => Object.assign({ yid: y.yid || '', name: y.name, kind: y.kind || '기타' },
           (y.base != null) ? { base: String(y.base || ''), color: String(y.color || ''), brand: String(y.brand || '') } : {},   // hotfix393
-          (Array.isArray(y.aliases) && y.aliases.length) ? { aliases: y.aliases.slice() } : {}));
+          (Array.isArray(y.aliases) && y.aliases.length) ? { aliases: y.aliases.slice() } : {},
+        (parseFloat(y.den) > 0) ? { den: parseFloat(y.den) } : {}));   /* hotfix468: 따로 적어 둔 굵기(데니어)는 직원 화면도 같이 읽는다 (단가가 아니라 굵기라서 괜찮다) */
         await setDoc(doc(db, C('settings'), 'yarn_names'), { items: names, updated_at: serverTimestamp(), updated_by: state.user?.email || 'unknown' });
         state.yarnNames = names;
       }
@@ -33421,7 +33467,10 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
     const PL = (plys && typeof plys === 'object') ? plys : null;   // hotfix422g: 편직 설정의 합사가 카드 줄의 합사를 이긴다
     let plyChanged = false;
     const next = want.map(nm => {
-      if (byName[nm]) { const y = byName[nm]; if (PL) { const p = kfPlyNum(PL[nm]); if (kfPlyNum(y.ply) !== p) { y.ply = p; plyChanged = true; } } return y; }
+      if (byName[nm]) { const y = byName[nm]; if (PL) { const p = kfPlyNum(PL[nm]); if (kfPlyNum(y.ply) !== p) { y.ply = p; plyChanged = true; } }
+        /* hotfix468: [원사 코드]에 굵기(데니어)를 따로 적어 두었으면 카드 줄의 굵기도 그 값으로 맞춘다 */
+        { const g0 = yarnGuessSpec(nm) || {}; if (g0.fromMaster && (parseFloat(y.size) !== g0.size || String(y.unit || '') !== 'D')) { y.size = g0.size; y.unit = 'D'; plyChanged = true; } }
+        return y; }
       const g = yarnGuessSpec(nm) || {};
       return { name: nm, size: (g.size == null ? null : g.size), unit: (g.unit === '수' ? '수' : 'D'), ply: PL ? kfPlyNum(PL[nm]) : 1, loop: null,
         bmode: (prev.blend_mode === 'manual' ? 'manual' : 'loop'), pct_manual: null, vendor: '', price: null, ship: null, loss: null,
@@ -34546,19 +34595,27 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
         }
         let ok = gNow ? true : await saveKnitFeeRow(key, V, collect(), { yarnNames: yarns });
         // hotfix422g: 공장을 옮겼으면 옛 공장 줄 · 옛 카드의 "(공장 미지정)" 줄을 지운다 (공장은 하나)
-        if (ok && !gNow) { const gone = Array.from(new Set(Array.from(dropOnSave).concat(Object.keys(K).filter(v => v !== V && (!v || v === KF_NO_FAC))))); for (const v of gone) { if (v === V) continue; try { await deleteKnitFeeRow(key, v); } catch (e) { console.warn('[kf drop]', e.message); } } dropOnSave.clear(); }
+        /* hotfix467(대표 지시 9/23): 창은 저장되자마자 닫는다. 뒤따르는 정리(옛 공장 줄 지우기 · 카드 [원사] 맞추기 · 혼용율 맞추기)는
+           저장이 끝난 뒤에 뒤에서 이어서 한다 — 그 일들이 하나씩 서버를 다녀오느라 [저장 중...]이 길게 걸렸다. 잘못되면 그때 알린다 */
         btn.disabled = false; btn.textContent = '저장';
-        if (ok) { try { await syncCardYarnsFromKnit(key, yarns, (knitFeeOf(key)[V] || {}).plys || {}, renames); for (const d434 of specDerivedOf(key)) { try { await syncCardYarnsFromKnit(d434, yarns, (knitFeeOf(key)[V] || {}).plys || {}, renames); } catch (e2) { console.warn('[derived yarn sync]', e2.message); } } Object.keys(renames).forEach(k => delete renames[k]); } catch (e) { console.warn('[card yarn sync]', e.message); } }   // hotfix399d: 카드 [원사] 반영 (주인 = 편직 설정) · hotfix422g: 합사도 · hotfix422h: 바꾼 사종은 값을 이어 받는다
-        if (ok) { try { await syncSpecBlendFromKnit(key); } catch (e) { console.warn('[blend sync]', e.message); } }   // hotfix399b: 품목 혼용률 자동
-        if (ok && !document.querySelector('#fs-modal.show')) { for (const d434 of specDerivedOf(key)) { try { await syncSpecBlendFromKnit(d434); } catch (e) { console.warn('[derived blend]', e.message); } } }   /* hotfix434: 파생 품목 혼용률도 같이 */
+        const yarnsSaved = yarns.slice();   /* hotfix467: 뒤 정리는 저장할 때의 사종 차례를 그대로 쓴다 (창을 닫으면서 yarns 가 다시 읽혀 차례가 바뀌지 않게) */
+        const bgAfterSave = async () => {
+          try {
+            if (!gNow) { const gone = Array.from(new Set(Array.from(dropOnSave).concat(Object.keys(K).filter(v => v !== V && (!v || v === KF_NO_FAC))))); for (const v of gone) { if (v === V) continue; try { await deleteKnitFeeRow(key, v); } catch (e) { console.warn('[kf drop]', e.message); } } dropOnSave.clear(); }
+            { try { await syncCardYarnsFromKnit(key, yarnsSaved, (knitFeeOf(key)[V] || {}).plys || {}, renames); for (const d434 of specDerivedOf(key)) { try { await syncCardYarnsFromKnit(d434, yarnsSaved, (knitFeeOf(key)[V] || {}).plys || {}, renames); } catch (e2) { console.warn('[derived yarn sync]', e2.message); } } Object.keys(renames).forEach(k => delete renames[k]); } catch (e) { console.warn('[card yarn sync]', e.message); } }   // hotfix399d: 카드 [원사] 반영 (주인 = 편직 설정) · hotfix422g: 합사도 · hotfix422h: 바꾼 사종은 값을 이어 받는다
+            { try { await syncSpecBlendFromKnit(key); } catch (e) { console.warn('[blend sync]', e.message); } }   // hotfix399b: 품목 혼용률 자동
+            if (!document.querySelector('#fs-modal.show')) { for (const d434 of specDerivedOf(key)) { try { await syncSpecBlendFromKnit(d434); } catch (e) { console.warn('[derived blend]', e.message); } } }   /* hotfix434: 파생 품목 혼용률도 같이 */
+          } catch (e) { console.warn('[저장 뒤 정리]', e.message); try { toast('저장은 됐습니다 — 뒤 정리가 덜 끝났습니다: ' + e.message, 'error'); } catch (_) {} }
+        };
         // hotfix421: [저장]하면 창이 닫히고 적던 값이 남지 않는다 (대표 확정 — 품목 디테일 수정 창과 같게). 담아 둔 것도 지운다
         if (ok) {
           if (opts && opts.newItem && state.dashView === 'costCalc') { state.ccMode = 'exist'; state.ccCardFid = key; }   // hotfix422i: 신규품목원가 → 그 품목이 기존품목원가로 열린다
           Object.assign(K, knitFeeOf(key)); yarns = kfYarnNamesFor(key, V); cardYarns = kfCardYarnNames(key);   /* hotfix462 */ touched = false; if (kfH) { kfH.drop(); }
           toast(gNow ? (savedG ? '원래 생지를 저장했습니다 — ' + String((itemByFid(savedG) || {}).name || '') : '원래 생지를 비웠습니다 — 이 품목은 다시 생지입니다') : '[' + V + '] 편직 값을 저장했습니다', 'success');
           // hotfix422i: 창이 팍 꺼지지 않게 — [저장 완료]를 잠깐 보여 주고 부드럽게 사라진다 (대표 요청 9/14)
-          try { btn.disabled = true; btn.textContent = '저장 완료'; btn.style.background = '#16a34a'; const box = wrap.firstElementChild; if (box) { box.style.transition = 'box-shadow .25s'; box.style.boxShadow = '0 0 0 3px #86efac, 0 24px 60px rgba(15,23,42,.35)'; } await new Promise(r => setTimeout(r, 420)); wrap.style.transition = 'opacity .35s'; wrap.style.opacity = '0'; await new Promise(r => setTimeout(r, 350)); } catch (_) {}
+          try { btn.disabled = true; btn.textContent = '저장 완료'; btn.style.background = '#16a34a'; const box = wrap.firstElementChild; if (box) { box.style.transition = 'box-shadow .25s'; box.style.boxShadow = '0 0 0 3px #86efac, 0 24px 60px rgba(15,23,42,.35)'; } await new Promise(r => setTimeout(r, 150)); wrap.style.transition = 'opacity .16s'; wrap.style.opacity = '0'; await new Promise(r => setTimeout(r, 160)); } catch (_) {}   /* hotfix467: 저장 뒤 창이 더 빨리 사라진다 (770ms → 310ms) */
           wrap.remove(); if (typeof onClose === 'function') { try { onClose(); } catch (e) {} } if (state.uiMode === 'dashboard' && (state.costTab || '') === 'knitfee') renderDashboard();
+          setTimeout(() => { bgAfterSave().then(() => { try { if (state.uiMode === 'dashboard' && state.dashView === 'knitSetup' && !document.querySelector('#fs-modal.show') && !document.getElementById('kf-popup')) renderDashboard(); } catch (_) {} }); }, 0);   /* hotfix467: 뒤 정리는 창을 닫고 나서. 다른 창이 떠 있으면 다시 그리지 않는다 */
           if (goDetail) { state.__fsOpenFid = key; if (state.dashView === 'costCalc') { state.ccCardFid = key; state.__fsReturn = 'costCalc'; } if (typeof window.hwGoView === 'function') window.hwGoView('fabricSpecs'); else { state.dashView = 'fabricSpecs'; renderDashboard(); } return; }
           // hotfix421: [+ 생지 추가]에서 온 창이면 "새로운 품목을 더 입력하시겠습니까?" → 확인이면 빈 생지 추가 창을 다시 연다
           if (fromNew) { const more = confirm('데이터를 저장했습니다.\n새로운 품목을 더 입력하시겠습니까?'); if (more && typeof openKnitNewItemModal === 'function') openKnitNewItemModal(); }
@@ -39567,6 +39624,8 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
       if (!s) return null;
       const ent = yarnEntryByName(s);
       const kind = ent ? String(ent.kind || '기타') : '';
+      /* hotfix468: [원사 코드]에 굵기(데니어)를 따로 적어 두었으면 그 값이 먼저다 — 에어카바링(AC · A/C) 40/75 처럼 이름의 숫자와 실제 굵기가 다른 사종 */
+      { const d0 = ent ? parseFloat(ent.den) : NaN; if (isFinite(d0) && d0 > 0) return { size: d0, unit: 'D', fromMaster: true }; }
       const m = s.match(/(\d+(?:\.\d+)?)\s*\/\s*\d+/);           // 75/36 · 150/48
       if (m) return { size: parseFloat(m[1]), unit: 'D' };
       const m2 = s.match(/(\d+(?:\.\d+)?)/);
@@ -39577,6 +39636,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
       return { size: n, unit: 'D' };
     }
     // 창 안의 값만으로 원가를 낸다 (저장 전에도 바로 보이게). 계산식은 확정된 것 그대로
+    if (typeof window !== 'undefined') window.__hf468 = { guess: yarnGuessSpec, blend: calcYarnBlend };   /* hotfix468: 검사용 창구 */
     function fcLiveCalc() {
       const numOf = id => { const v = (document.getElementById(id)?.value || '').trim(); return v === '' ? null : parseFloat(v); };
       const yarns = collectCostYarns();
@@ -40747,7 +40807,10 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
             </div>
             <div id="cp-f-fullname" style="font-size:11.5px;color:#2563eb;font-weight:700;margin-top:6px;min-height:16px;"></div></div>
           <div id="cp-f-kind-wrap"><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">종류</label>
-            <select id="cp-f-kind" style="${st}">${YARN_KINDS.map(k => `<option value="${k}">${yarnKindName(k)} (${YARN_UNIT_LABEL[k]})</option>`).join('')}</select></div>
+            <select id="cp-f-kind" style="${st}">${YARN_KINDS.map(k => `<option value="${k}">${yarnKindName(k)} (${YARN_UNIT_LABEL[k]})</option>`).join('')}</select>
+            <div id="cp-f-den-wrap" style="display:none;margin-top:8px;"><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">굵기 (데니어) <span style="font-weight:400;color:#9ca3af;">— 이름의 숫자와 실제 굵기가 다를 때만 (예: 에어카바링 A/C 40/75)</span></label>
+              <input type="number" step="0.1" min="0" id="cp-f-den" placeholder="비우면 이름에서 읽습니다" style="${st}">
+              <div style="font-size:11.5px;color:#64748b;line-height:1.5;margin-top:4px;">여기에 넣은 굵기로 루프장 × 굵기를 셈해 사종 비율(혼용율)을 냅니다. 종류가 [기타]일 때만 넣을 수 있습니다.</div></div></div>
           <div id="cp-f-comp-wrap" style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:7px;padding:10px 11px;">
             <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-bottom:7px;">
               <span style="font-size:12px;font-weight:700;color:#374151;">성분 (혼용율)</span>
@@ -47788,6 +47851,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
           (isNew ? '추가 — ' : '수정 — ') + ({ yarn: '원사 단가', knit: '편직료', proc: '공정 단가', bundle: '묶음 단가' }[type] || '');
         show('cp-f-name-wrap', type === 'yarn');
         show('cp-f-kind-wrap', type === 'yarn');
+        show('cp-f-den-wrap', false);   /* hotfix468: 종류가 [기타]일 때만 — 아래에서 다시 켠다 */
         show('cp-f-comp-wrap', type === 'yarn');
         show('cp-f-vendor-wrap', type !== 'yarn');
         show('cp-f-org-wrap', type === 'knit');
@@ -47812,6 +47876,10 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
           ['cp-f-name', 'cp-f-color', 'cp-f-brand'].forEach(id => { const el = document.getElementById(id); if (el) { el.oninput = paintFull; el.onchange = paintFull; } });
           paintFull(); }
         document.getElementById('cp-f-kind').value = cur.kind || '기타';
+        /* hotfix468(대표 지시 9/23): 에어카바링(AC · A/C)처럼 이름의 숫자와 실제 굵기가 다른 사종은 굵기를 따로 넣는다 */
+        { const dEl = document.getElementById('cp-f-den'); if (dEl) dEl.value = (cur.den == null || cur.den === '') ? '' : String(cur.den);
+          const paintDen = () => { const w = document.getElementById('cp-f-den-wrap'); const on = (document.getElementById('cp-f-kind').value || '기타') === '기타'; if (w) w.style.display = on ? '' : 'none'; };
+          paintDen(); document.getElementById('cp-f-kind').addEventListener('change', paintDen); }
         document.getElementById('cp-f-price').value = (cur.price != null ? moneyInputVal(cur.price) : '');
         document.getElementById('cp-f-memo').value = cur.memo || '';
         if (type === 'yarn') cpCompDraw(isNew ? [] : (Array.isArray(cur.comp) ? cur.comp : yarnCompOf(cur)));
@@ -47920,7 +47988,9 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
             ...(String(prev.yid || '').trim() ? { yid: String(prev.yid).trim() } : {}),   // hotfix391: 코드는 이어간다
             // hotfix422g: 이름을 바꾸면 옛 이름을 다른 표기에 남긴다 (옛 의뢰서 글자가 이 사종으로 읽힌다)
             ...((() => { const al = (Array.isArray(prev.aliases) ? prev.aliases : []).map(a => String(a || '').trim()).filter(Boolean); const pn = String(prev.name || '').trim(); if (pn && pn !== name && !al.some(a => a.toLowerCase() === pn.toLowerCase())) al.push(pn); return al.length ? { aliases: Array.from(new Set(al.filter(a => a.toLowerCase() !== name.toLowerCase()))) } : {}; })()),
-            comp: comp, comp_auto: false, updated_at: todayYMD(), updated_by: state.user?.email || ''
+            comp: comp, comp_auto: false, updated_at: todayYMD(), updated_by: state.user?.email || '',
+            /* hotfix468: 종류가 [기타]일 때만 굵기(데니어)를 따로 담는다. 비우면 전처럼 이름에서 읽는다 */
+            ...((() => { const dv = parseFloat(String((document.getElementById('cp-f-den') || {}).value || '').replace(/,/g, '')); return (kind === '기타' && isFinite(dv) && dv > 0) ? { den: dv } : {}; })())
           };
           list = P.yarns; key = priceKeyYarn(name);
         } else if (cpType === 'knit') {
@@ -50739,7 +50809,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix465';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
+  const VERSION = 'v2.53 hotfix468';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
