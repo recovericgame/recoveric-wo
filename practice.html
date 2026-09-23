@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="HIWOS">
 <meta name="mobile-web-app-capable" content="yes">
-<title>RECOVERIC HIWOS v2.53 hotfix463</title>
+<title>RECOVERIC HIWOS v2.53 hotfix465</title>
 
 <!-- PWA Manifest (인라인 data URL) -->
 <link rel="manifest" id="pwa-manifest">
@@ -578,7 +578,11 @@
   .y-dest-wrap .y-dest-cat { font-size: 11px; background: #f8fafc; color: #334155; font-weight: 700; }
   .knit-row { grid-template-columns: 1.7fr 64px 56px 60px 1.2fr 28px; }
   /* hotfix462(대표 지적 9/20): 품목(생지) 코드 표 — 화면 배율이 몇 %든 [판매 · 수정 · 편직 값 삭제]가 오른쪽에 붙어 늘 보인다. 칸 폭도 줄인다 */
-  .dash-table-wrap:has(> .kf-table) { overflow-x: auto; max-width: 100%; }
+  /* hotfix465(대표 지적 9/23): 가로 스크롤을 주면 세로도 스크롤 틀이 되어 머리글이 화면 맨 위가 아니라 표 틀 위에 붙는다.
+     표 틀 높이를 화면에 맞춰 두고, 머리글은 그 틀 맨 위에 붙인다 — 표 안에서 아래로 내려도 머리글이 늘 같이 따라온다 */
+  .dash-table-wrap:has(> .kf-table) { overflow: auto; max-width: 100%; max-height: calc(100vh - 290px); min-height: 300px; }
+  .dash-table-wrap:has(> .kf-table) .kf-table th { position: sticky; top: 0 !important; z-index: 110; }
+  .kf-table thead .kf-st1, .kf-table thead .kf-st2, .kf-table thead .kf-st3 { z-index: 130; }
   #dashboard-panel:has(.kf-table), .dashboard-panel:has(.kf-table), #dash-body:has(.kf-table) { min-width: 0 !important; max-width: 100%; box-sizing: border-box; }
   /* 대시보드 틀이 작성 화면의 고정 칸(340 · 420 · 6 · 340px)을 그대로 물려받아 1106px 밑으로 줄지 않았다 — 이 표에서는 한 칸으로 편다 */
   .main-app:has(.kf-table), #main-app:has(.kf-table) { grid-template-columns: minmax(0, 1fr) !important; grid-auto-columns: 0 !important; }
@@ -8753,6 +8757,13 @@ function nameSimilarList(name, pool, skip) {
   (pool || []).forEach(p => { const pn = String(p || '').trim(); if (!pn || sk.has(pn) || pn === String(name || '').trim()) return; const pk = nameSimKey(pn); if (!pk) return;
     if (near(pk, k) || near(strip(pn), kb)) out.push(pn); });
   return Array.from(new Set(out)).slice(0, 12);
+}
+// hotfix464(대표 지적 9/23): 튜브로 접어 잰 폭은 잰 값 그대로 보이고, 개폭은 괄호로 같이 보인다.
+//   판정(허용 범위)은 전과 같이 개폭으로 한다 — 품목 디테일의 기준 폭이 개폭이기 때문. 기준 폭이 튜브면 품목 디테일에서 [튜브]를 켜면 기준이 ×2 된다
+function qcWidthShow(w) {   /* 검사용 창구는 아래 window.__hf464 */
+  if (!w || w.actual == null) return '-';
+  const a = w.actual, r = w.raw;
+  return (w.double && r != null && isFinite(r) && Math.abs(r - a) > 0.001) ? `${r}″ (튜브 → 개폭 ${a}″)` : `${a}″`;
 }
 function greigeSplit(text) {
   const s = String(text || '').trim();
@@ -19760,7 +19771,8 @@ function validateBlendSum(blends, label) {
       const specMax = tube ? ws.max * 2 : ws.max;
       const lo = specMin - (num(T.width_lower) || 0), hi = specMax + (num(T.width_upper) || 0);
       const fail = actualW < lo || actualW > hi;
-      out.width = { actual: actualW, lo, hi, specMin, specMax, tube, rawMin: ws.min, rawMax: ws.max, fail };
+      out.width = { actual: actualW, lo, hi, specMin, specMax, tube, rawMin: ws.min, rawMax: ws.max, fail,
+        raw: (qcData.width_inch === '' || qcData.width_inch == null) ? null : parseFloat(qcData.width_inch), double: !!qcData.width_double };   /* hotfix464: 검사에서 잰 값(튜브로 접어 잰 값)도 같이 남긴다 */
       if (fail) out.any = true;
     }
     // 중량(g/y): 대표 설정 방식(% 또는 절대 g/y) 기준 밖이면 어긋남
@@ -19785,6 +19797,7 @@ function validateBlendSum(blends, label) {
     }
     return out;
   }
+  if (typeof window !== 'undefined') window.__hf464 = { dev: checkSpecDeviation, devRib: (r, wo) => checkSpecDeviationRib(r, wo), show: qcWidthShow };   /* hotfix464: 검사용 창구 */
   // 리프 규격이상 판정 — wo.rib 기준 + 리프 전용 허용치(rib_*)
   function checkSpecDeviationRib(ribData, wo) {
     const out = { width: null, weight: null, shrink: null, any: false };
@@ -19806,7 +19819,8 @@ function validateBlendSum(blends, label) {
       const specMax = tube ? ws.max * 2 : ws.max;
       const lo = specMin - (widthLower || 0), hi = specMax + (widthUpper || 0);
       const fail = actualW < lo || actualW > hi;
-      out.width = { actual: actualW, lo, hi, specMin, specMax, tube, rawMin: ws.min, rawMax: ws.max, fail };
+      out.width = { actual: actualW, lo, hi, specMin, specMax, tube, rawMin: ws.min, rawMax: ws.max, fail,
+        raw: (ribData.width_inch === '' || ribData.width_inch == null) ? null : parseFloat(ribData.width_inch), double: !!ribData.width_double };   /* hotfix464 */
       if (fail) out.any = true;
     }
     // 중량(g/y)
@@ -19973,7 +19987,7 @@ function validateBlendSum(blends, label) {
       : ((typeof calcActualWidth === 'function') ? calcActualWidth(q.width_inch, !!q.width_double) : null);
     if (d && d.width) {
       const c = d.width.fail ? '#dc2626' : '#6b7280';
-      L.push(`<div class="ceo-report-line"><span class="ceo-report-k">폭</span> 실측 <strong style="color:${c};">${d.width.actual}″</strong> / 허용 ${d.width.lo}~${d.width.hi}″ (기준 ${d.width.specMin}/${d.width.specMax}${d.width.tube ? ' · 튜브' : ''}) ${d.width.fail ? '<strong style="color:#dc2626;">규격 이상</strong>' : '<span style="color:#16a34a;">정상</span>'}</div>`);
+      L.push(`<div class="ceo-report-line"><span class="ceo-report-k">폭</span> 실측 <strong style="color:${c};">${qcWidthShow(d.width)}</strong> / 허용 ${d.width.lo}~${d.width.hi}″ (기준 ${d.width.specMin}/${d.width.specMax}${d.width.tube ? ' · 튜브' : ''}) ${d.width.fail ? '<strong style="color:#dc2626;">규격 이상</strong>' : '<span style="color:#16a34a;">정상</span>'}</div>`);
     } else if (aw != null) {
       L.push(`<div class="ceo-report-line"><span class="ceo-report-k">폭</span> 실측 <strong style="color:#6b7280;">${aw}″</strong> <span style="color:#9ca3af;">(기준 폭 없음 — 원단 기본 스펙에 등록하면 자동 판정)</span></div>`);
     }
@@ -22231,12 +22245,12 @@ function validateBlendSum(blends, label) {
       const line = (k, ok, txt) => `<div style="font-size:12px;margin:3px 0;color:${ok ? '#16a34a' : '#dc2626'};font-weight:700;">${ok ? '✓' : '⚠'} ${k} ${txt}</div>`;
       let rows = '';
       if (bodyDev) {
-        if (bodyDev.width) rows += line('폭', !bodyDev.width.fail, `실측 ${bodyDev.width.actual}″ (허용 ${bodyDev.width.lo}~${bodyDev.width.hi}″)`);
+        if (bodyDev.width) rows += line('폭', !bodyDev.width.fail, `실측 ${qcWidthShow(bodyDev.width)} (허용 ${bodyDev.width.lo}~${bodyDev.width.hi}″)`);
         if (bodyDev.weight) rows += line('중량', !bodyDev.weight.fail, `실측 ${bodyDev.weight.actual}g/y (허용 ${bodyDev.weight.lo}~${bodyDev.weight.hi})`);
         if (bodyDev.shrink) rows += line('축률', !bodyDev.shrink.fail, `폭 ${bodyDev.shrink.w == null ? '-' : bodyDev.shrink.w}% / 장 ${bodyDev.shrink.l == null ? '-' : bodyDev.shrink.l}% (기준 2.5% 이하)`);
       }
       if (ribDev) {
-        if (ribDev.width) rows += line('리프폭', !ribDev.width.fail, `실측 ${ribDev.width.actual}″ (허용 ${ribDev.width.lo}~${ribDev.width.hi}″)`);
+        if (ribDev.width) rows += line('리프폭', !ribDev.width.fail, `실측 ${qcWidthShow(ribDev.width)} (허용 ${ribDev.width.lo}~${ribDev.width.hi}″)`);
         if (ribDev.weight) rows += line('리프중량', !ribDev.weight.fail, `실측 ${ribDev.weight.actual}g/y (허용 ${ribDev.weight.lo}~${ribDev.weight.hi})`);
         if (ribDev.shrink) rows += line('리프축률', !ribDev.shrink.fail, `폭 ${ribDev.shrink.w == null ? '-' : ribDev.shrink.w}% / 장 ${ribDev.shrink.l == null ? '-' : ribDev.shrink.l}% (기준 2.5% 이하)`);
       }
@@ -28584,7 +28598,7 @@ function validateBlendSum(blends, label) {
     const devRow = (dev, qc) => {
       qc = qc || {};
       const rows = [];
-      if (dev && dev.width) { const cc = dev.width.fail ? '#dc2626' : '#16a34a'; rows.push(`<div class="ceo-report-line"><span class="ceo-report-k">폭</span> 실측 <strong style="color:${cc};">${dev.width.actual}″</strong> / 허용 ${dev.width.lo}~${dev.width.hi}″ ${dev.width.fail ? '<strong style="color:#dc2626;">⚠</strong>' : '<span style="color:#16a34a;">정상</span>'}</div>`); }
+      if (dev && dev.width) { const cc = dev.width.fail ? '#dc2626' : '#16a34a'; rows.push(`<div class="ceo-report-line"><span class="ceo-report-k">폭</span> 실측 <strong style="color:${cc};">${qcWidthShow(dev.width)}</strong> / 허용 ${dev.width.lo}~${dev.width.hi}″ ${dev.width.fail ? '<strong style="color:#dc2626;">⚠</strong>' : '<span style="color:#16a34a;">정상</span>'}</div>`); }
       else if (qc.width_inch != null) { rows.push(`<div class="ceo-report-line"><span class="ceo-report-k">폭</span> 실측 ${qc.width_inch}″${qc.width_double ? ' (더블)' : ''}</div>`); }
       // 중량: 기준이 있으면 판정, 없으면 실측 스퀘어/야드중량 그대로 표시
       if (dev && dev.weight) { const cc = dev.weight.fail ? '#dc2626' : '#16a34a'; rows.push(`<div class="ceo-report-line"><span class="ceo-report-k">중량</span> 실측 <strong style="color:${cc};">${dev.weight.actual}g/y</strong> / 허용 ${dev.weight.lo}~${dev.weight.hi} ${dev.weight.fail ? '<strong style="color:#dc2626;">⚠</strong>' : '<span style="color:#16a34a;">정상</span>'}</div>`); }
@@ -28824,7 +28838,7 @@ function validateBlendSum(blends, label) {
         const rows = [];
         if (dev && dev.width) {
           const c = dev.width.fail ? '#dc2626' : '#6b7280';
-          rows.push(`<div class="ceo-report-line"><span class="ceo-report-k">폭</span> 실측 <strong style="color:${c};">${dev.width.actual}″</strong> / 허용 ${dev.width.lo}~${dev.width.hi}″ (기준 ${dev.width.specMin}/${dev.width.specMax}${dev.width.tube ? ` · 튜브 ${dev.width.rawMin}/${dev.width.rawMax}×2` : ''}) ${dev.width.fail ? '<strong style="color:#dc2626;">이상</strong>' : '<span style="color:#16a34a;">정상</span>'}</div>`);
+          rows.push(`<div class="ceo-report-line"><span class="ceo-report-k">폭</span> 실측 <strong style="color:${c};">${qcWidthShow(dev.width)}</strong> / 허용 ${dev.width.lo}~${dev.width.hi}″ (기준 ${dev.width.specMin}/${dev.width.specMax}${dev.width.tube ? ` · 튜브 ${dev.width.rawMin}/${dev.width.rawMax}×2` : ''}) ${dev.width.fail ? '<strong style="color:#dc2626;">이상</strong>' : '<span style="color:#16a34a;">정상</span>'}</div>`);
         }
         if (dev && dev.weight) {
           const c = dev.weight.fail ? '#dc2626' : '#6b7280';
@@ -28850,7 +28864,7 @@ function validateBlendSum(blends, label) {
           rows.push(`<div class="ceo-report-line" style="margin-top:5px;padding-top:5px;border-top:1px dashed #ddd6fe;"><span class="ceo-report-k" style="color:#7c3aed;font-weight:800;">리프</span></div>`);
           if (rb.width) {
             const c = rb.width.fail ? '#dc2626' : '#6b7280';
-            rows.push(`<div class="ceo-report-line"><span class="ceo-report-k">리프폭</span> 실측 <strong style="color:${c};">${rb.width.actual}″</strong> / 허용 ${rb.width.lo}~${rb.width.hi}″ (기준 ${rb.width.specMin}/${rb.width.specMax}${rb.width.tube ? ` · 튜브 ${rb.width.rawMin}/${rb.width.rawMax}×2` : ''}) ${rb.width.fail ? '<strong style="color:#dc2626;">이상</strong>' : '<span style="color:#16a34a;">정상</span>'}</div>`);
+            rows.push(`<div class="ceo-report-line"><span class="ceo-report-k">리프폭</span> 실측 <strong style="color:${c};">${qcWidthShow(rb.width)}</strong> / 허용 ${rb.width.lo}~${rb.width.hi}″ (기준 ${rb.width.specMin}/${rb.width.specMax}${rb.width.tube ? ` · 튜브 ${rb.width.rawMin}/${rb.width.rawMax}×2` : ''}) ${rb.width.fail ? '<strong style="color:#dc2626;">이상</strong>' : '<span style="color:#16a34a;">정상</span>'}</div>`);
           }
           if (rb.weight) {
             const c = rb.weight.fail ? '#dc2626' : '#6b7280';
@@ -28894,7 +28908,7 @@ function validateBlendSum(blends, label) {
         // hotfix149: 몸판 규격
         if (bodyDev && bodyDev.width) {
           const cc = bodyDev.width.fail ? '#dc2626' : '#6b7280';
-          rows.push(`<div class="ceo-report-line"><span class="ceo-report-k">폭</span> 실측 <strong style="color:${cc};">${bodyDev.width.actual}″</strong> / 허용 ${bodyDev.width.lo}~${bodyDev.width.hi}″ ${bodyDev.width.fail ? '<strong style="color:#dc2626;">이상</strong>' : '<span style="color:#16a34a;">정상</span>'}</div>`);
+          rows.push(`<div class="ceo-report-line"><span class="ceo-report-k">폭</span> 실측 <strong style="color:${cc};">${qcWidthShow(bodyDev.width)}</strong> / 허용 ${bodyDev.width.lo}~${bodyDev.width.hi}″ ${bodyDev.width.fail ? '<strong style="color:#dc2626;">이상</strong>' : '<span style="color:#16a34a;">정상</span>'}</div>`);
         }
         if (bodyDev && bodyDev.weight) {
           const cc = bodyDev.weight.fail ? '#dc2626' : '#6b7280';
@@ -28909,7 +28923,7 @@ function validateBlendSum(blends, label) {
           const rL = [`<div class="ceo-report-line" style="margin-top:3px;"><span class="ceo-report-k" style="color:#7c3aed;font-weight:800;">리프</span></div>`];
           if (ribDev.width) {
             const cc = ribDev.width.fail ? '#dc2626' : '#6b7280';
-            rL.push(`<div class="ceo-report-line"><span class="ceo-report-k">리프폭</span> 실측 <strong style="color:${cc};">${ribDev.width.actual}″</strong> / 허용 ${ribDev.width.lo}~${ribDev.width.hi}″ ${ribDev.width.fail ? '<strong style="color:#dc2626;">이상</strong>' : '<span style="color:#16a34a;">정상</span>'}</div>`);
+            rL.push(`<div class="ceo-report-line"><span class="ceo-report-k">리프폭</span> 실측 <strong style="color:${cc};">${qcWidthShow(ribDev.width)}</strong> / 허용 ${ribDev.width.lo}~${ribDev.width.hi}″ ${ribDev.width.fail ? '<strong style="color:#dc2626;">이상</strong>' : '<span style="color:#16a34a;">정상</span>'}</div>`);
           }
           if (ribDev.weight) {
             const cc = ribDev.weight.fail ? '#dc2626' : '#6b7280';
@@ -33521,13 +33535,31 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
     const nv = v.replace(/[\u00a0\u3000\t]/g, ' ').replace(/^ +/, '').replace(/ *_ */g, '_').replace(/ /g, '_');
     if (nv !== v) { el.value = nv; try { const p = Math.max(0, Math.min(nv.length, (pos || 0) - (v.length - nv.length))); el.setSelectionRange(p, p); } catch (_) {} }
   }, true);
+  /* hotfix465: 비슷한 이름 글은 적는 동안에만 고친다 — 칸을 나가는 순간에 화면이 바뀌면 단추 누름이 사라진다 */
+  document.addEventListener('input', e => {
+    const el = e.target; if (!el || !NAME_US_IDS[el.id] || e.isComposing) return;
+    clearTimeout(el.__simT); el.__simT = setTimeout(() => { try { nameSimNoteFor(el, nameUs(el.value)); } catch (_) {} }, 250);
+  }, true);
   document.addEventListener('focusin', e => { const el = e.target; if (el && NAME_US_IDS[el.id] && el.dataset.nameOrig == null) el.dataset.nameOrig = el.value; }, true);
+  /* hotfix465(대표 지적 9/23 — [생지 만들기]가 안 눌림): 칸을 나갈 때 알림 창(alert)을 띄우면 그 창이 단추 누름을 먹어 버린다.
+     알림 창 대신 칸 바로 밑에 글씨로 보여 주고, 진짜 확인은 [저장] · [생지 만들기] 때 한 번 묻는다 */
+  /* hotfix465: 이 글은 칸 아래에 "떠서" 보인다 — 자리를 차지하면 아래 단추가 밀려서, 누른 자리와 놓은 자리가 달라져 클릭이 사라진다 */
+  function nameSimNoteFor(el, v) {
+    if (!el || !el.parentElement) return;
+    let note = el.parentElement.querySelector('.hw-simnote');
+    const hits = v ? nameSimilarList(v, nameUsPool(NAME_US_IDS[el.id]), [el.dataset.nameOrig || '']) : [];
+    if (!hits.length) { if (note) note.remove(); return; }
+    if (!note) {
+      note = document.createElement('div'); note.className = 'hw-simnote';
+      note.style.cssText = 'position:absolute;left:0;top:100%;z-index:5;margin-top:3px;padding:4px 8px;border-radius:6px;background:#fffbeb;border:1px solid #fcd34d;box-shadow:0 4px 10px rgba(15,23,42,.12);font-size:11.5px;font-weight:700;color:#b45309;line-height:1.5;max-width:min(420px,90vw);pointer-events:none;';
+      try { const cs = getComputedStyle(el.parentElement); if (cs.position === 'static') el.parentElement.style.position = 'relative'; } catch (_) {}
+      el.parentElement.appendChild(note);
+    }
+    note.textContent = '비슷한 이름이 있습니다 — ' + hits.slice(0, 4).join(' · ') + (hits.length > 4 ? ' 외 ' + (hits.length - 4) + '개' : '') + ' (같은 것이 아닌지 한 번 봐 주십시오)';
+  }
   document.addEventListener('focusout', e => {
     const el = e.target; if (!el || !NAME_US_IDS[el.id]) return;
     const v = nameUs(el.value); if (v !== el.value) { el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })); }
-    if (!v || v === el.dataset.nameOrig || el.dataset.simWarned === v) return;
-    el.dataset.simWarned = v;
-    setTimeout(() => nameSimilarAlert(v, NAME_US_IDS[el.id], [el.dataset.nameOrig || '']), 30);
   }, true);
   // 옛 이름 한꺼번에 — 미리 보여 주고 한 번 묻는다. 옛 이름은 다른 표기로 남는다(옛 의뢰서 · 재고와 이어짐). 코드는 안 바뀐다
   function nameUsPlan(names) {
@@ -33841,11 +33873,20 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
     if (kOpts.name) m.querySelector('#kn-name').value = String(kOpts.name);
     setTimeout(() => m.querySelector('#kn-name').focus(), 50);
     m.querySelector('#kn-ok').addEventListener('click', async () => {
-      const name = m.querySelector('#kn-name').value.trim();
-      if (!name) { toast('품목명을 넣어 주십시오', 'error'); return; }
+      const b = m.querySelector('#kn-ok');
+      try {
+      const nmEl = m.querySelector('#kn-name');
+      const name = (typeof nameUs === 'function') ? nameUs(nmEl.value) : String(nmEl.value || '').trim();   /* hotfix465: 띄어쓰기 → _ */
+      if (name !== nmEl.value) nmEl.value = name;
+      if (!name) { toast('품목명을 넣어 주십시오', 'error'); nmEl.focus(); return; }
       const list = getFabricSpecs().map(x => Object.assign({}, x));
-      if (list.some(x => String(x.name || '').trim() === name)) { toast('이미 [' + name + '] 이(가) 있습니다', 'error'); return; }
-      const b = m.querySelector('#kn-ok'); b.disabled = true;
+      const same = list.find(x => String(x.name || '').trim() === name);
+      if (same) { toast('이미 [' + name + '] 이(가) 있습니다' + (specFid(same) ? ' — ' + specFid(same) : ''), 'error'); nmEl.focus(); return; }
+      if (typeof nameSimilarList === 'function') {   /* hotfix465: 비슷한 이름은 여기서 한 번만 묻는다 */
+        const hits = nameSimilarList(name, list.map(x => x.name), []);
+        if (hits.length && !confirm('비슷한 품목 이름이 이미 있습니다:\n\n' + hits.map(h => '· ' + h).join('\n') + '\n\n그래도 [' + name + '] 을(를) 새로 만들까요?')) return;
+      }
+      b.disabled = true;
       list.push({ name, gubun: m.querySelector('#kn-gubun').value || GUBUN_BODY, cat: m.querySelector('#kn-cat').value.trim(), width: '', tube: false, gy: '', blend: '', active: true, updated_at: todayYMD() });
       assignFabricIds(list);
       const ok = await saveFabricSpecs(list);
@@ -33856,6 +33897,10 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
       if (kOpts.requestId) { try { const items = (Array.isArray(state.codeRequests) ? state.codeRequests : []).map(r => Object.assign({}, r)); const r = items.find(x => x.id === kOpts.requestId); if (r) { r.done = true; r.done_by = hwMyName(); r.done_at = editLogNow(); await saveCodeRequests(items); } } catch (_) {} }
       if (state.uiMode === 'dashboard') renderDashboard();
       if (fid) openKnitFeePopup(fid, m.querySelector('#kn-fac').value || '', null, () => { if (state.uiMode === 'dashboard') renderDashboard(); }, { fromNew: true });
+      } catch (e) {   /* hotfix465: 어디서 막혀도 까닭을 알리고 단추를 되살린다 (전에는 단추가 잠긴 채로 남아 다시 눌러도 아무 일이 없었다) */
+        console.error('[생지 추가]', e);
+        toast('생지를 만들지 못했습니다 — ' + (e && e.message ? e.message : '알 수 없는 까닭'), 'error');
+      } finally { try { const bb = m.querySelector('#kn-ok'); if (bb) bb.disabled = false; } catch (_) {} }
     });
   }
   // ============================================================
@@ -48850,7 +48895,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
             <div class="qc-double-row">
               <input type="number" step="0.1" min="0" id="qc-width-inch" value="${escapeHtml(fmtV(qc.width_inch))}" placeholder="예: 76.5" style="flex:0 0 130px;">
               <label class="qc-double-label ${initDouble ? 'checked' : ''}" id="qc-double-label">
-                <input type="checkbox" id="qc-width-double" ${initDouble ? 'checked' : ''}> 더블
+                <input type="checkbox" id="qc-width-double" ${initDouble ? 'checked' : ''}> 튜브(더블)
               </label>
               <span class="qc-actual-width" id="qc-actual-width">${initActualWidthLabel}</span>
             </div>
@@ -48893,7 +48938,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
                 <div class="qc-double-row">
                   <input type="number" step="0.1" min="0" id="qc-rib-width-inch" value="${escapeHtml(fmtV(ribq.width_inch))}" placeholder="예: 38" style="flex:0 0 130px;">
                   <label class="qc-double-label ${ribq.width_double ? 'checked' : ''}" id="qc-rib-double-label">
-                    <input type="checkbox" id="qc-rib-width-double" ${ribq.width_double ? 'checked' : ''}> 더블
+                    <input type="checkbox" id="qc-rib-width-double" ${ribq.width_double ? 'checked' : ''}> 튜브(더블)
                   </label>
                   <span class="qc-actual-width" id="qc-rib-actual-width"></span>
                 </div>
@@ -49278,10 +49323,10 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
         if (ribDev && ribDev.any) specDev.rib = ribDev;  // 리프 편차 동봉(저장·표시용)
         if (specDev.any || (ribDev && ribDev.any)) {
           const lines = [];
-          if (specDev.width && specDev.width.fail) lines.push(`· 몸판 폭 ${specDev.width.actual}″ (기준 ${specDev.width.specMin}/${specDev.width.specMax}″ → 허용 ${specDev.width.lo}~${specDev.width.hi}″)`);
+          if (specDev.width && specDev.width.fail) lines.push(`· 몸판 폭 ${qcWidthShow(specDev.width)} (기준 ${specDev.width.specMin}/${specDev.width.specMax}″ → 허용 ${specDev.width.lo}~${specDev.width.hi}″)`);
           if (specDev.weight && specDev.weight.fail) lines.push(`· 몸판 중량 ${specDev.weight.actual}g/y (기준 ${specDev.weight.target} → 허용 ${specDev.weight.lo}~${specDev.weight.hi})`);
           if (specDev.shrink && specDev.shrink.fail) lines.push(`· 몸판 축률 폭 ${specDev.shrink.w == null ? '-' : specDev.shrink.w}% / 장 ${specDev.shrink.l == null ? '-' : specDev.shrink.l}%`);
-          if (ribDev && ribDev.width && ribDev.width.fail) lines.push(`· 리프 폭 ${ribDev.width.actual}″ (기준 ${ribDev.width.specMin}/${ribDev.width.specMax}″ → 허용 ${ribDev.width.lo}~${ribDev.width.hi}″)`);
+          if (ribDev && ribDev.width && ribDev.width.fail) lines.push(`· 리프 폭 ${qcWidthShow(ribDev.width)} (기준 ${ribDev.width.specMin}/${ribDev.width.specMax}″ → 허용 ${ribDev.width.lo}~${ribDev.width.hi}″)`);
           if (ribDev && ribDev.weight && ribDev.weight.fail) lines.push(`· 리프 중량 ${ribDev.weight.actual}g/y (기준 ${ribDev.weight.target} → 허용 ${ribDev.weight.lo}~${ribDev.weight.hi})`);
           if (ribDev && ribDev.shrink && ribDev.shrink.fail) lines.push(`· 리프 축률 폭 ${ribDev.shrink.w == null ? '-' : ribDev.shrink.w}% / 장 ${ribDev.shrink.l == null ? '-' : ribDev.shrink.l}%`);
           const holdMsg = `규격 이상입니다.\n\n[${wo.wo_number || ''}] "${cName}"\n${lines.join('\n')}\n\n이 원단은 완료되지 않고\n대표 보고함으로 보고됩니다.\n대표가 보고함에서 확인·처리해야 완료됩니다.\n\n계속할까요?`;
@@ -50694,7 +50739,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix463';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
+  const VERSION = 'v2.53 hotfix465';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
