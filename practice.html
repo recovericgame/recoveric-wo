@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="HIWOS">
 <meta name="mobile-web-app-capable" content="yes">
-<title>RECOVERIC HIWOS v2.53 hotfix469</title>
+<title>RECOVERIC HIWOS v2.53 hotfix471</title>
 
 <!-- PWA Manifest (인라인 data URL) -->
 <link rel="manifest" id="pwa-manifest">
@@ -14393,6 +14393,9 @@ window.addEventListener('firebase-ready', () => {
       // 작성 화면 품목 자동완성 목록 갱신
       if (typeof refreshFabricSpecDatalist === 'function') refreshFabricSpecDatalist();
       if (state.uiMode === 'dashboard' && state.dashView === 'fabricSpecs') renderDashboard();
+      /* hotfix470(대표 지적 9/23 — 품목 디테일에 넣은 기준 폭이 원가 카드에 안 보임): 품목 스펙이 바뀌면(이 창에서 고쳤든, 새 창 · 다른 탭에서 고쳤든)
+         열려 있는 원가 계산기 카드의 회색 칸(품목명 · 구분 · 조직 · 기준 폭 · 튜브 · 제작중량 · 안내 범위)도 바로 새로 읽는다. 대표가 적던 돈 칸은 건드리지 않는다 */
+      try { if (state.uiMode === 'dashboard' && state.dashView === 'costCalc' && typeof window.__fcFreshSpec === 'function') window.__fcFreshSpec(); } catch (_) {}
     }, err => console.warn('[fabricSpec sub]', err.message));
     // hotfix283: 이름표 상자 — 조직·공정 이름 목록. 금액이 없으므로 직원도 읽는다.
     //   (금액은 cost_data 상자에 그대로 있고, 이쪽으로 한 글자도 옮기지 않는다)
@@ -19253,6 +19256,14 @@ function validateBlendSum(blends, label) {
     return Math.ceil(sw * 1.392 * aw / 60);
   }
 
+  // hotfix470(대표 지시 9/23): 거꾸로 — 야드중량 + 실제폭 → 스퀘어중량 (소수 첫째 자리)
+  if (typeof window !== 'undefined') window.__hf470 = { y: (a, b) => calcYardWeight(a, b), q: (a, b) => calcSqmWeight(a, b) };   /* hotfix470: 검사용 창구 */
+  function calcSqmWeight(yardWeight, actualWidth) {
+    const yw = parseFloat(yardWeight);
+    const aw = parseFloat(actualWidth);
+    if (!isFinite(yw) || yw <= 0 || !isFinite(aw) || aw <= 0) return null;
+    return Math.round((yw * 60 / (1.392 * aw)) * 10) / 10;
+  }
   // v2.51: 실제폭 계산 (입력폭 × 더블배수)
   function calcActualWidth(inputWidth, isDouble) {
     const w = parseFloat(inputWidth);
@@ -34863,13 +34874,27 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
       await copyFabricItem(b.dataset.kfFid);
       renderDashboard();
     }));
+    /* hotfix471(대표 지적 9/24): 표를 다시 그리면 화면이 맨 위로 튄다 — 보고 있던 자리를 그대로 지킨다.
+       무엇이 스크롤되는지 브라우저마다 다르므로 창 · 대시보드 판 · 표 감싼 칸을 모두 기억했다가 되돌린다 */
+    const kfKeepScroll = (fn) => {
+      const SEL = ['#dashboard-panel', '.dashboard-panel', '#dash-body', '#dash-body .dash-table-wrap'];
+      const pos = {}; SEL.forEach(q => { const e = document.querySelector(q); if (e) pos[q] = [e.scrollTop, e.scrollLeft]; });
+      const wy = window.scrollY || 0, wx = window.scrollX || 0;
+      try { fn(); } finally {
+        const back = () => {
+          SEL.forEach(q => { const e = document.querySelector(q); const p = pos[q]; if (!e || !p) return; try { if (p[0]) e.scrollTop = p[0]; if (p[1]) e.scrollLeft = p[1]; } catch (_) {} });
+          try { if (wy || wx) window.scrollTo(wx, wy); } catch (_) {}
+        };
+        back(); requestAnimationFrame(back); setTimeout(back, 60);
+      }
+    };
     /* hotfix461: 거르개 · 파생 펼치기 · 파생 품목명 고치기 */
     document.querySelectorAll('#dash-body .kf-viewbtn').forEach(b => b.addEventListener('click', () => { state.kfView = b.dataset.kfview; renderDashboard(); }));
     document.getElementById('kf-us-btn')?.addEventListener('click', async () => { const n = await nameUsBulkItems(); if (n) renderDashboard(); });   /* hotfix462 */
     document.querySelectorAll('#dash-body .kf-kids').forEach(b => b.addEventListener('click', () => {
       if (!state.kfOpen || typeof state.kfOpen !== 'object') state.kfOpen = {};
       const f = b.dataset.fid; if (state.kfOpen[f]) delete state.kfOpen[f]; else state.kfOpen[f] = true;
-      renderDashboard();
+      kfKeepScroll(() => renderDashboard());   /* hotfix471: 펼쳐도 보고 있던 자리 그대로 */
     }));
     document.querySelectorAll('#dash-body .kf-rename').forEach(b => b.addEventListener('click', async () => {
       const fid = b.dataset.fid;
@@ -37991,6 +38016,8 @@ function applyFreshSpec(code){
     if(wasClean&&D===ITEMS[code]) { try{ CLEAN=JSON.stringify(strip(D)); }catch(_){} }   // 마스터에서 온 변화는 "변경하던 사항"이 아니다
   }catch(e){}
 }
+/* hotfix470: 밖(품목 디테일 저장 · 다른 탭)에서 스펙이 바뀌면 지금 열린 카드의 회색 칸만 다시 읽는다 */
+if (typeof window !== 'undefined') window.__fcFreshSpec = function () { try { if (!CUR || !ITEMS[CUR]) return; applyFreshSpec(CUR); fillAll(); } catch (e) { console.warn('[fc fresh]', e && e.message); } };
 // 품목 하나를 고른다 (셀렉트에서 고른 것과 똑같이 움직인다)
 function pickItem(nx){
   if(!nx||!ITEMS[nx]) return;
@@ -46217,18 +46244,20 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
         const lock = (el, on) => { el.readOnly = on; el.style.background = on ? '#f0fdf4' : ''; el.title = on ? '중량 입력 방식에서 고른 쪽을 고치면 자동으로 계산됩니다' : ''; };
         lock(gyEl, mode === 'gsm'); lock(gsmEl, mode === 'gy');
         if (from === 'open') { window.__fsWTouched = false; return; }
-        if (from === 'gy' || from === 'gsm' || from === 'mode') window.__fsWTouched = true;
+        if (from === 'gy' || from === 'gsm' || from === 'mode' || from === 'width') window.__fsWTouched = true;   /* hotfix470: 기준 폭 · 튜브를 고치면 다시 셈한다 */
         if (!window.__fsWTouched) { fsPaintGyRange(); return; }   // 이번에 중량을 손대기 전에는 기준폭·튜브를 고쳐도 저장된 두 값을 덮지 않는다
         const gyV = parseFloat(unComma(gyEl.value || '')), gsmV = parseFloat(unComma(gsmEl.value || ''));
         // hotfix422h: 방식만 바꿀 때는 상대 칸이 비어 있을 때만 계산한다 — 저장된 두 값이 왕복 반올림으로 어긋나지 않게 (예 750 ↔ 436.3)
         if (from === 'mode' && (mode === 'gsm' ? (gyV > 0) : (gsmV > 0))) { fsPaintGyRange(); return; }
+      if (from === 'width' && !(w.inch > 0)) { fsPaintGyRange(); return; }   /* hotfix470: 폭을 지우는 중에는 값을 비우지 않는다 */
         if (mode === 'gsm' && from !== 'gy') { const g = gsmToGy(gsmV, w.inch, w.tube); if (g != null) { gyEl.value = String(g); formatMoneyInput(gyEl); gyEl.dataset.legacy = ''; } else if (!(gsmV > 0)) gyEl.value = gyEl.value; }
         else if (mode === 'gy' && from !== 'gsm') { const q = gyToGsm(gyV, w.inch, w.tube); if (q != null) gsmEl.value = String(q); else if (!(gyV > 0)) gsmEl.value = ''; }
         fsPaintGyRange();
       };
       document.getElementById('fs-f-gsm')?.addEventListener('input', () => window.fsPaintFinalGy('gsm'));
-      document.getElementById('fs-f-width')?.addEventListener('input', () => window.fsPaintFinalGy());
-      document.getElementById('fs-f-tube')?.addEventListener('change', () => window.fsPaintFinalGy());
+      /* hotfix470(대표 지시 9/23): 기준 폭 · 튜브를 고치면 고른 방식의 반대 칸을 바로 다시 셈한다 (전에는 중량 칸을 건드리기 전에는 안 바뀌었다) */
+      document.getElementById('fs-f-width')?.addEventListener('input', () => window.fsPaintFinalGy('width'));
+      document.getElementById('fs-f-tube')?.addEventListener('change', () => window.fsPaintFinalGy('width'));
       document.querySelectorAll('.fs-f-wmode').forEach(r => r.addEventListener('change', () => window.fsPaintFinalGy('mode')));
       document.getElementById('fs-f-gy')?.addEventListener('input', function () {
         const _e = document.getElementById('fs-f-gy'); if (_e) _e.dataset.legacy = '';
@@ -49017,8 +49046,8 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
           </div>
           <div class="qc-field">
             <label>야드중량<span class="qc-unit">(g/y · 자동계산)</span></label>
-            <input type="number" step="1" min="0" id="qc-weight-y" value="${escapeHtml(fmtV(qc.weight_g_per_y))}" placeholder="자동 계산됨" readonly tabindex="-1" title="스퀘어중량과 폭으로 자동 계산됩니다 (직접 수정 불가)">
-            <div class="qc-auto-hint" id="qc-weight-y-hint">스퀘어중량 + 폭 입력 시 자동 계산 (정수 올림) · 자동 입력 항목</div>
+            <input type="number" step="1" min="0" id="qc-weight-y" value="${escapeHtml(fmtV(qc.weight_g_per_y))}" placeholder="스퀘어중량을 넣으면 저절로" title="스퀘어중량 + 폭을 넣으면 저절로 나옵니다. 여기에 직접 넣으면 스퀘어중량이 거꾸로 계산됩니다">
+            <div class="qc-auto-hint" id="qc-weight-y-hint">스퀘어중량 + 폭 → 야드중량 · 야드중량 + 폭 → 스퀘어중량 (둘 중 아무 쪽이나 넣으면 나머지가 저절로)</div>
           </div>
           <div class="qc-field">
             <label>폭축률<span class="qc-unit">(%, 소수1)</span></label>
@@ -49060,8 +49089,8 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
               </div>
               <div class="qc-field">
                 <label>리프 야드중량<span class="qc-unit">(g/y · 자동계산)</span></label>
-                <input type="number" step="1" min="0" id="qc-rib-weight-y" value="${escapeHtml(fmtV(ribq.weight_g_per_y))}" placeholder="자동 계산됨" readonly tabindex="-1" title="스퀘어중량과 폭으로 자동 계산됩니다">
-                <div class="qc-auto-hint">스퀘어중량 + 폭 입력 시 자동 계산 · 자동 입력 항목</div>
+                <input type="number" step="1" min="0" id="qc-rib-weight-y" value="${escapeHtml(fmtV(ribq.weight_g_per_y))}" placeholder="스퀘어중량을 넣으면 저절로" title="스퀘어중량 + 폭을 넣으면 저절로 나옵니다. 여기에 직접 넣으면 스퀘어중량이 거꾸로 계산됩니다">
+                <div class="qc-auto-hint">스퀘어중량 + 폭 → 야드중량 · 야드중량 + 폭 → 스퀘어중량 (둘 중 아무 쪽이나)</div>
               </div>
               <div class="qc-field">
                 <label>리프 폭축률<span class="qc-unit">(%, 소수1)</span></label>
@@ -49181,9 +49210,10 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
     // 야드중량 자동계산 — readonly(직접 수정 불가)이므로 항상 자동 갱신.
     //   v2.53 hotfix19: 기존엔 저장값이 있으면 "수동편집됨"으로 오인해 잠가버려
     //     2차 이후 모달에서 자동계산이 안 되는 버그가 있었음. readonly로 바꾸고 잠금 제거.
-    let yardManuallyEdited = false;
-    function recalcYard() {
-      const sqm = fields.weight_g_per_sqm.value.trim();
+    /* hotfix470(대표 지시 9/23): 스퀘어중량 ↔ 야드중량 양쪽 다 — 넣은 쪽을 그대로 두고 나머지 쪽을 저절로 셈한다 */
+    let wLast = (fields.weight_g_per_sqm.value.trim() === '' && fields.weight_g_per_y.value.trim() !== '') ? 'gy' : 'sqm';
+    function recalcYard(from) {
+      if (from === 'sqm' || from === 'gy') wLast = from;
       const w = fields.width_inch.value.trim();
       const isD = fields.width_double.checked;
       const aw = calcActualWidth(w, isD);
@@ -49193,20 +49223,21 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
       } else {
         actualWidthEl.innerHTML = '';
       }
-      // 야드중량 자동 계산 (수동편집 안 된 경우만)
-      if (!yardManuallyEdited) {
-        const calc = calcYardWeight(sqm, aw);
-        if (calc != null) {
-          fields.weight_g_per_y.value = calc;
-          fields.weight_g_per_y.classList.add('qc-auto-calc');
-        } else {
-          fields.weight_g_per_y.value = '';
-          fields.weight_g_per_y.classList.remove('qc-auto-calc');
-        }
+      if (wLast === 'gy') {
+        const q = calcSqmWeight(fields.weight_g_per_y.value.trim(), aw);
+        fields.weight_g_per_y.classList.remove('qc-auto-calc');
+        if (q != null) { fields.weight_g_per_sqm.value = q; fields.weight_g_per_sqm.classList.add('qc-auto-calc'); }
+        else fields.weight_g_per_sqm.classList.remove('qc-auto-calc');
+        return;
       }
+      fields.weight_g_per_sqm.classList.remove('qc-auto-calc');
+      const calc = calcYardWeight(fields.weight_g_per_sqm.value.trim(), aw);
+      if (calc != null) { fields.weight_g_per_y.value = calc; fields.weight_g_per_y.classList.add('qc-auto-calc'); }
+      else { fields.weight_g_per_y.value = ''; fields.weight_g_per_y.classList.remove('qc-auto-calc'); }
     }
-    fields.width_inch.addEventListener('input', recalcYard);
-    fields.weight_g_per_sqm.addEventListener('input', recalcYard);
+    fields.width_inch.addEventListener('input', () => recalcYard());
+    fields.weight_g_per_sqm.addEventListener('input', () => recalcYard('sqm'));
+    fields.weight_g_per_y.addEventListener('input', () => recalcYard('gy'));
     fields.width_double.addEventListener('change', () => {
       doubleLabel.classList.toggle('checked', fields.width_double.checked);
       recalcYard();
@@ -49229,20 +49260,30 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
     };
     const ribDoubleLabel = document.getElementById('qc-rib-double-label');
     const ribActualWidthEl = document.getElementById('qc-rib-actual-width');
-    function recalcRibYard() {
+    let wRibLast = (ribFields.weight_g_per_sqm && ribFields.weight_g_per_sqm.value.trim() === '' && ribFields.weight_g_per_y && ribFields.weight_g_per_y.value.trim() !== '') ? 'gy' : 'sqm';   /* hotfix470 */
+    function recalcRibYard(from) {
       if (!ribFields.width_inch) return;
-      const sqm = ribFields.weight_g_per_sqm.value.trim();
+      if (from === 'sqm' || from === 'gy') wRibLast = from;
       const w = ribFields.width_inch.value.trim();
       const isD = ribFields.width_double.checked;
       const aw = calcActualWidth(w, isD);
       if (ribActualWidthEl) ribActualWidthEl.innerHTML = aw != null ? `→ <strong>${aw}</strong>인치 ${isD ? '(더블)' : ''}` : '';
-      const calc = calcYardWeight(sqm, aw);
+      if (wRibLast === 'gy') {
+        const q = calcSqmWeight(ribFields.weight_g_per_y.value.trim(), aw);
+        ribFields.weight_g_per_y.classList.remove('qc-auto-calc');
+        if (q != null) { ribFields.weight_g_per_sqm.value = q; ribFields.weight_g_per_sqm.classList.add('qc-auto-calc'); }
+        else ribFields.weight_g_per_sqm.classList.remove('qc-auto-calc');
+        return;
+      }
+      ribFields.weight_g_per_sqm.classList.remove('qc-auto-calc');
+      const calc = calcYardWeight(ribFields.weight_g_per_sqm.value.trim(), aw);
       if (calc != null) { ribFields.weight_g_per_y.value = calc; ribFields.weight_g_per_y.classList.add('qc-auto-calc'); }
       else { ribFields.weight_g_per_y.value = ''; ribFields.weight_g_per_y.classList.remove('qc-auto-calc'); }
     }
     if (ribFields.width_inch) {
-      ribFields.width_inch.addEventListener('input', recalcRibYard);
-      ribFields.weight_g_per_sqm.addEventListener('input', recalcRibYard);
+      ribFields.width_inch.addEventListener('input', () => recalcRibYard());
+      ribFields.weight_g_per_sqm.addEventListener('input', () => recalcRibYard('sqm'));
+      if (ribFields.weight_g_per_y) ribFields.weight_g_per_y.addEventListener('input', () => recalcRibYard('gy'));
       ribFields.width_double.addEventListener('change', () => { ribDoubleLabel.classList.toggle('checked', ribFields.width_double.checked); recalcRibYard(); });
       recalcRibYard();
     }
@@ -50850,7 +50891,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix469';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
+  const VERSION = 'v2.53 hotfix471';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
