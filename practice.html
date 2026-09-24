@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="HIWOS">
 <meta name="mobile-web-app-capable" content="yes">
-<title>RECOVERIC HIWOS v2.53 hotfix471</title>
+<title>RECOVERIC HIWOS v2.53 hotfix472</title>
 
 <!-- PWA Manifest (인라인 data URL) -->
 <link rel="manifest" id="pwa-manifest">
@@ -8701,11 +8701,16 @@ function greigeNoClean(v) {
         try {
           if (d.get.call(this) === v) return;   // 같은 목록이면 다시 그리지 않는다
           const ae = document.activeElement;
-          if (this.id && ae && ae.tagName === 'INPUT' && ae.getAttribute('list') === this.id) {
-            /* 그 칸에 목록이 열려 있는 중이다 — 목록을 그대로 갈면 옛 목록이 닫히지 않고 하나 더 뜬다.
-               잠깐 칸에서 목록을 떼었다 붙여 옛 목록을 닫고 새 목록을 단다. 값은 바로 들어간다(뒤 처리가 목록을 읽어도 새 값이 보인다) */
-            d.set.call(this, v);
-            try { ae.removeAttribute('list'); const id = this.id; requestAnimationFrame(() => { try { if (document.getElementById(id) === this || document.querySelector('datalist#' + CSS.escape(id))) ae.setAttribute('list', id); } catch (_) { ae.setAttribute('list', id); } }); } catch (_) {}
+          if (this.id && ae && ae.tagName === 'INPUT' && ae.getAttribute('list') === this.id && this.parentNode) {
+            /* hotfix472: 그 칸에 목록이 열려 있는 중이다 — 내용만 갈면 옛 목록이 닫히지 않고 하나 더 뜬다.
+               목록 조각 자체를 새것으로 바꿔 끼운다. 옛 조각이 화면에서 사라지면 열려 있던 목록도 같이 닫힌다 */
+            const fresh = document.createElement('datalist');
+            fresh.id = this.id;
+            d.set.call(fresh, v);
+            const par = this.parentNode, next = this.nextSibling;
+            try { par.removeChild(this); } catch (_) {}
+            try { par.insertBefore(fresh, next); } catch (_) { par.appendChild(fresh); }
+            try { ae.removeAttribute('list'); ae.setAttribute('list', fresh.id); } catch (_) {}
             return;
           }
         } catch (_) {}
@@ -33654,6 +33659,8 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
   document.addEventListener('focusout', e => {
     const el = e.target; if (!el || !NAME_US_IDS[el.id]) return;
     const v = nameUs(el.value); if (v !== el.value) { el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })); }
+    /* hotfix472(대표 지적 9/24): 안내 글이 계속 떠 있어 아래 칸을 가린다 — 칸을 벗어나면 바로 없앤다 */
+    try { clearTimeout(el.__simT); const n = el.parentElement && el.parentElement.querySelector('.hw-simnote'); if (n) n.remove(); } catch (_) {}
   }, true);
   // 옛 이름 한꺼번에 — 미리 보여 주고 한 번 묻는다. 옛 이름은 다른 표기로 남는다(옛 의뢰서 · 재고와 이어짐). 코드는 안 바뀐다
   function nameUsPlan(names) {
@@ -33966,11 +33973,31 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
     m.addEventListener('click', e => { if (e.target === m) m.remove(); });
     if (kOpts.name) m.querySelector('#kn-name').value = String(kOpts.name);
     setTimeout(() => m.querySelector('#kn-name').focus(), 50);
+    /* hotfix472: 편직공장을 고르면 저장될 이름(뒤에 (공장))을 미리 보여 준다 */
+    {
+      const nmEl = m.querySelector('#kn-name'), facEl = m.querySelector('#kn-fac');
+      const hint = document.createElement('div');
+      hint.id = 'kn-name-hint'; hint.style.cssText = 'font-size:11.5px;font-weight:700;color:#2563eb;margin-top:4px;min-height:15px;';
+      if (nmEl && nmEl.parentElement) nmEl.parentElement.appendChild(hint);
+      const paintHint = () => {
+        try {
+          const base = (typeof nameUs === 'function') ? nameUs(nmEl.value) : String(nmEl.value || '').trim();
+          const fac = String((facEl || {}).value || '').trim();
+          const full = (base && fac && typeof kfAutoItemName === 'function') ? kfAutoItemName(base, fac) : base;
+          hint.textContent = (full && full !== base) ? ('저장 이름: ' + full) : '';
+        } catch (_) { hint.textContent = ''; }
+      };
+      nmEl?.addEventListener('input', paintHint);
+      facEl?.addEventListener('change', paintHint);
+      paintHint();
+    }
     m.querySelector('#kn-ok').addEventListener('click', async () => {
       const b = m.querySelector('#kn-ok');
       try {
       const nmEl = m.querySelector('#kn-name');
-      const name = (typeof nameUs === 'function') ? nameUs(nmEl.value) : String(nmEl.value || '').trim();   /* hotfix465: 띄어쓰기 → _ */
+      let name = (typeof nameUs === 'function') ? nameUs(nmEl.value) : String(nmEl.value || '').trim();   /* hotfix465: 띄어쓰기 → _ */
+      /* hotfix472(대표 지적 9/24): 편직공장을 골랐으면 품목명 뒤에 (공장)을 붙여 만든다 — 전에는 안 붙어서 편직 설정에서 공장을 바꿨다 되돌려야 했다 */
+      { const fac0 = String((m.querySelector('#kn-fac') || {}).value || '').trim(); if (name && fac0 && typeof kfAutoItemName === 'function') name = kfAutoItemName(name, fac0); }
       if (name !== nmEl.value) nmEl.value = name;
       if (!name) { toast('품목명을 넣어 주십시오', 'error'); nmEl.focus(); return; }
       const list = getFabricSpecs().map(x => Object.assign({}, x));
@@ -34423,7 +34450,7 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
       };
       const applyRow = (row, nm) => {
         if (!row || !row.isConnected) return false;   // hotfix422i: 다시 그린 뒤 떨어져 나간 옛 줄의 이벤트(사종 칸 · 컬러 칸 둘 다 change)가 두 번째로 오면 무시
-        if (!yarnEntryByName(nm)) { toast(`"${nm}" 은(는) 원사 설정에 없는 사종입니다`, 'warning'); return false; }
+        if (!yarnEntryByName(nm)) { toast(`"${nm}" 은(는) 원사 설정에 없는 사종입니다 — 목록에서 골라 주시거나 컬러 칸의 [＋ 이 사종 등록]으로 먼저 넣어 주십시오 (줄은 그대로 둡니다)`, 'warning'); return false; }   /* hotfix472 */
         const real = yarnEntryByName(nm).name; const me = rowName(row);
         if (real === me) return false;
         if (me && !yarns.includes(me)) return false;
@@ -34470,7 +34497,13 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
           fillRowColors(row, true); const v = String(cSel?.value || '').trim();
           if (v && v !== rowName(row)) { applyRow(row, v); return; }
           if (v) return;
-          if ([...(cSel?.options || [])].some(o => o.value && o.value !== '__reg')) { cSel?.focus(); return; }
+          if ([...(cSel?.options || [])].some(o => o.value && o.value !== '__reg')) {
+            /* hotfix472(대표 지적 9/24 — 두 번째 원사부터 바꿔도 되돌아감): 사종만 바꾸면 아직 안 바뀐 것이다. 컬러를 골라야 그 줄이 바뀐다.
+               컬러가 하나면 저절로 골라지지만 여러 개면 대표가 골라야 하는데, 그것이 눈에 안 보여 "안 바뀐다"로 느껴졌다 */
+            try { cSel.style.borderColor = '#dc2626'; cSel.style.background = '#fff7ed'; cSel.style.fontWeight = '800'; } catch (_) {}
+            toast('컬러를 고르셔야 사종이 바뀝니다 — 빨갛게 표시된 컬러 칸에서 골라 주십시오', 'warning');
+            cSel?.focus(); return;
+          }
           // hotfix422i: 원사 설정에 없는 사종을 적었으면 바로 등록 창 — 등록하면 그 줄에 골라진다 (대표 확정 9/11)
           const typed = String(bIn.value || '').trim();
           if (typed && isOwnerUser() && !yarnEntryByName(typed) && ![...(cSel?.options || [])].some(o => o.value && o.value !== '__reg') && confirm('"' + typed + '" 은(는) 원사 설정에 없는 사종입니다.\n지금 등록할까요? (등록하면 이 줄에 골라집니다)')) {
@@ -34481,6 +34514,7 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
           if (rowName(row)) { const ent = yarnEntryByName(rowName(row)); bIn.value = ent ? yarnParts(ent).base : rowName(row); fillRowColors(row); }   // 없는 사종을 적었으면 원래 사종으로 되돌린다
         });
         cSel?.addEventListener('change', () => { const v = String(cSel.value || '').trim();
+          try { cSel.style.borderColor = ''; cSel.style.background = ''; cSel.style.fontWeight = ''; } catch (_) {}   /* hotfix472 */
           if (v === '__reg') {   // hotfix422i: 없는 사종을 그 자리에서 등록 → 등록하면 이 줄에 골라진다
             cSel.value = ''; const me = rowName(row); const typed = String(bIn?.value || '').trim() || me;
             openYarnQuickAdd({ kind: (kSel && kSel.value) || '면', base: typed }, nm => { const r2 = me ? wrap.querySelector('.kf-yrow[data-y="' + CSS.escape(me) + '"]') : wrap.querySelector('.kf-yrow-new'); if (r2) { const b2 = r2.querySelector('.kf-rb'); if (b2) b2.value = yarnParts(yarnEntryByName(nm)).base; fillRowColors(r2); if (me && String(yarnEntryByName(nm).name).trim() === me) { stash(); touched = true; paint(); } else applyRow(r2, nm); } });
@@ -50891,7 +50925,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix471';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
+  const VERSION = 'v2.53 hotfix472';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
