@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="HIWOS">
 <meta name="mobile-web-app-capable" content="yes">
-<title>RECOVERIC HIWOS v2.53 hotfix472</title>
+<title>RECOVERIC HIWOS v2.53 hotfix473</title>
 
 <!-- PWA Manifest (인라인 data URL) -->
 <link rel="manifest" id="pwa-manifest">
@@ -585,8 +585,10 @@
   .kf-table thead .kf-st1, .kf-table thead .kf-st2, .kf-table thead .kf-st3 { z-index: 130; }
   #dashboard-panel:has(.kf-table), .dashboard-panel:has(.kf-table), #dash-body:has(.kf-table) { min-width: 0 !important; max-width: 100%; box-sizing: border-box; }
   /* 대시보드 틀이 작성 화면의 고정 칸(340 · 420 · 6 · 340px)을 그대로 물려받아 1106px 밑으로 줄지 않았다 — 이 표에서는 한 칸으로 편다 */
-  .main-app:has(.kf-table), #main-app:has(.kf-table) { grid-template-columns: minmax(0, 1fr) !important; grid-auto-columns: 0 !important; }
-  .main-app:has(.kf-table) > #dashboard-panel, .main-app:has(.kf-table) > .dashboard-panel, #main-app:has(.kf-table) > .dashboard-panel { grid-column: 1 / -1 !important; }
+  /* hotfix473(대표 지적 9/24 — 의뢰서 작성 화면이 깨짐): 예전에는 :has(.kf-table) 로 걸었는데, 품목(생지) 코드 표가 화면에 안 보여도 문서 안에 남아 있으면
+     작성 화면에서도 칸이 한 줄로 접혀 버렸다. 이제 그 표를 실제로 보고 있을 때만 붙는 class 로 건다 */
+  #main-app.hw-wide, .main-app.hw-wide { grid-template-columns: minmax(0, 1fr) !important; grid-auto-columns: 0 !important; }
+  #main-app.hw-wide > #dashboard-panel, .main-app.hw-wide > #dashboard-panel, .main-app.hw-wide > .dashboard-panel { grid-column: 1 / -1 !important; }
   .kf-table { font-size: 12.5px; }
   .kf-table th, .kf-table td { padding: 6px 7px; }
   .kf-table td.kf-yn { white-space: normal; word-break: keep-all; min-width: 130px; max-width: 200px; line-height: 1.35; }
@@ -18271,6 +18273,7 @@ function validateBlendSum(blends, label) {
   
   // 모드 전환 (작성 ↔ 대시보드)
   function switchUiMode(mode) {
+  try { if (mode !== 'dashboard') document.getElementById('main-app')?.classList.remove('hw-wide'); } catch (_) {}   /* hotfix473: 작성 화면으로 가면 넓은 표 모드를 뗀다 */
     setTimeout(() => { try { hwSideApply(); if (typeof window.__hwTopPaint === 'function') window.__hwTopPaint(); } catch (e) {} }, 0);   /* hotfix443: 화면이 바뀌면 왼쪽 메뉴 상태도 바로 맞춘다 */
     // hotfix422e: 화면을 바꿀 때마다 브라우저 이력에 남겨 뒤로 · 앞으로 가기로 오갈 수 있게 (popstate 로 온 것은 안 남김)
     window.__switchUiMode = switchUiMode;
@@ -33342,7 +33345,11 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
                   ? (kfKidsOf(r.fid).length
                     ? `<button class="dash-action-btn kf-kids" data-fid="${escapeHtml(r.fid)}" title="이 생지에서 나오는 파생 품목을 폅니다" style="font-size:11px;padding:3px 9px;font-weight:800;color:#075985;border-color:#bae6fd;background:${(state.kfOpen || {})[r.fid] ? '#e0f2fe' : '#fff'};">파생 ${new Set(kfKidsOf(r.fid).map(x => x.fid)).size} ${(state.kfOpen || {})[r.fid] ? '▲' : '▾'}</button>`
                     : '<span style="color:#cbd5e1;">-</span>')
-                  : (specPrimaryGreige(r.fid) ? `<span style="color:#075985;font-weight:700;">${escapeHtml(String((itemByFid(specPrimaryGreige(r.fid)) || {}).name || ''))}</span>` : '<span style="color:#cbd5e1;">(이 품목이 생지)</span>')}${kfCanAct() ? `<div><button class="dash-action-btn kf-gset" data-fid="${escapeHtml(r.fid)}" title="이 품목의 원래 생지를 정합니다" style="font-size:10.5px;padding:2px 8px;margin-top:3px;color:#075985;border-color:#bae6fd;">원래 생지 설정</button></div>` : ''}</td>` : ''}
+                  : (specPrimaryGreige(r.fid) ? `<span style="color:#075985;font-weight:700;">${escapeHtml(String((itemByFid(specPrimaryGreige(r.fid)) || {}).name || ''))}</span>` : '<span style="color:#cbd5e1;">(이 품목이 생지)</span>')}${kfCanAct() ? `<div>${specPrimaryGreige(r.fid)
+                  /* hotfix473(대표 제안 9/24): 단추를 두 개로 나눈다 — 파생 줄은 위(원래 생지)를 바꾸고, 생지 줄은 아래(파생 품목)를 건다.
+                     생지 줄에도 [원래 생지 설정]은 남긴다 — 생지였던 품목이 뒤늦게 다른 생지의 파생으로 밝혀지는 경우가 있다 */
+                  ? `<button class="dash-action-btn kf-gset" data-fid="${escapeHtml(r.fid)}" title="이 파생 품목이 어느 생지에서 나오는지 바꿉니다" style="font-size:10.5px;padding:2px 8px;margin-top:3px;color:#075985;border-color:#bae6fd;">원래 생지 바꾸기</button>`
+                  : `<button class="dash-action-btn kf-gmap" data-fid="${escapeHtml(r.fid)}" title="이 생지에서 나오는 파생 품목을 한 번에 겁니다 — 생지는 미리 골라 둡니다" style="font-size:10.5px;padding:2px 8px;margin-top:3px;color:#075985;border-color:#bae6fd;font-weight:800;">파생 품목 걸기</button><button class="dash-action-btn kf-gset" data-fid="${escapeHtml(r.fid)}" title="이 품목이 실은 다른 생지에서 나오는 것이라면 여기서 그 생지를 고릅니다" style="font-size:10px;padding:2px 7px;margin-top:3px;color:#64748b;">원래 생지 설정</button>`}</div>` : ''}</td>` : ''}
       <td rowspan="${n}" style="text-align:center;vertical-align:top;font-size:12px;color:#334155;">${escapeHtml(r.sp.gubun || GUBUN_BODY)}</td>
       <td rowspan="${n}" style="text-align:center;vertical-align:top;font-size:12px;color:#475569;">${escapeHtml(r.sp.cat || '-')}</td>`;
       const g = kfGauge(k.inch, k.needles);
@@ -34925,6 +34932,7 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
     /* hotfix461: 거르개 · 파생 펼치기 · 파생 품목명 고치기 */
     document.querySelectorAll('#dash-body .kf-viewbtn').forEach(b => b.addEventListener('click', () => { state.kfView = b.dataset.kfview; renderDashboard(); }));
     document.getElementById('kf-us-btn')?.addEventListener('click', async () => { const n = await nameUsBulkItems(); if (n) renderDashboard(); });   /* hotfix462 */
+    document.querySelectorAll('#dash-body .kf-gmap').forEach(b => b.addEventListener('click', () => { try { openGreigeMapModal(b.dataset.fid); } catch (e) { console.error('[파생 걸기]', e); } }));   /* hotfix473 */
     document.querySelectorAll('#dash-body .kf-kids').forEach(b => b.addEventListener('click', () => {
       if (!state.kfOpen || typeof state.kfOpen !== 'object') state.kfOpen = {};
       const f = b.dataset.fid; if (state.kfOpen[f]) delete state.kfOpen[f]; else state.kfOpen[f] = true;
@@ -43446,6 +43454,8 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
     return !!(m && m.classList.contains('show'));
   }
   function renderDashboard() {
+    /* hotfix473: [품목(생지) 코드] 표를 실제로 보고 있을 때만 화면을 한 칸으로 넓힌다 */
+    try { const ma = document.getElementById('main-app'); if (ma) ma.classList.toggle('hw-wide', state.uiMode === 'dashboard' && state.dashView === 'knitSetup'); } catch (_) {}
     if (state.dashView === 'daily-report') {   // hotfix458: 창 이름이 화면 이름 자리에 들어오면 뒤 화면을 염색/가공 현황으로 두고 창을 연다
       state.dashView = 'overview'; state.overviewTypeFilter = '염색가공';
       try { if (typeof syncSidebarActive === 'function') syncSidebarActive(); } catch (_) {}
@@ -50925,7 +50935,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix472';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
+  const VERSION = 'v2.53 hotfix473';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
