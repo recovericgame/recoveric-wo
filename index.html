@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="HIWOS">
 <meta name="mobile-web-app-capable" content="yes">
-<title>RECOVERIC HIWOS v2.53 hotfix488</title>
+<title>RECOVERIC HIWOS v2.53 hotfix489</title>
 
 <!-- PWA Manifest (인라인 data URL) -->
 <link rel="manifest" id="pwa-manifest">
@@ -44255,10 +44255,13 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
         const ab = qb * y.unit; if (!(ab > 0)) return; const G = ab / y.p;
         const qty = Y.map((z, i) => i === b ? qb : (z.fix != null ? z.fix : Math.ceil((G * z.p / z.unit) / z.step - 1e-9) * z.step));
         const act = qty.map((q, i) => q * Y[i].unit);
-        const need = Y.map((z, i) => i === b ? act[b] : G * z.p);
+        /* hotfix489(대표 지시 9/26 — 어떤 원사도 절대 모자라면 안 된다): 짤 수 있는 양은 가장 먼저 떨어지는 원사가 정한다 → 그 원사가 기준(로스 0), 다른 원사는 모두 남거나 딱 맞음 */
+        let bb = b, G2 = Infinity; act.forEach((a, i) => { const g = a / Y[i].p; if (g < G2 - 1e-9) { G2 = g; bb = i; } });
+        if (!(G2 > 0) || !isFinite(G2)) return;
+        const need = Y.map((z, i) => G2 * z.p);
         const loss = act.map((a, i) => a - need[i]);
         const tot = act.reduce((s, a) => s + a, 0);
-        const r = { b, qty, act, need, loss, G, tot, lossSum: loss.reduce((s, x) => s + x, 0), dev: (G - planG) / planG * 100 };
+        const r = { b: bb, qty, act, need, loss: loss.map(x => Math.max(0, x)), G: G2, tot, lossSum: loss.reduce((s, x) => s + Math.max(0, x), 0), dev: (G2 - planG) / planG * 100 };
         r.lossRate = tot > 0 ? r.lossSum / tot * 100 : 0;
         r.within = Math.abs(r.dev) <= tol + 1e-9;
         const key = qty.map(q => q.toFixed(3)).join('|');
@@ -44295,7 +44298,8 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
     const sum = ys.reduce((s, y) => s + ycNum(y.pct), 0) || 100;
     return ys.map((y, i) => {
       const m = ycYarnMaster(y.name, y.yid); const key = y.yid || vendorKey(y.name);
-      const R = S.rows[key] || (S.rows[key] = { unit: ycBuyUnitOf(m), box: '', bag: 7, fix: '' });
+      const R = S.rows[key] || (S.rows[key] = { unit: ycBuyUnitOf(m), box: '', bag: 7, bagKg: '25.92', fix: '' });
+      if (R.bagKg == null || R.bagKg === undefined) R.bagKg = String(R.bag) === '8' ? '22.68' : '25.92';   /* hotfix489: 포대 → 박스당 중량 */
       return { i, key, name: yarnNameClean(y.name), yid: y.yid || (m && m.yid) || '', pct: ycNum(y.pct), p: ycNum(y.pct) / sum, kind: (m && m.kind) || '', master: m, R };
     });
   }
@@ -44311,9 +44315,9 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
   function ycPlanDetail(S, C, r) {
     const knitLoss = ycNum(S.loss) || 0; const kgjul = ycNum(S.kgjul) || 0;
     const knit = r.G * (1 - knitLoss / 100);
-    const jul = kgjul > 0 ? Math.round(knit / kgjul) : 0;
-    const rows = C.ys.map((y, i) => ({ name: y.name, yid: y.yid, pct: y.pct, unit: y.R.unit, unitKg: C.Y[i].unit, qty: r.qty[i], act: r.act[i], need: r.need[i], loss: r.loss[i], lossRate: r.tot > 0 ? r.loss[i] / r.tot * 100 : 0, base: i === r.b, bags: y.R.unit === '고리' ? r.act[i] / (YC_KORI / (parseInt(y.R.bag, 10) || 7)) : r.qty[i], bagN: parseInt(y.R.bag, 10) || 7, kind: y.kind, master: y.master }));
-    return { rows, G: r.G, tot: r.tot, lossSum: r.lossSum, lossRate: r.lossRate, knit, jul, knitLoss, kgjul, dev: r.dev, within: r.within };
+    const julRaw = kgjul > 0 ? knit / kgjul : 0; const jul = kgjul > 0 ? Math.ceil(julRaw - 1e-9) : 0;   /* hotfix489(대표 지시 9/26): 절수는 무조건 올림 */
+    const rows = C.ys.map((y, i) => ({ name: y.name, yid: y.yid, pct: y.pct, unit: y.R.unit, unitKg: C.Y[i].unit, qty: r.qty[i], act: r.act[i], need: r.need[i], loss: r.loss[i], lossRate: r.tot > 0 ? r.loss[i] / r.tot * 100 : 0, base: i === r.b, bags: y.R.unit === '고리' ? (ycNum(y.R.bagKg) > 0 ? r.act[i] / ycNum(y.R.bagKg) : null) : r.qty[i], bagKg: y.R.unit === '고리' ? ycNum(y.R.bagKg) : ycNum(y.R.box), kind: y.kind, master: y.master }));
+    return { rows, G: r.G, tot: r.tot, lossSum: r.lossSum, lossRate: r.lossRate, knit, jul, julRaw, knitLoss, kgjul, dev: r.dev, within: r.within };
   }
   function ycSnapshot(S, P) {
     const it = itemByFid(S.fid) || {};
@@ -44352,20 +44356,22 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
       </div>
       <div style="margin-top:8px;font-size:12px;color:#475569;">계획 편직량 <b>${ycF1(C.planG)}kg</b> (${ycNum(S.jul) || 0}절 × ${ycNum(S.kgjul) || 0}kg)</div>`;
     if (!S.fid) return h + `<div class="dash-empty" style="margin-top:14px;">품목을 고르면 그 품목의 원사(사종 · 비율)가 나옵니다. 품목(생지) 코드에 편직 값이 있는 품목만 나옵니다.</div></div>`;
-    h += `<table class="dash-table yc-yarns" style="margin-top:10px;font-size:12.5px;"><thead><tr><th style="text-align:left;">사종</th><th>비율</th><th>구매 단위</th><th>1박스 kg <span style="font-weight:400;color:#94a3b8;">(매번)</span></th><th>포대</th><th title="원사 회사가 &quot;있는 박스 다 써 달라&quot; 할 때 — 그 수량으로 고정하고 나머지만 맞춥니다">수량 고정</th></tr></thead><tbody>`;
+    h += `<table class="dash-table yc-yarns" style="margin-top:10px;font-size:12.5px;"><thead><tr><th style="text-align:left;">사종</th><th>비율</th><th>구매 단위</th><th title="고리 = 181.44kg · 박스로 사는 원사는 1박스 kg 을 매번 넣습니다">단위 중량 (kg)</th><th title="방적사 1고리를 몇 kg 짜리 박스로 받는지 — 입고 확인용">박스당 중량 (kg)</th><th title="원사 회사가 &quot;있는 박스 다 써 달라&quot; 할 때 — 그 수량으로 고정하고 나머지만 맞춥니다">수량 고정</th></tr></thead><tbody>`;
     C.ys.forEach(y => {
       h += `<tr><td style="text-align:left;font-weight:700;">${escapeHtml(y.name)}</td><td style="text-align:right;">${y.pct}%</td>
         <td style="text-align:center;"><select class="yc-row" data-key="${escapeHtml(y.key)}" data-f="unit" style="${inp}padding:3px 6px;"><option${y.R.unit === '고리' ? ' selected' : ''}>고리</option><option${y.R.unit === '박스' ? ' selected' : ''}>박스</option></select></td>
-        <td style="text-align:center;">${y.R.unit === '박스' ? `<input type="number" class="yc-row" data-key="${escapeHtml(y.key)}" data-f="box" value="${escapeHtml(String(y.R.box))}" step="0.01" placeholder="예 30" style="${inp}width:80px;padding:3px 6px;${ycNum(y.R.box) > 0 ? '' : 'border-color:#dc2626;background:#fef2f2;'}">` : '<span style="color:#94a3b8;">181.44kg</span>'}</td>
-        <td style="text-align:center;">${y.R.unit === '고리' ? `<select class="yc-row" data-key="${escapeHtml(y.key)}" data-f="bag" style="${inp}padding:3px 6px;"><option value="7"${String(y.R.bag) === '7' ? ' selected' : ''}>7포대 (25.92)</option><option value="8"${String(y.R.bag) === '8' ? ' selected' : ''}>8포대 (22.68)</option></select>` : '<span style="color:#94a3b8;">-</span>'}</td>
-        <td style="text-align:center;"><input type="number" class="yc-row" data-key="${escapeHtml(y.key)}" data-f="fix" value="${escapeHtml(String(y.R.fix))}" step="${y.R.unit === '고리' ? 0.5 : 1}" placeholder="자동" style="${inp}width:76px;padding:3px 6px;"> ${y.R.unit}</td></tr>`;
+        <td style="text-align:center;">${y.R.unit === '박스' ? `<input type="number" class="yc-row" data-key="${escapeHtml(y.key)}" data-f="box" value="${escapeHtml(String(y.R.box))}" step="0.01" placeholder="예 30" style="${inp}width:90px;padding:3px 6px;text-align:center;${ycNum(y.R.box) > 0 ? '' : 'border-color:#dc2626;background:#fef2f2;'}">` : '<span style="color:#94a3b8;">181.44</span>'}</td>
+        <td style="text-align:center;white-space:nowrap;">${y.R.unit === '고리' ? (() => { const bk = String(y.R.bagKg == null ? '' : y.R.bagKg); const preset = bk === '25.92' || bk === '22.68'; const mode = y.R.bagMode === 'custom' || !preset ? 'custom' : bk;
+          return `<select class="yc-row" data-key="${escapeHtml(y.key)}" data-f="bagSel" style="${inp}padding:3px 6px;"><option value="25.92"${mode === '25.92' ? ' selected' : ''}>25.92 (7박스)</option><option value="22.68"${mode === '22.68' ? ' selected' : ''}>22.68 (8박스)</option><option value="custom"${mode === 'custom' ? ' selected' : ''}>직접 입력</option></select>`
+            + (mode === 'custom' ? ` <input type="number" class="yc-row" data-key="${escapeHtml(y.key)}" data-f="bagKg" value="${escapeHtml(preset && y.R.bagMode === 'custom' ? '' : bk)}" step="0.01" placeholder="kg" style="${inp}width:80px;padding:3px 6px;text-align:center;${ycNum(bk) > 0 && !(preset && y.R.bagMode === 'custom') ? '' : 'border-color:#dc2626;background:#fef2f2;'}">` : ''); })() : '<span style="color:#94a3b8;">-</span>'}</td>
+        <td style="text-align:center;"><input type="number" class="yc-row" data-key="${escapeHtml(y.key)}" data-f="fix" value="${escapeHtml(String(y.R.fix))}" step="${y.R.unit === '고리' ? 0.5 : 1}" placeholder="자동" style="${inp}width:76px;padding:3px 6px;text-align:center;"> ${y.R.unit}</td></tr>`;
     });
-    h += `</tbody></table>`;
-    if (C.miss.length) return h + `<div style="margin-top:10px;color:#dc2626;font-weight:800;">박스로 사는 원사의 1박스 kg 을 넣어 주십시오 — ${C.miss.map(y => escapeHtml(y.name)).join(' · ')} (같은 원사도 매번 바뀌므로 직접 넣습니다)</div></div>`;
+    h += `</tbody></table><div style="display:flex;justify-content:flex-end;align-items:center;gap:10px;margin-top:8px;"><span style="font-size:11.5px;color:#64748b;">값을 넣고 Enter 또는</span><button type="button" class="dash-action-btn yc-calc" style="padding:8px 22px;font-weight:800;background:#1e3a8a;color:#fff;border-color:#1e3a8a;">계산하기</button></div>`;
+    if (C.miss.length) return h + `<div style="margin-top:10px;color:#dc2626;font-weight:800;">박스로 사는 원사의 단위 중량(1박스 kg)을 넣어 주십시오 — ${C.miss.map(y => escapeHtml(y.name)).join(' · ')} (같은 원사도 매번 바뀌므로 직접 넣습니다)</div></div>`;
     if (!C.res || !C.res.rec) return h + `<div class="dash-empty" style="margin-top:14px;">계산할 수 없습니다 — 절수 · 한 절 중량을 확인해 주십시오</div></div>`;
     const list = C.res.list; if (!(S.sel >= 0 && S.sel < list.length)) S.sel = 0;
     const recIdx = list.indexOf(C.res.rec);
-    h += `<div style="margin-top:14px;font-weight:800;">추천안 · 후보 <span style="font-weight:400;color:#64748b;font-size:12px;">— 누르면 그 안으로 봅니다. 계획 ±${ycNum(S.tol) == null ? 5 : ycNum(S.tol)}% 안에서 로스가 가장 적은 안이 ⭐</span></div>
+    h += `<div style="margin-top:14px;font-weight:800;">추천안 · 후보 <span style="font-weight:400;color:#64748b;font-size:12px;">— 누르면 그 안으로 봅니다. 계획 ±${ycNum(S.tol) == null ? 5 : ycNum(S.tol)}% 안에서 로스가 가장 적은 안이 ⭐ · 어떤 원사도 모자라지 않게 셈(가장 먼저 떨어지는 원사가 기준)</span></div>
       <table class="dash-table yc-cands" style="margin-top:6px;font-size:12.5px;"><thead><tr><th></th>${C.ys.map(y => `<th>${escapeHtml(y.name)}</th>`).join('')}<th>원사 로스</th><th>로스율</th><th>계획 대비</th><th>기준</th></tr></thead><tbody>`;
     list.forEach((r, n) => {
       const on = n === S.sel;
@@ -44380,15 +44386,15 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
     const it = itemByFid(S.fid) || {};
     h += `<div id="yc-card" style="margin-top:14px;background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px;">
       <div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap;"><div style="font-size:15px;font-weight:800;">${escapeHtml(it.name || '')} <span style="color:#94a3b8;">·</span> ${escapeHtml(S.fac)} <span style="font-size:12px;font-weight:400;color:#64748b;">원사 투입 계산</span></div><div style="font-size:12px;color:#64748b;">체크한 날짜 ${escapeHtml(S.date)}${P.within ? '' : ' · <b style="color:#b45309;">계획 범위 밖 안</b>'}</div></div>
-      <table class="dash-table" style="margin-top:8px;font-size:12.5px;"><thead><tr><th style="text-align:left;">사종</th><th>비율</th><th>필요량</th><th>발주 수량</th><th>실제 투입</th><th>로스</th><th>로스율</th><th>포대 · 박스</th></tr></thead><tbody>`
+      <table class="dash-table" style="margin-top:8px;font-size:12.5px;"><thead><tr><th style="text-align:left;">사종</th><th>비율</th><th>필요량</th><th>발주 수량</th><th>실제 투입</th><th>로스</th><th>로스율</th><th>박스 수</th></tr></thead><tbody>`
       + P.rows.map(r => `<tr><td style="text-align:left;font-weight:700;">${escapeHtml(r.name)}${r.base ? ' <span style="font-size:10.5px;font-weight:800;color:#2446e8;border:1px solid #c7d2fe;border-radius:8px;padding:0 6px;">기준</span>' : ''}</td><td style="text-align:right;">${r.pct}%</td><td style="text-align:right;">${ycF1(r.need)}kg</td><td style="text-align:center;font-weight:800;">${ycQ(r.qty, r.unit)}</td><td style="text-align:right;">${ycF1(r.act)}kg</td>
-        <td style="text-align:right;font-weight:800;color:${ycLossColor(r.loss)};">${r.loss > 0.05 ? '+' : ''}${ycF1(r.loss)}kg</td><td style="text-align:right;color:${ycLossColor(r.loss)};">${(Math.round(r.lossRate * 100) / 100).toFixed(2)}%</td><td style="text-align:center;">${r.unit === '고리' ? (Math.round(r.bags * 10) / 10) + '포대' : r.qty + '박스'}</td></tr>`).join('')
+        <td style="text-align:right;font-weight:800;color:${ycLossColor(r.loss)};">${r.loss > 0.05 ? '+' : ''}${ycF1(r.loss)}kg</td><td style="text-align:right;color:${ycLossColor(r.loss)};">${(Math.round(r.lossRate * 100) / 100).toFixed(2)}%</td><td style="text-align:center;">${r.unit === '고리' ? (r.bags == null ? '-' : (Math.round(r.bags * 10) / 10) + '박스 <span style="color:#94a3b8;font-size:11px;">(' + r.bagKg + 'kg)</span>') : r.qty + '박스'}</td></tr>`).join('')
       + `</tbody></table>
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-top:10px;">
-        ${[['원사 투입량', ycF1(P.tot) + 'kg'], ['원사 로스', (P.lossSum > 0 ? '+' : '') + ycF1(P.lossSum) + 'kg (' + (Math.round(P.lossRate * 100) / 100).toFixed(2) + '%)'], ['편직 로스', P.knitLoss + '%'], ['예상 편직량', ycF1(P.knit) + 'kg'], ['한 절 평균 중량', P.kgjul + 'kg']].map(([a, b]) => `<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:8px 10px;"><div style="font-size:11.5px;color:#64748b;">${a}</div><div style="font-size:15px;font-weight:800;">${b}</div></div>`).join('')}
-        <div style="background:#1e3a8a;border-radius:8px;padding:8px 10px;color:#fff;"><div style="font-size:11.5px;opacity:.85;">최소 예상 절수</div><div style="font-size:20px;font-weight:900;">${P.jul}절</div></div>
+        ${[['원사 투입량', ycF1(P.tot) + 'kg'], ['편직 필요 원사', ycF1(P.G) + 'kg'], ['원사 로스', (P.lossSum > 0 ? '+' : '') + ycF1(P.lossSum) + 'kg (' + (Math.round(P.lossRate * 100) / 100).toFixed(2) + '%)'], ['편직 로스', P.knitLoss + '%'], ['예상 편직량', ycF1(P.knit) + 'kg'], ['한 절 평균 중량', P.kgjul + 'kg']].map(([a, b]) => `<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:8px 10px;"><div style="font-size:11.5px;color:#64748b;">${a}</div><div style="font-size:15px;font-weight:800;">${b}</div></div>`).join('')}
+        <div style="background:#1e3a8a;border-radius:8px;padding:8px 10px;color:#fff;"><div style="font-size:11.5px;opacity:.85;">최소 예상 절수 <span style="opacity:.8;">(${(Math.round(P.julRaw * 100) / 100).toFixed(2)}절 올림)</span></div><div style="font-size:20px;font-weight:900;">${P.jul}절</div></div>
       </div>
-      <div style="font-size:11px;color:#94a3b8;margin-top:6px;">로스 색 — <b style="color:#dc2626;">＋ 남음</b> · <b style="color:#2563eb;">− 모자람</b> · <b style="color:#16a34a;">0</b></div>
+      <div style="font-size:11px;color:#94a3b8;margin-top:6px;">로스 색 — <b style="color:#dc2626;">＋ 남음</b> · <b style="color:#16a34a;">0 딱 맞음(기준 원사)</b> · 모자라는 안은 만들지 않습니다</div>
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
       <button type="button" class="dash-action-btn yc-act" data-a="kakao" style="padding:8px 14px;font-weight:800;">업체에 보낼 글 복사</button>
@@ -44420,7 +44426,16 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
         if (k === 'fac') { S.rows = {}; S.base = 'auto'; S.loss = ycKnitLossDef(S.fid, S.fac); }
         S.sel = 0; draw();
       }));
-      host.querySelectorAll('.yc-row').forEach(el => el.addEventListener('change', () => { const R = S.rows[el.dataset.key]; if (!R) return; R[el.dataset.f] = el.value; if (el.dataset.f === 'unit') R.fix = ''; S.sel = 0; draw(); }));
+      const rowSet = el => { const R = S.rows[el.dataset.key]; if (!R) return false; const f = el.dataset.f;
+        if (f === 'bagSel') { if (el.value === 'custom') { R.bagMode = 'custom'; } else { R.bagMode = ''; R.bagKg = el.value; } }
+        else if (f === 'bagKg') { R.bagKg = el.value; R.bagMode = 'custom'; }
+        else { R[f] = el.value; if (f === 'unit') R.fix = ''; }
+        return true; };
+      host.querySelectorAll('.yc-row').forEach(el => el.addEventListener('change', () => { if (!rowSet(el)) return; S.sel = 0; draw(); }));
+      /* hotfix489: Enter = 계산 · [계산하기] = 칸 값을 모두 읽고 다시 셈 */
+      const calcAll = () => { host.querySelectorAll('.yc-in').forEach(el => { if (el.dataset.k !== 'fid' && el.dataset.k !== 'fac') S[el.dataset.k] = el.value; }); host.querySelectorAll('.yc-row').forEach(el => rowSet(el)); S.sel = 0; draw(); };
+      host.querySelectorAll('.yc-in, .yc-row, .yc-price').forEach(el => el.addEventListener('keydown', ev => { if (ev.key === 'Enter') { ev.preventDefault(); if (el.classList.contains('yc-price')) { S.prices[el.dataset.key] = el.value; draw(); } else calcAll(); } }));
+      host.querySelector('.yc-calc')?.addEventListener('click', calcAll);
       host.querySelectorAll('.yc-price').forEach(el => el.addEventListener('change', () => { S.prices[el.dataset.key] = el.value; draw(); }));
       host.querySelectorAll('.yc-cand').forEach(tr => tr.addEventListener('click', () => { S.sel = parseInt(tr.dataset.n, 10) || 0; draw(); }));
       host.querySelectorAll('.yc-act').forEach(b => b.addEventListener('click', () => ycAct(b.dataset.a, host, opts, draw)));
@@ -52069,7 +52084,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix488';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
+  const VERSION = 'v2.53 hotfix489';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
