@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="HIWOS">
 <meta name="mobile-web-app-capable" content="yes">
-<title>RECOVERIC HIWOS v2.53 hotfix474</title>
+<title>RECOVERIC HIWOS v2.53 hotfix476</title>
 
 <!-- PWA Manifest (인라인 data URL) -->
 <link rel="manifest" id="pwa-manifest">
@@ -7218,7 +7218,7 @@ const firebaseConfig = {
 };
 
 // hotfix388: 어느 줄(본선/연습선)을 보는가 — 이 한 글자만 다르다. '' = 본선, 'practice_' = 연습선
-const LINE = 'practice_';
+const LINE = '';
 const C = n => LINE + n;
 window.__HIWOS_LINE = LINE;
 if (LINE) {
@@ -8798,8 +8798,17 @@ function nameSimilarList(name, pool, skip) {
 //   판정(허용 범위)은 전과 같이 개폭으로 한다 — 품목 디테일의 기준 폭이 개폭이기 때문. 기준 폭이 튜브면 품목 디테일에서 [튜브]를 켜면 기준이 ×2 된다
 function qcWidthShow(w) {   /* 검사용 창구는 아래 window.__hf464 */
   if (!w || w.actual == null) return '-';
+  if (w.tube) return `${qcWV(w).actual}″ 튜브`;   /* hotfix475(대표 지시 9/25): 튜브로 의뢰했으면 결과도 튜브 숫자로 */
   const a = w.actual, r = w.raw;
   return (w.double && r != null && isFinite(r) && Math.abs(r - a) > 0.001) ? `${r}″ (튜브 → 개폭 ${a}″)` : `${a}″`;
+}
+// hotfix475(대표 지시 9/25): 기준 폭이 튜브(품목 디테일 [튜브] 켬)면 보이는 숫자를 모두 튜브로 — 실측 · 허용 · 기준을 ÷2.
+//   판정(fail)은 손대지 않는다: 개폭 허용 = 기준×2 − 하한 ~ 기준×2 + 상한 이므로 ÷2 하면 튜브 허용 = 기준 − 하한/2 ~ 기준 + 상한/2 (여유 절반) — 같은 판정
+function qcWV(w) {
+  if (!w || !w.tube) return w;
+  const h = v => (v == null || v === '' || !isFinite(Number(v))) ? v : Math.round(Number(v) / 2 * 100) / 100;
+  return Object.assign({}, w, { actual: h(w.actual), lo: h(w.lo), hi: h(w.hi),
+    specMin: (w.rawMin != null ? w.rawMin : h(w.specMin)), specMax: (w.rawMax != null ? w.rawMax : h(w.specMax)) });
 }
 function greigeSplit(text) {
   const s = String(text || '').trim();
@@ -12765,7 +12774,7 @@ window.addEventListener('firebase-ready', () => {
         if (canAccessView('daily-report') && typeof openDailyReportModal === 'function') {
           const _d = new Date();
           const _today = _d.getFullYear() + '-' + String(_d.getMonth() + 1).padStart(2, '0') + '-' + String(_d.getDate()).padStart(2, '0');
-          const _key = 'hiwos_daily_modal_' + LINE + ((state.user && state.user.email) || '');
+          const _key = 'hiwos_daily_modal_' + (window.__HIWOS_LINE || '') + ((state.user && state.user.email) || '');   /* hotfix475: 연습선 구분 상수는 모듈 안에만 있어 이 자리에서 안 보였다(오류 → 창이 안 떴다) — 창구 window.__HIWOS_LINE 을 쓴다 */
           let _last = null; try { _last = localStorage.getItem(_key); } catch (_) { _last = null; }
           if (_last !== _today && !fromUrl) {   /* hotfix466: 새 창으로 연 화면에서는 일일 체크 창을 띄우지 않는다 */
             try { localStorage.setItem(_key, _today); } catch (_) {}
@@ -12818,6 +12827,7 @@ window.addEventListener('firebase-ready', () => {
   //   설정·경영·휴지통 화면은 제외(저장 권한이 Firestore 규칙과 묶여 있음).
   //   삭제만은 canDeleteHere()가 화면별로 따로 판정한다.
   function isAdminUser() {
+    if (!isOwnerUser() && permGroupOf()) return actGrantedHere();   /* hotfix476: 그룹에 넣은 사람은 등급이 아니라 그룹 표의 [수정] 칸으로 */
     if (isAdminEmail()) return true;
     return actGrantedHere();
   }
@@ -12992,8 +13002,8 @@ window.addEventListener('firebase-ready', () => {
   function permEmailKey(email) { return String(email || '').trim().toLowerCase().replace(/\./g, ','); }
   /* hotfix451(대표 지시 9/19): 품목(생지) 코드의 세부 권한 — 로스 % · 편직료 보기 / 판매 종료 · 수정 · 복제 · 편직 값 삭제. 기본은 최고관리자만이고, [권한 설정]의 사람별 표에서 허용한다 */
   const KNIT_SUB_PERMS = ['knitSetup.fee', 'knitSetup.act'];
-  function kfCanSeeFee() { return isOwnerUser() || personRule('knitSetup.fee') === 'allow'; }
-  function kfCanAct() { return isOwnerUser() || personRule('knitSetup.act') === 'allow'; }
+  function kfCanSeeFee() { return isOwnerUser() || personRule('knitSetup.fee') === 'allow' || (personRule('knitSetup.fee') === '' && pgHas('views', 'knitSetup.fee') === true); }   /* hotfix476: 그룹 */
+  function kfCanAct() { return isOwnerUser() || personRule('knitSetup.act') === 'allow' || (personRule('knitSetup.act') === '' && pgHas('views', 'knitSetup.act') === true); }
   function personRule(view, email) {
     const em = email != null ? email : (state.user && state.user.email);
     if (!em || !view) return '';
@@ -13007,6 +13017,38 @@ window.addEventListener('firebase-ready', () => {
     if (saved && ROLE_RANK[saved] !== undefined) return saved;
     return VIEW_PERMS_DEFAULT[view] || 'staff';
   }
+  // ============================================================
+  // hotfix476(대표 지시 9/25): 권한 그룹 — settings/permissions.groups = { 그룹id: { name, views:{화면:true}, edit:{화면:true}, del:{화면:true} } }
+  //   members = { 이메일키: 그룹id }. 그룹에 넣은 사람은 아래 PG_VIEWS 의 화면을 그룹 표대로 본다 (개인 예외가 먼저).
+  //   그룹 표에 없는 화면(첫 화면 overview 등)은 옛 방식 그대로라 화면이 비지 않는다
+  // ============================================================
+  const PG_CATS = [
+    { name: '기준정보관리', items: ['vendors', 'yarnSetup', 'knitSetup', 'knitSetup.fee', 'knitSetup.act', 'itemColors', 'itemPrints', 'users'] },
+    { name: '작업지시서', items: ['write'] },
+    { name: '생산 · 재고', items: ['yarnStock', 'knit', 'finish', 'print', 'bt', 'stockAdjust'] },
+    { name: '조회 · 통계', items: ['yarn', 'gs', 'fabricSpecs', 'moves', 'samples', 'of', 'claims', 'completed'] },
+    { name: '보고 (위 줄 단추)', items: ['completeReports', 'ceoReports', 'daily-report', 'kpiboard'] },
+    { name: '원가', items: ['costCalc', 'procSetup', 'procNew', 'procAlias', 'procAbbr', 'procRename', 'procVendor'] },
+    { name: '관리', items: ['stampSettings', 'specTol', 'cautionDrafts', 'permissions', 'editLog', 'trash', 'backup'] }
+  ];
+  const PG_VIEWS = PG_CATS.reduce((a, c) => a.concat(c.items), []);
+  // 세부 권한(화면이 아니라 그 화면 안의 일) — 보임 칸 하나로만 준다
+  const PG_SUB = ['knitSetup.fee', 'knitSetup.act', 'procNew', 'procAlias', 'procAbbr', 'procRename', 'procVendor', 'write', 'stockAdjust'];
+  // 의뢰서 화면 — [수정] 칸 = 의뢰서 수정 · 복사 · 완료 같은 작업 단추, [삭제] 칸 = 의뢰서 지우기
+  const PG_WO_VIEWS = ['yarn', 'knit', 'finish', 'print', 'bt', 'of', 'gs'];
+  function permGroupOf(email) {
+    const em = email != null ? email : (state.user && state.user.email);
+    if (!em || OWNER_EMAILS.includes(em)) return null;
+    const gid = (state.permMembers || {})[permEmailKey(em)];
+    const g = gid ? (state.permGroups || {})[gid] : null;
+    return (g && typeof g === 'object') ? g : null;
+  }
+  // 그룹 판정 — 그룹에 없는 사람이거나 그룹 표에 없는 화면이면 null (옛 방식으로)
+  function pgHas(kind, view) {
+    if (!view || !PG_VIEWS.includes(view) || OWNER_LOCKED_VIEWS.includes(view)) return null;
+    const g = permGroupOf(); if (!g) return null;
+    return !!((g[kind] || {})[view]);
+  }
   function canAccessView(view) {
     if (!view) return true;
     // hotfix422b: 비밀번호 변경 단추는 최고관리자만
@@ -13016,13 +13058,22 @@ window.addEventListener('firebase-ready', () => {
       const r = personRule(view);
       if (r === 'allow') return true;
       if (r === 'deny') return false;
+      const gv = pgHas('views', view);   /* hotfix476: 그룹 */
+      if (gv !== null) return gv;
     }
     return ROLE_RANK[userRole()] >= ROLE_RANK[viewMinRole(view)];
   }
   // hotfix398: 의뢰서 작성 · 복사 · 수정 권한 (기본 관리자까지, 사람별 허용/차단)
-  function canWriteWo() { return !!state.user && canAccessView('write'); }
+  function canWriteWo() {
+    if (!state.user) return false;
+    if (!isOwnerUser() && permGroupOf() && personRule('write') === '' && state.uiMode === 'dashboard') {   /* hotfix476: 그룹 — 의뢰서 화면에서는 그 화면의 [수정] 칸까지 */
+      const sc = currentDeleteScope();
+      if (PG_WO_VIEWS.includes(sc)) return canAccessView('write') && pgHas('edit', sc) === true;
+    }
+    return canAccessView('write');
+  }
   // hotfix398: 설정 화면의 코드(V · F · Y · P) 표시 = 최고관리자 + 그 화면을 허용받은 사람
-  function codeVisible(view) { return isOwnerUser() || personRule(view) === 'allow'; }
+  function codeVisible(view) { return isOwnerUser() || personRule(view) === 'allow' || pgHas('edit', view) === true; }   /* hotfix476: 그룹 [수정] */
   // hotfix410: 염/가공 설정 세부 권한 — 다섯 가지(procNew · procAlias · procAbbr · procRename · procVendor)를 등급 기본값 + 사람별 허용/차단으로 따로 본다
   //   최고관리자는 언제나 전부. 나머지는 [염/가공 설정] 자체를 볼 수 있어야 세부도 먹는다.
   const PROC_SUB_PERMS = ['procNew', 'procAlias', 'procAbbr', 'procRename', 'procVendor'];
@@ -13056,6 +13107,11 @@ window.addEventListener('firebase-ready', () => {
     if (!state.user) return false;
     const v = state.dashView || 'overview';
     if (ACT_EXCLUDED_VIEWS.includes(v)) return false;
+    if (!isOwnerUser() && permGroupOf()) {   /* hotfix476: 그룹 — 그 화면을 보고 [수정] 칸이 켜져 있어야 작업 단추 */
+      const sc = (v === 'overview') ? currentDeleteScope() : v;
+      const ge = pgHas('edit', sc);
+      if (ge !== null) return canAccessView(sc) && ge;
+    }
     return canAccessView(v);
   }
   // 진행 화면(원사·편직·염색가공·B/T)은 dashView가 전부 'overview'다 → 지금 보고 있는 유형으로 되짚는다
@@ -13076,6 +13132,8 @@ window.addEventListener('firebase-ready', () => {
   }
   function canDeleteHere(view) {
     if (isOwnerUser()) return true;
+    const v = view || currentDeleteScope();
+    if (!EDIT_VIEWS.includes(v)) { const gd = pgHas('del', v); if (gd !== null) return gd; }   /* hotfix476: 그룹 [삭제] 칸 (원단 스펙 · 거래처 삭제는 최고관리자 고정 그대로) */
     return ROLE_RANK[userRole()] >= ROLE_RANK[deleteMinRole(view)];
   }
   // 작성 화면은 의뢰서 유형으로 판정한다
@@ -13100,6 +13158,7 @@ window.addEventListener('firebase-ready', () => {
     const r = personRule(view);   // hotfix398: 화면을 사람별로 허용받았으면 고치기도 된다, 차단이면 안 된다
     if (r === 'allow') return true;
     if (r === 'deny') return false;
+    const ge = pgHas('edit', view); if (ge !== null) return ge && canAccessView(view);   /* hotfix476: 그룹 [수정] */
     return ROLE_RANK[userRole()] >= ROLE_RANK[editMinRole(view)];
   }
   // 영구 삭제·휴지통 복구는 등급 그대로 (Firestore 규칙이 관리자만 허용)
@@ -14198,6 +14257,7 @@ window.addEventListener('firebase-ready', () => {
         deletes: cleanDel,
         edits: cleanEdit,
         people: cleanPeople,
+        groups: state.permGroups || {}, members: state.permMembers || {},   /* hotfix476: 통째로 쓰는 문서 — 그룹 두 칸도 같이 실어 보낸다 (안 그러면 날아간다) */
         // hotfix325: 원사 성분(혼용율)을 관리자·직원에게 보일지 — 최고관리자가 켜고 끈다
         yarn_comp_open: !!state.yarnCompOpen,
         updated_at: serverTimestamp(),
@@ -14554,6 +14614,9 @@ window.addEventListener('firebase-ready', () => {
       state.viewDeletes = (snap.exists() && snap.data().deletes && typeof snap.data().deletes === 'object') ? snap.data().deletes : {};
       state.viewEdits = (snap.exists() && snap.data().edits && typeof snap.data().edits === 'object') ? snap.data().edits : {};   // hotfix383
       state.viewPeople = (snap.exists() && snap.data().people && typeof snap.data().people === 'object') ? snap.data().people : {};   // hotfix398
+      state.permGroups = (snap.exists() && snap.data().groups && typeof snap.data().groups === 'object') ? snap.data().groups : {};   /* hotfix476 */
+      state.permMembers = (snap.exists() && snap.data().members && typeof snap.data().members === 'object') ? snap.data().members : {};
+      state.permDocExists = snap.exists();
       if (typeof hwTopPaint === 'function') hwTopPaint();   // hotfix398: 사람별 권한이 바뀌면 상단 메뉴도 다시
       state.yarnCompOpen = !!(snap.exists() && snap.data().yarn_comp_open);
       applyMenuPermissions();
@@ -19896,7 +19959,7 @@ function validateBlendSum(blends, label) {
     }
     return out;
   }
-  if (typeof window !== 'undefined') window.__hf464 = { dev: checkSpecDeviation, devRib: (r, wo) => checkSpecDeviationRib(r, wo), show: qcWidthShow };   /* hotfix464: 검사용 창구 */
+  if (typeof window !== 'undefined') window.__hf464 = { dev: checkSpecDeviation, devRib: (r, wo) => checkSpecDeviationRib(r, wo), show: qcWidthShow, wv: qcWV };   /* hotfix464: 검사용 창구 */
   // 리프 규격이상 판정 — wo.rib 기준 + 리프 전용 허용치(rib_*)
   function checkSpecDeviationRib(ribData, wo) {
     const out = { width: null, weight: null, shrink: null, any: false };
@@ -20086,7 +20149,7 @@ function validateBlendSum(blends, label) {
       : ((typeof calcActualWidth === 'function') ? calcActualWidth(q.width_inch, !!q.width_double) : null);
     if (d && d.width) {
       const c = d.width.fail ? '#dc2626' : '#6b7280';
-      L.push(`<div class="ceo-report-line"><span class="ceo-report-k">폭</span> 실측 <strong style="color:${c};">${qcWidthShow(d.width)}</strong> / 허용 ${d.width.lo}~${d.width.hi}″ (기준 ${d.width.specMin}/${d.width.specMax}${d.width.tube ? ' · 튜브' : ''}) ${d.width.fail ? '<strong style="color:#dc2626;">규격 이상</strong>' : '<span style="color:#16a34a;">정상</span>'}</div>`);
+      L.push(`<div class="ceo-report-line"><span class="ceo-report-k">폭</span> 실측 <strong style="color:${c};">${qcWidthShow(d.width)}</strong> / 허용 ${qcWV(d.width).lo}~${qcWV(d.width).hi}″ (기준 ${qcWV(d.width).specMin}/${qcWV(d.width).specMax}${d.width.tube ? '″ 튜브' : ''}) ${d.width.fail ? '<strong style="color:#dc2626;">규격 이상</strong>' : '<span style="color:#16a34a;">정상</span>'}</div>`);
     } else if (aw != null) {
       L.push(`<div class="ceo-report-line"><span class="ceo-report-k">폭</span> 실측 <strong style="color:#6b7280;">${aw}″</strong> <span style="color:#9ca3af;">(기준 폭 없음 — 원단 기본 스펙에 등록하면 자동 판정)</span></div>`);
     }
@@ -22344,12 +22407,12 @@ function validateBlendSum(blends, label) {
       const line = (k, ok, txt) => `<div style="font-size:12px;margin:3px 0;color:${ok ? '#16a34a' : '#dc2626'};font-weight:700;">${ok ? '✓' : '⚠'} ${k} ${txt}</div>`;
       let rows = '';
       if (bodyDev) {
-        if (bodyDev.width) rows += line('폭', !bodyDev.width.fail, `실측 ${qcWidthShow(bodyDev.width)} (허용 ${bodyDev.width.lo}~${bodyDev.width.hi}″)`);
+        if (bodyDev.width) rows += line('폭', !bodyDev.width.fail, `실측 ${qcWidthShow(bodyDev.width)} (허용 ${qcWV(bodyDev.width).lo}~${qcWV(bodyDev.width).hi}″)`);
         if (bodyDev.weight) rows += line('중량', !bodyDev.weight.fail, `실측 ${bodyDev.weight.actual}g/y (허용 ${bodyDev.weight.lo}~${bodyDev.weight.hi})`);
         if (bodyDev.shrink) rows += line('축률', !bodyDev.shrink.fail, `폭 ${bodyDev.shrink.w == null ? '-' : bodyDev.shrink.w}% / 장 ${bodyDev.shrink.l == null ? '-' : bodyDev.shrink.l}% (기준 2.5% 이하)`);
       }
       if (ribDev) {
-        if (ribDev.width) rows += line('리프폭', !ribDev.width.fail, `실측 ${qcWidthShow(ribDev.width)} (허용 ${ribDev.width.lo}~${ribDev.width.hi}″)`);
+        if (ribDev.width) rows += line('리프폭', !ribDev.width.fail, `실측 ${qcWidthShow(ribDev.width)} (허용 ${qcWV(ribDev.width).lo}~${qcWV(ribDev.width).hi}″)`);
         if (ribDev.weight) rows += line('리프중량', !ribDev.weight.fail, `실측 ${ribDev.weight.actual}g/y (허용 ${ribDev.weight.lo}~${ribDev.weight.hi})`);
         if (ribDev.shrink) rows += line('리프축률', !ribDev.shrink.fail, `폭 ${ribDev.shrink.w == null ? '-' : ribDev.shrink.w}% / 장 ${ribDev.shrink.l == null ? '-' : ribDev.shrink.l}% (기준 2.5% 이하)`);
       }
@@ -28697,7 +28760,7 @@ function validateBlendSum(blends, label) {
     const devRow = (dev, qc) => {
       qc = qc || {};
       const rows = [];
-      if (dev && dev.width) { const cc = dev.width.fail ? '#dc2626' : '#16a34a'; rows.push(`<div class="ceo-report-line"><span class="ceo-report-k">폭</span> 실측 <strong style="color:${cc};">${qcWidthShow(dev.width)}</strong> / 허용 ${dev.width.lo}~${dev.width.hi}″ ${dev.width.fail ? '<strong style="color:#dc2626;">⚠</strong>' : '<span style="color:#16a34a;">정상</span>'}</div>`); }
+      if (dev && dev.width) { const cc = dev.width.fail ? '#dc2626' : '#16a34a'; rows.push(`<div class="ceo-report-line"><span class="ceo-report-k">폭</span> 실측 <strong style="color:${cc};">${qcWidthShow(dev.width)}</strong> / 허용 ${qcWV(dev.width).lo}~${qcWV(dev.width).hi}″ ${dev.width.fail ? '<strong style="color:#dc2626;">⚠</strong>' : '<span style="color:#16a34a;">정상</span>'}</div>`); }
       else if (qc.width_inch != null) { rows.push(`<div class="ceo-report-line"><span class="ceo-report-k">폭</span> 실측 ${qc.width_inch}″${qc.width_double ? ' (더블)' : ''}</div>`); }
       // 중량: 기준이 있으면 판정, 없으면 실측 스퀘어/야드중량 그대로 표시
       if (dev && dev.weight) { const cc = dev.weight.fail ? '#dc2626' : '#16a34a'; rows.push(`<div class="ceo-report-line"><span class="ceo-report-k">중량</span> 실측 <strong style="color:${cc};">${dev.weight.actual}g/y</strong> / 허용 ${dev.weight.lo}~${dev.weight.hi} ${dev.weight.fail ? '<strong style="color:#dc2626;">⚠</strong>' : '<span style="color:#16a34a;">정상</span>'}</div>`); }
@@ -28937,7 +29000,7 @@ function validateBlendSum(blends, label) {
         const rows = [];
         if (dev && dev.width) {
           const c = dev.width.fail ? '#dc2626' : '#6b7280';
-          rows.push(`<div class="ceo-report-line"><span class="ceo-report-k">폭</span> 실측 <strong style="color:${c};">${qcWidthShow(dev.width)}</strong> / 허용 ${dev.width.lo}~${dev.width.hi}″ (기준 ${dev.width.specMin}/${dev.width.specMax}${dev.width.tube ? ` · 튜브 ${dev.width.rawMin}/${dev.width.rawMax}×2` : ''}) ${dev.width.fail ? '<strong style="color:#dc2626;">이상</strong>' : '<span style="color:#16a34a;">정상</span>'}</div>`);
+          rows.push(`<div class="ceo-report-line"><span class="ceo-report-k">폭</span> 실측 <strong style="color:${c};">${qcWidthShow(dev.width)}</strong> / 허용 ${qcWV(dev.width).lo}~${qcWV(dev.width).hi}″ (기준 ${qcWV(dev.width).specMin}/${qcWV(dev.width).specMax}${dev.width.tube ? '″ 튜브' : ''}) ${dev.width.fail ? '<strong style="color:#dc2626;">이상</strong>' : '<span style="color:#16a34a;">정상</span>'}</div>`);
         }
         if (dev && dev.weight) {
           const c = dev.weight.fail ? '#dc2626' : '#6b7280';
@@ -28963,7 +29026,7 @@ function validateBlendSum(blends, label) {
           rows.push(`<div class="ceo-report-line" style="margin-top:5px;padding-top:5px;border-top:1px dashed #ddd6fe;"><span class="ceo-report-k" style="color:#7c3aed;font-weight:800;">리프</span></div>`);
           if (rb.width) {
             const c = rb.width.fail ? '#dc2626' : '#6b7280';
-            rows.push(`<div class="ceo-report-line"><span class="ceo-report-k">리프폭</span> 실측 <strong style="color:${c};">${qcWidthShow(rb.width)}</strong> / 허용 ${rb.width.lo}~${rb.width.hi}″ (기준 ${rb.width.specMin}/${rb.width.specMax}${rb.width.tube ? ` · 튜브 ${rb.width.rawMin}/${rb.width.rawMax}×2` : ''}) ${rb.width.fail ? '<strong style="color:#dc2626;">이상</strong>' : '<span style="color:#16a34a;">정상</span>'}</div>`);
+            rows.push(`<div class="ceo-report-line"><span class="ceo-report-k">리프폭</span> 실측 <strong style="color:${c};">${qcWidthShow(rb.width)}</strong> / 허용 ${qcWV(rb.width).lo}~${qcWV(rb.width).hi}″ (기준 ${qcWV(rb.width).specMin}/${qcWV(rb.width).specMax}${rb.width.tube ? '″ 튜브' : ''}) ${rb.width.fail ? '<strong style="color:#dc2626;">이상</strong>' : '<span style="color:#16a34a;">정상</span>'}</div>`);
           }
           if (rb.weight) {
             const c = rb.weight.fail ? '#dc2626' : '#6b7280';
@@ -29007,7 +29070,7 @@ function validateBlendSum(blends, label) {
         // hotfix149: 몸판 규격
         if (bodyDev && bodyDev.width) {
           const cc = bodyDev.width.fail ? '#dc2626' : '#6b7280';
-          rows.push(`<div class="ceo-report-line"><span class="ceo-report-k">폭</span> 실측 <strong style="color:${cc};">${qcWidthShow(bodyDev.width)}</strong> / 허용 ${bodyDev.width.lo}~${bodyDev.width.hi}″ ${bodyDev.width.fail ? '<strong style="color:#dc2626;">이상</strong>' : '<span style="color:#16a34a;">정상</span>'}</div>`);
+          rows.push(`<div class="ceo-report-line"><span class="ceo-report-k">폭</span> 실측 <strong style="color:${cc};">${qcWidthShow(bodyDev.width)}</strong> / 허용 ${qcWV(bodyDev.width).lo}~${qcWV(bodyDev.width).hi}″ ${bodyDev.width.fail ? '<strong style="color:#dc2626;">이상</strong>' : '<span style="color:#16a34a;">정상</span>'}</div>`);
         }
         if (bodyDev && bodyDev.weight) {
           const cc = bodyDev.weight.fail ? '#dc2626' : '#6b7280';
@@ -29022,7 +29085,7 @@ function validateBlendSum(blends, label) {
           const rL = [`<div class="ceo-report-line" style="margin-top:3px;"><span class="ceo-report-k" style="color:#7c3aed;font-weight:800;">리프</span></div>`];
           if (ribDev.width) {
             const cc = ribDev.width.fail ? '#dc2626' : '#6b7280';
-            rL.push(`<div class="ceo-report-line"><span class="ceo-report-k">리프폭</span> 실측 <strong style="color:${cc};">${qcWidthShow(ribDev.width)}</strong> / 허용 ${ribDev.width.lo}~${ribDev.width.hi}″ ${ribDev.width.fail ? '<strong style="color:#dc2626;">이상</strong>' : '<span style="color:#16a34a;">정상</span>'}</div>`);
+            rL.push(`<div class="ceo-report-line"><span class="ceo-report-k">리프폭</span> 실측 <strong style="color:${cc};">${qcWidthShow(ribDev.width)}</strong> / 허용 ${qcWV(ribDev.width).lo}~${qcWV(ribDev.width).hi}″ ${ribDev.width.fail ? '<strong style="color:#dc2626;">이상</strong>' : '<span style="color:#16a34a;">정상</span>'}</div>`);
           }
           if (ribDev.weight) {
             const cc = ribDev.weight.fail ? '#dc2626' : '#6b7280';
@@ -31008,7 +31071,7 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
             width: spN(src && src.width_inch, 1),
             width_double: !!(src && src.width_double),
             width_fail: !!(dev && dev.width && dev.width.fail),
-            width_tip: (dev && dev.width) ? `기준 ${dev.width.specMin}/${dev.width.specMax}″ · 실측 ${dev.width.actual}″` : '',
+            width_tip: (dev && dev.width) ? `기준 ${qcWV(dev.width).specMin}/${qcWV(dev.width).specMax}″${dev.width.tube ? ' 튜브' : ''} · 실측 ${qcWV(dev.width).actual}″` : '',
             gy: spN(src && src.weight_g_per_y, 0),
             gy_fail: !!(dev && dev.weight && dev.weight.fail),
             gy_tip: (dev && dev.weight) ? `기준 ${dev.weight.target}g/y (허용 ${dev.weight.lo}~${dev.weight.hi}) · 실측 ${dev.weight.actual}g/y` : '',
@@ -31031,8 +31094,148 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
   }
 
   // ===== hotfix260/261: 권한 관리 (최고관리자 전용) =====
+  // hotfix476: [권한 설정] = 위 [권한 그룹] (그룹 표 · 사람) + 아래 옛 방식(접힘)
   function renderPermissionsDash() {
     if (!isOwnerUser()) return `<div class="dash-empty">최고관리자만 볼 수 있는 화면입니다.</div>`;
+    return pgRender() + `<details id="pg-old" style="margin-top:26px;"${state.pgOldOpen ? ' open' : ''}><summary style="cursor:pointer;font-size:13px;font-weight:800;color:#6b7280;padding:8px 0;">옛 방식 (등급별 · 사람별 예외) — 그룹에 넣지 않은 사람에게만 먹습니다 · 사람별 예외는 그룹보다 먼저 먹습니다</summary>` + renderPermissionsDashOld() + `</details>`;
+  }
+  function pgDraft() {
+    if (!state.pgDraft) state.pgDraft = { groups: JSON.parse(JSON.stringify(state.permGroups || {})), members: JSON.parse(JSON.stringify(state.permMembers || {})) };
+    return state.pgDraft;
+  }
+  function pgDirty() { const d = state.pgDraft; if (!d) return false; return JSON.stringify(d.groups) !== JSON.stringify(state.permGroups || {}) || JSON.stringify(d.members) !== JSON.stringify(state.permMembers || {}); }
+  function pgLabel(v) { return (typeof HW_ERP_LABEL !== 'undefined' && HW_ERP_LABEL[v]) ? HW_ERP_LABEL[v] + ' (' + (VIEW_LABELS[v] || v) + ')' : (VIEW_LABELS[v] || v); }
+  function pgPeople() {
+    const seen = new Set(); const out = [];
+    (state.hwUsers || []).forEach(u => { const em = String((u && u.email) || '').trim(); if (!em || seen.has(em.toLowerCase())) return; seen.add(em.toLowerCase()); out.push({ name: u.name || '', email: em, role: OWNER_EMAILS.includes(em) ? 'owner' : ((ADMIN_EMAILS.includes(em) || u.role === 'admin') ? 'admin' : 'staff'), active: u.active !== false }); });
+    return out;
+  }
+  function pgRender() {
+    const d = pgDraft(); const ids = Object.keys(d.groups);
+    if (!state.pgTab) state.pgTab = 'group';
+    if (!state.pgSel || !d.groups[state.pgSel]) state.pgSel = ids[0] || '';
+    const tabBtn = (k, t) => `<button type="button" class="dash-action-btn pg-tab" data-pgtab="${k}" style="padding:8px 18px;font-weight:800;${state.pgTab === k ? 'background:#1e3a8a;color:#fff;border-color:#1e3a8a;' : ''}">${t}</button>`;
+    let h = `<div id="pg-box" style="max-width:980px;">
+      <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:12px 15px;margin-bottom:14px;font-size:12.5px;color:#1e3a8a;line-height:1.8;">
+        <strong>권한 그룹</strong> — ① [그룹]에서 그룹을 만들고 메뉴마다 <strong>보임 · 수정 · 삭제</strong>를 체크합니다. ② [사람]에서 직원마다 그룹을 고릅니다. ③ [저장].<br>
+        그룹에 넣은 사람은 <strong>그룹 표대로</strong> 왼쪽 카테고리와 메뉴가 보입니다. 그룹에 넣지 않은 사람은 아래 <strong>옛 방식</strong> 그대로입니다. 최고관리자는 언제나 전부입니다.<br>
+        <span style="color:#b45309;">서버 보안규칙은 그대로라서 <strong>의뢰서 삭제 · 설정 저장</strong>은 관리자 등급 계정만 실제로 됩니다. 직원 등급에게 삭제를 켜도 저장 단계에서 막힙니다.</span>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;">${tabBtn('group', '그룹')}${tabBtn('people', '사람')}
+        <span style="flex:1;"></span>${pgDirty() ? '<span id="pg-dirty" style="color:#b45309;font-weight:800;font-size:12.5px;">저장하지 않은 바뀜이 있습니다</span>' : ''}
+        <button type="button" class="dash-action-btn" id="pg-reset" style="padding:8px 14px;">되돌리기</button>
+        <button type="button" class="dash-action-btn" id="pg-save" style="background:#2563eb;color:#fff;font-weight:800;padding:8px 22px;">저장</button></div>`;
+    if (state.pgTab === 'people') h += pgRenderPeople(d);
+    else h += pgRenderGroup(d);
+    return h + `</div>`;
+  }
+  function pgRenderGroup(d) {
+    const ids = Object.keys(d.groups); const gid = state.pgSel; const g = gid ? d.groups[gid] : null;
+    let h = `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px;">
+      <span style="font-weight:800;font-size:13px;">그룹</span>
+      <select id="pg-sel" style="padding:6px 10px;min-width:180px;">${ids.length ? ids.map(i => `<option value="${escapeHtml(i)}"${i === gid ? ' selected' : ''}>${escapeHtml(d.groups[i].name || i)} (${Object.values(d.members).filter(x => x === i).length}명)</option>`).join('') : '<option value="">(그룹 없음)</option>'}</select>
+      <button type="button" class="dash-action-btn" id="pg-new" style="padding:6px 12px;">＋ 새 그룹</button>
+      ${g ? `<button type="button" class="dash-action-btn" id="pg-rename" style="padding:6px 12px;">이름 바꾸기</button>
+      <button type="button" class="dash-action-btn" id="pg-copy" style="padding:6px 12px;">복제</button>
+      <button type="button" class="dash-action-btn" id="pg-del" style="padding:6px 12px;color:#b91c1c;">그룹 지우기</button>` : ''}</div>`;
+    if (!g) return h + `<div class="dash-empty">[＋ 새 그룹]으로 그룹을 만드십시오. (예: 사무 · 현장 · 관리자)</div>`;
+    h += `<div class="dash-table-wrap"><table class="dash-table" id="pg-table"><thead><tr><th>카테고리 · 메뉴</th><th style="width:86px;text-align:center;">보임</th><th style="width:86px;text-align:center;">수정</th><th style="width:86px;text-align:center;">삭제</th><th>설명</th></tr></thead><tbody>`;
+    const cb = (kind, v, on, dis) => `<input type="checkbox" class="pg-cb" data-k="${kind}" data-v="${escapeHtml(v)}"${on ? ' checked' : ''}${dis ? ' disabled' : ''}>`;
+    PG_CATS.forEach((c, ci) => {
+      const catViews = c.items.filter(v => !OWNER_LOCKED_VIEWS.includes(v) && !PG_SUB.includes(v));
+      const allOn = catViews.length && catViews.every(v => (g.views || {})[v]);
+      h += `<tr style="background:#f1f5f9;"><td style="font-weight:800;">${escapeHtml(c.name)}</td><td style="text-align:center;">${catViews.length ? `<input type="checkbox" class="pg-cat" data-ci="${ci}"${allOn ? ' checked' : ''} title="이 카테고리 메뉴 전부 보임">` : ''}</td><td></td><td></td><td style="font-size:11.5px;color:#64748b;">${catViews.length ? '체크하면 이 카테고리의 메뉴가 전부 보입니다' : ''}</td></tr>`;
+      c.items.forEach(v => {
+        const locked = OWNER_LOCKED_VIEWS.includes(v); const sub = PG_SUB.includes(v);
+        const isWo = PG_WO_VIEWS.includes(v); const isEditV = EDIT_VIEWS.includes(v);
+        const note = locked ? '최고관리자만 (그룹으로 못 엶)'
+          : v === 'write' ? '의뢰서 새로 쓰기 · 복사 · 수정 (의뢰서 화면마다 [수정] 칸도 켜야 그 화면에서 수정)'
+          : sub ? '세부 권한 — 위 화면을 볼 수 있어야 먹습니다'
+          : isWo ? '수정 = 수정 · 복사 · 완료 같은 작업 단추 · 삭제 = 의뢰서 지우기'
+          : isEditV ? '수정 = 설정 고치기 · 삭제는 최고관리자만'
+          : '수정 = 이 화면의 작업 단추';
+        h += `<tr><td style="padding-left:22px;${sub ? 'color:#475569;font-size:12.5px;' : ''}">${sub ? '└ ' : ''}${escapeHtml(pgLabel(v))}</td>
+          <td style="text-align:center;">${locked ? '<span style="color:#9ca3af;">—</span>' : cb('views', v, (g.views || {})[v], false)}</td>
+          <td style="text-align:center;">${(locked || sub) ? '<span style="color:#9ca3af;">—</span>' : cb('edit', v, (g.edit || {})[v], false)}</td>
+          <td style="text-align:center;">${(locked || sub || isEditV) ? '<span style="color:#9ca3af;">—</span>' : cb('del', v, (g.del || {})[v], false)}</td>
+          <td style="font-size:11.5px;color:#64748b;">${note}</td></tr>`;
+      });
+    });
+    return h + `</tbody></table></div><div style="font-size:11.5px;color:#9ca3af;margin-top:6px;">[수정] · [삭제]를 켜면 [보임]도 같이 켜집니다. [보임]을 끄면 [수정] · [삭제]도 같이 꺼집니다.</div>`;
+  }
+  function pgRenderPeople(d) {
+    const ids = Object.keys(d.groups); const ppl = pgPeople();
+    let h = `<div class="dash-table-wrap"><table class="dash-table" id="pg-people"><thead><tr><th>이름</th><th>이메일</th><th style="width:90px;">계정 등급</th><th style="width:220px;">권한 그룹</th><th>알림</th></tr></thead><tbody>`;
+    if (!ppl.length) h += `<tr><td colspan="5" class="dash-empty">[사용자 관리]에 등록된 사람이 없습니다.</td></tr>`;
+    ppl.forEach(p => {
+      const key = permEmailKey(p.email); const cur = d.members[key] || ''; const g = cur ? d.groups[cur] : null;
+      const own = p.role === 'owner';
+      const personal = Object.keys((state.viewPeople || {})[key] || {}).length;
+      const warn = [];
+      if (g && p.role === 'staff' && Object.keys(g.del || {}).some(k => g.del[k])) warn.push('직원 등급 — 삭제는 서버 규칙에서 막힙니다');
+      if (personal) warn.push('옛 방식 사람별 예외 ' + personal + '개가 그룹보다 먼저 먹습니다');
+      h += `<tr${p.active ? '' : ' style="opacity:.55;"'}><td style="font-weight:700;">${escapeHtml(p.name)}</td><td style="font-size:12px;">${escapeHtml(p.email)}</td><td>${own ? '최고관리자' : (p.role === 'admin' ? '관리자' : '직원')}</td>
+        <td>${own ? '<span style="color:#9ca3af;">언제나 전부</span>' : `<select class="pg-mem" data-key="${escapeHtml(key)}" style="padding:5px 8px;width:100%;"><option value="">(그룹 없음 — 옛 방식)</option>${ids.map(i => `<option value="${escapeHtml(i)}"${i === cur ? ' selected' : ''}>${escapeHtml(d.groups[i].name || i)}</option>`).join('')}</select>`}</td>
+        <td style="font-size:11.5px;color:#b45309;">${warn.map(escapeHtml).join('<br>')}</td></tr>`;
+    });
+    return h + `</tbody></table></div>`;
+  }
+  function pgRerender() { const box = document.getElementById('pg-box'); if (!box) return; const y = window.scrollY; box.outerHTML = pgRender(); pgBind(); window.scrollTo(0, y); }
+  function pgBind() {
+    const box = document.getElementById('pg-box'); if (!box) return;
+    const old = document.getElementById('pg-old'); if (old && !old.__pg) { old.__pg = 1; old.addEventListener('toggle', () => { state.pgOldOpen = old.open; }); }
+    const d = pgDraft();
+    box.querySelectorAll('.pg-tab').forEach(b => b.addEventListener('click', () => { state.pgTab = b.dataset.pgtab; pgRerender(); }));
+    const sel = document.getElementById('pg-sel'); if (sel) sel.addEventListener('change', () => { state.pgSel = sel.value; pgRerender(); });
+    const nw = document.getElementById('pg-new'); if (nw) nw.addEventListener('click', () => {
+      const name = String(prompt('새 그룹 이름 (예: 사무 · 현장 · 관리자)') || '').trim(); if (!name) return;
+      if (Object.values(d.groups).some(x => x.name === name)) { toast('같은 이름의 그룹이 있습니다', 'error'); return; }
+      const id = 'g' + Date.now().toString(36); d.groups[id] = { name, views: {}, edit: {}, del: {} }; state.pgSel = id; pgRerender();
+    });
+    const rn = document.getElementById('pg-rename'); if (rn) rn.addEventListener('click', () => {
+      const g = d.groups[state.pgSel]; const name = String(prompt('그룹 이름', g.name || '') || '').trim(); if (!name || name === g.name) return;
+      if (Object.keys(d.groups).some(i => i !== state.pgSel && d.groups[i].name === name)) { toast('같은 이름의 그룹이 있습니다', 'error'); return; }
+      g.name = name; pgRerender();
+    });
+    const cp = document.getElementById('pg-copy'); if (cp) cp.addEventListener('click', () => {
+      const g = d.groups[state.pgSel]; const id = 'g' + Date.now().toString(36); let name = g.name + ' 복제'; let n = 2; while (Object.values(d.groups).some(x => x.name === name)) name = g.name + ' 복제' + (n++);
+      d.groups[id] = JSON.parse(JSON.stringify(Object.assign({}, g, { name }))); state.pgSel = id; pgRerender();
+    });
+    const dl = document.getElementById('pg-del'); if (dl) dl.addEventListener('click', () => {
+      const g = d.groups[state.pgSel]; const n = Object.values(d.members).filter(x => x === state.pgSel).length;
+      if (!confirm(`[${g.name}] 그룹을 지웁니다.` + (n ? `\n이 그룹의 ${n}명은 "그룹 없음(옛 방식)"으로 돌아갑니다.` : '') + '\n[저장]을 눌러야 반영됩니다.')) return;
+      Object.keys(d.members).forEach(k => { if (d.members[k] === state.pgSel) delete d.members[k]; });
+      delete d.groups[state.pgSel]; state.pgSel = ''; pgRerender();
+    });
+    box.querySelectorAll('.pg-cb').forEach(c => c.addEventListener('change', () => {
+      const g = d.groups[state.pgSel]; if (!g) return; const v = c.dataset.v, k = c.dataset.k;
+      ['views', 'edit', 'del'].forEach(x => { if (!g[x] || typeof g[x] !== 'object') g[x] = {}; });
+      if (c.checked) { g[k][v] = true; if (k !== 'views') g.views[v] = true; }
+      else { delete g[k][v]; if (k === 'views') { delete g.edit[v]; delete g.del[v]; } }
+      pgRerender();
+    }));
+    box.querySelectorAll('.pg-cat').forEach(c => c.addEventListener('change', () => {
+      const g = d.groups[state.pgSel]; if (!g) return; if (!g.views) g.views = {};
+      PG_CATS[+c.dataset.ci].items.filter(v => !OWNER_LOCKED_VIEWS.includes(v) && !PG_SUB.includes(v)).forEach(v => { if (c.checked) g.views[v] = true; else { delete g.views[v]; if (g.edit) delete g.edit[v]; if (g.del) delete g.del[v]; } });
+      pgRerender();
+    }));
+    box.querySelectorAll('.pg-mem').forEach(s => s.addEventListener('change', () => { if (s.value) d.members[s.dataset.key] = s.value; else delete d.members[s.dataset.key]; pgRerender(); }));
+    const rs = document.getElementById('pg-reset'); if (rs) rs.addEventListener('click', () => { state.pgDraft = null; pgRerender(); });
+    const sv = document.getElementById('pg-save'); if (sv) sv.addEventListener('click', async () => {
+      sv.disabled = true; sv.textContent = '저장 중...';
+      const groups = {}; Object.keys(d.groups).forEach(i => { const g = d.groups[i]; const cl = o => { const r = {}; Object.keys(o || {}).forEach(v => { if (o[v] === true && PG_VIEWS.includes(v) && !OWNER_LOCKED_VIEWS.includes(v)) r[v] = true; }); return r; }; groups[i] = { name: String(g.name || i), views: cl(g.views), edit: cl(g.edit), del: cl(g.del) }; });
+      const members = {}; Object.keys(d.members).forEach(k => { if (groups[d.members[k]]) members[k] = d.members[k]; });
+      try {
+        const ref = doc(db, C('settings'), 'permissions');
+        const body = { groups, members, updated_at: serverTimestamp(), updated_by: state.user?.email || 'unknown' };
+        if (state.permDocExists) await updateDoc(ref, body); else await setDoc(ref, body, { merge: true });   // 그룹 두 칸만 통째로 바꾼다 (옛 칸은 그대로)
+        state.permGroups = groups; state.permMembers = members; state.pgDraft = null;
+        toast('권한 그룹을 저장했습니다. 그 사람이 화면을 새로 고치면 바로 먹습니다', 'success');
+      } catch (e) { toast('권한 그룹 저장 실패: ' + e.message, 'error'); }
+      pgRerender();
+    });
+  }
+  function renderPermissionsDashOld() {
     const groups = [
       ['진행 상황', ['yarn', 'yarnStock', 'knit', 'finish', 'print', 'bt', 'kpiboard']],
       ['보고', ['completeReports', 'ceoReports', 'daily-report']],
@@ -48211,6 +48414,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
       document.querySelectorAll('#dash-body .perm-del').forEach(sel => { sel.value = 'owner'; });
       toast('삭제 권한을 전부 [대표만]으로 맞췄습니다. [저장]을 눌러 주세요', 'success');
     });
+    try { pgBind(); } catch (e) { console.warn('[pg bind]', e.message); }   /* hotfix476 */
     const permSaveEl = document.getElementById('perm-save');
     if (permSaveEl) permSaveEl.addEventListener('click', async () => {
       const next = permCollectFromScreen();
@@ -49559,10 +49763,10 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
         if (ribDev && ribDev.any) specDev.rib = ribDev;  // 리프 편차 동봉(저장·표시용)
         if (specDev.any || (ribDev && ribDev.any)) {
           const lines = [];
-          if (specDev.width && specDev.width.fail) lines.push(`· 몸판 폭 ${qcWidthShow(specDev.width)} (기준 ${specDev.width.specMin}/${specDev.width.specMax}″ → 허용 ${specDev.width.lo}~${specDev.width.hi}″)`);
+          if (specDev.width && specDev.width.fail) lines.push(`· 몸판 폭 ${qcWidthShow(specDev.width)} (기준 ${qcWV(specDev.width).specMin}/${qcWV(specDev.width).specMax}″ → 허용 ${qcWV(specDev.width).lo}~${qcWV(specDev.width).hi}″)`);
           if (specDev.weight && specDev.weight.fail) lines.push(`· 몸판 중량 ${specDev.weight.actual}g/y (기준 ${specDev.weight.target} → 허용 ${specDev.weight.lo}~${specDev.weight.hi})`);
           if (specDev.shrink && specDev.shrink.fail) lines.push(`· 몸판 축률 폭 ${specDev.shrink.w == null ? '-' : specDev.shrink.w}% / 장 ${specDev.shrink.l == null ? '-' : specDev.shrink.l}%`);
-          if (ribDev && ribDev.width && ribDev.width.fail) lines.push(`· 리프 폭 ${qcWidthShow(ribDev.width)} (기준 ${ribDev.width.specMin}/${ribDev.width.specMax}″ → 허용 ${ribDev.width.lo}~${ribDev.width.hi}″)`);
+          if (ribDev && ribDev.width && ribDev.width.fail) lines.push(`· 리프 폭 ${qcWidthShow(ribDev.width)} (기준 ${qcWV(ribDev.width).specMin}/${qcWV(ribDev.width).specMax}″ → 허용 ${qcWV(ribDev.width).lo}~${qcWV(ribDev.width).hi}″)`);
           if (ribDev && ribDev.weight && ribDev.weight.fail) lines.push(`· 리프 중량 ${ribDev.weight.actual}g/y (기준 ${ribDev.weight.target} → 허용 ${ribDev.weight.lo}~${ribDev.weight.hi})`);
           if (ribDev && ribDev.shrink && ribDev.shrink.fail) lines.push(`· 리프 축률 폭 ${ribDev.shrink.w == null ? '-' : ribDev.shrink.w}% / 장 ${ribDev.shrink.l == null ? '-' : ribDev.shrink.l}%`);
           const holdMsg = `규격 이상입니다.\n\n[${wo.wo_number || ''}] "${cName}"\n${lines.join('\n')}\n\n이 원단은 완료되지 않고\n대표 보고함으로 보고됩니다.\n대표가 보고함에서 확인·처리해야 완료됩니다.\n\n계속할까요?`;
@@ -50975,7 +51179,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix474';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
+  const VERSION = 'v2.53 hotfix476';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
