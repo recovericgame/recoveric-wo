@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="HIWOS">
 <meta name="mobile-web-app-capable" content="yes">
-<title>RECOVERIC HIWOS v2.53 hotfix486</title>
+<title>RECOVERIC HIWOS v2.53 hotfix487</title>
 
 <!-- PWA Manifest (인라인 data URL) -->
 <link rel="manifest" id="pwa-manifest">
@@ -9300,6 +9300,19 @@ function yarnNameClean(v) {
   }).trim();
 }
 if (typeof window !== 'undefined') window.__yarnNameClean = yarnNameClean;
+/* hotfix487(대표 지시 9/25): 구매처를 고르면 사종명 뒤에 (업체 짧은 이름) — 면20수_1% + GSY 김윤철 실장님 → 면20수_1%(GSY) */
+function yarnBrandShort(v) {
+  let t = String(v || '').trim().replace(/\(주\)|주식회사|㈜/g, '').trim(); t = (t.split(/\s+/)[0] || '').trim();
+  const c = t.replace(/(방직|섬유|텍스타일|텍스|산업|상사|무역)$/u, '').trim(); return (c.length >= 2 ? c : t);
+}
+function yarnAutoBase(base, brand) {
+  const b = String(base || '').trim(); const sh = yarnBrandShort(brand); if (!b || !sh) return b;
+  const known = new Set([sh]); try { ((typeof state !== 'undefined' && state.vendors) || []).forEach(v => { if (v && v.name && vendorTypeMatch(v, '원사 구매처')) known.add(yarnBrandShort(v.name)); }); } catch (_) {}
+  const m = /^(.*?)\s*[(（]([^()（）]*)[)）]$/.exec(b);
+  if (m && known.has(String(m[2]).trim())) return String(m[1]).trim() + '(' + sh + ')';
+  return b + '(' + sh + ')';
+}
+if (typeof window !== 'undefined') { window.__yarnAutoBase = yarnAutoBase; window.__yarnBrandShort = yarnBrandShort; }
 function yarnFullName(base, color, brand) {
   const b = String(base || '').trim(), c = String(color || '').trim(), br = String(brand || '').trim();
   return yarnNameClean(b + (yarnColorIsLW(c) ? '' : ' ' + c) + (br ? ' (' + br + ')' : ''));
@@ -34760,6 +34773,7 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
     return out;
   }
   // 원사 설정 등록 창(작게) — 저장하면 onDone(저장 이름)
+  if (typeof window !== 'undefined') window.__openYarnQuickAdd = (p, cb) => openYarnQuickAdd(p, cb);   /* hotfix487: 검사용 창구 */
   function openYarnQuickAdd(pre, onDone) {
     if (!isOwnerUser()) { toast('최고관리자만 사종을 넣을 수 있습니다', 'error'); return; }
     const old = document.getElementById('yq-modal'); if (old) old.remove();
@@ -34772,18 +34786,18 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
     const m = document.createElement('div'); m.id = 'yq-modal';
     m.style.cssText = 'position:fixed;inset:0;z-index:700;background:rgba(15,23,42,.45);display:flex;align-items:center;justify-content:center;';
     m.innerHTML = `<div style="background:#fff;border-radius:12px;width:min(560px,94vw);padding:18px 20px;box-shadow:0 20px 50px rgba(0,0,0,.3);">
-      <div style="display:flex;align-items:center;gap:14px;margin-bottom:10px;"><div style="font-size:15px;font-weight:800;color:#0f172a;">원사 등록</div>
-        <label style="font-size:12.5px;font-weight:700;display:inline-flex;align-items:center;gap:4px;cursor:pointer;"><input type="radio" name="yq-mode" value="new" checked> 신규 원사</label>
+      <div style="display:flex;align-items:center;gap:14px;margin-bottom:10px;"><div style="font-size:15px;font-weight:800;color:#0f172a;">사종 추가</div>
+        <label style="font-size:12.5px;font-weight:700;display:inline-flex;align-items:center;gap:4px;cursor:pointer;"><input type="radio" name="yq-mode" value="new" checked> 새 사종</label>
         <label style="font-size:12.5px;font-weight:700;display:inline-flex;align-items:center;gap:4px;cursor:pointer;"><input type="radio" name="yq-mode" value="sync"> 기존 원사와 동기화</label></div>
       <div id="yq-new">
-        <div style="font-size:12px;color:#64748b;margin-bottom:10px;white-space:nowrap;">[원사 설정]에 새 사종을 넣고 이 줄에 바로 고릅니다.</div>
+        <div style="font-size:12px;color:#64748b;margin-bottom:10px;white-space:nowrap;">[원사 코드]에 새 사종을 넣고 이 줄에 바로 고릅니다. 구매처를 고르면 사종명 뒤에 (업체)가 붙습니다.</div>
         <div style="display:grid;grid-template-columns:.8fr 1.4fr;gap:8px 10px;margin-bottom:8px;">
           <div>${lab('구분')}<select id="yq-kind" style="${iS}">${YARN_KINDS.map(k => `<option value="${k}"${k === (p.kind || '면') ? ' selected' : ''}>${escapeHtml(YARN_KIND_LABEL[k] || k)}</option>`).join('')}</select></div>
           <div>${lab('사종 *')}<input id="yq-base" lang="ko" value="${escapeHtml(typed)}" placeholder="예: 코마20수" style="${iS}font-weight:800;"></div>
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 10px;margin-bottom:8px;">
-          <div>${lab('컬러 (비우면 L/W)')}<input id="yq-color" lang="ko" placeholder="예: 8% · 3%" style="${iS}"></div>
-          <div>${lab('브랜드')}<input id="yq-brand" lang="ko" placeholder="예: 씨엔티" style="${iS}"></div>
+          <div>${lab('컬러')}<input id="yq-color" lang="ko" placeholder="비우면 L/W (예: 8%)" style="${iS}"></div>
+          <div>${lab('구매처')}<select id="yq-brand" style="${iS}">${vendorOptionsHTML('원사 구매처', '')}</select></div>
         </div>
         <div style="margin-bottom:12px;">${lab('소재 (성분) — 예: 면 100 · 폴리에스터 65 / 면 35')}<input id="yq-comp" lang="ko" placeholder="비우면 나중에 [원사 설정]에서" style="${iS}"></div>
       </div>
@@ -34792,7 +34806,7 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
         <div style="display:grid;grid-template-columns:.8fr 1.2fr 1.2fr;gap:8px 10px;margin-bottom:12px;">
           <div>${lab('구분')}<select id="yq-s-kind" style="${iS}"><option value="">전체</option>${YARN_KINDS.map(k => `<option value="${k}"${k === (p.kind || '') ? ' selected' : ''}>${escapeHtml(YARN_KIND_LABEL[k] || k)}</option>`).join('')}</select></div>
           <div>${lab('기존 사종 (글자 검색)')}<input id="yq-s-base" lang="ko" list="yq-s-list" autocomplete="off" placeholder="예: 코마10수" style="${iS}font-weight:800;"><datalist id="yq-s-list"></datalist></div>
-          <div>${lab('컬러 (브랜드)')}<select id="yq-s-color" style="${iS}"><option value="">컬러 …</option></select></div>
+          <div>${lab('컬러 (구매처)')}<select id="yq-s-color" style="${iS}"><option value="">컬러 …</option></select></div>
         </div>
       </div>
       <div style="display:flex;gap:8px;justify-content:flex-end;">
@@ -34817,6 +34831,7 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
     q('yq-s-base').addEventListener('input', sColors);
     try { attachPickList(q('yq-s-base'), () => sBases()); } catch (_) {}
     sList(); sColors();
+    q('yq-brand').addEventListener('change', () => { if (q('yq-brand').value) q('yq-base').value = yarnAutoBase(q('yq-base').value, q('yq-brand').value); });   /* hotfix487 */
     q('yq-cancel').addEventListener('click', () => m.remove());
     m.addEventListener('click', e => { if (e.target === m) m.remove(); });
     setTimeout(() => q(typed ? 'yq-color' : 'yq-base').focus(), 50);
@@ -34836,7 +34851,7 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
         }
         m.remove(); if (typeof onDone === 'function') onDone(nm); return;
       }
-      const base = q('yq-base').value.trim(); if (!base) { toast('사종을 넣어 주십시오', 'error'); return; }
+      const base = (q('yq-brand').value ? yarnAutoBase(q('yq-base').value, q('yq-brand').value) : q('yq-base').value.trim()); if (!base) { toast('사종을 넣어 주십시오', 'error'); return; }
       let color = q('yq-color').value.trim(); if (yarnColorIsLW(color)) color = YARN_LW;
       const brand = q('yq-brand').value.trim(); const kind = q('yq-kind').value || '기타';
       const name = yarnFullName(base, color, brand);
@@ -41644,7 +41659,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
           <div id="cp-f-name-wrap"><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">사종</label>
             <input type="text" id="cp-f-name" autocomplete="off" style="${st}" placeholder="예: CM30수 · DTY_150/48 (띄어쓰기는 _ 로 바뀝니다)">
             <div style="display:flex;gap:8px;margin-top:8px;">
-              <div style="flex:1;"><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">컬러 <span style="font-weight:400;color:#9ca3af;font-size:11px;">— L/W 면 비움 · 선염 컬러만 (134% 같은 규격 글자는 컬러가 아닙니다)</span></label>
+              <div style="flex:1;"><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">컬러</label>
                 <select id="cp-f-color-sel" style="${st}"><option value="L/W">L/W (로화이트)</option><option value="1%">1%</option><option value="8%">8%</option><option value="13%">13%</option><option value="__custom">직접 입력…</option></select>
                 <input type="text" id="cp-f-color" autocomplete="off" style="${st}margin-top:6px;display:none;" placeholder="컬러 직접 입력 (예: 5%)"></div>
               <div style="flex:1;"><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;"><span title="원사 설정에만 보입니다 · 의뢰서엔 컬러만">구매처</span></label>
@@ -49081,6 +49096,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
           // hotfix396: 브랜드는 거래처 관리의 [원사 구매처] 목록에서 고른다 (가나다·ABC 순). 옛 값이 명단에 없으면 "(거래처 미등록)" 으로 붙여 보여 준다
           document.getElementById('cp-f-brand').innerHTML = vendorOptionsHTML('원사 구매처', isNew ? '' : pt.brand);
           const paintFull = () => { const el = document.getElementById('cp-f-fullname'); if (el) { const nm = yarnFullName(document.getElementById('cp-f-name').value, document.getElementById('cp-f-color').value, document.getElementById('cp-f-brand').value); el.textContent = nm ? '저장 이름: ' + nm : ''; } };
+          { const bEl = document.getElementById('cp-f-brand'); if (bEl) bEl.addEventListener('change', () => { const nEl = document.getElementById('cp-f-name'); if (nEl && bEl.value) { nEl.value = yarnAutoBase(nEl.value, bEl.value); paintFull(); } }); }   /* hotfix487 */
           ['cp-f-name', 'cp-f-color', 'cp-f-brand'].forEach(id => { const el = document.getElementById(id); if (el) { el.oninput = paintFull; el.onchange = paintFull; } });
           paintFull(); }
         document.getElementById('cp-f-kind').value = cur.kind || '기타';
@@ -52041,7 +52057,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix486';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
+  const VERSION = 'v2.53 hotfix487';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
