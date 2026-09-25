@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="HIWOS">
 <meta name="mobile-web-app-capable" content="yes">
-<title>RECOVERIC HIWOS v2.53 hotfix482</title>
+<title>RECOVERIC HIWOS v2.53 hotfix483</title>
 
 <!-- PWA Manifest (인라인 data URL) -->
 <link rel="manifest" id="pwa-manifest">
@@ -6722,6 +6722,26 @@
   html body .hwside-head { min-height: 64px; }
   html body .dash-table-wrap:has(> .kf-table) { max-height: calc(100vh - 356px); }
 </style>
+
+<style id="hf483">
+  /* hotfix483: 화면 크기 90% (계정 메뉴에서 100% 로 바꿀 수 있음) */
+  @media (min-width: 900px) {   /* 폰 · 좁은 화면은 그대로 */
+    html.hw-z90 body { zoom: 0.9; }
+    html.hw-z90 .app { height: calc(100vh / 0.9); }
+    html.hw-z90 body .dash-table-wrap:has(> .kf-table) { max-height: calc(100vh / 0.9 - 356px); }
+  }
+  /* 완료 초록 · 불량 빨강 */
+  html body .hwico.c { color: #16a34a !important; }
+  html body .hwico.b { color: #dc2626 !important; }
+  /* 일일 체크 및 전송 — 옅은 노랑 */
+  html body .hwsub .hwchk.d { background: #fef3c7; color: #b45309; border-color: #fcd34d; }
+  html body .hwsub .hwchk.d .n { background: #f59e0b; color: #fff; }
+  /* 다른 사람 화면으로 보기 */
+  html body .hwdrop .hwme.hwva:hover { background: #eef2ff; border-radius: 6px; color: #1e3a8a; }
+  #hw-viewas-bar { position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 9000; background: #1e3a8a; color: #fff; padding: 9px 16px; border-radius: 10px; font-size: 13px; box-shadow: 0 8px 24px rgba(15,23,42,.35); display: flex; align-items: center; gap: 12px; }
+  #hw-viewas-bar button { border: 0; border-radius: 7px; padding: 6px 12px; font-weight: 800; cursor: pointer; background: #fff; color: #1e3a8a; font-family: inherit; }
+</style>
+<script>/* hotfix483: 화면 크기 — 첫 화면부터 */ try { if (localStorage.getItem('hiwos.zoom') !== '100') document.documentElement.classList.add('hw-z90'); } catch (e) { document.documentElement.classList.add('hw-z90'); }</script>
 </head>
 <body>
 
@@ -7446,7 +7466,10 @@ const __wrappedUpdateDoc = __withWriteTimeout(function (ref, updates) {
 const __wrappedSetDoc = __withWriteTimeout(setDoc);
 const __wrappedDeleteDoc = __withWriteTimeout(deleteDoc);
 
-window.firebase = { auth, db, provider, signInWithPopup, signOut, onAuthStateChanged, collection, addDoc: __wrappedAddDoc, updateDoc: __wrappedUpdateDoc, deleteDoc: __wrappedDeleteDoc, doc, getDoc, getDocs, setDoc: __wrappedSetDoc, deleteField, writeBatch, query, orderBy, onSnapshot, serverTimestamp, runTransaction, C };
+// hotfix483: 최고관리자가 [다른 사람 화면으로 보기] 중이면 쓰기를 모두 막는다 (보기 전용)
+const __vaGuard = f => function () { if (window.__hwViewAs) return Promise.reject(new Error('다른 사람 화면으로 보는 중 — 보기 전용이라 저장하지 않습니다')); return f.apply(this, arguments); };
+const __vaBatch = function () { const b = writeBatch.apply(this, arguments); if (b && typeof b.commit === 'function') { const c = b.commit.bind(b); b.commit = __vaGuard(c); } return b; };
+window.firebase = { auth, db, provider, signInWithPopup, signOut, onAuthStateChanged, collection, addDoc: __vaGuard(__wrappedAddDoc), updateDoc: __vaGuard(__wrappedUpdateDoc), deleteDoc: __vaGuard(__wrappedDeleteDoc), doc, getDoc, getDocs, setDoc: __vaGuard(__wrappedSetDoc), deleteField, writeBatch: __vaBatch, query, orderBy, onSnapshot, serverTimestamp, runTransaction: __vaGuard(runTransaction), C };
 window.dispatchEvent(new Event('firebase-ready'));
 </script>
 
@@ -8535,12 +8558,14 @@ function mountProcPicker(host, opts) {
   return host;
 }
 // hotfix419: 글자 검색 목록 상자 — datalist 대신. 포커스하면 전체, 글자를 적으면 포함하는 것만, 클릭하면 고른다
+// hotfix483: 화면 크기(zoom) — 화면에서 잰 좌표를 CSS 좌표로 바꿀 때 나눈다
+function hwZf() { try { return parseFloat(getComputedStyle(document.body).zoom) || 1; } catch (_) { return 1; } }
 function attachPickList(inp, itemsFn, onPick) {
   if (!inp || inp.dataset.pickBound) return; inp.dataset.pickBound = '1';
   let box = null;
   // hotfix422d: 내 상자만 닫는다 (다른 칸의 목록 상자를 지우지 않게)
   // hotfix424: 화면(폼)이 스크롤되면 목록 상자가 제자리에 남아 엉뚱한 곳에 떠 있던 것 — 스크롤 · 창 크기 바뀜 때 다시 자리 잡고, 칸이 안 보이면 닫는다
-  const place = () => { if (!box || !box.isConnected) return; const r = inp.getBoundingClientRect(); if (r.bottom < 0 || r.top > window.innerHeight) { close(); return; } box.style.left = r.left + 'px'; box.style.top = (r.bottom + 2) + 'px'; box.style.minWidth = Math.max(180, r.width) + 'px'; };
+  const place = () => { if (!box || !box.isConnected) return; const r = inp.getBoundingClientRect(); if (r.bottom < 0 || r.top > window.innerHeight) { close(); return; } const z = hwZf(); box.style.left = (r.left / z) + 'px'; box.style.top = ((r.bottom + 2) / z) + 'px'; box.style.minWidth = Math.max(180, r.width / z) + 'px'; };
   const onScroll = () => place();
   const close = () => { if (box && box.isConnected) box.remove(); box = null; document.removeEventListener('scroll', onScroll, true); window.removeEventListener('resize', onScroll); };
   const open = () => {
@@ -8553,7 +8578,7 @@ function attachPickList(inp, itemsFn, onPick) {
     const hits = items.filter(t => !q || vendorKey(t).includes(q)).slice(0, 60);
     if (!hits.length) { close(); return; }
     if (!box || !box.isConnected) { close(); box = document.createElement('div'); box.className = 'pick-list'; box.style.cssText = 'position:fixed;z-index:9999;background:#fff;border:1px solid #cbd5e1;border-radius:7px;box-shadow:0 10px 30px rgba(15,23,42,.18);max-height:260px;overflow:auto;font-size:13px;'; document.body.appendChild(box); }
-    const r = inp.getBoundingClientRect(); box.style.left = r.left + 'px'; box.style.top = (r.bottom + 2) + 'px'; box.style.minWidth = Math.max(180, r.width) + 'px'; box.style.maxHeight = '260px'; box.style.overflowY = 'auto';
+    const r = inp.getBoundingClientRect(); const z = hwZf(); box.style.left = (r.left / z) + 'px'; box.style.top = ((r.bottom + 2) / z) + 'px'; box.style.minWidth = Math.max(180, r.width / z) + 'px'; box.style.maxHeight = '260px'; box.style.overflowY = 'auto';
     document.removeEventListener('scroll', onScroll, true); document.addEventListener('scroll', onScroll, true); window.removeEventListener('resize', onScroll); window.addEventListener('resize', onScroll);
     box.innerHTML = hits.map(t => `<div class="pick-item" style="padding:6px 10px;cursor:pointer;white-space:nowrap;">${escapeHtml(t)}</div>`).join('');
     box.querySelectorAll('.pick-item').forEach(d => d.addEventListener('mousedown', ev => { ev.preventDefault(); inp.value = d.textContent; close(); inp.__pickSkip = true; inp.dispatchEvent(new Event('input', { bubbles: true })); inp.__pickSkip = false; inp.dispatchEvent(new Event('change', { bubbles: true })); if (typeof onPick === 'function') onPick(d.textContent); }));
@@ -12929,6 +12954,13 @@ window.addEventListener('firebase-ready', () => {
       
       // 정상 로그인
       state.user = user;
+      /* hotfix483: 최고관리자의 [다른 사람 화면으로 보기] — 이 창(탭)에서만. 보기 전용(쓰기는 모듈에서 막음) */
+      try { const va = sessionStorage.getItem('hiwos.viewas');
+        if (va && OWNER_EMAILS.map(x => x.toLowerCase()).includes(String(user.email || '').toLowerCase())) {
+          const u = (state.hwUsers || []).find(x => x && String(x.email || '').toLowerCase() === va.toLowerCase());
+          if (u) { state.realUser = user; state.user = { email: String(u.email).toLowerCase(), displayName: u.name || u.email, uid: 'viewas' }; window.__hwViewAs = { email: u.email, name: u.name || u.email, role: u.role || '' }; }
+          else sessionStorage.removeItem('hiwos.viewas');
+        } } catch (_) {}
       state.codeMapWritable = isAdminEmail();   // hotfix392: settings/code_map 은 관리자 이상만 씀 (보안규칙과 같음)
       window.__hiwosWoCache = (id) => (Array.isArray(state.allWorkOrders) ? state.allWorkOrders.find(w => w && w.id === id) : null) || null;   // hotfix394: 이력용 전 값
       document.getElementById('login-screen').style.display = 'none';
@@ -13548,7 +13580,7 @@ window.addEventListener('firebase-ready', () => {
     d.style.left = '';
     const r = d.getBoundingClientRect();
     const over = r.right - (window.innerWidth - 8);
-    if (over > 0) d.style.left = (-Math.min(over, r.left - 8)) + 'px';
+    if (over > 0) d.style.left = (-Math.min(over, r.left - 8) / hwZf()) + 'px';
   }
   function hwOpen(it) {
     clearTimeout(hwCloseAll._t);
@@ -13617,6 +13649,19 @@ window.addEventListener('firebase-ready', () => {
     box: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 7.5L12 3l8.5 4.5v9L12 21l-8.5-4.5z"/><path d="M3.5 7.5L12 12l8.5-4.5M12 12v9"/></svg>',
     pen: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z"/></svg>'
   };
+  // hotfix483: 화면 크기 (이 PC 에 기억 · 처음 값 90%)
+  function hwZoom() { let z = null; try { z = localStorage.getItem('hiwos.zoom'); } catch (_) {} return z === '100' ? '100' : '90'; }
+  function hwZoomSet(z) { try { localStorage.setItem('hiwos.zoom', z === '100' ? '100' : '90'); } catch (_) {} hwZoomApply(); }
+  function hwZoomApply() { document.documentElement.classList.toggle('hw-z90', hwZoom() === '90'); }
+  hwZoomApply();
+  // hotfix483: 다른 사람 화면으로 보는 중 띠
+  function hwViewAsBar() {
+    const va = window.__hwViewAs; let bar = document.getElementById('hw-viewas-bar');
+    if (!va) { if (bar) bar.remove(); return; }
+    if (!bar) { bar = document.createElement('div'); bar.id = 'hw-viewas-bar'; document.body.appendChild(bar); }
+    bar.innerHTML = '<b>' + escapeHtml(va.name) + '</b> (' + escapeHtml(roleLabel(va.role)) + ') 화면으로 보는 중 — 보기 전용이라 저장 · 삭제는 되지 않습니다 <button type="button" id="hw-viewas-back">내 화면으로 돌아가기</button>';
+    bar.querySelector('#hw-viewas-back').addEventListener('click', () => { try { sessionStorage.removeItem('hiwos.viewas'); } catch (_) {} location.reload(); });
+  }
   function hwTopPaint() {
     // hotfix422a: 다른 스코프(코드 요청 · 구독)에서 다시 그리기
     if (typeof window !== 'undefined') window.__hwTopPaint = hwTopPaint;
@@ -13646,7 +13691,7 @@ window.addEventListener('firebase-ready', () => {
       sub += '<button type="button" class="hwchk d" data-hwview="daily-report">' + HW_ICO.send + '<span>' + (nw ? '일일' : '일일 체크 및 전송') + '</span>' + (n ? '<span class="n">' + escapeHtml(n) + '</span>' : '') + '</button>';
     }
     if (canAccessView('knit')) sub += '<button type="button" class="hwchk g' + (cur === 'knit' ? ' cur' : '') + '" data-hwview="knit" title="생지생산 및 재고">' + HW_ICO.box + '<span>생지 재고</span></button>';   // hotfix481: 새 단추
-    if (isOwnerUser()) {   // hotfix383: [수정 발생 N]
+    if (false && isOwnerUser()) {   // hotfix483(대표 지시): [수정 발생] 단추 없앰 — [관리] → [수정 이력]에서 봄
       const n = editLogUnseen();
       sub += '<button type="button" class="hwchk e' + (cur === 'editLog' ? ' cur' : '') + '" data-hwview="editLog" title="관리자·직원이 원단 스펙·거래처를 고친 이력">' + HW_ICO.pen + '<span>' + (nw ? '수정' : '수정 발생') + '</span>' + (n ? '<span class="n">' + n + '</span>' : '') + '</button>';
     }
@@ -13658,7 +13703,7 @@ window.addEventListener('firebase-ready', () => {
         /* hotfix482(대표 지시): 위 줄의 [경영 자료 비밀번호 만들기] 단추는 없앰 — [관리] → [권한 설정] 아래 단추로 만든다 */
       } else if (state.ownerUnlocked) {
       } else {
-        r += '<button type="button" class="hwlock shut" data-hwlock="unlock" title="최고관리자 영역이 잠겨 있습니다. 누르면 엽니다.">' + OWNER_ICO_LOCK + '</button>';
+        /* hotfix483(대표 지시): 위 줄 자물쇠 단추 없앰 — 잠긴 화면을 열면 그 자리에서 비밀번호를 묻는다 */
       }
     }
     const meName = hwMyName();
@@ -13668,11 +13713,15 @@ window.addEventListener('firebase-ready', () => {
       + '<button type="button" class="hwacct hwme2"><span class="av">' + escapeHtml(String(meName || '?').trim().slice(0, 1)) + '</span><span class="tx"><b>' + escapeHtml(meName) + ' <span class="rl">' + escapeHtml(meRole) + '</span></b><small>' + escapeHtml(hwMyEmail()) + '</small></span><span class="hwcaret"></span></button>'
       + '<div class="hwdrop" style="min-width:250px;">'
       + (list.length
-          ? list.map(u => '<div class="hwme' + (String(u.email || '').toLowerCase() === hwMyEmail() ? ' self' : '') + '">'
+          ? ((isOwnerUser() && !window.__hwViewAs) ? '<div style="font-size:11px;color:#94a3b8;padding:2px 10px 6px;">이름을 누르면 그 사람 화면으로 봅니다 (보기 전용)</div>' : '')
+            + list.map(u => { const self = String(u.email || '').toLowerCase() === hwMyEmail(); const can = isOwnerUser() && !window.__hwViewAs && !self && u.email;
+              return '<div class="hwme' + (self ? ' self' : '') + (can ? ' hwva' : '') + '"' + (can ? ' data-viewas="' + escapeHtml(String(u.email)) + '" role="button" tabindex="0" title="' + escapeHtml(u.name) + ' 화면으로 보기 (보기 전용)" style="cursor:pointer;"' : '') + '>'
               + '<span>' + escapeHtml(u.name) + '</span>'
-              + '<span class="hwcnt">' + escapeHtml(roleLabel(u.role)) + '</span></div>').join('')
+              + '<span class="hwcnt">' + escapeHtml(roleLabel(u.role)) + '</span></div>'; }).join('')
           : '<div class="hwme"><span>등록된 사람이 없습니다</span></div>')
       + '<div class="hwline"></div>'
+      + (window.__hwViewAs ? '<button type="button" data-viewback="1"><span>내 화면으로 돌아가기</span></button>' : '')
+      + '<div class="hwme" style="gap:6px;"><span>화면 크기</span><span style="display:inline-flex;gap:4px;">' + ['90', '100'].map(z => '<button type="button" class="hwzoom" data-zoom="' + z + '" style="width:auto;padding:2px 8px;border-radius:6px;border:1px solid ' + (hwZoom() === z ? '#2446e8;background:#2446e8;color:#fff;' : '#cbd5e1;background:#fff;color:#334155;') + 'font-size:11.5px;font-weight:700;">' + z + '%</button>').join('') + '</span></div>'
       + ((isOwnerUser() && ownerPinIsSet() && state.ownerUnlocked) ? '<button type="button" data-hwlock="lock" title="최고관리자 영역 전부에 걸립니다. 업무 화면은 그대로 열려 있습니다."><span>최고관리자 영역 잠그기</span></button>' : '')
       + '<button type="button" data-hwview="logout"><span>로그아웃</span></button>'
       + '</div></div>';
@@ -13684,6 +13733,10 @@ window.addEventListener('firebase-ready', () => {
     right.innerHTML = r;
     { const sb = document.getElementById('hwtop-sub'); if (sb) sb.innerHTML = sub; }   // hotfix481: 둘째 줄
     hwTopBind();
+    right.querySelectorAll('[data-viewas]').forEach(el => el.addEventListener('click', e => { e.stopPropagation(); try { sessionStorage.setItem('hiwos.viewas', el.dataset.viewas); } catch (_) {} location.reload(); }));   // hotfix483
+    right.querySelector('[data-viewback]')?.addEventListener('click', e => { e.stopPropagation(); try { sessionStorage.removeItem('hiwos.viewas'); } catch (_) {} location.reload(); });
+    right.querySelectorAll('.hwzoom').forEach(b => b.addEventListener('click', e => { e.stopPropagation(); hwZoomSet(b.dataset.zoom); hwTopPaint(); }));
+    hwViewAsBar();
     right.querySelector('[data-hwbell]')?.addEventListener('click', () => { if (typeof window.openCodeRequestsModal === 'function') window.openCodeRequestsModal(); });
   }
   function hwTopBind() {
@@ -43963,13 +44016,13 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
     try {
       const R = document.documentElement.style;
       const h = document.querySelector('.dashboard-panel .dash-header');
-      const hh = h ? Math.round(h.getBoundingClientRect().height) : 0;
+      const hh = h ? Math.round(h.getBoundingClientRect().height / hwZf()) : 0;
       R.setProperty('--dashHeadH', hh + 'px');
       const panel = document.querySelector('.dashboard-panel');
       const pin = document.querySelector('.dashboard-panel .dash-pin');
-      let ph = pin ? Math.round(pin.getBoundingClientRect().height) : 0;
+      let ph = pin ? Math.round(pin.getBoundingClientRect().height / hwZf()) : 0;
       // 너무 높으면(화면 절반 넘김) 붙이지 않는다 — 자료 볼 자리가 없어진다
-      const lim = panel ? Math.round(panel.getBoundingClientRect().height * 0.55) : 380;
+      const lim = panel ? Math.round(panel.getBoundingClientRect().height / hwZf() * 0.55) : 380;
       if (pin) {
         const tall = ph > lim;
         pin.classList.toggle('loose', tall);
@@ -45092,16 +45145,17 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
         // 위치 잡기 — 배지 바로 아래. 단, 화면 하단을 넘으면 배지 위로 띄움(마지막 행 잘림 방지)
         const rect = badge.getBoundingClientRect();
         menu.style.position = 'fixed';
-        menu.style.left = rect.left + 'px';
+        menu.style.left = (rect.left / hwZf()) + 'px';
         menu.style.zIndex = '9999';
         menu.style.visibility = 'hidden';
         document.body.appendChild(menu);
         const menuH = menu.offsetHeight;
-        if (rect.bottom + 2 + menuH > window.innerHeight - 8) {
-          menu.style.top = Math.max(8, rect.top - menuH - 2) + 'px';
+        { const z = hwZf();   // hotfix483: 화면 크기
+        if (rect.bottom + 2 + menuH * z > window.innerHeight - 8) {
+          menu.style.top = Math.max(8, rect.top / z - menuH - 2) + 'px';
         } else {
-          menu.style.top = (rect.bottom + 2) + 'px';
-        }
+          menu.style.top = ((rect.bottom + 2) / z) + 'px';
+        } }
         menu.style.visibility = 'visible';
         // 바깥 클릭 시 닫기
         setTimeout(() => {
@@ -51555,7 +51609,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix482';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
+  const VERSION = 'v2.53 hotfix483';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
