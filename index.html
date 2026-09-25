@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="HIWOS">
 <meta name="mobile-web-app-capable" content="yes">
-<title>RECOVERIC HIWOS v2.53 hotfix473</title>
+<title>RECOVERIC HIWOS v2.53 hotfix474</title>
 
 <!-- PWA Manifest (인라인 data URL) -->
 <link rel="manifest" id="pwa-manifest">
@@ -7206,7 +7206,7 @@
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
-import { getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, addDoc, updateDoc, deleteDoc, doc, getDoc, getDocs, setDoc, deleteField, writeBatch, query, orderBy, onSnapshot, serverTimestamp, arrayUnion } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, addDoc, updateDoc, deleteDoc, doc, getDoc, getDocs, setDoc, deleteField, writeBatch, query, orderBy, onSnapshot, serverTimestamp, arrayUnion, runTransaction } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAIaNFZozda5sp4Qjs7LEn-aXYLX1JZi10",
@@ -7218,7 +7218,7 @@ const firebaseConfig = {
 };
 
 // hotfix388: 어느 줄(본선/연습선)을 보는가 — 이 한 글자만 다르다. '' = 본선, 'practice_' = 연습선
-const LINE = '';
+const LINE = 'practice_';
 const C = n => LINE + n;
 window.__HIWOS_LINE = LINE;
 if (LINE) {
@@ -7343,7 +7343,7 @@ const __wrappedUpdateDoc = __withWriteTimeout(function (ref, updates) {
 const __wrappedSetDoc = __withWriteTimeout(setDoc);
 const __wrappedDeleteDoc = __withWriteTimeout(deleteDoc);
 
-window.firebase = { auth, db, provider, signInWithPopup, signOut, onAuthStateChanged, collection, addDoc: __wrappedAddDoc, updateDoc: __wrappedUpdateDoc, deleteDoc: __wrappedDeleteDoc, doc, getDoc, getDocs, setDoc: __wrappedSetDoc, deleteField, writeBatch, query, orderBy, onSnapshot, serverTimestamp, C };
+window.firebase = { auth, db, provider, signInWithPopup, signOut, onAuthStateChanged, collection, addDoc: __wrappedAddDoc, updateDoc: __wrappedUpdateDoc, deleteDoc: __wrappedDeleteDoc, doc, getDoc, getDocs, setDoc: __wrappedSetDoc, deleteField, writeBatch, query, orderBy, onSnapshot, serverTimestamp, runTransaction, C };
 window.dispatchEvent(new Event('firebase-ready'));
 </script>
 
@@ -12683,7 +12683,7 @@ document.getElementById('btn-kakao').addEventListener('click', async () => {
 window.addEventListener('firebase-ready', () => {
   const { auth, db, provider, signInWithPopup, signOut, onAuthStateChanged,
     collection, addDoc, updateDoc, deleteDoc, doc, getDoc, getDocs, setDoc, deleteField, writeBatch, C,
-    query, orderBy, onSnapshot, serverTimestamp } = window.firebase;
+    query, orderBy, onSnapshot, serverTimestamp, runTransaction } = window.firebase;
   
   // ============================================================
   // 보안: 허용된 이메일만 접근 가능
@@ -33489,21 +33489,61 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
     state.knitBlend[key] = copy; state.knitBlendDocExists = true;
     return true;
   }
-  // 전체 사본 맞추기 — 최고관리자 로그인 때 한 번 (편직 설정 · 사본 · 사종 이름이 다 내려온 뒤). 다르면 문서 통째로 다시 쓴다
+  // 전체 사본 맞추기 — 최고관리자 로그인 때 한 번 (편직 설정 · 사본 · 사종 이름이 다 내려온 뒤)
+  // hotfix474(대표 결정 9/25): 예전에는 글자 그대로(JSON.stringify) 비교해서, 파이어베이스가 돌려주는 칸 순서가 달라 내용이 같아도 늘 "다름" → 창을 열 때마다 문서를 통째로 다시 썼다
+  //   · 칸 순서와 상관없이 비교한다 (kbCanon) — 같으면 아무것도 안 쓴다
+  //   · 달라진 품목만 'items.품목코드' 칸으로 고쳐 쓴다 · 편직 설정에서 사라진 품목은 그 칸만 지운다
+  //   · 쓸 때는 트랜잭션 — 서버의 편직 설정 · 사본을 다시 읽어 계산하므로, 다른 창이 그 사이에 편직 설정을 바꿔도 옛 값으로 덮지 않는다
+  //   · 트랜잭션 실패 · 오프라인 · 시간 초과는 조용히 건너뛴다 (화면은 그대로 · 이번 창에서는 다시 시도하지 않음)
+  function kbCanon(v) {
+    if (Array.isArray(v)) return v.map(kbCanon);
+    if (v && typeof v === 'object') { const o = {}; Object.keys(v).sort().forEach(k => { o[k] = kbCanon(v[k]); }); return o; }
+    return v;
+  }
+  function kbEmpty(v) { return !v || typeof v !== 'object' || !Object.keys(v).length; }
+  function kbSame(a, b) { if (kbEmpty(a) && kbEmpty(b)) return true; return JSON.stringify(kbCanon(a || {})) === JSON.stringify(kbCanon(b || {})); }
+  // 계산만 — 편직 설정(KF)으로 사본을 만들어 지금 사본(KB)과 품목별로 견준다. knitBlendCopyOf 가 state.knitFee 를 읽으므로 잠깐 바꿔 끼웠다가 되돌린다(중간에 await 없음)
+  function knitBlendDiffOf(KF, KB) {
+    const keep = state.knitFee; const copies = {};
+    try { state.knitFee = (KF && typeof KF === 'object') ? KF : {}; Object.keys(state.knitFee).forEach(fid => { const c = knitBlendCopyOf(fid); if (!kbEmpty(c)) copies[fid] = c; }); }
+    finally { state.knitFee = keep; }
+    const cur = (KB && typeof KB === 'object') ? KB : {};
+    const set = Object.keys(copies).filter(fid => !kbSame(copies[fid], cur[fid]));
+    const del = Object.keys(cur).filter(fid => !(fid in copies) && !kbEmpty(cur[fid]));
+    return { copies, set, del, n: set.length + del.length };
+  }
   async function knitBlendSyncAll() {
     if (!isOwnerUser() || !state.knitFeeLoaded || !state.knitBlendLoaded || !state.yarnNamesLoaded || state._kbSyncedOnce || state._kbSyncing) return false;
     state._kbSyncing = true;
     try {
-      const items = {};
-      Object.keys(state.knitFee || {}).forEach(fid => { const c = knitBlendCopyOf(fid); if (Object.keys(c).length) items[fid] = c; });
-      const cur = (state.knitBlend && typeof state.knitBlend === 'object') ? state.knitBlend : {};
-      if (JSON.stringify(items) !== JSON.stringify(cur)) {
-        await setDoc(doc(db, C('settings'), 'knit_blend'), { items, updated_at: serverTimestamp(), updated_by: state.user?.email || '' });
-        state.knitBlend = items; state.knitBlendDocExists = true;
-        console.log('[knit_blend] 편직 사종 비율 사본을 맞췄습니다:', Object.keys(items).length, '품목');
+      const local = knitBlendDiffOf(state.knitFee, state.knitBlend);   // 먼저 화면이 가진 자료로 — 같으면 서버는 읽지도 쓰지도 않는다
+      if (local.n) {
+        if (typeof runTransaction !== 'function') throw new Error('runTransaction 없음');
+        const kfRef = doc(db, C('cost_data'), 'knit_fee'), kbRef = doc(db, C('settings'), 'knit_blend');
+        const who = state.user?.email || '';
+        const job = runTransaction(db, async tx => {
+          const kfS = await tx.get(kfRef); const kbS = await tx.get(kbRef);
+          const KF = (kfS.exists() && kfS.data().items && typeof kfS.data().items === 'object') ? kfS.data().items : {};
+          const KB = (kbS.exists() && kbS.data().items && typeof kbS.data().items === 'object') ? kbS.data().items : {};
+          const p = knitBlendDiffOf(KF, KB);
+          if (!p.n) return p;
+          if (kbS.exists()) {
+            const upd = { updated_at: serverTimestamp(), updated_by: who };
+            p.set.forEach(fid => { upd['items.' + fid] = p.copies[fid]; });
+            p.del.forEach(fid => { upd['items.' + fid] = deleteField(); });
+            tx.update(kbRef, upd);
+          } else {
+            const items = {}; p.set.forEach(fid => { items[fid] = p.copies[fid]; });
+            tx.set(kbRef, { items, updated_at: serverTimestamp(), updated_by: who });
+          }
+          return p;
+        });
+        job.catch(() => {});   // 시간 초과 뒤 늦게 실패해도 조용히
+        const p = await Promise.race([job, new Promise((_, rej) => setTimeout(() => rej(new Error('시간 초과')), 20000))]);
+        if (p && p.n) console.log('[knit_blend] 편직 사종 비율 사본을 맞췄습니다: 고침 ' + p.set.length + ' · 지움 ' + p.del.length + ' 품목');
       }
       state._kbSyncedOnce = true;
-    } catch (e) { console.warn('[knit_blend syncAll]', e.message); }
+    } catch (e) { state._kbSyncedOnce = true; console.warn('[knit_blend syncAll] 건너뜀 —', (e && e.message) || e); }
     state._kbSyncing = false;
     return true;
   }
@@ -50935,7 +50975,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix473';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
+  const VERSION = 'v2.53 hotfix474';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
