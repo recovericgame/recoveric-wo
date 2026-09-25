@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="HIWOS">
 <meta name="mobile-web-app-capable" content="yes">
-<title>RECOVERIC HIWOS v2.53 hotfix485</title>
+<title>RECOVERIC HIWOS v2.53 hotfix486</title>
 
 <!-- PWA Manifest (인라인 data URL) -->
 <link rel="manifest" id="pwa-manifest">
@@ -6765,6 +6765,14 @@
   html body .hwside-items button.cur { background: none; color: #2563eb; font-weight: 800; }
   html body .hwside-items button.cur:hover { background: #f1f5f9; }
 </style>
+<style id="hf486">
+  /* hotfix486(대표 지시 9/25): 큰 카테고리 = 옅은 연보라(진하지 않게) · 고른 작은 메뉴는 485 그대로 파란 글자 */
+  html body .hwside-gh { background: #f5f3ff; color: #7c6fcf; box-shadow: inset 3px 0 0 #d8d0fb; }
+  html body .hwside-gh:hover { background: #ede9fe; }
+  /* 위 줄 카테고리 글자 — 누르면 그 줄 첫 메뉴 */
+  html body .hwcrumb .c[data-sgrp] { cursor: pointer; border-radius: 6px; padding: 1px 4px; margin: 0 -4px; }
+  html body .hwcrumb .c[data-sgrp]:hover { background: #f5f3ff; color: #6d5fc7; text-decoration: underline; text-underline-offset: 3px; }
+</style>
 </head>
 <body>
 
@@ -12883,10 +12891,18 @@ document.getElementById('btn-image').addEventListener('click', captureSafetyWrap
 //   다시 누르면 전체 목록이 나오도록 초점 때 칸을 비우고, 아무것도 안 고르고 나가면 옛 값을 그대로 돌려놓는다 (사건은 안 일으킨다 — 저장되지 않은 변경으로 잡히지 않는다).
 //   손으로 지우고 나간 것(입력 사건이 난 것)은 지운 대로 둔다. 모든 list= 칸에 한 번에 걸린다.
 ['y_notes', 'k_notes', 'f_notes'].forEach(id => document.getElementById(id)?.addEventListener('input', function () { this.dataset.autoNotes = ''; }));   // hotfix404: 손으로 치면 자동 메모 아님
+(function hwNoFormHistory() {   /* hotfix486(대표 지시 9/25): 콤보박스 외에 브라우저의 과거 입력 이력은 절대 안 나오게 */
+  const SKIP = /^(hidden|checkbox|radio|button|submit|reset|file|range|color|image|password)$/i;
+  const fix = el => { if (el && el.tagName === 'INPUT' && !SKIP.test(el.type || '') && !el.hasAttribute('autocomplete')) el.setAttribute('autocomplete', 'off'); };
+  const scan = root => { if (!root || root.nodeType !== 1) return; if (root.tagName === 'INPUT') fix(root); else if (root.querySelectorAll) root.querySelectorAll('input:not([autocomplete])').forEach(fix); };
+  try { scan(document.documentElement); new MutationObserver(ms => ms.forEach(m => m.addedNodes.forEach(scan))).observe(document.documentElement, { childList: true, subtree: true }); } catch (_) {}
+  document.addEventListener('focusin', ev => fix(ev.target), true); document.addEventListener('pointerdown', ev => fix(ev.target), true);
+  document.querySelectorAll('form:not([autocomplete])').forEach(f => f.setAttribute('autocomplete', 'off'));
+})();
 (function datalistShowAll() {
   const isDl = el => el instanceof HTMLInputElement && el.hasAttribute('list') && !el.readOnly && !el.disabled;
   document.addEventListener('focusin', ev => {
-    const el = ev.target; if (!isDl(el) || !el.value) return;
+    const el = ev.target; if (!isDl(el) || !el.value || el.dataset.dlKeep === '1') return;   /* hotfix486: 검색 칸을 다시 그린 뒤 초점을 돌려줄 때는 비우지 않는다 */
     el.dataset.dlPrev = el.value; el.dataset.dlTyped = '0'; el.value = '';
   });
   document.addEventListener('input', ev => { const el = ev.target; if (isDl(el) && el.dataset.dlPrev !== undefined) el.dataset.dlTyped = '1'; });
@@ -13706,9 +13722,11 @@ window.addEventListener('firebase-ready', () => {
     { let cat = '', lab = '';
       if (state.uiMode !== 'dashboard') { cat = '작업지시서'; lab = (state.currentType ? String(state.currentType).replace('BT', 'B/T') + ' 의뢰서' : '작성'); }
       else { const g = HW_SIDE.find(x => (x.items || []).includes(cur)); cat = g ? g.name : ''; lab = cur ? hwSideLabel(cur) : ''; }
-      h += '<div class="hwcrumb">' + (cat ? '<span class="c">' + escapeHtml(cat) + '</span>' : '') + (cat && lab ? '<span class="sep">&gt;</span>' : '') + (lab ? '<b>' + escapeHtml(lab) + '</b>' : '') + '</div>'; }
+      const gk = (HW_SIDE.find(x => x.name === cat) || {}).key || '';   /* hotfix486: 카테고리 글자를 누르면 그 줄 첫 메뉴로 */
+      h += '<div class="hwcrumb">' + (cat ? '<span class="c" role="button" tabindex="0" data-sgrp="' + escapeHtml(gk) + '" title="' + escapeHtml(cat) + ' 첫 메뉴로">' + escapeHtml(cat) + '</span>' : '') + (cat && lab ? '<span class="sep">&gt;</span>' : '') + (lab ? '<b>' + escapeHtml(lab) + '</b>' : '') + '</div>'; }
     nav.innerHTML = h;
     hwSidePaint(cur);
+    { const c = nav.querySelector('.hwcrumb .c[data-sgrp]'); if (c) { const go = () => { const b = document.querySelector('#hwside-nav .hwside-grp[data-sgrp="' + c.dataset.sgrp + '"] .hwside-items button'); if (b) b.click(); }; c.addEventListener('click', go); c.addEventListener('keydown', e => { if (e.key === 'Enter') go(); }); } }   /* hotfix486 */
 
     const nw = hwNarrow();
     let r = '', sub = '';
@@ -33862,6 +33880,15 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
     const out = []; const kids = {};
     const q = String(state.kfQ || '').trim().toLowerCase();
     const fv = String(state.kfFactory || '').trim();
+    /* hotfix486(대표 지시 9/25): 찾기 — 생지를 찾으면 그 파생 품목도 같이, 파생 품목을 찾으면 원래 생지가 위에 오고 파생이 펼쳐져 나온다 (옛 이름도 찾음) */
+    const qSet = new Set();
+    if (q) {
+      const all = getFabricSpecs(); const kidsOf = {}; const heads = new Set();
+      const hit = sp => String(sp.name || '').toLowerCase().indexOf(q) >= 0 || String(specFid(sp) || '').toLowerCase() === q || (Array.isArray(sp.aliases) && sp.aliases.some(a => String(a || '').toLowerCase().indexOf(q) >= 0));
+      all.forEach(s0 => { const f = specFid(s0); const g = f ? specPrimaryGreige(f) : ''; if (g) (kidsOf[g] = kidsOf[g] || []).push(f); });
+      all.forEach(s0 => { const f = specFid(s0); if (!f || !hit(s0)) return; qSet.add(f); const head = specPrimaryGreige(f) || f; if (kidsOf[head]) { qSet.add(head); heads.add(head); kidsOf[head].forEach(k => qSet.add(k)); } });
+      if (state.__kfQOpened !== q) { state.__kfQOpened = q; if (!state.kfOpen || typeof state.kfOpen !== 'object') state.kfOpen = {}; heads.forEach(h => { state.kfOpen[h] = true; }); }
+    } else state.__kfQOpened = '';
     getFabricSpecs().slice().sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'ko', { numeric: true })).forEach(sp => {
       const fid = specFid(sp); if (!fid) return;
       if (sp && sp.trashed) return;   // hotfix480: 휴지통 품목은 안 보임
@@ -33872,7 +33899,7 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
       if (state.kfGubun && String(sp.gubun || GUBUN_BODY) !== state.kfGubun) return;
       if (state.kfCat && String(sp.cat || '') !== state.kfCat) return;   /* hotfix451: 조직으로 거르기 */
       if (state.kfGreige) { const gg = specPrimaryGreige(fid); if (state.kfGreige === '__none' ? !!gg : gg !== state.kfGreige) return; }   /* 원래 생지로 거르기(최고관리자 화면에만 보이는 칸) */
-      if (q && String(sp.name || '').toLowerCase().indexOf(q) < 0 && fid.toLowerCase() !== q) return;
+      if (q && !qSet.has(fid)) return;   /* hotfix486 */
       const K = knitFeeOf(fid);
       const yarns = kfYarnNames(fid);
       const fs = Object.keys(K).filter(v => !fv || (fv === KF_UNREG ? !knitFactoryKnown(v) : v === fv));
@@ -45255,7 +45282,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
       renderDashboard();
       const again = document.getElementById(id);
       if (again && wasFocused) {
-        again.focus();
+        again.dataset.dlKeep = '1'; again.focus(); delete again.dataset.dlKeep;   /* hotfix486 */
         const p = (pos == null) ? again.value.length : pos;
         try { again.setSelectionRange(p, p); } catch (_) {}
       }
@@ -52014,7 +52041,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix485';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
+  const VERSION = 'v2.53 hotfix486';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
