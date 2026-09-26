@@ -13,18 +13,31 @@
 <meta name="apple-mobile-web-app-title" content="FABIWOS">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <script>
-/* hotfix499: 카카오톡 안에서 열면 기본 브라우저(크롬 · 삼성 인터넷 · 사파리)로 넘긴다 — 카톡 안 창은 로그인 · 휴대폰 등록이 유지되지 않는다 */
+/* hotfix502b(대표 9/27): 안드로이드는 카카오톡 · 엣지 · 웨일 · 삼성 인터넷 등 어디서 열어도 크롬으로 넘긴다 (기본 브라우저가 엣지인 휴대폰 때문)
+   아이폰은 카톡 안이면 사파리로(아이폰은 사파리에서만 앱 설치가 된다). 크롬이 없으면 지금 브라우저에 그대로 남는다 */
 (function () {
-  var ua = navigator.userAgent || '';
-  if (/KAKAOTALK/i.test(ua) && !/[?&]kx=1/.test(location.search)) {
-    var go = function () { location.href = 'kakaotalk://web/openExternal?url=' + encodeURIComponent(location.href.split('#')[0] + (location.search ? '&' : '?') + 'kx=1'); };
-    window.__hwpKakao = true;
-    document.addEventListener('DOMContentLoaded', function () {
-      var k = document.getElementById('kk'); if (k) k.classList.add('on');
-      var b = document.getElementById('kk-go'); if (b) b.addEventListener('click', go);
-      setTimeout(go, 250);
-    });
+  var ua = navigator.userAgent || '', L = location;
+  if (!/^https?:$/.test(L.protocol) || /[?&]cx=1/.test(L.search)) return;
+  var kakao = /KAKAOTALK/i.test(ua), android = /Android/i.test(ua), ios = /iPhone|iPad|iPod/i.test(ua);
+  var realChrome = /Chrome\/\d/.test(ua) && !/EdgA|Edg\/|SamsungBrowser|Whale|NAVER|OPR\/|Opera|KAKAOTALK|; wv\)|Firefox|FxiOS|YaBrowser|MiuiBrowser|HeyTapBrowser|Line\/|DuckDuckGo|DaumApps|Instagram|FBAN|FBAV/.test(ua);
+  var go = null;
+  var k = (L.hash.match(/k=([^&]+)/) || [])[1] || '';
+  var q = L.search ? L.search.slice(1).split('&').filter(function (x) { return x && x.indexOf('k=') !== 0; }) : [];
+  if (k) q.push('k=' + k); q.push('cx=1');
+  var url = L.protocol + '//' + L.host + L.pathname + '?' + q.join('&');
+  if (android && !realChrome) {
+    go = function () { L.href = window.__hwpGoUrl = 'intent://' + L.host + L.pathname + '?' + q.join('&') + '#Intent;scheme=https;package=com.android.chrome;S.browser_fallback_url=' + encodeURIComponent(url) + ';end'; };
+  } else if (kakao && ios) {
+    go = function () { L.href = window.__hwpGoUrl = 'kakaotalk://web/openExternal?url=' + encodeURIComponent(url); };
   }
+  if (!go) return;
+  window.__hwpKakao = true;
+  document.addEventListener('DOMContentLoaded', function () {
+    var el = document.getElementById('kk'); if (el) el.classList.add('on');
+    var b = document.getElementById('kk-go'); if (b) b.addEventListener('click', go);
+    var s2 = document.getElementById('kk-stay'); if (s2) s2.addEventListener('click', function () { L.replace(url); });
+    setTimeout(go, 250);
+  });
 })();
 </script>
 <title>FABIWOS 공정 체크 · 현일텍스</title>
@@ -259,7 +272,7 @@ button,input,select{font-family:inherit}
 </div>
 <div id="sheet"></div>
 <div id="toast"></div>
-<div class="kk" id="kk"><b>기본 브라우저에서 열립니다</b><p>카카오톡 안 화면에서는 로그인이 유지되지 않습니다.<br>크롬(또는 삼성 인터넷 · 사파리)으로 넘어가지 않았다면<br>아래 단추를 누르십시오.</p><button type="button" id="kk-go">브라우저로 열기</button><p style="font-size:12.5px;opacity:.7">안 되면 오른쪽 위 [⋮] → [다른 브라우저로 열기]</p></div>
+<div class="kk" id="kk"><b>크롬에서 열립니다</b><p>FABIWOS 공정 체크는 크롬에서 씁니다.<br>(아이폰은 사파리)<br>저절로 넘어가지 않았다면 아래 단추를 누르십시오.</p><button type="button" id="kk-go">크롬으로 열기</button><button type="button" id="kk-stay" style="background:none;border:0;color:#fff;opacity:.75;text-decoration:underline;font-size:14px;margin-top:4px">크롬이 없으면 · 이 브라우저에서 그냥 쓰기</button></div>
 </div></div>
 
 <script type="module">
@@ -271,7 +284,7 @@ import { initializeFirestore, getFirestore, doc, getDoc, updateDoc, collection, 
  *   읽는 것: proc_acc/{내 uid} · proc_pub/{내 업체} · proc_log(내 업체 것만)
  *   쓰는 것: proc_log 한 줄 추가(고치기 · 지우기 없음) · 처음 로그인 때 내 기기 등록 한 번
  */
-const PVER = 'p4 (hotfix502)';
+const PVER = 'p4b (hotfix502b)';
 const cfg = { apiKey: "AIzaSyAIaNFZozda5sp4Qjs7LEn-aXYLX1JZi10", authDomain: "recoveric-wo.firebaseapp.com", projectId: "recoveric-wo", storageBucket: "recoveric-wo.firebasestorage.app", messagingSenderId: "267946532287", appId: "1:267946532287:web:fcc1b597c9bf53c9d8950a" };
 const DOMAIN = 'proc.recoveric.com';
 const app = initializeApp(cfg);
@@ -606,7 +619,7 @@ $('list').addEventListener('click', e => {
   else if (act === 'issue') issueSheet(it, a.dataset.id || '');
   else if (act === 'hist') histSheet(it);
 });
-try { const m = location.hash.match(/k=([^&]+)/); if (m) { S.focusK = decodeURIComponent(m[1]); S.filt = 'all'; } } catch (_) {}
+try { const m = location.hash.match(/k=([^&]+)/) || location.search.match(/[?&]k=([^&]+)/); if (m) { S.focusK = decodeURIComponent(m[1]); S.filt = 'all'; } } catch (_) {}
 if (window.matchMedia && matchMedia('(min-width: 900px)').matches && !isApp()) document.body.classList.add('pc');
 
 window.__hwpVer = PVER;
