@@ -1,4 +1,4 @@
-/* 현일텍스 공정 체크 — 앱 설치용 (HIWOS hotfix499). 저장(캐시)은 하지 않는다: 늘 새 화면 · 새 자료를 인터넷에서 받는다 */
+/* 현일텍스 공정 체크 — 앱 설치용 (FABIWOS hotfix502). 저장(캐시)은 하지 않는다: 늘 새 화면 · 새 자료를 인터넷에서 받는다 */
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', e => e.waitUntil(self.clients.claim()));
 self.addEventListener('fetch', e => {
