@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="FABIWOS">
 <meta name="mobile-web-app-capable" content="yes">
-<title>FABIWOS v2.53 hotfix502</title>
+<title>FABIWOS v2.53 hotfix503</title>
 
 <!-- PWA Manifest (인라인 data URL) -->
 <link rel="manifest" id="pwa-manifest">
@@ -44449,37 +44449,59 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
   function pinDashTop() {
     const body = document.getElementById('dash-body');
     if (!body) return;
-    // 지난번 감싸개를 먼저 푼다
-    const old = body.querySelector(':scope > .dash-pin');
-    if (old) { while (old.firstChild) body.insertBefore(old.firstChild, old); old.remove(); }
+    // 지난번 감싸개를 먼저 푼다 (hotfix503: 안쪽 어디에 있든)
+    const old = body.querySelector('.dash-pin');
+    if (old) { const par = old.parentElement; while (old.firstChild) par.insertBefore(old.firstChild, old); old.remove(); }
     // 표가 어디서 시작되는지 찾는다 (표 바로 위까지가 고정 자리)
     const inner = body.querySelector('.dash-table-wrap, .dash-table');
     if (!inner) return;
-    let top = inner;
-    while (top.parentElement && top.parentElement !== body) top = top.parentElement;
-    if (top === body || !top.previousElementSibling) return;
+    // hotfix503: 화면 전체를 한 겹 더 감싼 화면(업체코드 등)은 한 겹 안으로 들어가서 찾는다
+    let host = body, top = inner;
+    for (let g = 0; g < 6; g++) {
+      top = inner; while (top.parentElement && top.parentElement !== host) top = top.parentElement;
+      if (top === host || top === inner && !top.previousElementSibling) return;
+      if (top.previousElementSibling) break;
+      host = top;
+    }
+    if (!top.previousElementSibling) return;
     const pin = document.createElement('div');
     pin.className = 'dash-pin';
-    body.insertBefore(pin, body.firstElementChild);
+    host.insertBefore(pin, host.firstElementChild);
     while (pin.nextElementSibling && pin.nextElementSibling !== top) pin.appendChild(pin.nextElementSibling);
-    if (!pin.firstElementChild) pin.remove();
+    if (!pin.firstElementChild) { pin.remove(); return; }
+    // hotfix503: 고정 자리 높이가 바뀌면(입력 칸 펼치기 등) 표 머리 자리도 다시 맞춘다
+    try { if (window.ResizeObserver) { if (pinDashTop._ro) pinDashTop._ro.disconnect(); pinDashTop._ro = new ResizeObserver(() => { cancelAnimationFrame(pinDashTop._raf); pinDashTop._raf = requestAnimationFrame(syncDashHeadH); }); pinDashTop._ro.observe(pin); } } catch (_) {}
   }
   // 제목줄·고정 자리가 얼마나 높은지 재서 표 머리가 그 아래에 붙게 한다
   function syncDashHeadH() {
     try {
       const R = document.documentElement.style;
       const h = document.querySelector('.dashboard-panel .dash-header');
-      const hh = h ? Math.round(h.getBoundingClientRect().height / hwZf()) : 0;
+      const zf = hwZf(); const r2 = x => Math.round(x * 100) / 100;   // hotfix503: 반올림으로 생기던 1px 틈 없앰
+      const hh = h ? r2(h.getBoundingClientRect().height / zf) : 0;
       R.setProperty('--dashHeadH', hh + 'px');
       const panel = document.querySelector('.dashboard-panel');
       const pin = document.querySelector('.dashboard-panel .dash-pin');
-      let ph = pin ? Math.round(pin.getBoundingClientRect().height / hwZf()) : 0;
+      // hotfix503: 제목줄 아래 여백(16px)을 고정 자리 안쪽으로 옮긴다 — 여백만큼 올라가다 멈추던(조금씩 내려오는 듯 보이던) 움직임 없앰
+      if (pin && h && !pin.classList.contains('loose')) {
+        const mb = parseFloat(getComputedStyle(h).marginBottom) || 0;
+        pin.style.marginTop = (-mb) + 'px'; pin.style.paddingTop = mb + 'px';
+        // 고정 자리와 표 머리 사이 틈(표 테두리 1px 등)도 없앤다
+        if (panel) {
+          const keep = panel.scrollTop; if (keep) panel.scrollTop = 0;   // 맨 위 자리에서 재고 곧바로 되돌린다(그리기 전이라 화면이 튀지 않음)
+          pin.style.marginBottom = '0px';
+          const th = Array.from((pin.parentElement || document).querySelectorAll('th')).find(t => !pin.contains(t) && getComputedStyle(t).position === 'sticky' && t.offsetParent);
+          if (th) { const g = (th.getBoundingClientRect().top - pin.getBoundingClientRect().bottom) / zf; if (g > 0.2 && g < 8) pin.style.marginBottom = (-r2(g)) + 'px'; }
+          if (keep) panel.scrollTop = keep;
+        }
+      } else if (pin) { pin.style.marginTop = ''; pin.style.paddingTop = ''; pin.style.marginBottom = ''; }
+      let ph = pin ? r2(pin.getBoundingClientRect().height / zf) : 0;
       // 너무 높으면(화면 절반 넘김) 붙이지 않는다 — 자료 볼 자리가 없어진다
-      const lim = panel ? Math.round(panel.getBoundingClientRect().height / hwZf() * 0.55) : 380;
+      const lim = panel ? Math.round(panel.getBoundingClientRect().height / zf * 0.55) : 380;
       if (pin) {
         const tall = ph > lim;
         pin.classList.toggle('loose', tall);
-        if (tall) ph = 0;
+        if (tall) { ph = 0; pin.style.marginTop = ''; pin.style.paddingTop = ''; pin.style.marginBottom = ''; }
       }
       R.setProperty('--dashStickH', (hh + ph) + 'px');
     } catch (e) {}
@@ -52426,7 +52448,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix502';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
+  const VERSION = 'v2.53 hotfix503';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
@@ -52459,6 +52481,22 @@ window.addEventListener('beforeunload', e => {
 })();
 </script>
 <script>
+/* hotfix503(대표 9/27): 작성 화면 왼쪽 이력 — [작업지시서 작성] 제목 아래 여백만큼 위쪽 묶음이 올라가다 멈추던 것 · 제목 높이를 재서 딱 붙인다 */
+(function () {
+  function fitSide() {
+    try {
+      const vis = e => e && e.offsetParent && e.getBoundingClientRect().height > 0;
+      const t = Array.from(document.querySelectorAll('.sidebar .side-title')).find(vis), p = Array.from(document.querySelectorAll('.sidebar .side-pin')).find(vis);
+      if (!t || !p || getComputedStyle(t).position !== 'sticky' || getComputedStyle(p).position !== 'sticky') return;
+      const zf = parseFloat(getComputedStyle(document.body).zoom) || 1;
+      if (!t.dataset.mb) t.dataset.mb = String(parseFloat(getComputedStyle(t).marginBottom) || 0);
+      const th = Math.round(t.getBoundingClientRect().height / zf * 100) / 100; const mb = parseFloat(t.dataset.mb) || 0;
+      t.style.marginBottom = '0px'; p.style.top = Math.round((th + (parseFloat(getComputedStyle(t).top) || 0)) * 100) / 100 + 'px';   /* 제목의 top(-18px)까지 더해 제목 바로 아래 */ p.style.marginTop = '0px'; p.style.paddingTop = mb + 'px';
+    } catch (_) {}
+  }
+  window.addEventListener('resize', fitSide); document.addEventListener('click', () => setTimeout(fitSide, 60), true);
+  setInterval(fitSide, 1500); setTimeout(fitSide, 800);
+})();
 /* hotfix502(대표 지적 9/27): 작성 화면에서 스크롤할 때 스탬프 칸이 머리에서 떨어져 떠 보이던 것 — 머리 · 스탬프 실제 높이로 고정 위치를 맞춘다 */
 (function () {
   function fit() {
@@ -52609,6 +52647,19 @@ window.addEventListener('beforeunload', e => {
   const ymd = t => { const d = new Date(t); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
   const dayDiff = (a, b) => Math.round((new Date(ymd(b) + 'T00:00:00') - new Date(ymd(a) + 'T00:00:00')) / 864e5);
   P.ymd = ymd;
+  /* hotfix503(대표 9/27): 표준 일수는 영업일 — 토 · 일 · 공휴일 빼고 센다. 나라별 달력을 붙일 수 있게 나라 코드로 나눠 둠(지금은 대한민국) · 회사 휴무일은 설정에서 더함 */
+  const CAL = {
+    KR: { name: '대한민국', weekend: [0, 6],
+      days: ('2026-01-01,2026-02-16,2026-02-17,2026-02-18,2026-03-02,2026-05-01,2026-05-05,2026-05-25,2026-06-03,2026-07-17,2026-08-17,2026-09-24,2026-09-25,2026-09-26,2026-10-05,2026-10-09,2026-12-25,'
+        + '2027-01-01,2027-02-08,2027-02-09,2027-03-01,2027-05-05,2027-05-13,2027-07-19,2027-08-16,2027-09-14,2027-09-15,2027-09-16,2027-10-04,2027-10-11,2027-12-27').split(',') }
+  };
+  P.CAL = CAL;
+  P.calOf = function () { const c = (P.cfg && P.cfg.cal) || {}; const base = CAL[c.country] || CAL.KR; return { country: CAL[c.country] ? c.country : 'KR', name: base.name, weekend: base.weekend, base: base.days, extra: Array.isArray(c.extra) ? c.extra : [] }; };
+  P.bizDiff = function (a, b) {   // a 다음 날부터 b 날까지 영업일 수
+    const C = P.calOf(); const off = new Set(C.base.concat(C.extra)); const d = new Date(ymd(a) + 'T12:00:00'); const e = ymd(b); let n = 0, g = 0;
+    while (ymd(d) < e && g++ < 1200) { d.setDate(d.getDate() + 1); if (!C.weekend.includes(d.getDay()) && !off.has(ymd(d))) n++; }
+    return n;
+  };
   // 신호등 — 초록 정상 · 노랑 한 단계에 오래 머뭄 · 빨강 예정일 지남 / 확인 요청 하루 넘게 답 없음 · 회색 출고 끝
   P.signal = function (st, it) {
     const now = Date.now();
@@ -52617,8 +52668,8 @@ window.addEventListener('beforeunload', e => {
     if (st.openReq && now - tOf(st.openReq) > 864e5) return { c: 'red', t: '확인 요청에 답 없음' };
     const nx = st.next; if (!nx) return { c: 'green', t: '정상' };
     const from = st.curLog ? tOf(st.curLog) : (it.date ? new Date(it.date + 'T09:00:00').getTime() : now);
-    const days = dayDiff(from, now); const std = Number(P.stageCfg(nx.c).d) || 0;
-    if (std > 0 && days > std) return { c: 'yellow', t: nx.n + ' ' + days + '일째(표준 ' + std + '일)' };
+    const days = P.bizDiff(from, now); const std = Number(P.stageCfg(nx.c).d) || 0;
+    if (std > 0 && days > std) return { c: 'yellow', t: nx.n + ' 영업일 ' + days + '일째(표준 ' + std + '일)' };
     if (st.openReq) return { c: 'yellow', t: '확인 요청 중' };
     return { c: 'green', t: '정상' };
   };
@@ -52800,6 +52851,8 @@ window.addEventListener('beforeunload', e => {
     if (l.kind === 'cancel') return '기록 하나를 취소함';
     return '';
   }
+  P.dnotifPref = function (v) { try { if (v) localStorage.setItem('hwp.dnotif', v); return localStorage.getItem('hwp.dnotif') !== 'off'; } catch (_) { return true; } };
+  P.dnotifOn = () => ('Notification' in window) && Notification.permission === 'granted' && P.dnotifPref();
   P.notifyScan = function () {
     try {
       if (!P.can || !P.can().v) return;
@@ -52810,7 +52863,7 @@ window.addEventListener('beforeunload', e => {
       renderNotif(L);
       if (!first && fresh.length) {
         chime();
-        try { if (document.hidden && 'Notification' in window && Notification.permission === 'granted') { const l = fresh[0]; new Notification('FABIWOS · ' + (l.vendor || '가공소'), { body: (l.wo || '') + ' ' + notifText(l), tag: 'hwp-' + l.id }); } } catch (_) {}
+        try { if (document.hidden && P.dnotifOn()) { const l = fresh[0]; new Notification('FABIWOS · ' + (l.vendor || '가공소'), { body: (l.wo || '') + ' ' + notifText(l), tag: 'hwp-' + l.id }); } } catch (_) {}
       }
     } catch (_) {}
   };
@@ -52977,6 +53030,9 @@ window.addEventListener('beforeunload', e => {
     try { await f.deleteDoc(f.doc(f.db, f.C('proc_secret'), a.uid)); } catch (_) {}
     return { uid: uid2, id: newId, pw, vn: a.vendor, oldGone };
   };
+  const dtm = t => { const d = new Date(t); const p = x => String(x).padStart(2, '0'); return d.getFullYear() % 100 + '.' + p(d.getMonth() + 1) + '.' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes()); };
+  const foldGet = () => { try { return JSON.parse(localStorage.getItem('hwp.fold') || '{}') || {}; } catch (_) { return {}; } };
+  const foldBtn = (k, sum) => { const m = !!foldGet()[k]; return `${m && sum ? `<span class="hwp-foldsum">${sum}</span>` : ''}<button type="button" class="hwp-fold" data-hwp-act="fold" data-f="${k}">${m ? '늘이기 ▾' : '줄이기 ▴'}</button>`; };
   P.renderAdmin = function () {
     const C = P.can();
     if (!C.v) return '<div class="dash-empty">[권한 설정]에서 허용받은 사람만 볼 수 있는 화면입니다.</div>';
@@ -52987,14 +53043,14 @@ window.addEventListener('beforeunload', e => {
     const today = new Date().toDateString();
     const nToday = P.logs.filter(l => l.by === 'vendor' && l.kind !== 'dev_fail' && new Date(tOf(l)).toDateString() === today).length;
     const accs = P.accs.slice().sort((a, b) => (Number(!!b.active) - Number(!!a.active)) || (a.vendor + a.login_id).localeCompare(b.vendor + b.login_id, 'ko'));
-    const devTxt = a => a.dev ? esc(String(a.dev_ua || '등록됨').replace(/.*(iPhone|Android [0-9.]+|Android|Windows|Macintosh).*/, '$1')) + (a.dev_at ? `<small>${hhmm(tOf({ at: a.dev_at }))}</small>` : '') : '<span class="hwp-dim">첫 로그인 전</span>';
+    const devTxt = a => a.dev ? esc(String(a.dev_ua || '등록됨').replace(/.*(iPhone|Android [0-9.]+|Android|Windows|Macintosh).*/, '$1')) + (a.dev_at ? `<small>${dtm(tOf({ at: a.dev_at }))}</small>` : '') : '<span class="hwp-dim">아직 로그인 전</span>';
     let h = '<div class="hwp-admin">';
     if (P.err) h += `<div class="hwp-note warn"><b>아직 열리지 않았습니다.</b> 새 보안 규칙을 파이어베이스에 게시해야 이 화면이 움직입니다. <small>(${esc(P.err)})</small></div>`;
-    if (alerts.length) h += `<div class="hwp-note bad"><b>새 기기 시도 ${alerts.length}건 (14일)</b> — ${alerts.slice(0, 4).map(a => `${esc(a.vendor)} ${hhmm(tOf(a))}`).join(' · ')}. 가공소가 휴대폰을 바꾼 것이면 그 줄의 [기기 초기화]를 누르십시오.</div>`;
+    h += '<div class="hwp-stick">';   // hotfix503: 위쪽 띠 + 가공소 계정까지 틀고정
     h += `<div class="hwp-top">
       <div class="hwp-url"><span class="k">가공소 주소</span><span class="v" id="hwp-url">${esc(P.url())}</span><button type="button" class="hwp-lnk" data-hwp-act="copyurl">복사</button></div>
       <div class="hwp-stats"><span><b>${accs.filter(a => a.active).length}</b>사용 중</span><span><b>${accs.length}</b>전체 계정</span><span><b>${nToday}</b>오늘 입력</span></div></div>`;
-    h += `<section class="hwp-card"><div class="hwp-card-h"><h3>가공소 계정</h3><span class="hwp-dim">${C.e ? '아이디 · 비밀번호를 직접 정하고 바꿀 수 있습니다' : '보기 권한 — 만들기 · 수정은 [권한 설정]에서 수정 권한을 받은 사람만'}</span></div>
+    h += `<section class="hwp-card${foldGet().acc ? ' min' : ''}"><div class="hwp-card-h"><h3>가공소 계정</h3><span class="hwp-dim">${C.e ? '아이디 · 비밀번호를 직접 정하고 바꿀 수 있습니다' : '보기 권한 — 만들기 · 수정은 [권한 설정]에서 수정 권한을 받은 사람만'}</span>${foldBtn('acc', accs.map(a => esc(a.vendor) + ' ' + esc(a.login_id)).join(' · '))}</div>
       ${C.e ? `<div class="hwp-new">
         <select id="hwp-new-v"><option value="">업체</option>${vs.map(v => `<option${v === S.vn ? ' selected' : ''}>${esc(v)}</option>`).join('')}</select>
         <input id="hwp-new-id" type="text" placeholder="아이디 (영문 소문자 · 숫자)" value="${esc(S.id || '')}" autocomplete="off" spellcheck="false">
@@ -53002,33 +53058,33 @@ window.addEventListener('beforeunload', e => {
         <button type="button" class="hwp-btn" data-hwp-act="make">＋ 계정 만들기</button></div>` : ''}`;
     if (S.made) h += `<div class="hwp-done-strip"><span><b>${esc(S.madeTitle || '저장했습니다')}</b> · ${esc(S.made.vn)} · 아이디 <code>${esc(S.made.id)}</code> · 비밀번호 <code>${esc(S.made.pw)}</code></span><span><button type="button" class="hwp-btn s" data-hwp-act="copymade">카톡 글 복사</button><button type="button" class="hwp-x2" data-hwp-act="closemade" aria-label="닫기">✕</button></span></div>`;
     h += `<div class="hwp-tw"><table class="hwp-tbl"><colgroup><col style="width:12%"><col style="width:13%"><col style="width:13%"><col style="width:7%"><col style="width:13%"><col style="width:7%"><col style="width:10%"><col></colgroup>
-      <thead><tr><th>업체</th><th>아이디</th><th>비밀번호</th><th>상태</th><th>등록 휴대폰</th><th>올린 목록</th><th>마지막 입력</th><th>관리</th></tr></thead><tbody>`;
+      <thead><tr><th>업체</th><th>아이디</th><th>비밀번호</th><th>상태</th><th title="아이디 · 비밀번호만 맞으면 어느 휴대폰이든 들어옵니다 — 마지막으로 들어온 휴대폰">등록 휴대폰</th><th>올린 목록</th><th>마지막 입력</th><th>관리</th></tr></thead><tbody>`;
     if (!accs.length) h += '<tr><td colspan="8" class="hwp-empty">아직 계정이 없습니다 — 위 줄에서 업체 · 아이디 · 비밀번호를 넣고 [계정 만들기]를 누르십시오.</td></tr>';
     accs.forEach(a => {
       const pw = secOf(a.uid); const lt = lastT(a.vendor);
       h += `<tr class="${a.active ? '' : 'off'}${S.editFor === a.uid ? ' editing' : ''}"><td class="l"><b>${esc(a.vendor)}</b></td><td class="mono">${esc(a.login_id)}</td>
         <td class="mono">${pw ? esc(pw) : '<span class="hwp-dim" title="이 판 전에 만든 계정 — [수정]에서 한 번 정하면 보입니다">모름</span>'}</td>
         <td>${a.active ? '<span class="hwp-pill ok">사용</span>' : '<span class="hwp-pill off">꺼짐</span>'}</td><td>${devTxt(a)}</td>
-        <td>${a.active ? ((out[a.vendor] || []).length + '건') : '-'}</td><td>${lt ? hhmm(lt) : '-'}</td>
+        <td>${a.active ? ((out[a.vendor] || []).length + '건') : '-'}</td><td>${lt ? dtm(lt) : '-'}</td>
         <td class="acts">${C.e ? `<button type="button" class="hwp-lnk" data-hwp-act="edit" data-uid="${esc(a.uid)}">수정</button>` : ''}<button type="button" class="hwp-lnk" data-hwp-act="kakao" data-uid="${esc(a.uid)}">카톡 글</button>${C.e && a.dev ? `<button type="button" class="hwp-lnk" data-hwp-act="reset" data-uid="${esc(a.uid)}">기기 초기화</button>` : ''}${C.e ? `<button type="button" class="hwp-lnk" data-hwp-act="${a.active ? 'off' : 'on'}" data-uid="${esc(a.uid)}">${a.active ? '끄기' : '켜기'}</button>` : ''}${C.d ? `<button type="button" class="hwp-lnk red" data-hwp-act="del" data-uid="${esc(a.uid)}">삭제</button>` : ''}</td></tr>`;
       if (S.editFor === a.uid) h += `<tr class="hwp-edit-row"><td colspan="8"><div class="hwp-edit">
         <label>아이디<input id="hwp-ed-id" type="text" value="${esc(a.login_id)}" autocomplete="off" spellcheck="false"></label>
         <label>비밀번호<input id="hwp-ed-pw" type="text" value="${esc(pw)}" placeholder="새 비밀번호 (6자 이상)" autocomplete="off" spellcheck="false"></label>
         ${pw ? '' : '<label>지금 비밀번호<input id="hwp-ed-cur" type="text" placeholder="이 판 전에 만든 계정만 한 번" autocomplete="off" spellcheck="false"></label>'}
         <span class="btns"><button type="button" class="hwp-btn" data-hwp-act="edsave" data-uid="${esc(a.uid)}">저장</button><button type="button" class="hwp-btn gray" data-hwp-act="edcancel">취소</button></span>
-        <div class="hwp-hint">아이디나 비밀번호를 바꾸면 그 가공소 휴대폰은 한 번 로그아웃되고, 새 아이디 · 비밀번호로 다시 들어오면 됩니다. 등록 휴대폰은 그대로 유지됩니다.</div></div></td></tr>`;
+        <div class="hwp-hint">아이디나 비밀번호를 바꾸면 그 가공소 휴대폰은 한 번 로그아웃되고, 새 아이디 · 비밀번호로 다시 들어오면 됩니다. 아이디 · 비밀번호만 맞으면 어느 휴대폰에서든 들어옵니다.</div></div></td></tr>`;
       if (S.delFor === a.uid) h += `<tr class="hwp-edit-row del"><td colspan="8"><div class="hwp-edit">
         <b class="dt">${esc(a.vendor)} (${esc(a.login_id)}) 계정을 삭제합니다 — 되돌릴 수 없습니다. 공정 기록은 남습니다.</b>
         ${pw ? '' : '<label>지금 비밀번호<input id="hwp-del-cur" type="text" placeholder="모르면 비워 두십시오" autocomplete="off" spellcheck="false"></label>'}
         <span class="btns"><button type="button" class="hwp-btn red" data-hwp-act="delsave" data-uid="${esc(a.uid)}">삭제</button><button type="button" class="hwp-btn gray" data-hwp-act="delcancel">취소</button></span></div></td></tr>`;
     });
-    h += '</tbody></table></div></section>';
+    h += '</tbody></table></div></section></div>';
     const pv = S.pv || (vs.find(v => (out[v] || []).length) || vs[0] || '');
     let items = [];
     try { const acc = (H().build().acc || {})[pv] || []; items = acc.filter(it => !it.isPrint && it.colorIdx >= 0 && it.wo && it.wo.type === '염색가공').map(it => itemOf(it.wo, it.colorIdx, pv, it.processTag)); } catch (_) {}
     const cntOf = v => { try { return ((H().build().acc || {})[v] || []).filter(it => !it.isPrint && it.colorIdx >= 0 && it.wo && it.wo.type === '염색가공').length; } catch (_) { return 0; } };
     const cardOf = it => { const L = P.logs.filter(l => l && l.k === it.k && (!l.vendor || l.vendor === pv)); const st = procState(L, it); const sig = P.signal(st, it); const [bg, fg, bd] = SIGC[st.any ? sig.c : 'done']; const iss = st.issues[st.issues.length - 1];
-      return `<div class="hwp-pvc${st.shippedAll ? ' done' : ''}"><div class="a"><span class="no">${esc(it.wo)} · 작지 ${elapsedOf(it)}일째</span><span class="hwp-sigpill sm" style="background:${bg};color:${fg};border-color:${bd}"><i class="hwp-dot" style="background:${fg}"></i>${esc(st.any ? sig.t : '입력 전')}</span></div><div class="nm"><b>${esc(it.item)}</b> · ${esc(it.color)}</div><div class="q"><b class="hwp-qty">몸판 ${it.body}절</b>${it.rib ? ' <b class="hwp-qty rib">리프 ' + it.rib + '절</b>' : ''}</div>
+      return `<div class="hwp-pvc${st.shippedAll ? ' done' : ''}"><div class="a"><span class="no">작지 ${elapsedOf(it)}일째</span><span class="hwp-sigpill sm" style="background:${bg};color:${fg};border-color:${bd}"><i class="hwp-dot" style="background:${fg}"></i>${esc(st.any ? sig.t : '입력 전')}</span></div><div class="nm"><b>${esc(it.item)}</b> · ${esc(it.color)}</div><div class="q"><b class="hwp-qty">몸판 ${it.body}절</b>${it.rib ? ' <b class="hwp-qty rib">리프 ' + it.rib + '절</b>' : ''}</div>
         ${P.stepperHTML(st)}
         <div class="now"><b>${esc(stageText(st))}</b><span>${st.eta && st.eta.date ? '출고 예정 ' + esc(md(st.eta.date)) : '예정일 없음'}</span></div>
         ${st.openReq ? '<div class="iss bad">확인 요청 중</div>' : ''}${iss ? `<div class="iss ${iss.issue === '원단 불량' ? 'bad' : ''}">특이사항 · ${esc(iss.issue)}${iss.note ? ' — ' + esc(iss.note) : ''}</div>` : ''}</div>`; };
@@ -53038,16 +53094,25 @@ window.addEventListener('beforeunload', e => {
       ${items.length ? `<div class="hwp-pvsum">${esc(pv)} · 진행 ${items.length - nDone}건 · 출고 완료 ${nDone}건 · 입력 전 ${items.filter(it => !procState(P.logs.filter(l => l && l.k === it.k), it).any).length}건</div>` : ''}
       <div class="hwp-pv">${items.length ? items.map(cardOf).join('') : '<div class="hwp-empty">진행 중인 염색/가공 건이 없습니다.</div>'}</div></section>`;
     { const owner = !!(H().isOwner && H().isOwner()); const nOK = ('Notification' in window) ? Notification.permission : 'none';
-      h += `<section class="hwp-card"><div class="hwp-card-h"><h3>공정 단계 · 표준 일수</h3><span class="hwp-dim">앞 단계부터 이 단계까지 보통 걸리는 날수 — 넘으면 노랑 · 출고 예정일이 지나면 빨강</span></div>
-      <div class="hwp-stdrow">${P.cfg.stages.map(x => `<label class="hwp-std"><span>${esc(x.n)}</span><input type="number" inputmode="numeric" min="0" max="60" data-hwp-std="${x.c}" value="${Number(x.d) || 0}" ${owner ? '' : 'disabled'}><em>일</em></label>`).join('')}
-      ${owner ? '<button type="button" class="hwp-btn" data-hwp-act="stdsave">표준 일수 저장</button>' : ''}</div>
-      <div class="hwp-hint">후가공완료는 작업지시서에서 [후가공]을 체크한 원단에만 나옵니다. 염색 · 가공도 그 가공소가 맡은 공정만 나옵니다.</div>
+      const locked = !!P.cfg.saved && !S.stdEdit; const dis = (!owner || locked) ? 'disabled' : '';
+      const cal = P.calOf(); const extra = S.stdEdit ? (S.extra || []) : cal.extra; const yrs = Array.from(new Set(cal.base.map(d => d.slice(0, 4)))).join(' · ');
+      h += `<section class="hwp-card${foldGet().std ? ' min' : ''}"><div class="hwp-card-h"><h3>공정 단계 · 표준 일수</h3><span class="hwp-dim">앞 단계부터 이 단계까지 보통 걸리는 <b>영업일</b> 수 — 넘으면 노랑 · 출고 예정일이 지나면 빨강</span>${foldBtn('std', P.cfg.stages.map(x => esc(x.n) + ' ' + (Number(x.d) || 0)).join(' · ') + ' (영업일)')}</div>
+      <div class="hwp-stdrow${locked ? ' locked' : ''}">${P.cfg.stages.map(x => `<label class="hwp-std"><span>${esc(x.n)}</span><input type="number" inputmode="numeric" min="0" max="60" data-hwp-std="${x.c}" value="${Number(x.d) || 0}" ${dis}><em>영업일</em></label>`).join('')}
+      ${owner ? (locked ? '<button type="button" class="hwp-btn amber" data-hwp-act="stdedit">표준 일수 수정</button>' : '<button type="button" class="hwp-btn" data-hwp-act="stdsave">표준 일수 저장</button>' + (P.cfg.saved ? '<button type="button" class="hwp-btn gray" data-hwp-act="stdcancel">취소</button>' : '')) : ''}</div>
+      <div class="hwp-calrow${locked ? ' locked' : ''}"><b>영업일 기준</b>
+        <select id="hwp-cal-country" ${dis}>${Object.keys(P.CAL).map(k => `<option value="${k}"${k === cal.country ? ' selected' : ''}>${esc(P.CAL[k].name)}</option>`).join('')}</select>
+        <span class="hwp-dim">토 · 일 · 공휴일 빼고 셈 (${esc(yrs)}년 공휴일 들어 있음)</span>
+        <span class="hwp-offs"><b>회사 휴무일</b>${extra.length ? extra.slice().sort().map(d => `<span class="hwp-off">${esc(md(d))}${!dis ? `<button type="button" data-hwp-act="extradel" data-d="${esc(d)}" aria-label="빼기">✕</button>` : ''}</span>`).join('') : '<span class="hwp-dim">없음</span>'}</span>
+        ${!dis ? '<input type="date" id="hwp-extra"><button type="button" class="hwp-btn s" data-hwp-act="extraadd">휴무일 더하기</button>' : ''}</div>
+      <div class="hwp-hint">후가공완료는 작업지시서에서 [후가공]을 체크한 원단에만 나옵니다. 염색 · 가공도 그 가공소가 맡은 공정만 나옵니다. 여름휴가처럼 회사가 쉬는 날은 [회사 휴무일]에 더하면 영업일에서 빠집니다.</div>
       <div class="hwp-notifset"><b>알림</b> 가공소가 단계 · 예정일 · 출고 · 특이사항을 넣으면 화면 오른쪽 아래에 알림이 뜨고(✕ 누를 때까지 남음) 소리가 납니다.
-        ${nOK === 'granted' ? '<span class="hwp-ok">바탕화면 알림 켜짐</span>' : (nOK === 'none' ? '' : '<button type="button" class="hwp-btn s" data-hwp-act="notifon">바탕화면 알림도 켜기</button>')}</div></section>`; }
+        ${nOK === 'none' ? '' : (nOK === 'denied' ? '<span class="hwp-dim">바탕화면 알림이 브라우저에서 막혀 있습니다 — 주소창 왼쪽 자물쇠 → 알림 → 허용</span>'
+          : (P.dnotifOn() ? '<button type="button" class="hwp-btn s red" data-hwp-act="notifoff">바탕화면 알림 끄기</button><span class="hwp-ok">바탕화면 알림 켜짐</span>' : '<button type="button" class="hwp-btn s" data-hwp-act="notifon">바탕화면 알림 켜기</button>'))}</div></section>`; }
     return h + '</div>';
   };
   P.bindAdmin = function () {
     const box = document.querySelector('.hwp-admin'); if (!box) return;
+    if (P.__keepStd) { P.__keepStd.forEach(([c, v]) => { const i = box.querySelector(`[data-hwp-std="${c}"]`); if (i) i.value = v; }); P.__keepStd = null; }
     const S = P.ui || (P.ui = { vn: '', id: '', pw: '', made: null, pv: '' });
     const nv = document.getElementById('hwp-new-v'), ni = document.getElementById('hwp-new-id'), np = document.getElementById('hwp-new-pw');
     if (nv) nv.addEventListener('change', () => { S.vn = nv.value; });
@@ -53065,12 +53130,19 @@ window.addEventListener('beforeunload', e => {
       try {
         if (act === 'copyurl') { const ok = await copyText(P.url()); toast(ok ? '주소를 복사했습니다' : '복사가 막혔습니다', ok ? 'success' : 'error'); return; }
         if (act === 'pv') { S.pv = b.dataset.v; rerenderNow(); return; }
+        if (act === 'fold') { const o = foldGet(); o[b.dataset.f] = !o[b.dataset.f]; try { localStorage.setItem('hwp.fold', JSON.stringify(o)); } catch (_) {} rerenderNow(); return; }
         if (act === 'closemade') { S.made = null; rerenderNow(); return; }
-        if (act === 'notifon') { try { await Notification.requestPermission(); } catch (_) {} rerenderNow(); return; }
+        if (act === 'notifon') { try { if (Notification.permission !== 'granted') await Notification.requestPermission(); } catch (_) {} if (Notification.permission === 'granted') { P.dnotifPref('on'); toast('바탕화면 알림을 켰습니다', 'success'); } rerenderNow(); return; }
+        if (act === 'notifoff') { P.dnotifPref('off'); toast('바탕화면 알림을 껐습니다 (화면 안 알림 · 소리는 그대로)', 'success'); rerenderNow(); return; }
+        if (act === 'stdedit') { S.stdEdit = true; S.extra = P.calOf().extra.slice(); rerenderNow(); return; }
+        if (act === 'stdcancel') { S.stdEdit = false; rerenderNow(); return; }
+        if (act === 'extraadd') { const d = val('hwp-extra'); if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) { toast('날짜를 고르십시오', 'error'); return; } S.extra = Array.from(new Set((S.stdEdit ? (S.extra || []) : P.calOf().extra).concat([d]))); S.stdEdit = true; P.__keepStd = Array.from(box.querySelectorAll('[data-hwp-std]')).map(i => [i.dataset.hwpStd, i.value]); rerenderNow(); return; }
+        if (act === 'extradel') { S.extra = (S.stdEdit ? (S.extra || []) : P.calOf().extra).filter(d => d !== b.dataset.d); S.stdEdit = true; P.__keepStd = Array.from(box.querySelectorAll('[data-hwp-std]')).map(i => [i.dataset.hwpStd, i.value]); rerenderNow(); return; }
         if (act === 'stdsave') {
           const st2 = P.cfg.stages.map(x => { const inp = box.querySelector(`[data-hwp-std="${x.c}"]`); return Object.assign({}, x, { d: Math.max(0, Math.min(60, parseInt(inp && inp.value, 10) || 0)) }); });
-          await f.setDoc(f.doc(f.db, f.C('settings'), 'proc_cfg'), { stages: st2, updated_by: email(), updated_at: f.serverTimestamp() }, { merge: true });
-          P.cfg.stages = st2; toast('표준 일수를 저장했습니다', 'success'); rerenderNow(); return;
+          const cal2 = { country: val('hwp-cal-country') || 'KR', extra: (S.stdEdit ? (S.extra || []) : P.calOf().extra).slice().sort() };
+          await f.setDoc(f.doc(f.db, f.C('settings'), 'proc_cfg'), { stages: st2, cal: cal2, updated_by: email(), updated_at: f.serverTimestamp() }, { merge: true });
+          P.cfg.stages = st2; P.cfg.cal = cal2; P.cfg.saved = true; S.stdEdit = false; toast('표준 일수를 저장했습니다 — 바꾸려면 [표준 일수 수정]', 'success'); rerenderNow(); return;
         }
         if (act === 'copymade') { const ok = await copyText(P.accText(S.made)); toast(ok ? '카톡 글을 복사했습니다' : '복사가 막혔습니다', ok ? 'success' : 'error'); return; }
         if (act === 'edcancel') { S.editFor = ''; rerenderNow(); return; }
@@ -53118,7 +53190,8 @@ window.addEventListener('beforeunload', e => {
     try { f.onSnapshot(f.collection(f.db, f.C('proc_acc')), snap => { P.err = ''; const a = []; snap.forEach(d => a.push(Object.assign({ uid: d.id }, d.data()))); P.accs = a; rerender(); }, onErr); } catch (e) { onErr(e); }
     try { if (P.can().v) f.onSnapshot(f.collection(f.db, f.C('proc_secret')), snap => { const o = {}; snap.forEach(d => { o[d.id] = d.data(); }); P.secrets = o; rerender(); }, () => {}); } catch (_) {}   /* hotfix499: 대표만 */
     try { f.onSnapshot(f.doc(f.db, f.C('settings'), 'proc_cfg'), snap => { const d = snap && snap.exists && snap.exists() ? snap.data() : null;   /* hotfix502: 단계 · 표준 일수 */
-      if (d && Array.isArray(d.stages)) P.cfg.stages = STAGE_DEF.map(x => Object.assign({}, x, d.stages.find(y => y && y.c === x.c) || {})); rerender(); }, () => {}); } catch (_) {}
+      if (d && Array.isArray(d.stages)) P.cfg.stages = STAGE_DEF.map(x => Object.assign({}, x, d.stages.find(y => y && y.c === x.c) || {}));
+      if (d && d.cal) P.cfg.cal = d.cal; P.cfg.saved = !!(d && d.updated_at); rerender(); }, () => {}); } catch (_) {}
     try { f.onSnapshot(f.collection(f.db, f.C('proc_pub')), snap => { const o = {}; snap.forEach(d => { o[d.id] = d.data(); }); P.pubs = o; }, () => {}); } catch (_) {}
     try {
       let q = f.collection(f.db, f.C('proc_log'));
@@ -53157,7 +53230,12 @@ window.addEventListener('beforeunload', e => {
 .hwp-row input[type=number]{width:70px}.hwp-row input[type=text]{flex:1 1 220px;min-width:180px}
 .hwp-hint{font-size:11.5px;color:#64748b}
 .hwp-btn{border:0;background:#1e3a8a;color:#fff;border-radius:8px;padding:8px 14px;font-weight:700;cursor:pointer;font-size:12.5px;font-family:inherit}
-.hwp-btn.s{padding:5px 9px;font-size:11.5px;margin:1px 3px 1px 0}.hwp-btn.gray{background:#64748b}.hwp-btn.red{background:#b91c1c}
+.hwp-btn.s{padding:5px 9px;font-size:11.5px;margin:1px 3px 1px 0}.hwp-btn.gray{background:#64748b}.hwp-btn.red{background:#b91c1c}.hwp-btn.amber{background:#d97706}.hwp-btn.amber:hover{background:#b45309}
+.hwp-stdrow.locked .hwp-std{background:#f1f5f9}.hwp-stdrow.locked .hwp-std input{background:#f1f5f9;color:#475569;border-color:#e2e8f0}
+.hwp-calrow{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;margin-top:10px;padding:9px 12px;border:1px solid #e2e8f0;border-radius:10px;background:#f8fafc;font-size:12.5px;color:#334155}
+.hwp-calrow select{border:1px solid #cbd5e1;border-radius:7px;padding:4px 8px;font-family:inherit;font-size:12.5px}.hwp-calrow input[type=date]{border:1px solid #cbd5e1;border-radius:7px;padding:3px 6px;font-family:inherit;font-size:12px}
+.hwp-offs{display:inline-flex;flex-wrap:wrap;align-items:center;gap:5px}.hwp-offs>b{margin-right:2px}.hwp-off{display:inline-flex;align-items:center;gap:4px;background:#fff7ed;border:1px solid #fed7aa;color:#9a3412;border-radius:999px;padding:1px 9px;font-weight:700;font-size:12px}
+.hwp-off button{border:0;background:none;color:#c2410c;cursor:pointer;padding:0;font-size:11px}
 .hwp-delbox{border-color:#fca5a5;background:#fef2f2}.hwp-delbox .hwp-made-h{color:#991b1b}.hwp-pwbox .hwp-row input{flex:1 1 220px}.hwp-btn:disabled{opacity:.55;cursor:default}
 .hwp-hist{border:1px solid #e2e8f0;border-radius:10px;max-height:260px;overflow:auto}
 .hwp-h{display:grid;grid-template-columns:92px 1fr auto;gap:8px;padding:7px 10px;border-bottom:1px solid #f1f5f9;font-size:12.5px}
@@ -53172,6 +53250,10 @@ window.addEventListener('beforeunload', e => {
 .hwp-top .hwp-lnk{color:#fff;background:rgba(255,255,255,.1);border-color:rgba(255,255,255,.45)}.hwp-top .hwp-lnk:hover{background:rgba(255,255,255,.2);border-color:#fff}
 .hwp-stats{display:flex;gap:8px}.hwp-stats span{background:rgba(255,255,255,.12);border-radius:10px;padding:6px 12px;font-size:12px;display:flex;align-items:baseline;gap:6px;white-space:nowrap}.hwp-stats b{font-size:18px}
 .hwp-card{background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px}
+.hwp-stick{position:sticky;top:var(--dashHeadH,0px);z-index:105;display:flex;flex-direction:column;gap:10px;background:#f5f5f5;margin:-16px -20px 0;padding:16px 20px 10px;box-shadow:0 6px 10px -6px rgba(15,23,42,.16)}
+.hwp-card.min{padding-top:9px;padding-bottom:9px}.hwp-card.min>.hwp-card-h{margin-bottom:0}.hwp-card.min>:not(.hwp-card-h){display:none!important}
+.hwp-fold{margin-left:auto;align-self:center;border:1px solid #cbd5e1;background:#fff;color:#334155;border-radius:7px;padding:3px 10px;font-size:11.5px;font-weight:800;cursor:pointer;font-family:inherit;white-space:nowrap}.hwp-fold:hover{background:#f1f5f9}
+.hwp-foldsum{margin-left:6px;font-size:12px;color:#475569;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1}
 .hwp-card-h{display:flex;align-items:baseline;gap:10px;margin-bottom:10px}.hwp-card-h h3,.hwp-dict summary h3{font-size:14.5px;font-weight:800;color:#0f172a;margin:0}
 .hwp-new{display:grid;grid-template-columns:160px 1fr 1fr auto;gap:8px;margin-bottom:10px}
 .hwp-new select,.hwp-new input,.hwp-edit input{border:1px solid #cbd5e1;border-radius:8px;padding:8px 10px;font-size:13px;font-family:inherit;min-width:0;background:#fff}
@@ -53194,7 +53276,7 @@ window.addEventListener('beforeunload', e => {
 .hwp-edit{display:flex;flex-wrap:wrap;align-items:flex-end;gap:10px}.hwp-edit label{display:flex;flex-direction:column;gap:4px;font-size:11.5px;font-weight:700;color:#475569;flex:0 1 240px}
 .hwp-edit .btns{display:flex;gap:6px}.hwp-edit .hwp-hint{flex-basis:100%}.hwp-edit .dt{color:#991b1b;font-size:13px;flex-basis:100%}
 .hwp-vtabs2{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}.hwp-vtabs2 button{border:1px solid #d7dde7;background:#fff;border-radius:16px;padding:5px 12px;font-size:12.5px;font-weight:700;color:#475569;cursor:pointer;font-family:inherit}.hwp-vtabs2 button.on{background:#1e3a8a;color:#fff;border-color:#1e3a8a}
-.hwp-pv{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px}
+.hwp-pv{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px}@media (max-width:1400px){.hwp-pv{grid-template-columns:repeat(4,minmax(0,1fr))}}@media (max-width:1100px){.hwp-pv{grid-template-columns:repeat(2,minmax(0,1fr))}}
 .hwp-pvc{border:1px solid #e2e8f0;border-radius:12px;padding:12px 14px;background:#fff;font-size:12.5px;box-shadow:0 1px 2px rgba(15,23,42,.04)}
 .hwp-pvc .a{display:flex;justify-content:space-between;color:#94a3b8;font-size:11.5px}.hwp-pvc .tg{background:#eef2ff;color:#3730a3;border-radius:6px;padding:0 6px;font-weight:800}
 .hwp-pvc .nm{font-size:14px;margin-top:3px;color:#0f172a}.hwp-pvc .q{margin-top:2px;color:#334155}
