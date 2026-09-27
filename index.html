@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="FABIWOS">
 <meta name="mobile-web-app-capable" content="yes">
-<title>FABIWOS v2.53 hotfix516</title>
+<title>FABIWOS v2.53 hotfix517</title>
 
 <!-- PWA Manifest (인라인 data URL) -->
 <link rel="manifest" id="pwa-manifest">
@@ -9393,6 +9393,31 @@ function greigeNoClean(v) {
       .observe(document.body, { attributes: true, attributeFilter: ['class', 'style'], subtree: true });
   } catch (_) {}
   if (typeof window !== 'undefined') window.__hwDragReset = dragReset;
+})();
+(function hwStMenu() {   /* hotfix517: select.hw-stsel 을 누르면 가운데 정렬된 작은 목록 · 고르면 원래 select 값을 바꾸고 change 를 보낸다(저장은 전과 같음) */
+  if (typeof document === 'undefined' || document.__hwStMenu) return; document.__hwStMenu = true;
+  const esc = t => String(t == null ? '' : t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+  const close = () => { const m = document.getElementById('hw-stmenu'); if (m) m.remove(); };
+  document.addEventListener('mousedown', e => {
+    const t = e.target; const sel = t && t.closest ? t.closest('select.hw-stsel') : null;
+    if (!sel) { if (!(t && t.closest && t.closest('#hw-stmenu'))) close(); return; }
+    if (sel.disabled || e.button !== 0) return;
+    e.preventDefault(); try { sel.focus(); } catch (_) {}
+    const cur = document.getElementById('hw-stmenu'); if (cur && cur.__sel === sel) { close(); return; }
+    close();
+    const z = (() => { try { return parseFloat(getComputedStyle(document.body).zoom) || 1; } catch (_) { return 1; } })();
+    const r = sel.getBoundingClientRect();
+    const m = document.createElement('div'); m.id = 'hw-stmenu'; m.__sel = sel;
+    m.innerHTML = Array.from(sel.options).map((o, i) => `<div class="hw-stm-it ${o.value === '0' ? 'n' : 'y'}${i === sel.selectedIndex ? ' on' : ''}" data-i="${i}">${esc(o.text)}</div>`).join('');
+    m.style.left = (r.left / z) + 'px'; m.style.top = ((r.bottom + 2) / z) + 'px'; m.style.width = Math.max(r.width / z, 84) + 'px';
+    document.body.appendChild(m);
+    const mr = m.getBoundingClientRect(); if (mr.bottom > window.innerHeight - 4) m.style.top = ((r.top - mr.height - 2) / z) + 'px';
+    m.addEventListener('mousedown', ev => { ev.preventDefault(); ev.stopPropagation(); const it = ev.target.closest('.hw-stm-it'); if (!it) return; const i = parseInt(it.dataset.i, 10); close();
+      if (sel.selectedIndex !== i) { sel.selectedIndex = i; sel.dispatchEvent(new Event('input', { bubbles: true })); sel.dispatchEvent(new Event('change', { bubbles: true })); } });
+  }, true);
+  window.addEventListener('scroll', e => { const m = document.getElementById('hw-stmenu'); if (m && !m.contains(e.target)) close(); }, true);
+  window.addEventListener('resize', close);
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') close(); });
 })();
 // hotfix462(대표 지시 9/20): 품목명 · 사종명의 띄어쓰기는 "_" 로 — 이름이 같아 보여도 달라 헷갈리는 일을 막는다.
 //   앞뒤 공백은 지우고, 공백은 "_" 하나로, "_" 옆 공백은 "_" 에 합친다. 이미 "_" 인 자리는 그대로 둔다
@@ -53191,7 +53216,8 @@ window.addEventListener('beforeunload', e => {
   
   // Apple touch icon 적용
   const appleIcon = document.getElementById('apple-touch-icon');
-  if (appleIcon) appleIcon.href = iconAppleTouch;
+  const __hwMainApp = (typeof LINE === 'undefined' || LINE === '') && (location.protocol === 'https:' || location.hostname === 'localhost');   /* hotfix517: 본선(인터넷 주소)만 파일 아이콘 · 매니페스트 */
+  if (appleIcon) appleIcon.href = __hwMainApp ? 'fabiwos-icon-180.png' : iconAppleTouch;
   
   // ===== 2. 매니페스트 동적 생성 (Blob URL) =====
   const manifest = {
@@ -53215,7 +53241,7 @@ window.addEventListener('beforeunload', e => {
   const manifestBlob = new Blob([JSON.stringify(manifest)], { type: 'application/json' });
   const manifestUrl = URL.createObjectURL(manifestBlob);
   const manifestLink = document.getElementById('pwa-manifest');
-  if (manifestLink) manifestLink.href = manifestUrl;
+  if (manifestLink) manifestLink.href = __hwMainApp ? 'fabiwos-manifest.json' : manifestUrl;   /* hotfix517: 파일 매니페스트여야 크롬이 진짜 앱으로 설치(크롬 표시 없는 아이콘) */
   
   // ===== 3. 서비스워커 (Blob URL → 오프라인 캐싱) =====
   // 주의: Blob URL 서비스워커는 일부 브라우저(특히 iOS)에서 제약이 있을 수 있어
@@ -53225,8 +53251,10 @@ window.addEventListener('beforeunload', e => {
     //   SW를 새로 등록하지 않고, 이미 등록된 SW와 캐시를 전부 제거한다 → 항상 최신 파일 로드.
     try {
       navigator.serviceWorker.getRegistrations().then(regs => {
-        regs.forEach(r => r.unregister());
-        if (regs.length) console.log('[PWA] 낡은 서비스워커 ' + regs.length + '개 제거');
+        const keep = r => { const u = String((r.active || r.installing || r.waiting || {}).scriptURL || ''); return /\/(fabiwos-sw|p-sw)\.js$/.test(u); };   /* hotfix517: 우리 두 앱(본선 · 가공소)은 남긴다 — 둘 다 저장을 안 해서 옛 판을 붙잡지 않는다 */
+        const old = regs.filter(r => !keep(r)); old.forEach(r => r.unregister());
+        if (old.length) console.log('[PWA] 낡은 서비스워커 ' + old.length + '개 제거');
+        if (__hwMainApp) navigator.serviceWorker.register('fabiwos-sw.js', { scope: './' }).catch(e => console.log('[PWA] 등록 실패', e && e.message));
       }).catch(() => {});
       if (window.caches && caches.keys) {
         caches.keys().then(keys => Promise.all(keys.map(k => caches.delete(k)))).catch(() => {});
@@ -53287,7 +53315,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix516';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
+  const VERSION = 'v2.53 hotfix517';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
@@ -54377,7 +54405,11 @@ window.addEventListener('beforeunload', e => {
 .hw-stf{display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap}.hw-stf label{display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:700;color:#64748b;background:#f8fafc;border:1px solid #e2e8f0;border-radius:16px;padding:4px 11px;cursor:pointer;white-space:nowrap;user-select:none}
 .hw-stf label.on{background:#fff7ed;border-color:#fdba74;color:#9a3412}.hw-stf input{width:14px;height:14px;margin:0;accent-color:#ea580c}.hw-stf em{font-style:normal;background:#fed7aa;color:#9a3412;border-radius:8px;padding:0 6px;font-size:11px}
 .hw-stsel{border:1px solid #bbf7d0;background:#f0fdf4;color:#166534;border-radius:14px;padding:3px 8px;font-size:12px;font-weight:800;font-family:inherit;cursor:pointer;min-width:78px;text-align:center}
-.hw-stsel.off{border-color:#fecaca;background:#fef2f2;color:#b91c1c}.hw-stsel:disabled{opacity:.7;cursor:default}
+.hw-stsel.off{border-color:#fecaca;background:#fef2f2;color:#b91c1c}
+.hw-stsel{text-align-last:center}.hw-stsel option{text-align:center}
+#hw-stmenu{position:fixed;z-index:100500;background:#fff;border:1px solid #cbd5e1;border-radius:9px;box-shadow:0 10px 28px rgba(15,23,42,.18);padding:4px;box-sizing:border-box;display:flex;flex-direction:column;gap:2px}
+#hw-stmenu .hw-stm-it{text-align:center;padding:6px 8px;border-radius:6px;font-size:12px;font-weight:800;cursor:pointer;user-select:none;white-space:nowrap}
+#hw-stmenu .hw-stm-it.y{color:#166534}#hw-stmenu .hw-stm-it.n{color:#b91c1c}#hw-stmenu .hw-stm-it:hover{background:#f1f5f9}#hw-stmenu .hw-stm-it.on{background:#eff6ff;box-shadow:inset 0 0 0 1px #bfdbfe}.hw-stsel:disabled{opacity:.7;cursor:default}
 .hw-stchip{display:inline-block;border-radius:12px;padding:2px 10px;font-size:11.5px;font-weight:800;background:#f0fdf4;color:#166534;border:1px solid #bbf7d0}.hw-stchip.off{background:#fef2f2;color:#b91c1c;border-color:#fecaca}
 tr.hw-st-offrow td{color:#94a3b8}
 /* hotfix514: 원단(컬러) 코드 — ERP 찾기 칸 · 표 */
