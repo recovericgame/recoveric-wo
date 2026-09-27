@@ -1,4 +1,4 @@
-/* 현일텍스 공정 체크 — 앱 설치용 (HIWOS hotfix499) · hotfix518: 앱을 꺼 둬도 알림(웹 푸시)
+/* 현일텍스 공정 체크 — 앱 설치용 (HIWOS hotfix499) · hotfix518: 앱을 꺼 둬도 알림(웹 푸시) · hotfix521: 소리 + 진동
  *   저장(캐시)은 하지 않는다: 늘 새 화면 · 새 자료를 인터넷에서 받는다 */
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', e => e.waitUntil(self.clients.claim()));
@@ -15,7 +15,7 @@ self.addEventListener('push', e => {
   e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(cs => {
     const open = cs.filter(c => { try { return /\/p(\.html)?$/.test(new URL(c.url).pathname) && c.visibilityState === 'visible'; } catch (_) { return false; } });
     if (open.length) { open.forEach(c => c.postMessage({ hwpush: x })); return; }
-    return self.registration.showNotification(title, { body: x.body || '', icon: 'p-icon-192.png', badge: 'p-icon-192.png', tag: x.tag || 'hwp-news', renotify: true, data: { url: x.url || new URL('p.html?app=1', self.registration.scope).href } });
+    return self.registration.showNotification(title, { body: x.body || '', icon: 'p-icon-192.png', badge: 'p-icon-192.png', tag: x.tag || 'hwp-news', renotify: true, silent: false, vibrate: [300, 120, 300, 120, 300], data: { url: x.url || new URL('p.html?app=1', self.registration.scope).href } });
   }));
 });
 self.addEventListener('notificationclick', e => {

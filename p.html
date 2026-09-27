@@ -392,7 +392,7 @@ import { initializeFirestore, getFirestore, doc, getDoc, updateDoc, setDoc, dele
  *   읽는 것: proc_acc/{내 uid} · proc_pub/{내 업체} · proc_log(내 업체 것만)
  *   쓰는 것: proc_log 한 줄 추가(고치기 · 지우기 없음) · 처음 로그인 때 내 기기 등록 한 번
  */
-const PVER = 'p11 (hotfix518)';
+const PVER = 'p12 (hotfix521)';
 const cfg = { apiKey: "AIzaSyAIaNFZozda5sp4Qjs7LEn-aXYLX1JZi10", authDomain: "recoveric-wo.firebaseapp.com", projectId: "recoveric-wo", storageBucket: "recoveric-wo.firebasestorage.app", messagingSenderId: "267946532287", appId: "1:267946532287:web:fcc1b597c9bf53c9d8950a" };
 const DOMAIN = 'proc.recoveric.com';
 const app = initializeApp(cfg, 'hwvendor');   /* hotfix507: 이름 붙인 앱 = 로그인 보관 칸이 직원 화면(구글 로그인)과 따로. 전에는 같은 크롬에서 가공소로 로그인하면 직원 화면이 '권한 없음'으로 로그아웃되고, 그 로그아웃이 다시 가공소 화면까지 끊었다 */
@@ -475,6 +475,7 @@ $('lg-form').addEventListener('submit', async e => {
   if (!id || !pw) { $('lg-msg').textContent = '아이디와 비밀번호를 넣으십시오.'; return; }
   try { localStorage.setItem('hwp.auto', $('lg-auto').checked ? '1' : '0'); } catch (_) {}
   const em = id.includes('@') ? id : id + '@' + DOMAIN;
+  askNotify();   /* hotfix521: 로그인 단추를 누른 그 순간(브라우저가 허락 창을 띄울 수 있는 때) 알림 허락을 묻는다 — 처음 한 번만 뜸 */
   if (pw === AUTO_TOKEN && S.sess && String(S.sess.email || '').toLowerCase() === em) { $('lg-btn').disabled = true; $('lg-msg').textContent = '확인 중 …'; enter(S.sess); return; }
   if (pw === AUTO_TOKEN) { $('lg-pw').value = ''; $('lg-msg').textContent = '비밀번호를 넣으십시오.'; $('lg-pw').focus(); return; }
   $('lg-btn').disabled = true; $('lg-msg').textContent = '확인 중 …'; S.go = true;
@@ -522,7 +523,7 @@ async function enter(user) {
   $('vn').innerHTML = esc(acc.vendor) + '<span class="to">›</span><span class="hq">현일텍스</span>';
   subscribe();
   guardBack();
-  pushReg(false).then(() => { try { paintNset(); } catch (_) {} });   /* hotfix518: 알림을 이미 허락한 휴대폰은 들어올 때 조용히 등록(새로 고침) */
+  (S.permP || Promise.resolve()).then(() => pushReg(false)).then(ok => { try { paintNset(); } catch (_) {} if (ok && !lsGet('hwp.pushOkShown', false)) { lsSet('hwp.pushOkShown', true); toast('알림이 켜졌습니다 — 앱을 꺼 둬도 새 작업의뢰가 오면 소리 + 진동으로 알려 드립니다'); } else if (!ok) nudgeNotify(); });   /* hotfix518 · 521: 허락했으면 들어올 때 등록 · 아직이면 한 번 권함 */
 }
 /* ===== hotfix518: 앱을 꺼 둬도 알림(웹 푸시) — 이 휴대폰 알림 열쇠(token)를 push_tok 에 적어 두면, 현일텍스 서버(Cloud Functions)가
  *   새 작업의뢰 · 확인 요청 · 현일텍스 안내가 생길 때 이 휴대폰으로 보낸다. 로그아웃하면 열쇠를 지운다 ===== */
@@ -545,6 +546,19 @@ async function pushReg(ask) {
     }
     S.push = true; return true;
   } catch (e) { S.pushErr = (e && (e.code || e.message)) || '오류'; console.warn('[푸시]', e); return false; }
+}
+/* hotfix521: 처음 쓰는 휴대폰은 알림을 켜 둔 채로 시작 — 소리 + 진동이 기본(nmode 'both') */
+function askNotify() { try { if (!('Notification' in window) || Notification.permission !== 'default' || location.protocol !== 'https:') return; if (!lsGet('hwp.nmode.set', false)) { try { if (!localStorage.getItem('hwp.nmode')) localStorage.setItem('hwp.nmode', 'both'); } catch (_) {} lsSet('hwp.nmode.set', true); } S.permP = Notification.requestPermission().catch(() => {}); } catch (_) {} }
+let nudged = false;
+function nudgeNotify() {
+  try { if (nudged || !('Notification' in window) || location.protocol !== 'https:' || Notification.permission === 'granted') return; nudged = true;
+    const denied = Notification.permission === 'denied';
+    sheet(`<h3>알림을 켜 두십시오</h3><div class="sub">앱을 꺼 둬도 새 작업의뢰 · 확인 요청이 오면 <b>소리 + 진동</b>으로 알려 드립니다.</div>
+      ${denied ? '<div class="ig-note">이 휴대폰에서 알림이 막혀 있습니다 — 휴대폰 <b>설정 → 애플리케이션 → FABIWOS(또는 Chrome) → 알림</b>을 켜 주십시오.</div>' : ''}
+      <div class="row2"><button type="button" class="no" data-x>나중에</button>${denied ? '' : '<button type="button" class="ok teal" id="nn-on">알림 켜기</button>'}</div>`);
+    const sh = $('sheet'); sh.querySelectorAll('[data-x]').forEach(b => b.addEventListener('click', () => closeSheet()));
+    const on = $('nn-on'); if (on) on.addEventListener('click', async () => { closeSheet(); const ok = await pushReg(true); try { paintNset(); } catch (_) {} toast(ok ? '알림이 켜졌습니다 — 앱을 꺼 둬도 소리 + 진동으로 알려 드립니다' : ('알림 등록이 안 됐습니다' + (S.pushErr ? ' — ' + S.pushErr.slice(0, 60) : '')), !ok); });
+  } catch (_) {}
 }
 async function pushOff() { const last = lsGet('hwp.push', null); S.push = false; if (!last || !last.id) return; try { await deleteDoc(doc(db, 'push_tok', last.id)); } catch (_) {} try { localStorage.removeItem('hwp.push'); } catch (_) {} }
 /* 앱이 열려 있을 때 온 푸시는 서비스워커가 알림창 대신 여기로 넘긴다 — 화면이 이미 실시간으로 받으므로 소리만 */
