@@ -333,8 +333,10 @@ body.pc .device>#toast{position:absolute;zoom:1.06}
 .nb-ok{width:100%;border:0;background:linear-gradient(135deg,#0f766e,#1d4ed8);color:#fff;border-radius:12px;padding:12px;font-size:15px;font-weight:800;margin-top:2px;cursor:pointer;font-family:inherit}
 .nlist{max-height:58vh;overflow:auto;margin:6px 0 10px}.nl{background:#fff;border:1px solid #eef2f6}.nl.un{background:#f0f9ff;border-color:#bae6fd}.nl time{flex:0 0 auto;font-size:11.5px;color:#94a3b8}
 .c-ic{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}.c-icl{min-width:0}
-.c-stamps{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:6px 8px;max-width:48%;padding-top:4px}
-.c-stamps span{display:inline-block;color:var(--sc);border:3px double var(--sc);background:rgba(255,255,255,.9);border-radius:4px;padding:2px 8px;font-size:15px;font-weight:900;letter-spacing:2px;line-height:1.2;transform:rotate(var(--rt));white-space:nowrap}
+.c-stamps{display:flex;flex-wrap:wrap;justify-content:flex-end;align-content:flex-start;gap:4px;max-width:46%;padding-top:3px}
+.c-stamps span{display:inline-block;color:var(--sc);border:1px solid var(--sc);background:#fff;border-radius:5px;padding:1px 6px;font-size:11.5px;font-weight:800;letter-spacing:.5px;line-height:1.5;white-space:nowrap}   /* hotfix510: 작고 정갈하게 */
+#ptr{position:fixed;left:50%;top:calc(env(safe-area-inset-top) + 8px);transform:translate(-50%,0);z-index:70;display:none;align-items:center;gap:8px;background:#fff;border:1px solid #e2e8f0;border-radius:999px;padding:7px 14px;box-shadow:0 8px 22px rgba(15,23,42,.16);font-size:13px;font-weight:700;color:#334155}
+#ptr.on{display:flex}#ptr i{width:16px;height:16px;border-radius:50%;border:2px solid #cbd5e1;border-top-color:#0e7490}#ptr.go i{border-color:#0e7490}#ptr.spin i{animation:ptrs .7s linear infinite}@keyframes ptrs{to{transform:rotate(360deg)}}
 .nset{padding:12px 18px 6px;border-top:1px solid #eef2f6}
 .nset-h b{display:block;font-size:14px;color:#0f172a}.nset-h small{font-size:11.5px;color:#94a3b8}
 .seg{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;background:#f1f5f9;border-radius:12px;padding:4px;margin:8px 0}
@@ -389,7 +391,7 @@ import { initializeFirestore, getFirestore, doc, getDoc, updateDoc, collection, 
  *   읽는 것: proc_acc/{내 uid} · proc_pub/{내 업체} · proc_log(내 업체 것만)
  *   쓰는 것: proc_log 한 줄 추가(고치기 · 지우기 없음) · 처음 로그인 때 내 기기 등록 한 번
  */
-const PVER = 'p9 (hotfix509)';
+const PVER = 'p10 (hotfix510)';
 const cfg = { apiKey: "AIzaSyAIaNFZozda5sp4Qjs7LEn-aXYLX1JZi10", authDomain: "recoveric-wo.firebaseapp.com", projectId: "recoveric-wo", storageBucket: "recoveric-wo.firebasestorage.app", messagingSenderId: "267946532287", appId: "1:267946532287:web:fcc1b597c9bf53c9d8950a" };
 const DOMAIN = 'proc.recoveric.com';
 const app = initializeApp(cfg, 'hwvendor');   /* hotfix507: 이름 붙인 앱 = 로그인 보관 칸이 직원 화면(구글 로그인)과 따로. 전에는 같은 크롬에서 가공소로 로그인하면 직원 화면이 '권한 없음'으로 로그아웃되고, 그 로그아웃이 다시 가공소 화면까지 끊었다 */
@@ -523,7 +525,7 @@ async function enter(user) {
 /* hotfix505: 실시간 — 받기를 걸어 두고, 휴대폰을 다시 켜거나 인터넷이 돌아오면 곧바로 다시 건다 (끌어내려 새로고침할 필요 없음) */
 function subscribe() {
   S.unsub.forEach(f => { try { f(); } catch (_) {} }); S.unsub = []; const acc = S.acc; if (!acc) return;
-  S.unsub.push(onSnapshot(doc(db, 'proc_pub', acc.vendor), sn => { S.live = true; S.items = (sn.exists() && Array.isArray(sn.data().items)) ? sn.data().items : []; S.lists = sn.exists() ? (sn.data().lists || null) : null; S.pubAt = sn.exists() ? sn.data().at : null; S.gotPub = true; render(); scanNews(); }, e => onDenied(e)));
+  S.unsub.push(onSnapshot(doc(db, 'proc_pub', acc.vendor), sn => { S.live = true; S.items = (sn.exists() && Array.isArray(sn.data().items)) ? sn.data().items : []; S.items = keepStamps(S.items); S.lists = sn.exists() ? (sn.data().lists || null) : null; S.pubAt = sn.exists() ? sn.data().at : null; S.gotPub = true; render(); scanNews(); }, e => onDenied(e)));
   S.unsub.push(onSnapshot(query(collection(db, 'proc_log'), where('vendor', '==', acc.vendor)), sn => { S.live = true; const a = []; sn.forEach(d => a.push(Object.assign({ id: d.id }, d.data({ serverTimestamps: 'estimate' })))); S.logs = a; S.gotLog = true; render(); scanNews(); }, e => onDenied(e)));
 }
 let hidAt = 0;
@@ -572,6 +574,22 @@ function procState(L, it) {
 }
 const stOf = it => procState(S.logs.filter(l => l.k === it.k), it);
 
+/* hotfix510: 스탬프는 목록에 실려 오는데, 옛 판 FABIWOS 가 목록을 다시 올리면 스탬프 칸이 빠진다 — 칸이 아예 없으면(옛 판) 마지막으로 받은 스탬프를 그대로 쓴다 */
+function keepStamps(items) { const mem = lsGet(vKey('stamps'), {}) || {}; let ch = false;
+  const out = items.map(it => { if (!it || !it.k) return it; if (Array.isArray(it.stamps)) { if (JSON.stringify(mem[it.k] || []) !== JSON.stringify(it.stamps)) { mem[it.k] = it.stamps; ch = true; } return it; } return mem[it.k] ? Object.assign({}, it, { stamps: mem[it.k] }) : it; });
+  if (ch) lsSet(vKey('stamps'), mem); return out; }
+/* hotfix510: 맨 위에서 끌어내리면 새로고침(다시 받기) — 앱으로 설치해도 된다 */
+(function () { let y0 = null, pulling = false, ind = null;
+  const scr = () => document.querySelector('body.pc .screen');
+  const atTop = () => { const s = scr(); return s ? s.scrollTop <= 0 : (window.scrollY || 0) <= 0; };
+  const blocked = () => !S.acc || $('sheet').classList.contains('on') || $('drawer').classList.contains('on');
+  const mk = () => { if (!ind) { ind = document.createElement('div'); ind.id = 'ptr'; ind.innerHTML = '<i></i><span>놓으면 새로고침</span>'; document.body.appendChild(ind); } return ind; };
+  document.addEventListener('touchstart', e => { if (blocked() || !atTop()) { y0 = null; return; } y0 = e.touches[0].clientY; pulling = false; }, { passive: true });
+  document.addEventListener('touchmove', e => { if (y0 == null) return; const dy = e.touches[0].clientY - y0; if (dy <= 0) { if (ind) ind.classList.remove('on', 'go'); return; } pulling = true; const i = mk(); i.classList.add('on'); i.style.transform = `translate(-50%, ${Math.min(dy, 110) * .6}px)`; i.classList.toggle('go', dy > 80); i.querySelector('span').textContent = dy > 80 ? '놓으면 새로고침' : '당겨서 새로고침'; }, { passive: true });
+  document.addEventListener('touchend', () => { if (y0 == null) return; const go = ind && ind.classList.contains('go'); y0 = null; if (!ind) return;
+    if (go && pulling) { ind.querySelector('span').textContent = '새로 받는 중 …'; ind.classList.add('spin'); try { subscribe(); } catch (_) {} setTimeout(() => { render(); if (ind) { ind.classList.remove('on', 'go', 'spin'); ind.style.transform = ''; } toast('새로 받았습니다'); }, 700); }
+    else { ind.classList.remove('on', 'go'); ind.style.transform = ''; } }, { passive: true });
+})();
 /* ===== hotfix509: 정렬 ===== */
 const SORTS = [['new', '최근 의뢰순'], ['old', '오래된 의뢰순'], ['eta', '출고 예정일 빠른 순'], ['stage', '진행이 늦은 순']];
 function sortKey() { let k = ''; try { k = localStorage.getItem('hwp.sort') || ''; } catch (_) {} return SORTS.some(x => x[0] === k) ? k : 'new'; }
@@ -640,7 +658,8 @@ function openNews() {
   sheet(`<h3>새 소식</h3><div class="sub">최근 14일 · 누르면 그 원단으로 갑니다</div>
     <div class="nlist">${a.length ? a.map(n => { const t = NT[n.type] || NT.note; const ln = newsLine(n); return `<button type="button" class="nl${n.read ? '' : ' un'}" data-nk="${esc(n.k || '')}" data-nid="${esc(n.id)}"><em class="${t[1]}">${t[0]}</em><span><b>${esc(ln.nm)}</b>${ln.sub ? `<small>${esc(ln.sub)}</small>` : ''}</span><time>${esc(md(new Date(n.at).toISOString().slice(0, 10)))} ${esc(hhmm(n.at))}</time></button>`; }).join('') : '<div class="pe">아직 새 소식이 없습니다.<br>현일텍스에서 새 작업의뢰 · 확인 요청이 오면 여기에 쌓입니다.</div>'}</div>
     <div class="row2"><button type="button" class="no" data-x>닫기</button>${a.some(n => !n.read) ? '<button type="button" class="ok teal" id="nl-all">모두 읽음</button>' : ''}</div>`);
-  const sh = $('sheet'); sh.querySelectorAll('.nl').forEach(b => b.addEventListener('click', () => { const x = newsList(); x.forEach(n => { if (n.id === b.dataset.nid) n.read = true; }); newsSave(x); closeSheet(); goCard(b.dataset.nk); }));
+  const sh = $('sheet'); sh.querySelectorAll('[data-x]').forEach(b => b.addEventListener('click', () => closeSheet()));   /* hotfix510: [닫기] */
+  sh.querySelectorAll('.nl').forEach(b => b.addEventListener('click', () => { const x = newsList(); x.forEach(n => { if (n.id === b.dataset.nid) n.read = true; }); newsSave(x); closeSheet(); goCard(b.dataset.nk); }));
   const all = $('nl-all'); if (all) all.addEventListener('click', () => { const x = newsList(); x.forEach(n => { n.read = true; }); newsSave(x); hideNbox(false); closeSheet(); });
 }
 function paintNset() {
