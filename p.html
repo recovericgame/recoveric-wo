@@ -284,6 +284,7 @@ html,body{overscroll-behavior-y:none;word-break:keep-all;overflow-wrap:break-wor
 .ig-menu{padding:4px 0;background:#fff;margin:6px 6px 8px auto;width:118px;border-radius:10px;box-shadow:0 6px 16px rgba(15,23,42,.16)}.ig-menu div{padding:6px 10px;color:#334155;white-space:nowrap;position:relative}
 .ig-menu div.hot{background:#e0f5f6;color:#0f5f76;font-weight:800}.ig-menu div.hot i{position:static;display:inline-block;margin-left:6px;font-style:normal;background:#dc2626;color:#fff;border-radius:6px;padding:1px 6px;font-size:10.5px;animation:igP 1.4s ease-in-out infinite}
 @keyframes igP{50%{transform:scale(1.12)}}.ig-menu div.hot i{animation-name:none}
+.ig-menu div.hot{white-space:normal;line-height:1.35;word-break:keep-all}.ig-menu div.hot i{display:block;width:max-content;margin:3px 0 0}   /* hotfix518: 새 크롬 메뉴 이름이 길어 두 줄 · [여기]는 아래 */
 .ig-steps{margin:0;padding-left:20px;font-size:14.5px;line-height:1.6;color:#1f2937}.ig-steps li{margin-bottom:8px}
 .ig-note{font-size:13px;color:#475569;background:#f8fafc;border-radius:10px;padding:9px 12px}
 #drawer .pf{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 18px calc(14px + env(safe-area-inset-bottom));border-top:1px solid #eef2f6;font-size:12px;color:#94a3b8}
@@ -385,13 +386,13 @@ body.pc .device>#toast{position:absolute;zoom:1.06}
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
 import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut, setPersistence, browserLocalPersistence } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
-import { initializeFirestore, getFirestore, doc, getDoc, updateDoc, collection, query, where, onSnapshot, addDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { initializeFirestore, getFirestore, doc, getDoc, updateDoc, setDoc, deleteDoc, collection, query, where, onSnapshot, addDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
 /* 현일텍스 공정 체크 (가공소 휴대폰용) — HIWOS hotfix498 · p1
  *   읽는 것: proc_acc/{내 uid} · proc_pub/{내 업체} · proc_log(내 업체 것만)
  *   쓰는 것: proc_log 한 줄 추가(고치기 · 지우기 없음) · 처음 로그인 때 내 기기 등록 한 번
  */
-const PVER = 'p10 (hotfix510)';
+const PVER = 'p11 (hotfix518)';
 const cfg = { apiKey: "AIzaSyAIaNFZozda5sp4Qjs7LEn-aXYLX1JZi10", authDomain: "recoveric-wo.firebaseapp.com", projectId: "recoveric-wo", storageBucket: "recoveric-wo.firebasestorage.app", messagingSenderId: "267946532287", appId: "1:267946532287:web:fcc1b597c9bf53c9d8950a" };
 const DOMAIN = 'proc.recoveric.com';
 const app = initializeApp(cfg, 'hwvendor');   /* hotfix507: 이름 붙인 앱 = 로그인 보관 칸이 직원 화면(구글 로그인)과 따로. 전에는 같은 크롬에서 가공소로 로그인하면 직원 화면이 '권한 없음'으로 로그아웃되고, 그 로그아웃이 다시 가공소 화면까지 끊었다 */
@@ -431,7 +432,7 @@ function showInstall() {
 function howText() {
   if (isIOS) return '사파리 아래쪽 <b>[공유]</b> 단추 → <b>[홈 화면에 추가]</b> → <b>[추가]</b><br>그다음 바탕화면의 <b>[FABIWOS]</b> 아이콘으로 열어 로그인하십시오.';
   if (isSamsung) return '오른쪽 아래 <b>[≡]</b> → <b>[현재 페이지 추가]</b> → <b>[홈 화면]</b><br>그다음 바탕화면의 <b>[FABIWOS]</b> 아이콘으로 여십시오.';
-  return '오른쪽 위 <b>[⋮]</b> → <b>[홈 화면에 추가]</b> 또는 <b>[앱 설치]</b><br>그다음 바탕화면의 <b>[FABIWOS]</b> 아이콘으로 여십시오.';
+  return '오른쪽 위 <b>[⋮]</b> → <b>[설치 및 바로가기 만들기]</b> → 다음 창에서 <b>[설치]</b> (옛 크롬은 <b>[앱 설치]</b>)<br>그다음 바탕화면의 <b>[FABIWOS]</b> 아이콘으로 여십시오.';
 }
 async function doInstall() {
   if (!deferred) { for (let i = 0; i < 8 && !deferred; i++) await new Promise(r => setTimeout(r, 200)); }   // 크롬 설치 창 준비를 잠깐 기다림
@@ -440,16 +441,16 @@ async function doInstall() {
 }
 /* hotfix505b: 크롬이 설치 창을 띄워 주지 않을 때(한 번 [취소]한 뒤 · 이미 설치됨 등) — 메뉴에서 설치하는 법을 그림으로 */
 function installGuide() {
-  const menu = isIOS ? ['공유', '즐겨찾기 추가', '홈 화면에 추가', '읽기 목록에 추가'] : (isSamsung ? ['현재 페이지 추가', '북마크', '방문 기록', '설정'] : ['새 탭', '새 시크릿 탭', '방문 기록', '다운로드', '앱 설치', '홈 화면에 추가', '설정']);
-  const hot = isIOS ? '홈 화면에 추가' : (isSamsung ? '현재 페이지 추가' : '앱 설치');
+  const menu = isIOS ? ['공유', '즐겨찾기 추가', '홈 화면에 추가', '읽기 목록에 추가'] : (isSamsung ? ['현재 페이지 추가', '북마크', '방문 기록', '설정'] : ['새 탭', '방문 기록', '다운로드', '번역…', '설치 및 바로가기 만들기', '설정']);   /* hotfix518: 새 크롬 메뉴 이름 */
+  const hot = isIOS ? '홈 화면에 추가' : (isSamsung ? '현재 페이지 추가' : '설치 및 바로가기 만들기');
   const steps = isIOS ? ['사파리 아래쪽 <b>[공유 ⬆]</b> 단추를 누릅니다', '<b>[홈 화면에 추가]</b>를 누릅니다', '오른쪽 위 <b>[추가]</b>를 누르면 바탕화면에 <b>FABIWOS</b> 아이콘이 생깁니다']
     : (isSamsung ? ['오른쪽 아래 <b>[≡]</b>를 누릅니다', '<b>[현재 페이지 추가]</b> → <b>[홈 화면]</b>을 누릅니다', '바탕화면에 <b>FABIWOS</b> 아이콘이 생깁니다']
-    : ['크롬 오른쪽 위 <b>[⋮]</b>(점 세 개)를 누릅니다', '<b>[앱 설치]</b>를 누릅니다 — 없으면 <b>[홈 화면에 추가]</b> → <b>[설치]</b>', '바탕화면에 <b>FABIWOS</b> 아이콘이 생깁니다. 이제 그 아이콘으로 여십시오']);
+    : ['크롬 오른쪽 위 <b>[⋮]</b>(점 세 개)를 누릅니다', '<b>[설치 및 바로가기 만들기]</b>를 누릅니다 (옛 크롬은 <b>[앱 설치]</b>)', '다음 창에서 <b>[설치]</b>를 고릅니다 — <b>[바로가기 만들기]</b>를 고르면 크롬 표시가 붙은 아이콘이 됩니다', '바탕화면에 <b>FABIWOS</b> 아이콘이 생깁니다. 이제 그 아이콘으로 여십시오']);
   sheet(`<h3>휴대폰에 앱으로 설치</h3><div class="sub">플레이스토어가 아니라 이 화면에서 바로 설치합니다. 설치하면 바탕화면 아이콘으로 앱처럼 열립니다.</div>
     <div class="ig"><div class="ig-phone"><div class="ig-bar"><span class="ig-url">recovericgame.github.io</span><span class="ig-dots${isIOS || isSamsung ? ' off' : ''}">⋮</span></div>
       <div class="ig-menu">${menu.map(x => `<div class="${x === hot ? 'hot' : ''}">${x}${x === hot ? '<i>여기</i>' : ''}</div>`).join('')}</div></div>
     <ol class="ig-steps">${steps.map(x => `<li>${x}</li>`).join('')}</ol></div>
-    <div class="ig-note">메뉴에 <b>[앱 열기]</b>가 보이면 이미 설치돼 있는 것입니다 — 바탕화면(또는 앱 목록)의 <b>FABIWOS</b> 아이콘을 누르십시오.</div>
+    <div class="ig-note">다음 창에 <b>[앱이 이미 설치되어 있습니다]</b>가 보이면 이미 설치돼 있는 것입니다 — 앱 목록의 <b>FABIWOS</b>(예전 이름 <b>HIWOS</b>) 아이콘을 누르십시오.<br><b>HIWOS</b> 로 설치돼 있으면 그 앱을 길게 눌러 [삭제]한 뒤 다시 설치하십시오.</div>
     <div class="row2"><button type="button" class="ok teal" data-x>알겠습니다</button></div>`);
   $('sheet').onclick = e => { if (e.target.id === 'sheet' || e.target.closest('[data-x]')) closeSheet(); };
 }
@@ -484,7 +485,7 @@ $('lg-form').addEventListener('submit', async e => {
     $('lg-btn').disabled = false; S.go = false;
   }
 });
-$('out').addEventListener('click', async () => { if (!confirm('로그아웃합니까?')) return; S.sess = null; closeAll(); await signOut(auth); });
+$('out').addEventListener('click', async () => { if (!confirm('로그아웃합니까?')) return; S.sess = null; closeAll(); await pushOff(); await signOut(auth); });   /* hotfix518: 로그아웃하면 이 휴대폰 알림 열쇠도 지움 */
 
 /* hotfix508: 로그아웃 · 로그인 화면으로 갈 때 삼선 목록 · 아래 창 · 알림 창을 모두 닫고 화면 잠금을 푼다 */
 function closeAll() {
@@ -521,7 +522,33 @@ async function enter(user) {
   $('vn').innerHTML = esc(acc.vendor) + '<span class="to">›</span><span class="hq">현일텍스</span>';
   subscribe();
   guardBack();
+  pushReg(false).then(() => { try { paintNset(); } catch (_) {} });   /* hotfix518: 알림을 이미 허락한 휴대폰은 들어올 때 조용히 등록(새로 고침) */
 }
+/* ===== hotfix518: 앱을 꺼 둬도 알림(웹 푸시) — 이 휴대폰 알림 열쇠(token)를 push_tok 에 적어 두면, 현일텍스 서버(Cloud Functions)가
+ *   새 작업의뢰 · 확인 요청 · 현일텍스 안내가 생길 때 이 휴대폰으로 보낸다. 로그아웃하면 열쇠를 지운다 ===== */
+async function sha40(t) { try { const b = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(t)); return Array.from(new Uint8Array(b)).map(x => x.toString(16).padStart(2, '0')).join('').slice(0, 40); } catch (_) { let h = 0; for (let i = 0; i < t.length; i++) h = (h * 31 + t.charCodeAt(i)) | 0; return 'h' + (h >>> 0).toString(16) + t.length; } }
+async function pushReg(ask) {
+  S.pushErr = '';
+  try {
+    if (!S.acc || !('Notification' in window) || !('serviceWorker' in navigator) || location.protocol !== 'https:') return false;
+    if (Notification.permission !== 'granted') { if (!ask) return false; if (await Notification.requestPermission() !== 'granted') return false; }
+    const M = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-messaging.js');
+    if (!(await M.isSupported())) { S.pushErr = '이 브라우저는 지원하지 않음'; return false; }
+    const reg = await navigator.serviceWorker.register('p-sw.js', { scope: './p' });
+    if (!reg.active) await new Promise(r => { const w = reg.installing || reg.waiting; if (!w) return r(); w.addEventListener('statechange', () => { if (w.state === 'activated') r(); }); setTimeout(r, 6000); });
+    const token = await M.getToken(M.getMessaging(app), { serviceWorkerRegistration: reg });
+    if (!token) { S.pushErr = '열쇠를 못 받음'; return false; }
+    const id = await sha40(token); const last = lsGet('hwp.push', null);
+    if (!last || last.id !== id || last.uid !== S.uid || Date.now() - (last.t || 0) > 7 * 864e5) {
+      await setDoc(doc(db, 'push_tok', id), { token, role: 'proc', vendor: S.acc.vendor, uid: S.uid, url: new URL('p.html?app=1', location.href).href, ua: navigator.userAgent.slice(0, 160), at: serverTimestamp() });
+      lsSet('hwp.push', { id, uid: S.uid, t: Date.now() });
+    }
+    S.push = true; return true;
+  } catch (e) { S.pushErr = (e && (e.code || e.message)) || '오류'; console.warn('[푸시]', e); return false; }
+}
+async function pushOff() { const last = lsGet('hwp.push', null); S.push = false; if (!last || !last.id) return; try { await deleteDoc(doc(db, 'push_tok', last.id)); } catch (_) {} try { localStorage.removeItem('hwp.push'); } catch (_) {} }
+/* 앱이 열려 있을 때 온 푸시는 서비스워커가 알림창 대신 여기로 넘긴다 — 화면이 이미 실시간으로 받으므로 소리만 */
+try { navigator.serviceWorker && navigator.serviceWorker.addEventListener('message', ev => { if (ev.data && ev.data.hwpush) { try { ring(); } catch (_) {} } }); } catch (_) {}
 /* hotfix505: 실시간 — 받기를 걸어 두고, 휴대폰을 다시 켜거나 인터넷이 돌아오면 곧바로 다시 건다 (끌어내려 새로고침할 필요 없음) */
 function subscribe() {
   S.unsub.forEach(f => { try { f(); } catch (_) {} }); S.unsub = []; const acc = S.acc; if (!acc) return;
@@ -665,12 +692,13 @@ function openNews() {
 function paintNset() {
   const box = $('nmode'); if (!box) return; const m = nmode();
   box.innerHTML = NMODES.map(([k, l]) => `<button type="button" data-nm="${k}" class="${k === m ? 'on' : ''}">${l}</button>`).join('');
-  const p = $('nperm'); if (p) { const ok = ('Notification' in window) && Notification.permission === 'granted'; p.textContent = ok ? '휴대폰 알림창 받는 중' : '휴대폰 알림창에도 받기'; p.classList.toggle('on', ok); p.style.display = ('Notification' in window) ? '' : 'none'; }
+  const p = $('nperm'); if (p) { const ok = ('Notification' in window) && Notification.permission === 'granted'; p.textContent = ok ? (S.push ? '앱을 꺼 둬도 알림 받는 중' : '휴대폰 알림창 받는 중') : '앱을 꺼 둬도 알림 받기'; p.classList.toggle('on', ok); p.style.display = ('Notification' in window) ? '' : 'none'; }
 }
 document.addEventListener('click', async e => {
   const nm = e.target.closest('#nmode [data-nm]'); if (nm) { try { localStorage.setItem('hwp.nmode', nm.dataset.nm); } catch (_) {} paintNset(); if (nm.dataset.nm !== 'off') ring(nm.dataset.nm); toast('새 소식 알림 · ' + (NMODES.find(x => x[0] === nm.dataset.nm) || [])[1]); return; }
   if (e.target.closest('#ntest')) { const m = nmode(); if (m === 'off') toast('알림이 꺼져 있습니다'); else ring(m); return; }
-  if (e.target.closest('#nperm')) { try { if (('Notification' in window) && Notification.permission !== 'granted') await Notification.requestPermission(); } catch (_) {} paintNset(); if (('Notification' in window) && Notification.permission === 'denied') toast('휴대폰 설정에서 이 앱(크롬)의 알림을 허용해 주십시오', true); return; }
+  if (e.target.closest('#nperm')) { try { if (('Notification' in window) && Notification.permission !== 'granted') await Notification.requestPermission(); } catch (_) {} paintNset();
+    if (('Notification' in window) && Notification.permission === 'granted') { const ok = await pushReg(true); paintNset(); toast(ok ? '앱을 꺼 둬도 알림이 옵니다' : ('알림 등록이 안 됐습니다' + (S.pushErr ? ' — ' + S.pushErr.slice(0, 60) : '')), !ok); } if (('Notification' in window) && Notification.permission === 'denied') toast('휴대폰 설정에서 이 앱(크롬)의 알림을 허용해 주십시오', true); return; }
   if (e.target.closest('#bell')) { openNews(); return; }
   if (e.target.closest('#sortbtn')) { const mn = $('sortmenu'); const k = sortKey(); mn.innerHTML = SORTS.map(([kk, l]) => `<button type="button" data-sk="${kk}" class="${kk === k ? 'on' : ''}">${l}${kk === 'new' ? '<small>기본</small>' : ''}</button>`).join(''); mn.classList.toggle('on'); return; }
   const sk = e.target.closest('#sortmenu [data-sk]'); if (sk) { try { localStorage.setItem('hwp.sort', sk.dataset.sk); } catch (_) {} $('sortmenu').classList.remove('on'); render(); try { window.scrollTo(0, 0); const scr = document.querySelector('body.pc .screen'); if (scr) scr.scrollTop = 0; } catch (_) {} return; }

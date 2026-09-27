@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="FABIWOS">
 <meta name="mobile-web-app-capable" content="yes">
-<title>FABIWOS v2.53 hotfix517</title>
+<title>FABIWOS v2.53 hotfix518</title>
 
 <!-- PWA Manifest (인라인 data URL) -->
 <link rel="manifest" id="pwa-manifest">
@@ -7312,7 +7312,7 @@
           <div class="blend-rows" id="body_blends"></div>
           <button class="btn-add" type="button" id="add_body_blend">+ 항목 추가</button>
         </div>
-        <div class="field"><label>몸판 가공 사양 <span style="font-weight:400;color:#9ca3af;">— 최고관리자가 선작업 → 염색/물나염 → 가공 → 후가공 순으로 고릅니다 (염색처·가공처에 등록된 공정만) · 특이는 글로 · 품목 표준 사양이 저절로 들어옵니다</span></label>
+        <div class="field"><label>몸판 가공 사양 <span style="font-weight:400;color:#9ca3af;">— 최고관리자가 염색 · 가공 · 후가공 줄에서 눌러 고릅니다 · 없는 공정은 그 줄 [+ 추가] · 품목 디테일에 저장된 마지막 사양이 저절로 들어오고, 저장하면 품목 디테일에도 저장됩니다</span></label>
           <div id="f_body_proc_picker" class="proc-picker" data-part="body"></div>
           <input type="text" lang="ko" id="f_body_spec" placeholder="위에서 고르면 여기에 합쳐집니다 (옛 의뢰서 글은 그대로 고칠 수 있음)" title="의뢰서에 찍히는 가공 사양 글자">
           <input type="text" lang="ko" id="f_body_spec_note" placeholder="특이 사항 (예: 텐컴 후 70/72+400 · 색상 톤 맞춤)" style="margin-top:4px;"></div>
@@ -8699,10 +8699,30 @@ function addKnitRow(data={}) {
 //   · 저장 = spec(합친 글자 "프리셋팅 · 농(진)색 · 텐타 · 컴팩 / 특이: …") + spec_procs[] + spec_note. 옛 의뢰서(글자만)는 글자 그대로 고칠 수 있다
 //   · 품목 수정 창 "표준 가공 사양"(std_procs · std_note)은 의뢰서에서 품목을 고르면 빈 고르개에 저절로 들어간다
 // ============================================================
-const PROC_PARTS = ['선작업', '염색/물나염', '가공', '후가공'];
+// hotfix518(대표 확정 9/28): 11줄 — 염색(염색선택 · 선작업 · 염색 특이 · 염색) · 가공(가공선택 · 가공특이 · 가공 · 기모 · 덤블) · 후가공(후가공 · 후덤블)
+const PROC_PARTS = ['염색선택', '선작업', '염색 특이', '염색', '가공선택', '가공특이', '가공', '기모', '덤블', '후가공', '후덤블'];
+const PROC_ONE = ['염색선택', '가공선택', '가공'];   // 하나만 고르는 줄
+const PROC_BANDS = ['염색', '가공', '후가공'];
+const PROC_BAND_OF = { '염색선택': '염색', '선작업': '염색', '염색 특이': '염색', '염색': '염색', '가공선택': '가공', '가공특이': '가공', '가공': '가공', '기모': '가공', '덤블': '가공', '후가공': '후가공', '후덤블': '후가공' };
+const PROC_BAND_COLOR = { '염색': '#b45309', '가공': '#4338ca', '후가공': '#047857' };
+const PROC_DEFAULT_ROWS = [
+  ['염색선택', ['나염용', '염색용']], ['선작업', ['프리셋팅', '봉침', '실켓']], ['염색 특이', ['특염', '선바이오']],
+  ['염색', ['고압쇼핑', '쇼핑', '고압과수', '과수', '고압백색', '백색', '면사이드', '포리사이드', '양사이드', '물나염']],
+  ['가공선택', ['튜브가공', '개폭가공']], ['가공특이', ['변사수지', '수지가공(텐타)', '유연제 가공', '실키가공']],
+  ['가공', ['텐타(최대축소)', '텐타(축소)', '텐타(정상)', '텐타(신장)', '텐타(최대신장)']],
+  ['기모', ['피치기모(앞면)', '피치기모(뒷면)', '단면기모(앞면)', '단면기모(뒷면)', '양기모']], ['덤블', ['스프레이덤블', '침수덤블']],
+  ['후가공', ['샤링', '컴팩', '후바이오', '후텐타']], ['후덤블', ['후스프레이덤블', '후침수덤블']]
+].reduce((a, [p, ns]) => a.concat(ns.map(n => ({ part: p, name: n }))), []);
+// 옛 분류(선작업 · 염색/물나염 · 가공 · 후가공)로 [+ 추가]했던 이름은 새 줄로 옮겨 남긴다
+function procOldPartMap(part, name) { const n = String(name || '');
+  if (part === '선작업') return '선작업';
+  if (part === '염색/물나염') return /선바이오|특염/.test(n) ? '염색 특이' : '염색';
+  if (part === '가공') return /기모/.test(n) ? '기모' : (/덤블/.test(n) ? '덤블' : (/텐타|튜브/.test(n) ? '가공' : '가공특이'));
+  if (part === '후가공') return /덤블/.test(n) ? '후덤블' : '후가공';
+  return PROC_PARTS.includes(part) ? part : ''; }
 // hotfix422a: 튜브 원단이면 꼭 들어가는 가공 이름 (공정 마스터에 이 이름이 있을 때만)
 const TUBE_PROC_NAME = '튜브가공';
-const PROC_PART_COLOR = { '선작업': '#0369a1', '염색/물나염': '#b45309', '가공': '#4338ca', '후가공': '#047857' };
+const PROC_PART_COLOR = { '염색선택': '#9a3412', '선작업': '#0369a1', '염색 특이': '#be123c', '염색': '#b45309', '가공선택': '#312e81', '가공특이': '#7c3aed', '가공': '#4338ca', '기모': '#0e7490', '덤블': '#0f766e', '후가공': '#047857', '후덤블': '#15803d' };
 // hotfix509: 작업지시서 가공 사양 목록 = settings/wo_specs (원가 설정 염/가공과 따로). 문서가 아직 없으면 원가 설정 목록을 처음 한 번 보여 주고, [+ 추가] · [목록 고치기] 때 그대로 옮겨 적는다
 //   업체 등록 공정으로 거르지 않는다(모든 공정을 고를 수 있음) · 묶음도 업체와 상관없이 한 목록
 function procMasterBase() { try { return (typeof window !== 'undefined' && window.__procMaster) ? window.__procMaster() : { rows: [], byVendor: {}, bundles: {} }; } catch (e) { return { rows: [], byVendor: {}, bundles: {} }; } }
@@ -8711,14 +8731,21 @@ function woSpecSeed() {
   Object.keys(b.bundles || {}).forEach(vk => (b.bundles[vk] || []).forEach(x => { if (!x || !x.name || seen.has(x.name)) return; seen.add(x.name); bl.push({ name: String(x.name), procs: (x.procs || []).slice() }); }));
   return { rows: (b.rows || []).map(r => Object.assign({ part: r.part, name: r.name }, r.abbr ? { abbr: r.abbr } : {}, r.grade ? { grade: true } : {})), bundles: bl };
 }
-function woSpecs() { const W = (typeof state !== 'undefined') ? state.woSpecs : null; return (W && Array.isArray(W.rows)) ? W : woSpecSeed(); }
+function woSpecs() {
+  const W = (typeof state !== 'undefined') ? state.woSpecs : null;
+  if (W && Array.isArray(W.rows) && W.v === 2) return W;
+  // hotfix518: 새 11줄 기본 목록 + 전에 [+ 추가]로 넣었던 이름(원가 설정에서 옮겨 온 것은 빼고)만 새 줄로 옮겨 붙인다. 저장은 다음 [+ 추가] · [목록 고치기] 때
+  const seedNames = new Set(woSpecSeed().rows.map(r => r.name)); const rows = PROC_DEFAULT_ROWS.map(r => Object.assign({}, r)); const have = new Set(rows.map(r => r.name));
+  ((W && Array.isArray(W.rows)) ? W.rows : []).forEach(r => { if (!r || !r.name || have.has(r.name) || seedNames.has(r.name)) return; const pt = procOldPartMap(r.part, r.name); if (!pt) return; rows.push({ part: pt, name: r.name }); have.add(r.name); });
+  return { rows, bundles: (W && Array.isArray(W.bundles)) ? W.bundles : [], v: 2 };
+}
 function procMaster() { const W = woSpecs(); return { rows: W.rows.filter(r => r && r.name && PROC_PARTS.includes(r.part)), byVendor: {}, bundles: { '*': (W.bundles || []).filter(x => x && x.name && Array.isArray(x.procs) && x.procs.length) }, catalog: true }; }
 async function woSpecsSave(W, msg) {
-  try { const f = window.firebase; await f.setDoc(f.doc(f.db, f.C('settings'), 'wo_specs'), { rows: W.rows, bundles: W.bundles || [], updated_at: f.serverTimestamp(), updated_by: (state.user && state.user.email) || '' });
-    state.woSpecs = { rows: W.rows, bundles: W.bundles || [] }; if (msg) toast(msg, 'success'); (window.__ppHosts || new Set()).forEach(h => { try { if (h.isConnected && h.__paint) h.__paint(); } catch (_) {} }); return true; }
+  try { const f = window.firebase; await f.setDoc(f.doc(f.db, f.C('settings'), 'wo_specs'), { rows: W.rows, bundles: W.bundles || [], v: 2, updated_at: f.serverTimestamp(), updated_by: (state.user && state.user.email) || '' });
+    state.woSpecs = { rows: W.rows, bundles: W.bundles || [], v: 2 }; if (msg) toast(msg, 'success'); (window.__ppHosts || new Set()).forEach(h => { try { if (h.isConnected && h.__paint) h.__paint(); } catch (_) {} }); return true; }
   catch (e) { toast('가공 사양 목록을 저장하지 못했습니다: ' + ((e && e.message) || ''), 'error'); return false; }
 }
-function procPartOfName(name) { if (name === '염색') return '염색/물나염'; const r = procMaster().rows.find(x => x.name === name); return r ? r.part : ''; }
+function procPartOfName(name) { const r = procMaster().rows.find(x => x.name === name); return r ? r.part : ''; }
 function procVendorSet(vendor) { const set = procMaster().byVendor[vendorKey(vendor)]; return (set && set.size) ? set : null; }
 function procVendorBundles(vendor) { const b = (procMaster().bundles || {})['*']; return Array.isArray(b) ? b : []; }   // hotfix405: 업체 묶음 · 509: 업체와 상관없이 한 목록
 function procSpecText(procs, note) {
@@ -8757,101 +8784,77 @@ function mountProcPicker(host, opts) {
   const compose = () => { lockFields(); const t = textEl(); if (!t) return; if (locked()) { if (host.__procs.length) t.value = groupedText() || procSpecText(host.__procs, noteEl()?.value); t.readOnly = true; t.style.background = '#f1f5f9'; return; } if (host.__procs.length) { t.value = groupedText() || procSpecText(host.__procs, noteEl()?.value); t.dataset.ppComposed = '1'; t.readOnly = true; t.style.background = '#f8fafc'; } else { if (t.dataset.ppComposed === '1') { t.value = ''; t.dataset.ppComposed = ''; } t.readOnly = false; t.style.background = ''; } };   // hotfix405: 뱃지를 다 빼면 합쳐 놓은 글자도 비운다 (옛 글자 의뢰서는 손대지 않음)
   const paint = () => {
     lockFields(); if (locked()) { host.innerHTML = ''; return; }   // hotfix405
-    // hotfix422a: 잠긴 공정(튜브 원단 → 튜브가공)은 늘 들어 있게
-    { const lk = (typeof o.lockedProcs === 'function') ? (o.lockedProcs() || []) : []; let add = false; lk.forEach(n => { if (n && !host.__procs.includes(n)) { host.__procs.push(n); add = true; } }); if (add) { compose(); try { if (typeof o.onChange === 'function') o.onChange(host.__procs.slice()); } catch (_) {} } }   // hotfix432: 고정 공정(튜브가공)이 들어오면 글자와 작업지시서도 바로(전에는 글자만 바뀌고 미리 보기는 '-')
+    // hotfix422a · 518: 잠긴 공정(튜브 원단 → 튜브가공)은 늘 들어 있게 — 가공선택은 하나만이므로 개폭가공은 뺀다
+    { const lk = (typeof o.lockedProcs === 'function') ? (o.lockedProcs() || []) : []; let add = false;
+      lk.forEach(n => { if (n && !host.__procs.includes(n)) { const pt = procPartOfName(n); if (PROC_ONE.includes(pt)) host.__procs = host.__procs.filter(x => procPartOfName(x) !== pt); if (n === TUBE_PROC_NAME) host.__procs = host.__procs.filter(x => procPartOfName(x) !== '가공'); host.__procs.push(n); add = true; } });
+      if (add) { compose(); try { if (typeof o.onChange === 'function') o.onChange(host.__procs.slice()); } catch (_) {} } }
     const m = procMaster();
-    const rowsOf = part => m.rows.filter(r => r.part === part);
-    // hotfix422a: 1차(왼쪽 세로) → 2차(오른쪽 크게) 두 칸 · 묶음은 아래 따로 상자 · 잠긴 공정(튜브가공)은 × 없음
+    const rowsOf = part => m.rows.filter(r => r.part === part);   // hotfix518: 목록 차례 그대로(가나다 정렬 안 함)
     const lockedSet = new Set((typeof o.lockedProcs === 'function') ? (o.lockedProcs() || []) : []);
     host.__lockedSet = lockedSet;
     const G0 = groupsOf();
-    const selHtml = `<div class="pp-sel"><span class="pp-step">고른 공정</span>${host.__procs.length ? host.__procs.map(n => `<span class="pp-badge${lockedSet.has(n) ? ' locked' : ''}" style="background:${PROC_PART_COLOR[procPartOfName(n)] || '#64748b'};" data-n="${escapeHtml(n)}" title="${lockedSet.has(n) ? '튜브 원단은 튜브가공이 꼭 들어갑니다 (뺄 수 없음)' : ''}">${G0 && host.__pv[n] ? `<em class="pp-vtag">${escapeHtml(host.__pv[n])}</em>` : ''}${escapeHtml(n)}${lockedSet.has(n) ? '<i>고정</i>' : '<b title="빼기">×</b>'}</span>`).join('') : '<span class="pp-empty">고른 공정이 없습니다 — 위에서 고르십시오</span>'}</div>`;
-    if (G0) {
-      // hotfix431: 업체마다 완전히 나뉜 상자 — 업체 머리(색) · 그 업체의 대분류 · 고른 업체 옆에만 소분류 · 그 업체의 묶음. 고른 공정 뱃지에도 업체 이름표
-      if (!host.__partVendor || !G0.some(x => x.vendor === host.__partVendor)) host.__partVendor = G0[0].vendor;
-      const cg0 = G0.find(x => x.vendor === host.__partVendor) || G0[0]; if (!cg0.parts.includes(host.__part)) host.__part = cg0.parts[0];
-      host.innerHTML = G0.map((x, gi) => { const col = PP_VENDOR_COLORS[gi % PP_VENDOR_COLORS.length]; const active = x.vendor === host.__partVendor;
-        return `<div class="pp-vblock${active ? ' on' : ''}" data-vendor="${escapeHtml(x.vendor)}" style="--vc:${col};">
-          <div class="pp-vhead"><span class="pp-vname">${escapeHtml(x.vendor || '업체 없음')}</span><span class="pp-vsub">${escapeHtml(x.parts.join(' · '))}</span></div>
-          <div class="pp-grid">
-            <div class="pp-parts pp-parts-v"><div class="pp-step">대분류</div>${x.parts.map(p => { const n = host.__procs.filter(y => procPartOfName(y) === p && String(host.__pv[y] || vendorFor(p)) === x.vendor).length; const on = active && p === host.__part; return `<button type="button" class="pp-part${on ? ' on' : ''}" data-part="${escapeHtml(p)}" data-vendor="${escapeHtml(x.vendor)}" style="--pc:${PROC_PART_COLOR[p]};">${escapeHtml(p)}${n ? `<span class="n">${n}</span>` : ''}</button>`; }).join('')}</div>
-            ${active ? `<div class="pp-right"><div class="pp-step">소분류 — <b style="color:${PROC_PART_COLOR[host.__part] || '#334155'};">${escapeHtml(host.__part)}</b> <span class="pp-hint" id="pp-hint"></span></div><div class="pp-names"></div></div>` : `<div class="pp-right pp-right-off"><span class="pp-hint">이 업체의 대분류를 누르면 여기에 소분류가 나옵니다</span></div>`}
-          </div>
-          <div class="pp-bundle-box"><div class="pp-bundles" data-vendor="${escapeHtml(x.vendor)}"></div></div>
-        </div>`; }).join('') + selHtml;
-    } else
-    host.innerHTML = `<div class="pp-grid">
-        <div class="pp-parts pp-parts-v"><div class="pp-step">대분류</div>${(function () {
-          // hotfix423: 업체가 단계마다 다르면(염색소 대흥 · 가공소 송원 …) 대분류를 업체별 묶음으로 나눠 보인다 — 묶음 머리에 업체명. 같은 곳이면 묶음 하나
-          const G = groupsOf();
-          if (G) {   // hotfix424: 업체 묶음 — 업체마다 그 업체가 하는 단계. 고른 공정 수는 (업체, 단계)로 센다
-            if (!host.__partVendor || !G.some(x => x.vendor === host.__partVendor)) host.__partVendor = G[0].vendor;
-            const cg = G.find(x => x.vendor === host.__partVendor) || G[0]; if (!cg.parts.includes(host.__part)) host.__part = cg.parts[0];
-            return G.map(x => `<div class="pp-vgroup" title="이 업체가 하는 단계">${escapeHtml(x.vendor || '업체 없음')}</div>` + x.parts.map(p => { const n = host.__procs.filter(y => procPartOfName(y) === p && String(host.__pv[y] || vendorFor(p)) === x.vendor).length; const on = p === host.__part && x.vendor === host.__partVendor; return `<button type="button" class="pp-part${on ? ' on' : ''}" data-part="${escapeHtml(p)}" data-vendor="${escapeHtml(x.vendor)}" style="--pc:${PROC_PART_COLOR[p]};">${escapeHtml(p)}${n ? `<span class="n">${n}</span>` : ''}</button>`; }).join('')).join('');
-          }
-          const PARTS = partsOf(); if (!PARTS.includes(host.__part)) host.__part = PARTS[0];
-          const vOf = p => String(vendorFor(p) || '').trim(); const vs = PARTS.map(vOf); const distinct = Array.from(new Set(vs.filter(Boolean)));
-          let out = ''; let prev = null;
-          PARTS.forEach((p, i) => { const v = vs[i]; if (distinct.length > 1 && v !== prev) { out += `<div class="pp-vgroup" title="이 업체에서 하는 단계">${escapeHtml(v || '업체 없음')}</div>`; prev = v; }
-            const n = host.__procs.filter(x => procPartOfName(x) === p).length; out += `<button type="button" class="pp-part${p === host.__part ? ' on' : ''}" data-part="${escapeHtml(p)}" style="--pc:${PROC_PART_COLOR[p]};">${escapeHtml(p)}${n ? `<span class="n">${n}</span>` : ''}</button>`; });
-          return out; })()}</div>
-        <div class="pp-right"><div class="pp-step">소분류 — <b style="color:${PROC_PART_COLOR[host.__part] || '#334155'};">${escapeHtml(host.__part)}</b> <span class="pp-hint" id="pp-hint"></span></div><div class="pp-names"></div></div>
-      </div>
-      <div class="pp-bundle-box"><div class="pp-bundles"></div></div>
-      ` + selHtml;
-    const vendor = vendorFor(host.__part); const set = vendor ? procVendorSet(vendor) : null;
-    // hotfix422d: 2차 공정 이름 오름차순(한글 · 숫자 순)
-    const names = rowsOf(host.__part).slice().sort((a, b) => String(a.name).localeCompare(String(b.name), 'ko', { numeric: true }));
-    // hotfix405: 업체 묶음 — 누르면 묶음의 공정을 한 번에 담는다 (염색처 묶음 + 가공처 묶음)
-    { const vs = (typeof o.vendorOf === 'function') ? (o.vendorOf() || {}) : {}; const bl = []; const seenV = new Set();
-      { const G1 = groupsOf(); procVendorBundles('').forEach(b => { const pts = b.procs.map(procPartOfName); let v = ''; if (G1) { const g = G1.find(x => pts.every(p => !p || x.parts.includes(p))) || G1.find(x => pts.some(p => x.parts.includes(p))) || G1[0]; v = g ? g.vendor : ''; } else v = vendorFor(pts[0] || '') || vs.pre || vs.mid || vs.post || ''; bl.push(Object.assign({ vendor: v }, b)); }); void seenV; }   // hotfix509: 묶음은 한 목록 — 업체 상자에는 그 업체 단계 묶음
-      if (host.__bOnDirty || !host.__bOn) {   // hotfix407: 다 들어 있는 묶음 중 더 큰 묶음 안에 통째로 든 것(텐덤 ⊂ 기텐덤)은 켜지 않는다
-        host.__bOnDirty = false; const full = bl.filter(b => b.procs.length && b.procs.every(p => host.__procs.includes(p)));
-        host.__bOn = {}; full.forEach(b => { if (!full.some(o => o !== b && o.procs.length > b.procs.length && b.procs.every(p => o.procs.includes(p)))) host.__bOn[b.name] = true; }); }
-      const bb = host.querySelector('.pp-bundles');
-      // hotfix422d: 튜브 원단이면 텐타가 든 묶음은 못 담는다
-      const tubeNow = (typeof o.tubeOn === 'function') ? !!o.tubeOn() : false;
-      const blHtml = (list) => list.length ? `<span class="pp-bl-lbl">묶음 — 한 번에 담기</span>` + list.map(b => { const i = bl.indexOf(b); const on = !!(host.__bOn || {})[b.name] && b.procs.every(p => host.__procs.includes(p)); const tb = tubeNow && b.procs.some(p => /텐타/.test(p)); if (tb) return `<button type="button" class="pp-bundle off" data-i="${i}" disabled title="튜브 원단은 텐타 묶음을 담을 수 없습니다"><b>${escapeHtml(b.name)}</b><small>${escapeHtml(b.procs.join('·'))}</small></button>`; return `<button type="button" class="pp-bundle${on ? ' on' : ''}" data-i="${i}" title="${escapeHtml(b.procs.join(' · '))}"><b>${escapeHtml(b.name)}</b><small>${escapeHtml(b.procs.join('·'))}</small></button>`; }).join('') : '';
-      if (G0) host.querySelectorAll('.pp-bundles[data-vendor]').forEach(el => { const v = el.dataset.vendor; const mine = bl.filter(b => vendorKey(b.vendor) === vendorKey(v)); el.innerHTML = mine.length ? blHtml(mine) : '<span class="pp-hint">이 업체 묶음 없음</span>'; });   // hotfix431: 업체 상자마다 그 업체 묶음
-      else if (bb) bb.innerHTML = bl.length ? `<span class="pp-bl-lbl">묶음 — 한 번에 담기</span>` + bl.map((b, i) => { const on = !!(host.__bOn || {})[b.name] && b.procs.every(p => host.__procs.includes(p)); const tb = tubeNow && b.procs.some(p => /텐타/.test(p)); if (tb) return `<button type="button" class="pp-bundle off" data-i="${i}" disabled title="튜브 원단은 텐타가 든 묶음을 담을 수 없습니다" style="opacity:.45;cursor:not-allowed;"><b>${escapeHtml(b.name)}</b><span>${escapeHtml(b.procs.join('·'))}</span></button>`; return `<button type="button" class="pp-bundle${on ? ' on' : ''}" data-i="${i}" title="${escapeHtml(b.vendor + ' 묶음: ' + b.procs.join(' · '))}">${escapeHtml(b.name)}<small>${escapeHtml(b.procs.join('·'))}</small></button>`; }).join('') : '';
-      host.__bundles = bl; }
-    const box = host.querySelector('.pp-names');
-    // hotfix422c: 업체에 등록 안 된 공정도 고를 수 있다(연하게 · 툴팁). 튜브 원단이면 텐타 계열은 못 고르고, 튜브 아니면 튜브가공을 못 고른다
     const tubeOn = (typeof o.tubeOn === 'function') ? !!o.tubeOn() : null;
-    const tubeBlock = n => tubeOn === null ? false : (tubeOn ? /텐타/.test(n) : n === TUBE_PROC_NAME);
-    box.innerHTML = names.length ? names.map(r => { const on = host.__procs.includes(r.name); const reg = !set || set.has(r.name); const ok = !tubeBlock(r.name) || on; return `<button type="button" class="pp-name${on ? ' on' : ''}${ok ? '' : ' off'}${reg ? '' : ' unreg'}" data-n="${escapeHtml(r.name)}" ${ok ? (reg ? '' : 'title="' + escapeHtml(vendor) + ' 에 등록되지 않은 공정 — 골라도 됩니다 (단가 없음)"') : 'disabled title="' + (tubeOn ? '튜브 원단은 텐타를 할 수 없습니다' : '튜브 원단이 아니면 튜브가공을 고를 수 없습니다') + '"'}>${escapeHtml(r.name)}</button>`; }).join('') : '<span class="pp-empty">이 단계의 공정이 없습니다 ([약어 설정]에서 넣습니다)</span>';
-    const hint = host.querySelector('#pp-hint'); if (hint) hint.innerHTML = `${names.length}개 <button type="button" class="pp-edit${host.__edit ? ' on' : ''}" title="목록에서 빼기 · 원가 설정과는 따로입니다">${host.__edit ? '고치기 끝' : '✎ 목록 고치기'}</button>`;   // hotfix509
-    { const eb = host.querySelector('.pp-edit'); if (eb) eb.addEventListener('click', () => { host.__edit = !host.__edit; paint(); }); }
-    // hotfix509: [+ 추가] — 이 단계에 새 공정 이름을 바로 넣는다 (작업지시서 목록에만)
-    if (box) { const add = document.createElement('span'); add.className = 'pp-addwrap'; add.innerHTML = host.__adding ? `<input type="text" class="pp-addin" maxlength="20" placeholder="새 ${escapeHtml(host.__part)} 이름"><button type="button" class="pp-addok">넣기</button><button type="button" class="pp-addx">✕</button>` : `<button type="button" class="pp-addbtn pp-add">+ 추가</button>`;
-      if (box.querySelector('.pp-empty')) box.innerHTML = ''; box.appendChild(add);
-      if (host.__edit) box.querySelectorAll('.pp-name[data-n]').forEach(b => { b.classList.add('pp-del'); b.title = '누르면 목록에서 뺍니다 (이미 쓴 의뢰서는 그대로)'; });
-      const ab = add.querySelector('.pp-add'); if (ab) ab.addEventListener('click', () => { host.__adding = true; paint(); setTimeout(() => { const i = host.querySelector('.pp-addin'); if (i) i.focus(); }, 0); });
-      const doAdd = async () => { const i = host.querySelector('.pp-addin'); const nm = String(i ? i.value : '').trim().replace(/\s+/g, ' '); if (!nm) { toast('이름을 넣어 주십시오', 'warning'); return; }
-        const W = JSON.parse(JSON.stringify(woSpecs())); if (W.rows.some(r => r.name === nm)) { toast(`[${nm}] 은(는) 이미 있습니다`, 'warning'); return; }
-        W.rows.push({ part: host.__part, name: nm }); host.__adding = false;
-        if (await woSpecsSave(W, `${host.__part}에 [${nm}]을(를) 넣었습니다`)) { if (!host.__procs.includes(nm)) { host.__procs.push(nm); if (groupsOf()) host.__pv[nm] = String(host.__partVendor || vendorFor(host.__part) || ''); } changed(); } };
-      const ok = add.querySelector('.pp-addok'); if (ok) ok.addEventListener('click', doAdd);
-      const inp = add.querySelector('.pp-addin'); if (inp) inp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); doAdd(); } else if (e.key === 'Escape') { host.__adding = false; paint(); } });
-      const x = add.querySelector('.pp-addx'); if (x) x.addEventListener('click', () => { host.__adding = false; paint(); }); }
-    host.querySelectorAll('.pp-part').forEach(b => b.addEventListener('click', () => { host.__part = b.dataset.part; if (b.dataset.vendor != null) host.__partVendor = b.dataset.vendor; paint(); }));
-    // hotfix405: 묶음은 통째로 담고/빼기. hotfix407: 켜진 묶음은 누른 것만(host.__bOn) — 텐덤 ⊂ 기텐덤 처럼 작은 묶음이 저절로 켜지지 않는다.
-    //   묶음을 끌 때 다른 켜진 묶음에도 든 공정은 남긴다.
-    host.querySelectorAll('.pp-bundle').forEach(b => b.addEventListener('click', () => {
-      const bd = (host.__bundles || [])[parseInt(b.dataset.i, 10)]; if (!bd) return;
-      host.__bOn = host.__bOn || {};
-      const on = !!host.__bOn[bd.name] && bd.procs.every(p => host.__procs.includes(p));
-      if (on) {
-        delete host.__bOn[bd.name];
-        const keep = new Set([].concat(...(host.__bundles || []).filter(x => host.__bOn[x.name] && x !== bd).map(x => x.procs)));
-        host.__procs = host.__procs.filter(p => !bd.procs.includes(p) || keep.has(p) || (host.__lockedSet && host.__lockedSet.has(p)));
-      } else { host.__bOn[bd.name] = true; bd.procs.forEach(p => { if (!host.__procs.includes(p)) { host.__procs.push(p); if (groupsOf()) host.__pv[p] = String(bd.vendor || ''); } }); }   // hotfix431: 묶음의 공정은 그 묶음 업체 것
-      changed();
-    }));
-    host.querySelectorAll('.pp-name.pp-del').forEach(b => b.addEventListener('click', async (ev) => { ev.stopImmediatePropagation(); const n = b.dataset.n; if (!confirm(`[${n}]을(를) 작업지시서 가공 사양 목록에서 뺍니다.\n이미 쓴 의뢰서 · 원가 설정은 그대로입니다.`)) return;
-      const W = JSON.parse(JSON.stringify(woSpecs())); W.rows = W.rows.filter(r => r.name !== n); W.bundles = (W.bundles || []).filter(bd => !(bd.procs || []).includes(n)); await woSpecsSave(W, `[${n}]을(를) 목록에서 뺐습니다`); }, true));   // hotfix509
-    host.querySelectorAll('.pp-name:not(.off):not(.pp-del):not(.pp-add)').forEach(b => b.addEventListener('click', () => { const n = b.dataset.n; if (host.__lockedSet && host.__lockedSet.has(n)) { toast('튜브 원단은 [' + n + ']을 뺄 수 없습니다', 'warning'); return; } const i = host.__procs.indexOf(n); if (i >= 0) { host.__procs.splice(i, 1); delete host.__pv[n]; } else { host.__procs.push(n); if (groupsOf()) host.__pv[n] = String(host.__partVendor || vendorFor(procPartOfName(n)) || ''); }; changed(); }));
-    host.querySelectorAll('.pp-badge b').forEach(b => b.addEventListener('click', () => { const n = b.parentElement.dataset.n; if (host.__lockedSet && host.__lockedSet.has(n)) return; host.__procs = host.__procs.filter(x => x !== n); delete host.__pv[n]; changed(); }));
+    const blocks = G0 ? G0.map((x, gi) => ({ vendor: x.vendor, parts: PROC_PARTS.filter(p => x.parts.includes(p)), col: PP_VENDOR_COLORS[gi % PP_VENDOR_COLORS.length] })) : [{ vendor: null, parts: partsOf(), col: '' }];
+    const inBlock = (n, b) => { if (b.vendor == null) return true; const v = String(host.__pv[n] || ''); return v ? v === b.vendor : String(vendorFor(procPartOfName(n)) || '') === b.vendor; };
+    const tubeSel = () => host.__procs.includes(TUBE_PROC_NAME);
+    const chip = (r, b) => {
+      const n = r.name; const on = host.__procs.includes(n) && inBlock(n, b); const pt = r.part;
+      let off = false, tip = '';
+      if (pt === '가공선택' && tubeOn === true && n !== TUBE_PROC_NAME) tip = '누르면 폭 칸 [튜브] 체크가 꺼지고 개폭으로 바뀝니다';
+      if (lockedSet.has(n)) tip = '튜브 원단 — 뺄 수 없습니다';
+      return `<button type="button" class="pq-chip pp-name${on ? ' on' : ''}${off ? ' off' : ''}${host.__edit ? ' pp-del' : ''}" data-n="${escapeHtml(n)}" data-part="${escapeHtml(pt)}" data-v="${escapeHtml(b.vendor || '')}" style="--pc:${PROC_PART_COLOR[pt] || '#475569'};"${tip ? ` title="${escapeHtml(tip)}"` : ''}${off ? ' disabled' : ''}>${on ? '<i>✓</i>' : ''}${escapeHtml(n)}</button>`;
+    };
+    const rowHtml = (pt, b) => {
+      const rows = rowsOf(pt); const key = pt + '|' + (b.vendor || '');
+      let body;
+      if (pt === '가공' && tubeSel()) body = `<span class="pq-tubenote">튜브가공 — 텐타는 하지 않습니다 <small>(개폭가공을 고르면 텐타가 나옵니다)</small></span>`;
+      else body = rows.map(r => chip(r, b)).join('');
+      const add = host.__adding === key
+        ? `<span class="pp-addwrap"><input type="text" class="pp-addin" maxlength="20" placeholder="새 ${escapeHtml(pt)} 이름" data-part="${escapeHtml(pt)}" data-v="${escapeHtml(b.vendor || '')}"><button type="button" class="pp-addok">넣기</button><button type="button" class="pp-addx">✕</button></span>`
+        : (pt === '가공' && tubeSel() ? '' : `<button type="button" class="pq-add pp-add" data-key="${escapeHtml(key)}">+ 추가</button>`);
+      return `<div class="pq-row" data-part="${escapeHtml(pt)}" style="--pc:${PROC_PART_COLOR[pt] || '#475569'};"><div class="pq-lab">${escapeHtml(pt)}${PROC_ONE.includes(pt) ? '<small>하나만</small>' : ''}</div><div class="pq-chips">${body}${add}</div></div>`;
+    };
+    const bandHtml = b => PROC_BANDS.map(bd => { const ps = b.parts.filter(p => PROC_BAND_OF[p] === bd); if (!ps.length) return '';
+      return `<div class="pq-band" data-band="${bd}" style="--bc:${PROC_BAND_COLOR[bd]};"><div class="pq-bandh">${bd}</div><div class="pq-rows">${ps.map(p => rowHtml(p, b)).join('')}</div></div>`; }).join('');
+    const selHtml = `<div class="pp-sel"><span class="pp-step">고른 공정</span>${host.__procs.length ? host.__procs.map(n => `<span class="pp-badge${lockedSet.has(n) ? ' locked' : ''}" style="background:${PROC_PART_COLOR[procPartOfName(n)] || '#64748b'};" data-n="${escapeHtml(n)}" title="${lockedSet.has(n) ? '튜브 원단 — 뺄 수 없습니다' : (procPartOfName(n) ? procPartOfName(n) : '목록에 없는 공정 (옛 의뢰서)')}">${G0 && host.__pv[n] ? `<em class="pp-vtag">${escapeHtml(host.__pv[n])}</em>` : ''}${escapeHtml(n)}${lockedSet.has(n) ? '' : '<b title="빼기">×</b>'}</span>`).join('') : '<span class="pp-hint">아직 고른 공정이 없습니다 — 위에서 누르십시오</span>'}</div>`;
+    host.innerHTML = `<div class="pq-tools"><span>누르면 고르고 · 다시 누르면 뺍니다 · <b>하나만</b> 줄은 하나만</span><button type="button" class="pp-edit${host.__edit ? ' on' : ''}" title="목록에서 빼기 · 원가 설정과는 따로입니다">${host.__edit ? '고치기 끝' : '✎ 목록 고치기'}</button></div>`
+      + blocks.map(b => `<div class="pq-vblock"${b.vendor != null ? ` data-vendor="${escapeHtml(b.vendor)}" style="--vc:${b.col};"` : ''}>${b.vendor != null ? `<div class="pq-vhead"><span class="pq-vname">${escapeHtml(b.vendor || '업체 없음')}</span><span class="pq-vsub">${escapeHtml(PROC_BANDS.filter(bd => b.parts.some(p => PROC_BAND_OF[p] === bd)).join(' · '))}</span></div>` : ''}${bandHtml(b)}<div class="pp-bundle-box"><div class="pp-bundles"${b.vendor != null ? ` data-vendor="${escapeHtml(b.vendor)}"` : ''}></div></div></div>`).join('')
+      + selHtml;
+    host.__part = host.__part || PROC_PARTS[0];
+    // hotfix405: 묶음(지금은 감춰져 있음 — 자료만 유지)
+    { const vs = (typeof o.vendorOf === 'function') ? (o.vendorOf() || {}) : {}; const bl = [];
+      procVendorBundles('').forEach(b => { const pts = b.procs.map(procPartOfName); let v = ''; if (G0) { const g = G0.find(x => pts.every(p => !p || x.parts.includes(p))) || G0.find(x => pts.some(p => x.parts.includes(p))) || G0[0]; v = g ? g.vendor : ''; } else v = vendorFor(pts[0] || '') || vs.pre || ''; bl.push(Object.assign({}, b, { vendor: v })); });
+      host.__bundles = bl; }
+    // ── 누르기 ──
+    host.querySelector('.pp-edit').addEventListener('click', () => { host.__edit = !host.__edit; host.__adding = ''; paint(); });
+    host.querySelectorAll('.pq-add').forEach(b => b.addEventListener('click', () => { host.__adding = b.dataset.key; paint(); setTimeout(() => { const i = host.querySelector('.pp-addin'); if (i) i.focus(); }, 0); }));
+    { const inp = host.querySelector('.pp-addin');
+      if (inp) {
+        const doAdd = async () => { const nm = String(inp.value || '').trim().replace(/\s+/g, ' '); const pt = inp.dataset.part; const v = inp.dataset.v; if (!nm) { toast('이름을 넣어 주십시오', 'warning'); return; }
+          const W = JSON.parse(JSON.stringify(woSpecs())); if (W.rows.some(r => r.name === nm)) { toast(`[${nm}] 은(는) 이미 있습니다 (${(W.rows.find(r => r.name === nm) || {}).part || ''})`, 'warning'); return; }
+          W.rows.push({ part: pt, name: nm }); host.__adding = '';
+          if (await woSpecsSave(W, `${pt}에 [${nm}]을(를) 넣었습니다`)) { pick(nm, pt, v); } else paint(); };
+        host.querySelector('.pp-addok').addEventListener('click', doAdd);
+        inp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); doAdd(); } else if (e.key === 'Escape') { host.__adding = ''; paint(); } });
+        host.querySelector('.pp-addx').addEventListener('click', () => { host.__adding = ''; paint(); });
+      } }
+    host.querySelectorAll('.pq-chip.pp-del').forEach(b => b.addEventListener('click', async ev => { ev.stopImmediatePropagation(); const n = b.dataset.n; if (!confirm(`[${n}]을(를) 작업지시서 가공 사양 목록에서 뺍니다.\n이미 쓴 의뢰서 · 원가 설정은 그대로입니다.`)) return;
+      const W = JSON.parse(JSON.stringify(woSpecs())); W.rows = W.rows.filter(r => r.name !== n); W.bundles = (W.bundles || []).filter(bd => !(bd.procs || []).includes(n)); await woSpecsSave(W, `[${n}]을(를) 목록에서 뺐습니다`); }, true));
+    host.querySelectorAll('.pq-chip:not(.off):not(.pp-del)').forEach(b => b.addEventListener('click', () => pick(b.dataset.n, b.dataset.part, b.dataset.v)));
+    host.querySelectorAll('.pp-badge b').forEach(b => b.addEventListener('click', () => { const n = b.parentElement.dataset.n; if (host.__lockedSet && host.__lockedSet.has(n)) return; host.__procs = host.__procs.filter(x => x !== n); delete host.__pv[n]; if (n === TUBE_PROC_NAME && typeof o.setTube === 'function') o.setTube(false); changed(); }));
+  };
+  // hotfix518: 고르기 — 하나만 줄은 같은 줄의 다른 것을 뺀다 · 가공선택 튜브가공/개폭가공은 폭 칸 [튜브] 체크와 함께 움직인다
+  const pick = (n, pt, v) => {
+    if (host.__lockedSet && host.__lockedSet.has(n) && host.__procs.includes(n)) { toast('튜브 원단은 [' + n + ']을 뺄 수 없습니다', 'warning'); return; }
+    const i = host.__procs.indexOf(n);
+    if (i >= 0) { host.__procs.splice(i, 1); delete host.__pv[n]; if (n === TUBE_PROC_NAME && typeof o.setTube === 'function') o.setTube(false); }
+    else {
+      if (PROC_ONE.includes(pt)) host.__procs.filter(x => procPartOfName(x) === pt && x !== n).forEach(x => { host.__procs.splice(host.__procs.indexOf(x), 1); delete host.__pv[x]; });
+      if (n === TUBE_PROC_NAME) host.__procs = host.__procs.filter(x => procPartOfName(x) !== '가공');   // 튜브가공이면 텐타는 하지 않는다
+      host.__procs.push(n); if (groupsOf() && v) host.__pv[n] = v;
+      if (pt === '가공선택' && typeof o.setTube === 'function') o.setTube(n === TUBE_PROC_NAME);
+    }
+    changed();
   };
   const changed = () => { compose(); paint(); if (typeof o.onChange === 'function') o.onChange(host.__procs.slice()); };
   host.__paint = paint; host.__compose = compose;
@@ -9045,7 +9048,7 @@ function vendorVidOf(name) {
 }
 // hotfix424: 업체가 하는 단계(거래처 설정 구분대로) — 염색처 → 선작업 · 염색/물나염, 가공처 → 가공, 후가공처 → 후가공. 구분이 없거나 기타면 전부
 const VENDOR_WORKS = ['염색', '가공', '후가공', '나염', '기타'];   // hotfix426: 염/가공 설정 › 업체별 설정에서 고르는 "이 업체가 하는 작업"
-const VENDOR_WORK_PARTS = { '염색': ['선작업', '염색/물나염'], '가공': ['가공'], '후가공': ['후가공'], '나염': ['나염'], '기타': ['기타'] };
+const VENDOR_WORK_PARTS = { '염색': ['염색선택', '선작업', '염색 특이', '염색'], '가공': ['가공선택', '가공특이', '가공', '기모', '덤블'], '후가공': ['후가공', '후덤블'], '나염': ['나염'], '기타': ['기타'] };   // hotfix518: 11줄
 function vendorWorksOf(name) {
   const pw = (typeof state !== 'undefined' && state.costPrices && state.costPrices.proc_works && typeof state.costPrices.proc_works === 'object') ? state.costPrices.proc_works : {};
   let key = Object.keys(pw).find(k => vendorSameAs(k, '', name)); let w = key ? pw[key] : null;
@@ -9058,7 +9061,7 @@ function vendorStagesOf(name) {
   if (w) { const st = []; w.forEach(x => (VENDOR_WORK_PARTS[x] || []).forEach(p => { if (!st.includes(p)) st.push(p); })); return st.length ? st : PROC_PARTS.slice(); }
   const vendors = (typeof state !== 'undefined' && state.vendors) ? state.vendors : [];
   const v = vendors.find(x => x && vendorHasName(x, name)); const t = v ? vendorTypesNorm(v) : [];
-  const st = []; if (t.includes('염색처')) st.push('선작업', '염색/물나염'); if (t.includes('가공처')) st.push('가공'); if (t.includes('후가공처')) st.push('후가공');
+  const st = []; if (t.includes('염색처')) st.push(...VENDOR_WORK_PARTS['염색']); if (t.includes('가공처')) st.push(...VENDOR_WORK_PARTS['가공']); if (t.includes('후가공처')) st.push(...VENDOR_WORK_PARTS['후가공']);   // hotfix518
   return st.length ? st : PROC_PARTS.slice();
 }
 // hotfix423: 의뢰서에 적힌 업체 글자(+코드)가 지금 고른 업체와 같은 곳인가 — 대표명 · 다른 표기 · 코드(vid · 합친 코드) 다 본다. 업체명이 바뀌었거나 옛 표기로 적힌 자료도 같은 곳으로 맞춘다
@@ -15654,6 +15657,29 @@ window.addEventListener('firebase-ready', () => {
     return true;
   }
 
+  // hotfix518(대표 9/27): 작업지시서에서 마지막으로 저장한 가공 사양을 품목 디테일(표준 가공 사양)에도 저장 — 품목 디테일에서 고친 값은 다음 작업지시서에 들어온다
+  //   몸판 · 리프(다른 품목일 때) 각각 · 업체마다(std_by_vendor) + 공통(std_procs) · 달라졌을 때만 저장
+  async function woSpecToItems(d, woNo) {
+    const list = (state.fabricSpecs || []).map(x => Object.assign({}, x)); let ch = [];
+    const r = d.recipients || {}; const dyeV = String(r.dyeing || '').trim();
+    [['body', d.body], ['rib', d.rib]].forEach(([k, p]) => {
+      if (!p || !String(p.item || '').trim()) return; if (k === 'rib' && d.body && String(d.body.item || '').trim() === String(p.item).trim()) return;
+      const procs = (Array.isArray(p.spec_procs) ? p.spec_procs : []).map(x => String(x || '').trim()).filter(Boolean); const note = String(p.spec_note || '').trim();
+      if (!procs.length && !note) return;
+      const sp = findFabricSpec(p.item); if (!sp) return; const i = list.findIndex(x => x === sp || (x.name === sp.name && (x.fid || '') === (sp.fid || ''))); if (i < 0) return;
+      const it = list[i]; const pv = p.spec_proc_vendors || {};
+      const byV = Object.assign({}, (it.std_by_vendor && typeof it.std_by_vendor === 'object') ? JSON.parse(JSON.stringify(it.std_by_vendor)) : {});
+      const vs = {}; procs.forEach(n => { const v = String(pv[n] || dyeV || '').trim(); if (!v) return; (vs[v] = vs[v] || []).push(n); });
+      Object.keys(vs).forEach((v, j) => { byV[v] = { procs: vs[v], note: (v === dyeV || (!vs[dyeV] && j === 0)) ? note : '' }; });
+      const next = Object.assign({}, it, { std_procs: procs, std_note: note, std_from: { wo: woNo || '', at: todayYMD() } }, Object.keys(byV).length ? { std_by_vendor: byV } : {});
+      const same = JSON.stringify([it.std_procs || [], it.std_note || '', it.std_by_vendor || {}]) === JSON.stringify([next.std_procs, next.std_note, next.std_by_vendor || {}]);
+      if (same) return; list[i] = next; ch.push(it.name);
+    });
+    if (!ch.length) return false;
+    const ok = await saveFabricSpecs(list, state.fabricGubuns || []);
+    if (ok) toast('품목 디테일 가공 사양도 저장했습니다 — ' + ch.join(' · '), 'info');
+    return ok;
+  }
   // hotfix66: 원단 기본 스펙 저장 (관리자만) — settings/fabric_specs
   async function saveFabricSpecs(items, gubuns) {
     if (!canEditView('fabricSpecs')) { toast('원단 스펙을 고치는 권한이 없습니다', 'error'); return false; }   // hotfix383
@@ -15684,6 +15710,7 @@ window.addEventListener('firebase-ready', () => {
       ...(Array.isArray(it.std_procs) && it.std_procs.length ? { std_procs: it.std_procs.map(x => String(x || '').trim()).filter(Boolean) } : {}),   // hotfix403: 표준 가공 사양
       ...(String(it.std_note || '').trim() ? { std_note: String(it.std_note).trim() } : {}),
       ...(it.std_by_vendor && typeof it.std_by_vendor === 'object' && Object.keys(it.std_by_vendor).length ? { std_by_vendor: it.std_by_vendor } : {}),   // hotfix406
+      ...(it.std_from && typeof it.std_from === 'object' && it.std_from.wo ? { std_from: { wo: String(it.std_from.wo), at: String(it.std_from.at || '') } } : {}),   // hotfix518: 어느 작업지시서에서 왔는지
       ...(String(it.dye_vendor || '').trim() ? { dye_vendor: String(it.dye_vendor).trim() } : {}), ...(String(it.fin_vendor || '').trim() ? { fin_vendor: String(it.fin_vendor).trim() } : {}), ...(String(it.post_vendor || '').trim() ? { post_vendor: String(it.post_vendor).trim() } : {}),   // hotfix422i: 염색소 · 가공소 · 후가공소
       ...(it.updated_at ? { updated_at: it.updated_at } : {})
     })).filter(it => it.name);
@@ -18275,8 +18302,8 @@ function specGreigeColors(fid) {
       const tubeLock = id => () => (document.getElementById(id)?.checked && procMaster().rows.some(r => r.name === TUBE_PROC_NAME)) ? [TUBE_PROC_NAME] : [];
       // hotfix424: 염색처 · 가공처 · 후가공처에 고른 업체마다 묶음 — 각 업체가 하는 단계(구분대로). 같은 곳이면 묶음 하나
       const finishGroups = () => { const v = vendorOfFinish(); const vs = Array.from(new Set([v.pre, v.mid, v.post].map(x => String(x || '').trim()).filter(Boolean))); return vs.length ? vs.map(x => ({ vendor: x, parts: vendorStagesOf(x) })) : null; };
-      mountProcPicker(document.getElementById('f_body_proc_picker'), { textId: 'f_body_spec', noteId: 'f_body_spec_note', vendorOf: vendorOfFinish, groups: finishGroups, locked: procLocked, lockedProcs: tubeLock('f_body_spec_tube'), tubeOn: () => !!document.getElementById('f_body_spec_tube')?.checked, onChange: () => { render(); markDirty(); } });
-      mountProcPicker(document.getElementById('f_rib_proc_picker'), { textId: 'f_rib_spec', noteId: 'f_rib_spec_note', vendorOf: vendorOfFinish, groups: finishGroups, locked: procLocked, lockedProcs: tubeLock('f_rib_spec_tube'), tubeOn: () => !!document.getElementById('f_rib_spec_tube')?.checked, onChange: () => { render(); markDirty(); } });
+      mountProcPicker(document.getElementById('f_body_proc_picker'), { textId: 'f_body_spec', noteId: 'f_body_spec_note', vendorOf: vendorOfFinish, groups: finishGroups, locked: procLocked, lockedProcs: tubeLock('f_body_spec_tube'), tubeOn: () => !!document.getElementById('f_body_spec_tube')?.checked, setTube: on => { const c = document.getElementById('f_body_spec_tube'); if (c && c.checked !== !!on) { c.checked = !!on; c.dispatchEvent(new Event('change', { bubbles: true })); } }, onChange: () => { render(); markDirty(); } });
+      mountProcPicker(document.getElementById('f_rib_proc_picker'), { textId: 'f_rib_spec', noteId: 'f_rib_spec_note', vendorOf: vendorOfFinish, groups: finishGroups, locked: procLocked, lockedProcs: tubeLock('f_rib_spec_tube'), tubeOn: () => !!document.getElementById('f_rib_spec_tube')?.checked, setTube: on => { const c = document.getElementById('f_rib_spec_tube'); if (c && c.checked !== !!on) { c.checked = !!on; c.dispatchEvent(new Event('change', { bubbles: true })); } }, onChange: () => { render(); markDirty(); } });
       [['f_body_spec_tube', 'f_body_proc_picker'], ['f_rib_spec_tube', 'f_rib_proc_picker']].forEach(([cid, hid]) => { const c = document.getElementById(cid); if (c && !c.dataset.tubeLockBound) { c.dataset.tubeLockBound = '1'; c.addEventListener('change', () => { const h = document.getElementById(hid); if (h && !c.checked && Array.isArray(h.__procs) && h.__procs.includes(TUBE_PROC_NAME)) { h.__procs = h.__procs.filter(x => x !== TUBE_PROC_NAME); }   /* hotfix509: 튜브를 끄면 튜브가공도 뺀다 */ if (h && h.__paint) { h.__paint(); if (h.__compose) h.__compose(); } }); } });
       window.__procPickersPaint = () => ['f_body_proc_picker', 'f_rib_proc_picker'].forEach(id => { const h = document.getElementById(id); if (h && h.__paint) h.__paint(); });
       fp.addEventListener('change', e => { const t = e.target; const id = (t && (t.id || (t.dataset && t.dataset.target))) || ''; if (id === 'f_r_dye' || id === 'f_r_proc' || id === 'f_r_post') setTimeout(() => { window.__procPickersPaint(); if (id === 'f_r_dye') window.__procStdOnVendor(); }, 0); }, true);
@@ -19330,6 +19357,7 @@ function validateBlendSum(blends, label) {
         toast(`저장 완료: ${wo_number}${d.type === '원사' && d.lot_no ? ' / LOT ' + d.lot_no : ''}`, 'success');
         render();
       }
+      if (d.type === '염색가공' && isOwnerUser()) { try { await woSpecToItems(d, state.currentWoNumber || d.wo_number || ''); } catch (e) { console.warn('[품목 가공 사양]', e && e.message); } }   // hotfix518
       state.isDirty = false; formBaseMark();   // hotfix405
       updateSaveStatus('저장됨', 'saved');
     } catch (e) { console.error(e); toast('저장 실패: ' + e.message, 'error'); }
@@ -48332,7 +48360,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
             const gate = () => { const any = !!((vs && vs.value) || (vf && vf.value) || (vp && vp.value)); const on = any ? { dyeing: !!(vs && vs.value), processing: !!(vf && vf.value), post: !!(vp && vp.value) } : { dyeing: true, processing: true, post: true }; /* 세 곳 다 비어 있으면(옛 품목) 가리지 않는다 */ Object.keys(on).forEach(k => { const b = modal.querySelector('[data-cblock="' + k + '"]'); if (b) { b.style.display = on[k] ? '' : 'none'; b.dataset.off = on[k] ? '' : '1'; } }); const g = document.getElementById('fs-f-vendors-gate'); if (g) g.textContent = ['dyeing', 'processing', 'post'].some(k => !on[k]) ? '고르지 않은 곳(' + [!on.dyeing && '염색', !on.processing && '가공', !on.post && '후가공'].filter(Boolean).join(' · ') + ')은 주의사항 초안을 쓰지 않습니다' : ''; };
             modal.__vendorGate = gate; gate();
             [vs, vf, vp].forEach(el => { if (el && !el.dataset.gateBound) { el.dataset.gateBound = '1'; el.addEventListener('change', () => { gate(); try { modalMarkDirty(modal); } catch (_) {} }); } }); }
-          const hint = document.getElementById('fs-f-std-vendors-hint'); if (hint) hint.textContent = has.length ? '설정된 표준 사양: ' + has.join(' · ') : '아직 설정된 표준 사양 없음';
+          const hint = document.getElementById('fs-f-std-vendors-hint'); if (hint) hint.textContent = (has.length ? '설정된 표준 사양: ' + has.join(' · ') : '아직 설정된 표준 사양 없음') + ((idx >= 0 && s && s.std_from && s.std_from.wo) ? ' · 마지막 작업지시서 ' + s.std_from.wo + (s.std_from.at ? ' (' + s.std_from.at + ')' : '') + '에서 저장됨' : '');   // hotfix518
           const curV = () => String(vs?.value || '');
           const curF = () => String(document.getElementById('fs-f-v-fin')?.value || ''), curP = () => String(document.getElementById('fs-f-v-post')?.value || '');
           // hotfix424: 업체마다 고르개 하나 — 염색소 · 가공소 · 후가공소로 고른 업체(같은 곳은 하나)마다 그 업체가 등록한 단계 · 공정에서 고른다(대흥이 염색 · 가공 다 되면 대흥 고르개에 둘 다). 값은 modal.__stdMap[업체] 에 따로 담긴다. 아무 업체도 없으면 공통('') 하나
@@ -53216,7 +53244,7 @@ window.addEventListener('beforeunload', e => {
   
   // Apple touch icon 적용
   const appleIcon = document.getElementById('apple-touch-icon');
-  const __hwMainApp = (typeof LINE === 'undefined' || LINE === '') && (location.protocol === 'https:' || location.hostname === 'localhost');   /* hotfix517: 본선(인터넷 주소)만 파일 아이콘 · 매니페스트 */
+  const __hwMainApp = !(window.__HIWOS_LINE || '') && (location.protocol === 'https:' || location.hostname === 'localhost');   /* hotfix517: 본선(인터넷 주소)만 파일 아이콘 · 매니페스트 */
   if (appleIcon) appleIcon.href = __hwMainApp ? 'fabiwos-icon-180.png' : iconAppleTouch;
   
   // ===== 2. 매니페스트 동적 생성 (Blob URL) =====
@@ -53315,7 +53343,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix517';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
+  const VERSION = 'v2.53 hotfix518';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
@@ -53486,7 +53514,8 @@ window.addEventListener('beforeunload', e => {
     const p = vendorParts(wo, vn); const want = ['in', 'plan'];
     if (p['염']) want.push('dye');
     if (p['가']) want.push('fin');
-    if (p['후'] || (wo && wo.processes && wo.processes.post && !norm((wo.recipients || {}).post) && p['가'])) want.push('post');
+    const postPicked = (typeof procPartOfName === 'function') && [].concat((wo && wo.body && wo.body.spec_procs) || [], (wo && wo.rib && wo.rib.spec_procs) || []).some(n => ['후가공', '후덤블'].includes(procPartOfName(n)));   // hotfix518
+    if (p['후'] || (wo && wo.processes && wo.processes.post && !norm((wo.recipients || {}).post) && p['가']) || (postPicked && !norm((wo.recipients || {}).post) && (p['가'] || p['염']))) want.push('post');
     if (!p['염'] && !p['가'] && !p['후']) want.push('fin');
     want.push('qc', 'ship');
     return want.map(c => { const s = P.stageCfg(c); return { c, n: s.n }; });
@@ -54483,6 +54512,36 @@ body.hw-popdash #dashboard-panel{position:fixed!important;top:3vh;left:3vw;right
 #hwside-newtab-wrap{flex:0 0 auto;padding:6px 8px 7px;background:#fff;border-bottom:1px solid #eef2f7;position:relative;z-index:2}
 #hwside-newtab-wrap .hwside-newtab{position:static!important;box-shadow:none!important;margin:0!important}
 .pp-bundle-box{display:none!important}
+/* hotfix518: 가공 사양 11줄 — 한눈에 */
+.proc-picker .pq-tools{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:11.5px;color:#64748b;margin:0 0 8px}
+.proc-picker .pq-tools b{color:#334155}
+.proc-picker .pq-vblock{border:1px solid #e2e8f0;border-radius:12px;background:#fff;padding:10px 12px 6px;margin-bottom:10px;box-shadow:0 1px 2px rgba(15,23,42,.04)}
+.proc-picker .pq-vblock[data-vendor]{border-top:3px solid var(--vc,#cbd5e1)}
+.proc-picker .pq-vhead{display:flex;align-items:baseline;gap:8px;margin:0 0 8px}
+.proc-picker .pq-vname{font-size:13px;font-weight:900;color:var(--vc,#334155);background:color-mix(in srgb,var(--vc,#94a3b8) 10%,#fff);border:1px solid color-mix(in srgb,var(--vc,#94a3b8) 35%,#fff);border-radius:8px;padding:2px 10px}
+.proc-picker .pq-vsub{font-size:11.5px;color:#94a3b8;font-weight:700}
+.proc-picker{container-type:inline-size}
+.proc-picker .pq-band{padding:8px 0 6px;border-top:1px dashed #e2e8f0}
+.proc-picker .pq-band:first-of-type{border-top:0}
+.proc-picker .pq-bandh{display:inline-block;margin:0 0 6px;font-size:12px;font-weight:900;color:var(--bc);background:color-mix(in srgb,var(--bc) 9%,#fff);border-radius:6px;padding:2px 9px;line-height:1.4;letter-spacing:.5px}
+.proc-picker .pq-rows{display:flex;flex-direction:column;gap:5px}
+.proc-picker .pq-row{display:grid;grid-template-columns:74px 1fr;gap:8px;align-items:start}
+.proc-picker .pq-lab{font-size:12px;font-weight:800;color:var(--pc);padding-top:5px;white-space:nowrap;line-height:1.1}
+.proc-picker .pq-lab small{display:block;font-size:9.5px;font-weight:700;color:#94a3b8;margin-top:2px}
+.proc-picker .pq-chips{display:flex;flex-wrap:wrap;gap:5px;align-items:center}
+.proc-picker .pq-chip{display:inline-flex;align-items:center;gap:3px;height:27px;padding:0 10px;border-radius:14px;border:1.5px solid color-mix(in srgb,var(--pc) 30%,#e2e8f0);background:#fff;color:#334155;font-size:12.5px;font-weight:700;cursor:pointer;font-family:inherit;transition:background .12s,border-color .12s,color .12s,transform .08s}
+.proc-picker .pq-chip:hover{border-color:var(--pc);color:var(--pc);background:color-mix(in srgb,var(--pc) 6%,#fff)}
+.proc-picker .pq-chip:active{transform:scale(.96)}
+.proc-picker .pq-chip.on{background:var(--pc);border-color:var(--pc);color:#fff;box-shadow:0 2px 6px color-mix(in srgb,var(--pc) 35%,transparent)}
+.proc-picker .pq-chip.on i{font-style:normal;font-size:11px;font-weight:900}
+.proc-picker .pq-chip.off{opacity:.38;cursor:not-allowed;text-decoration:line-through}
+.proc-picker .pq-chip.pp-del{border-style:dashed}
+.proc-picker .pq-add{height:27px;padding:0 9px;border-radius:14px;border:1.5px dashed #cbd5e1;background:#f8fafc;color:#64748b;font-size:12px;font-weight:800;cursor:pointer;font-family:inherit}
+.proc-picker .pq-add:hover{border-color:#1d4ed8;color:#1d4ed8;background:#eff6ff}
+.proc-picker .pq-tubenote{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 11px;border-radius:14px;background:#eef2ff;color:#3730a3;font-size:12px;font-weight:800}
+.proc-picker .pq-tubenote small{font-weight:600;color:#6366f1}
+.proc-picker .pp-addin{height:28px;box-sizing:border-box}
+@container (max-width:560px){.proc-picker .pq-row{display:flex;flex-wrap:wrap;gap:5px;align-items:center}.proc-picker .pq-chips{display:contents}.proc-picker .pq-lab{padding:0 4px 0 0;min-width:0}.proc-picker .pq-lab small{display:inline;margin:0 0 0 3px}.proc-picker .pq-chip{height:26px;padding:0 9px;font-size:12px}.proc-picker .pq-vblock{padding:8px 9px 4px}}
 .smg-bg{position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:10060;display:flex;align-items:flex-start;justify-content:center;overflow:auto;padding:26px 12px}
 .smg-box{background:#fff;border-radius:14px;max-width:1040px;width:100%;box-shadow:0 24px 64px rgba(15,23,42,.35);overflow:hidden}
 .smg-head{display:flex;align-items:flex-start;gap:12px;padding:16px 20px 14px;border-bottom:1px solid #e2e8f0;background:linear-gradient(180deg,#f8fafc,#fff)}
