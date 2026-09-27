@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="FABIWOS">
 <meta name="mobile-web-app-capable" content="yes">
-<title>FABIWOS v2.53 hotfix520</title>
+<title>FABIWOS v2.53 hotfix522</title>
 
 <!-- PWA Manifest (인라인 data URL) -->
 <link rel="manifest" id="pwa-manifest">
@@ -6975,6 +6975,13 @@
   .dashboard-panel[data-hwv="procSetup"] .dash-table th { position: static !important; }
   /* 설명 칸 줄이기 / 늘이기 */
   .hw-desc-off { display: none !important; }
+  /* hotfix522: 설명을 접었을 때 — 빈 칸은 감추고, 단추만 남은 칸은 오른쪽 한 줄 · 섞인 칸은 글만 접음 */
+  .hw-desc-hostoff { display: none !important; }
+  .hw-desc-compact { flex-direction: row !important; justify-content: flex-end !important; align-items: center !important; flex-wrap: wrap !important; gap: 6px !important; min-height: 0 !important; }
+  .hw-desc-compact > :not(.hw-desc) { display: flex !important; flex-direction: row !important; flex-wrap: wrap !important; align-items: center !important; justify-content: flex-end !important; gap: 6px !important; }
+  .hw-desc-mixed-off > .hw-desc-part { display: none !important; }
+  .hw-desc-mixed-off { padding-top: 8px !important; padding-bottom: 8px !important; }
+  .hw-desc-mixed-off > :not(.hw-desc-part) { margin-top: 0 !important; }
   .dash-header > .hw-descbtn { margin-right: auto; align-self: center; }
   .hw-descbtn { margin-left: 12px; vertical-align: middle; border: 1px solid #cbd5e1; background: #fff; color: #334155; border-radius: 7px; padding: 3px 10px; font-size: 11.5px; font-weight: 800; cursor: pointer; font-family: inherit; white-space: nowrap; letter-spacing: 0; }
   .hw-descbtn:hover { background: #f1f5f9; }
@@ -53348,7 +53355,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix520';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
+  const VERSION = 'v2.53 hotfix522';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
@@ -53393,7 +53400,24 @@ window.addEventListener('beforeunload', e => {
     const c = Array.from(body.querySelectorAll('div,p,span')).filter(e => (e.offsetParent || e.classList.contains('hw-desc-off')) && !e.closest('.hwp-admin') && before(e)
       && !e.querySelector('input,select,button,textarea,table') && /니다|하십시오|세요/.test(e.textContent || '') && (e.textContent || '').trim().length >= 30
       && parseFloat(getComputedStyle(e).fontSize) <= 13.5);
-    return c.filter(e => !c.some(o => o !== e && o.contains(e)));
+    return c.filter(e => !c.some(o => o !== e && o.contains(e)) && !e.classList.contains('hw-desc-part'));
+  }
+  /* hotfix522: 설명 글과 단추가 한 칸에 섞인 것(예: 나염 코드 — 설명 + [나염 구분 설정]) — 글만 접고 단추는 남긴다 */
+  function findMixed(body, plain) {
+    const firstT = body.querySelector('.dash-table-wrap, .dash-table, table');
+    const before = e => !firstT || ((e.compareDocumentPosition(firstT) & Node.DOCUMENT_POSITION_FOLLOWING) && !e.contains(firstT));
+    const ownText = e => Array.from(e.childNodes).filter(n => n.nodeType === 3 || (n.nodeType === 1 && !n.querySelector('button') && n.tagName !== 'BUTTON' && (!n.classList.contains('hw-desc') || n.classList.contains('hw-desc-part')) && getComputedStyle(n).display !== 'none')).map(n => n.textContent || '').join('').trim();
+    return Array.from(body.querySelectorAll('div,p')).filter(e => (e.offsetParent || e.classList.contains('hw-desc-mixed')) && !e.closest('.hwp-admin') && before(e)
+      && e.querySelector('button') && !Array.from(e.querySelectorAll('input,select,textarea,table')).some(x => x.offsetParent !== null) && !plain.some(p => p.contains(e))
+      && (e.classList.contains('hw-desc-mixed') || (/니다|하십시오|세요/.test(ownText(e)) && ownText(e).length >= 30)) && parseFloat(getComputedStyle(e).fontSize) <= 13.5);
+  }
+  function markMixed(e) {
+    if (e.classList.contains('hw-desc-mixed')) return;
+    e.classList.add('hw-desc-mixed');
+    Array.from(e.childNodes).forEach(n => {
+      if (n.nodeType === 3) { if (!n.textContent.trim()) return; const sp = document.createElement('span'); sp.className = 'hw-desc-part'; n.parentNode.insertBefore(sp, n); sp.appendChild(n); }
+      else if (n.nodeType === 1 && n.tagName !== 'BUTTON' && !n.querySelector('button')) n.classList.add('hw-desc-part');
+    });
   }
   function run() {
     try {
@@ -53402,6 +53426,18 @@ window.addEventListener('beforeunload', e => {
       const v = view(); const off = !!get()[v];
       const ds = find(body);
       ds.forEach(e => { e.classList.add('hw-desc'); e.classList.toggle('hw-desc-off', off); });
+      /* hotfix522: 설명을 접은 뒤 남는 칸 — 비었으면 칸째 감추고, 단추만 남으면 오른쪽 한 줄로 */
+      const btnFree = k => { const c = k.cloneNode(true); c.querySelectorAll('button,[style*="display:none"],[style*="display: none"]').forEach(x => x.remove()); return (c.textContent || '').trim(); };   /* 단추 말고 남는 글자 */
+      const hosts = Array.from(new Set(ds.map(e => e.parentElement).filter(Boolean)));
+      hosts.forEach(h => { h.classList.remove('hw-desc-hostoff', 'hw-desc-compact'); });
+      if (off) hosts.forEach(h => {
+        const kids = Array.from(h.children).filter(k => !k.classList.contains('hw-desc') && getComputedStyle(k).display !== 'none' && ((k.textContent || '').trim() || k.querySelector('button,input,select,textarea,img,svg,canvas,table')));
+        const ownTxt = Array.from(h.childNodes).some(n => n.nodeType === 3 && n.textContent.trim());
+        if (!kids.length && !ownTxt) { h.classList.add('hw-desc-hostoff'); return; }
+        if (!ownTxt && /flex/.test(getComputedStyle(h).display) && kids.every(k => !Array.from(k.querySelectorAll('input,select,textarea,table')).some(x => x.offsetParent !== null) && k.tagName !== 'INPUT' && k.tagName !== 'SELECT') && kids.every(k => k.tagName === 'BUTTON' || (k.querySelector('button') && !btnFree(k)))) h.classList.add('hw-desc-compact');
+      });
+      const mx = findMixed(body, ds); mx.forEach(e => { markMixed(e); e.classList.toggle('hw-desc-mixed-off', off); });
+      ds.push(...mx);
       let b = head.querySelector('.hw-descbtn');
       if (!ds.length) { if (b) b.remove(); return; }
       if (!b) { b = document.createElement('button'); b.type = 'button'; b.className = 'hw-descbtn';
