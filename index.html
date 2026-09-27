@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="FABIWOS">
 <meta name="mobile-web-app-capable" content="yes">
-<title>FABIWOS v2.53 hotfix512</title>
+<title>FABIWOS v2.53 hotfix513</title>
 
 <!-- PWA Manifest (인라인 data URL) -->
 <link rel="manifest" id="pwa-manifest">
@@ -14159,6 +14159,18 @@ window.addEventListener('firebase-ready', () => {
     b.querySelector('.hw-ret-x').onclick = () => { window.__hwRet = null; hwRetPaint(); }; }
   window.hwRetPaint = hwRetPaint;
   window.hwOpenDailyReport = () => openDailyReportModal();
+  /* hotfix513: 일일 보고 실시간 — 창이 열려 있으면 자료가 바뀔 때 다시 그린다. 접어 둔 거래처 · 스크롤 자리는 그대로 */
+  window.hwDrRefresh = () => { clearTimeout(window.__drRT); window.__drRT = setTimeout(() => { try {
+    const mb = document.getElementById('dash-modal-bg'); if (!mb || !mb.classList.contains('show') || (document.getElementById('dash-modal-title') || {}).textContent !== '거래처별 일일 보고') return;
+    if (mb.querySelector('.dr-card-copy[disabled]')) { window.hwDrRefresh(); return; }   /* 이미지 복사 · 인쇄 중이면 끝난 뒤 */
+    const closed = new Set(Array.from(mb.querySelectorAll('.dr-card')).filter(c => { const p = c.querySelector('.dr-card-preview'); return p && p.style.display === 'none'; }).map(c => c.dataset.recipient));
+    const scs = [mb, mb.querySelector('.dash-modal'), document.getElementById('dash-modal-body')].filter(Boolean).map(e => [e, e.scrollTop]);
+    const before = (document.getElementById('dash-modal-body') || {}).innerHTML;
+    openDailyReportModal();
+    const body = document.getElementById('dash-modal-body'); if (body && body.innerHTML === before) return;
+    mb.querySelectorAll('.dr-card').forEach(c => { if (!closed.has(c.dataset.recipient)) return; const p = c.querySelector('.dr-card-preview'); const t = c.querySelector('[data-action="dr-toggle"]'); if (p) p.style.display = 'none'; if (t) t.textContent = '▾'; });
+    scs.forEach(([e, y]) => { try { e.scrollTop = y; } catch (_) {} });
+  } catch (e) { console.warn('[daily live]', e && e.message); } }, 350); };
   window.hwWoOpen = (id, mode) => {   /* hotfix510: [수정]으로 온 때는 호출한 쪽이 되돌아가기를 건다 */ const wo = (state.allWorkOrders || []).find(w => w && w.id === id); if (!wo) { toast('의뢰서를 찾지 못했습니다', 'error'); return; } if (mode === 'edit') { if (typeof woLockedForMe === 'function' && woLockedForMe(wo)) { woLockToast(); return; } switchUiMode('write'); loadWorkOrder(wo); } else showPreviewModal(wo); };   // hotfix509: 공정 창에서
   // hotfix509: 작성 화면 위에 다른 화면을 창으로 띄우고, [작업지시서로 돌아가기]로 쓰던 자리로 — 쓰던 의뢰서는 그대로
   window.hwPopView = (view, title) => {
@@ -18484,7 +18496,7 @@ function specGreigeColors(fid) {
       try { clearTimeout(window.__hwPubT); window.__hwPubT = setTimeout(() => { try { if (window.hwProc && window.hwProc.publish) window.hwProc.publish(); } catch (_) {} }, 1200); } catch (_) {}   // hotfix509: 의뢰서가 바뀌면(수정 · 입고 취소 …) 곧바로 가공소 화면에도
       state.allWorkOrders = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
       state.__woLoaded = true;   /* hotfix485 */
-      try { const _mb = document.getElementById('dash-modal-bg'); if (_mb && _mb.classList.contains('show') && _mb.querySelector('.dr-modal-empty') && (document.getElementById('dash-modal-title') || {}).textContent === '거래처별 일일 보고') openDailyReportModal(); } catch (_) {}   /* hotfix485(대표 지적 9/25): 자료 오기 전 빈 창이 떴으면 다시 그림 */
+      try { if (window.hwDrRefresh) window.hwDrRefresh(); } catch (_) {}   /* hotfix513: 일일 보고가 열려 있으면 실시간으로 다시 그림(빈 창 포함) */   /* hotfix485(대표 지적 9/25): 자료 오기 전 빈 창이 떴으면 다시 그림 */
       renderHistory();
       // v2.51 step2: 사이드바 클레임 배지 갱신
       updateClaimsBadge();
@@ -53006,7 +53018,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix512';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
+  const VERSION = 'v2.53 hotfix513';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
@@ -53564,6 +53576,7 @@ window.addEventListener('beforeunload', e => {
   function rerender() {
     clearTimeout(rrT);
     rrT = setTimeout(() => {
+      try { if (window.hwDrRefresh) window.hwDrRefresh(); } catch (_) {}   /* hotfix513: 공정 기록이 바뀌면 일일 보고 진행상황도 */
       try {
         if ((typeof state === 'undefined') || state.uiMode !== 'dashboard') return;
         const ae = document.activeElement; if (ae && /INPUT|TEXTAREA|SELECT/.test(ae.tagName) && ae.closest && ae.closest('#dash-body')) return;
@@ -54050,6 +54063,14 @@ window.addEventListener('beforeunload', e => {
 .hwn-msg{font-size:13.5px;font-weight:800;color:#0f5f76;margin:5px 0 2px}.hwn-card.warn .hwn-msg{color:#c2410c}.hwn-card.ok .hwn-msg{color:#15803d}.hwn-card.eta .hwn-msg{color:#4338ca}
 .hwn-it{font-size:12px;color:#64748b}.hwn-go{margin-top:8px;border:1px solid #cfe3ea;background:#f5fbfc;color:#0f5f76;border-radius:8px;padding:4px 12px;font-weight:800;font-size:12px;cursor:pointer;font-family:inherit}
 .hwn-more{text-align:center;font-size:12px;color:#64748b;background:#fff;border-radius:10px;padding:6px;box-shadow:0 6px 16px rgba(15,23,42,.1)}
+/* hotfix513: 전체 소식 창 — 카드가 창 높이에 맞춰 눌리지 않게(각 카드 제 높이 · 목록만 스크롤) · 흰 판 */
+#hwp-notif .hwn-card{flex-shrink:0}
+#hwp-notif.all{top:18px;bottom:18px;max-height:none;background:#f1f5f9;border:1px solid #dbe4ec;border-radius:16px;padding:10px;box-shadow:0 24px 60px rgba(15,23,42,.30);gap:10px}
+#hwp-notif.all .hwn-head{box-shadow:none;flex-shrink:0}
+#hwp-notif.all .hwn-list{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:2px 2px 6px}
+#hwp-notif.all .hwn-card{animation:none;box-shadow:0 2px 8px rgba(15,23,42,.08)}
+#hwp-notif.all .hwn-more{flex-shrink:0;box-shadow:none}
+@media (max-width:520px){#hwp-notif.all{left:10px;right:10px;width:auto;top:10px;bottom:10px}}
 .hwp-pvc .hwp-steps{margin:10px 0 4px}.hwp-pvc .hwp-step b{font-size:9.5px}.hwp-pvc .hwp-step i{width:15px;height:15px;border-width:2px}.hwp-pvc .hwp-step::before{top:6px;height:2px}
 .hwp-pvc .a{align-items:center}
 </style>
