@@ -350,6 +350,20 @@ body.pc .device>#toast{position:absolute;zoom:1.06}
 .seg button.on{background:#fff;color:#0e7490;box-shadow:0 1px 3px rgba(15,23,42,.12)}
 .nrow{display:flex;gap:6px}.nrow button{flex:1;border:1px solid #e2e8f0;background:#fff;border-radius:10px;padding:9px 6px;font-size:12.5px;font-weight:700;color:#334155;cursor:pointer;font-family:inherit}
 .nrow button.on{background:#ecfdf5;border-color:#a7f3d0;color:#047857}
+/* hotfix553: 사양 줄은 화면 안에서 줄바꿈 · 카드 조금 작게 */
+.c-spec span{white-space:normal!important;word-break:keep-all;overflow-wrap:anywhere;max-width:100%;box-sizing:border-box;line-height:1.45}
+.card{padding:12px 13px 11px!important;margin:9px 0!important;border-radius:16px!important}
+.c-item{font-size:17px!important;margin-top:2px!important}.c-color{font-size:14.5px!important;margin-top:1px!important}
+.qty2{margin-top:7px!important;gap:6px!important}.qty2 .q{padding:6px 10px!important;border-radius:11px!important}.qty2 .q b{font-size:20px!important}.qty2 .q span,.qty2 .q em{font-size:12px!important}
+.c-spec{margin-top:6px!important;gap:5px!important}.c-spec span{font-size:12px!important;padding:3px 8px!important}
+.c-note{font-size:12.5px!important;padding:6px 9px!important;margin-top:6px!important;line-height:1.45!important}
+.steps{margin:10px 0 4px!important}.step i{width:22px!important;height:22px!important;border-width:2.5px!important}.step b{font-size:11px!important}.step small{font-size:10px!important;min-height:11px!important}
+.big{min-height:46px!important;font-size:16px!important;border-radius:13px!important}
+.c-foot2{margin-top:8px!important}.c-foot2 button{height:36px!important;font-size:13px!important;border-radius:10px!important}
+.ribbon{font-size:12.5px}
+.card.urg{border:2.5px solid #dc2626!important;box-shadow:0 0 0 4px rgba(220,38,38,.14),0 10px 24px -14px rgba(185,28,28,.6)!important;padding-top:30px!important}
+.card.urg::before{content:'긴급 — 먼저 해 주세요';position:absolute;top:0;left:0;right:0;background:linear-gradient(90deg,#dc2626,#ef4444);color:#fff;font-weight:900;font-size:12.5px;letter-spacing:.3px;padding:4px 13px;z-index:1}
+.card.urg .t-urg{background:#dc2626!important;color:#fff!important}
 </style>
 </head>
 <body>
@@ -397,7 +411,7 @@ import { initializeFirestore, getFirestore, doc, getDoc, updateDoc, setDoc, dele
  *   읽는 것: proc_acc/{내 uid} · proc_pub/{내 업체} · proc_log(내 업체 것만)
  *   쓰는 것: proc_log 한 줄 추가(고치기 · 지우기 없음) · 처음 로그인 때 내 기기 등록 한 번
  */
-const PVER = 'p14 (hotfix547)';
+const PVER = 'p15 (hotfix553)';
 const cfg = { apiKey: "AIzaSyAIaNFZozda5sp4Qjs7LEn-aXYLX1JZi10", authDomain: "recoveric-wo.firebaseapp.com", projectId: "recoveric-wo", storageBucket: "recoveric-wo.firebasestorage.app", messagingSenderId: "267946532287", appId: "1:267946532287:web:fcc1b597c9bf53c9d8950a" };
 const DOMAIN = 'proc.recoveric.com';
 const app = initializeApp(cfg, 'hwvendor');   /* hotfix507: 이름 붙인 앱 = 로그인 보관 칸이 직원 화면(구글 로그인)과 따로. 전에는 같은 크롬에서 가공소로 로그인하면 직원 화면이 '권한 없음'으로 로그아웃되고, 그 로그아웃이 다시 가공소 화면까지 끊었다 */
@@ -588,7 +602,8 @@ const dayDiff = (a, b) => Math.round((new Date(ymd(b) + 'T00:00:00') - new Date(
 const md = s => { if (!s) return ''; const d = new Date(s + 'T00:00:00'); return (d.getMonth() + 1) + '/' + d.getDate() + '(' + '일월화수목금토'[d.getDay()] + ')'; };
 const elapsed = it => it && it.date ? Math.max(0, dayDiff(new Date(it.date + 'T09:00:00').getTime(), Date.now())) : 0;
 const DEF_STAGES = [{ c: 'in', n: '생지입고' }, { c: 'plan', n: '계획완료' }, { c: 'dye', n: '염색완료' }, { c: 'fin', n: '가공완료' }, { c: 'qc', n: 'QC완료' }, { c: 'ship', n: '출고완료' }];
-const stagesOf = it => (Array.isArray(it.stages) && it.stages.length) ? it.stages : DEF_STAGES;
+const ST_RN = { '염색완료': '염색중', '가공완료': '가공중', '후가공완료': '후가공중', 'QC완료': 'QC중' };   /* hotfix553 */
+const stagesOf = it => ((Array.isArray(it.stages) && it.stages.length) ? it.stages : DEF_STAGES).map(x => ST_RN[x.n] ? Object.assign({}, x, { n: ST_RN[x.n] }) : x);
 function procState(L, it) {
   const s = L.slice().sort((a, b) => tOf(a) - tOf(b));
   const cancelled = new Set(s.filter(l => l.kind === 'cancel' && l.ref).map(l => l.ref));
@@ -734,7 +749,7 @@ function render() {
   const tabs = [['ing', '진행 중', nIng], ['req', '확인 요청', nReq], ['done', '출고 완료', items.length - nIng], ['all', '전체', items.length]];
   $('bar').innerHTML = tabs.filter(t => t[0] !== 'req' || t[2] > 0).map(([k, l, n]) => `<button type="button" data-f="${k}" class="${S.filt === k ? 'on' : ''}${k === 'req' ? ' req' : ''}">${l}<span class="n">${n}</span></button>`).join('');
   let show = items.filter(it => S.filt === 'all' || (S.filt === 'ing' ? !isDone(it) : (S.filt === 'req' ? isReq(it) : isDone(it))));
-  show = show.slice().sort((a, b) => (isReq(b) - isReq(a)) || (isDone(a) - isDone(b)) || sortCmp(a, b, sts));   // hotfix509: 확인 요청 먼저 → 고른 정렬(기본 최근 의뢰 먼저)
+  show = show.slice().sort((a, b) => ((!!b.urgent && !isDone(b)) - (!!a.urgent && !isDone(a))) || (isReq(b) - isReq(a)) || (isDone(a) - isDone(b)) || sortCmp(a, b, sts));   /* hotfix553: 긴급 먼저 */   // hotfix509: 확인 요청 먼저 → 고른 정렬(기본 최근 의뢰 먼저)
   paintSort();
   if (!show.length) { $('list').innerHTML = `<div class="empty">${items.length ? '해당하는 원단이 없습니다.' : '지금 맡기신 현일텍스 원단이 없습니다.<br>새 의뢰가 들어오면 여기에 저절로 나타납니다.'}</div>`; return; }
   $('list').innerHTML = show.map(it => card(it, sts.get(it.k))).join('');
@@ -757,10 +772,10 @@ function card(it, st) {
   else if (nx) bigH = `<button type="button" class="big" data-act="stage" data-c="${esc(nx.c)}">${esc(nx.n)}<span class="arr">›</span></button>`;
   const steps = `<div class="steps">${st.stages.map(x => {
     const on = x.c === 'ship' ? st.shippedAll : !!st.done[x.c]; const isNx = nx && nx.c === x.c; const lg = x.c === 'ship' ? st.ships[st.ships.length - 1] : st.done[x.c];
-    return `<button type="button" class="step${on ? ' on' : ''}${isNx ? ' nx' : ''}" data-act="${x.c === 'ship' ? 'ship' : 'stage'}" data-c="${esc(x.c)}">${lg && lg.note ? '<span class="memo"></span>' : ''}<i></i><b>${esc(x.n).replace(/완료$/, '<u>완료</u>')}</b><small>${lg ? esc(hhmm(tOf(lg)).replace('오늘 ', '')) : ''}</small></button>`;
+    return `<button type="button" class="step${on ? ' on' : ''}${isNx ? ' nx' : ''}" data-act="${x.c === 'ship' ? 'ship' : 'stage'}" data-c="${esc(x.c)}">${lg && lg.note ? '<span class="memo"></span>' : ''}<i></i><b>${esc(x.n).replace(/(완료|중)$/, '<u>$1</u>')}</b><small>${lg ? esc(hhmm(tOf(lg)).replace('오늘 ', '')) : ''}</small></button>`;
   }).join('')}</div>`;
   const iss = st.issues.slice(-2).reverse().map(l => `<button type="button" class="${l.issue === '원단 불량' ? 'b' : ''}" data-act="issue" data-id="${esc(l.id)}">특이사항 · ${esc(l.issue)}${l.note ? ' — ' + esc(l.note) : ''}<small>${esc(hhmm(tOf(l)))}</small></button>`).join('');
-  return `<div class="card${st.shippedAll ? ' done' : ''}${st.openReq ? ' req' : ''}${(S.flashK === it.k && Date.now() < (S.flashTo || 0)) ? ' flash' : ''}" data-k="${esc(it.k)}">
+  return `<div class="card${it.urgent && !st.shippedAll ? ' urg' : ''}${st.shippedAll ? ' done' : ''}${st.openReq ? ' req' : ''}${(S.flashK === it.k && Date.now() < (S.flashTo || 0)) ? ' flash' : ''}" data-k="${esc(it.k)}">
     ${st.openReq ? (st.openReq.reason === 'lack' ? `<div class="ribbon lack"><span><em>부족분 확인</em>${esc(st.openReq.note || '부족분을 확인해 주십시오')}</span><span class="rb2"><button type="button" data-act="eta">입고 예정일 알려주기</button><button type="button" data-act="issue">답하기</button></span></div>` : `<div class="ribbon"><span>현일텍스 확인 요청 — ${esc(st.openReq.note || '출고일을 알려 주십시오')}</span><button type="button" data-act="eta">날짜 알려주기</button></div>`) : ''}
     <div class="c-h"><span class="c-no">${esc(it.wo)} · <span class="el">작지 ${elapsed(it)}일째</span></span><span class="c-tags">${it.urgent ? '<span class="t-urg">긴급</span>' : ''}${it.redye ? '<span class="t-re">재염</span>' : ''}${it.tag ? '<span class="t-tag">' + esc(it.tag) + '</span>' : ''}</span></div>
     <div class="c-ic"><div class="c-icl"><div class="c-item">${esc(it.item)}</div><div class="c-color">${esc(it.color)}</div></div>${(Array.isArray(it.stamps) && it.stamps.length) ? `<div class="c-stamps">${it.stamps.slice(0, 4).map((x, i) => `<span style="--sc:${esc(x.c || '#475569')};--rt:${i % 2 ? '5deg' : '-6deg'}">${esc(x.n || '')}</span>`).join('')}</div>` : ''}</div>
@@ -867,7 +882,7 @@ function stageSheet(it, c) {
       <div class="row2"><button type="button" class="no danger" data-cancel>완료 취소</button><button type="button" class="ok" data-save>메모 저장</button></div>`);
     $('sheet').onclick = async e => {
       if (e.target.id === 'sheet') { closeSheet(); return; }
-      if (e.target.closest('[data-cancel]')) { if (!confirm(x.n + ' 완료를 취소합니다.')) return; if (await put(it, { kind: 'cancel', ref: lg.id })) { closeSheet(); toast(x.n + ' 완료를 취소했습니다'); } return; }
+      if (e.target.closest('[data-cancel]')) { if (!confirm(x.n + ' 기록을 취소합니다.')) return; if (await put(it, { kind: 'cancel', ref: lg.id })) { closeSheet(); toast(x.n + ' 기록을 취소했습니다'); } return; }
       if (e.target.closest('[data-save]')) { const v = ($('sh-note').value || '').trim().slice(0, 200); if (await put(it, { kind: 'note_edit', ref: lg.id, note: v })) { closeSheet(); toast('메모를 고쳤습니다'); } }
     };
     return;
@@ -941,7 +956,7 @@ function issueSheet(it, id) {
 }
 function histSheet(it) {
   const st = stOf(it); const name = c => (st.stages.find(s => s.c === c) || { n: c }).n;
-  const w = l => l.kind === 'st' ? name(l.stage) + ' 완료' : l.kind === 'eta' ? '출고 예정 ' + md(l.date) + (l.part === 'rest' ? ' (잔량)' : '') + (l.reason ? ' · ' + l.reason : '') : l.kind === 'ship' ? (l.mode === 'all' ? '전량 출고' : '부분 출고 · 몸판 ' + (l.body || 0) + ' · 리프 ' + (l.rib || 0)) : l.kind === 'issue' ? '특이사항 · ' + l.issue : l.kind === 'req' ? '현일텍스 확인 요청' : l.kind === 'cancel' ? '취소' : l.kind === 'note_edit' ? '메모 고침' : '(옛 기록) ' + (l.label || '');
+  const w = l => l.kind === 'st' ? (/(완료|중)$/.test(name(l.stage)) ? name(l.stage) : name(l.stage) + ' 완료') : l.kind === 'eta' ? '출고 예정 ' + md(l.date) + (l.part === 'rest' ? ' (잔량)' : '') + (l.reason ? ' · ' + l.reason : '') : l.kind === 'ship' ? (l.mode === 'all' ? '전량 출고' : '부분 출고 · 몸판 ' + (l.body || 0) + ' · 리프 ' + (l.rib || 0)) : l.kind === 'issue' ? '특이사항 · ' + l.issue : l.kind === 'req' ? '현일텍스 확인 요청' : l.kind === 'cancel' ? '취소' : l.kind === 'note_edit' ? '메모 고침' : '(옛 기록) ' + (l.label || '');
   const L = st.all.slice().reverse();
   sheet(`<h3>기록 · 고치기</h3><div class="sub">${esc(it.item)} · ${esc(it.color)} — 잘못 누른 것은 [취소]를 누르십시오. 기록은 지워지지 않고 남습니다.</div>
     <div class="hist">${L.length ? L.map(l => `<div class="h${st.cancelled.has(l.id) ? ' x' : ''}"><span class="t">${esc(hhmm(tOf(l)))}</span><span class="w">${esc(w(l))}${l.note && l.kind !== 'req' ? ' — ' + esc(l.note) : ''}<br><span class="by">${l.by === 'vendor' ? '가공소' : '현일텍스'}</span></span>${(l.by === 'vendor' && !st.cancelled.has(l.id) && ['st', 'eta', 'ship', 'issue'].includes(l.kind)) ? `<button type="button" data-cx="${esc(l.id)}">취소</button>` : '<span></span>'}</div>`).join('') : '<div class="empty" style="padding:24px">아직 기록이 없습니다.</div>'}</div>
