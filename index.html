@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="FABIWOS">
 <meta name="mobile-web-app-capable" content="yes">
-<title>FABIWOS v2.53 hotfix555</title>
+<title>FABIWOS v2.53 hotfix556</title>
 
 <!-- PWA Manifest (인라인 data URL) -->
 <script>
@@ -29754,6 +29754,25 @@ function validateBlendSum(blends, label) {
     if (v === 'lackView') return hwLackRows().map(x => x.pk + ':' + x.st + ':' + x.lb + ':' + x.lr).join(',');
     if (v === 'fieldView') return hfMsgs().map(m => m.id + ':' + hfAcks(m.id).length).join(',');
   } catch (_) {} return String(Date.now()); };
+  /* hotfix556: 불량 체크 · 생산 완료 체크 카드 [현장 알림] — 품목 · 컬러 · 차수 · 수량이 붙은 코멘트 */
+  window.hwFieldQuick = function (woId, ci, rno, card) {
+    const wo = (state.allWorkOrders || []).find(w => w && w.id === woId); if (!wo) return; const c = (wo.colors || [])[ci] || {};
+    const item = String((wo.body && wo.body.item) || (wo.rib && wo.rib.item) || '').trim();
+    let qty = ''; try { const ln = Array.from((card || document).querySelectorAll('.ceo-report-line')).find(l => /^\s*수량/.test(l.innerText)); if (ln) qty = ln.innerText.replace(/^\s*수량\s*/, '').replace(/\s+/g, ' ').trim(); } catch (_) {}
+    if (!qty) qty = `의뢰 몸판 ${Number(c.body) || 0}절 · 리프 ${Number(c.rib) || 0}절`;
+    const ref = [wo.wo_number || '', item, c.name || '', rno ? rno + '차' : ''].filter(Boolean).join(' · ');
+    const m = gmModal('현장 알림 — 이 원단에 코멘트', `<div class="hw-gm-src"><b>${gmEsc(wo.wo_number || '')}</b> · ${gmEsc(item)} · <b>${gmEsc(c.name || '')}</b>${rno ? ' · ' + gmEsc(rno) + '차' : ''}<br><span style="color:#475569">${gmEsc(qty)}</span></div>
+      <div class="hw-gm-fg"><label class="full">현장에 보낼 코멘트<textarea id="hfq-t" rows="4" maxlength="260" style="padding:9px 11px;border:1px solid #cbd5e1;border-radius:9px;font:inherit;font-size:14px;" placeholder="예: 장축률 4.4% — 다시 재서 사진 보내 주세요 / 이 컬러는 출고 보류"></textarea></label></div>
+      <div class="hw-gm-note">현장 휴대폰(현장 QC 앱)에 큰 창 + 소리 · 진동으로 뜨고, 위 원단 정보가 함께 갑니다. 확인하면 [현장 알림] 화면에 누가 언제 확인했는지 나옵니다.</div>
+      <div class="hw-gm-acts"><button type="button" class="hw-gm-btn" data-x>닫기</button><button type="button" class="hw-gm-btn red" id="hfq-go" style="background:#dc2626;color:#fff;border-color:#b91c1c;">현장에 보내기</button></div>`, (mm, close) => {
+      mm.querySelector('[data-x]').addEventListener('click', close);
+      mm.querySelector('#hfq-go').addEventListener('click', async ev => { const t = mm.querySelector('#hfq-t').value.trim(); if (!t) { toast('코멘트를 적으십시오', 'warning'); mm.querySelector('#hfq-t').focus(); return; } ev.currentTarget.disabled = true;
+        const ok = window.hwFieldSend ? await window.hwFieldSend(t + ' — ' + (item ? item + ' ' : '') + (c.name || '') + (qty ? ' (' + qty + ')' : ''), ref) : false;
+        if (ok) { close(); toast('현장에 보냈습니다 — [현장 알림] 화면에서 확인 여부를 볼 수 있습니다', 'success'); try { hwTopPaint(); } catch (_) {} } else ev.currentTarget.disabled = false; });
+    }, true);
+    setTimeout(() => { const t = m.querySelector('#hfq-t'); if (t) t.focus(); }, 30);
+  };
+  document.addEventListener('click', e => { const b = e.target && e.target.closest ? e.target.closest('.hw-field-rep') : null; if (!b) return; e.preventDefault(); e.stopPropagation(); window.hwFieldQuick(b.dataset.id, parseInt(b.dataset.colorIdx, 10) || 0, b.dataset.receiptNo || '', b.closest('.ceo-report-card')); }, true);
   window.__hf545 = { all: () => gmAll(), pending: () => gmPending(), rem: (w, i) => gmRemAt(w, i) };
 
   // 생지 줄 취소(최고관리자) — 이동 · 로스 줄을 void 도장 (재고는 돌아오고 기록은 남는다)
@@ -31988,6 +32007,7 @@ function validateBlendSum(blends, label) {
         <div class="ceo-report-actions">
           <button class="dash-action-btn hist-open-btn" data-hist-id="${rep.woId}" data-hist-color="${rep.colorIdx}" title="전체 작업 이력 보기" style="background:#eef2ff;color:#4338ca;border-color:#c7d2fe;font-weight:700;">작업 이력</button>
           <button class="dash-action-btn complete-rep-view-btn" data-id="${rep.woId}">원단 보기</button>
+          <button class="dash-action-btn hw-field-rep" data-id="${rep.woId}" data-color-idx="${rep.colorIdx}" data-receipt-no="${rep.receiptNo || ''}" style="background:#fef2f2;color:#b91c1c;border-color:#fca5a5;font-weight:800;" title="이 원단에 대해 현장 휴대폰으로 코멘트 보내기">현장 알림</button>
           <button class="dash-action-btn complete-rep-revert-btn" style="background:#fff;color:#374151;border-color:#9ca3af;font-weight:700;" data-id="${rep.woId}" data-color-idx="${rep.colorIdx}" data-receipt-no="${rep.receiptNo}" title="직원이 잘못 합격 처리했을 때 다시 진행(QC 대기)으로 되돌립니다">↩ 진행으로</button>
           <button class="dash-action-btn complete-rep-defect-btn" style="background:#fff;color:#b91c1c;border-color:#dc2626;font-weight:700;" data-id="${rep.woId}" data-color-idx="${rep.colorIdx}" data-receipt-no="${rep.receiptNo}">불량 처리</button>
           <button class="dash-action-btn complete-rep-ok-btn" style="background:#16a34a;color:#fff;border-color:#15803d;font-weight:700;" data-id="${rep.woId}" data-color-idx="${rep.colorIdx}" data-receipt-no="${rep.receiptNo}">✓ 확인 완료</button>
@@ -32112,6 +32132,7 @@ function validateBlendSum(blends, label) {
           <div class="ceo-report-actions">
             <button class="dash-action-btn hist-open-btn" data-hist-id="${rep.woId}" data-hist-color="${rep.colorIdx}" title="전체 작업 이력 보기" style="background:#eef2ff;color:#4338ca;border-color:#c7d2fe;font-weight:700;">작업 이력</button>
             <button class="dash-action-btn ceo-rep-view-btn" data-id="${rep.woId}">원단 보기</button>
+            <button class="dash-action-btn hw-field-rep" data-id="${rep.woId}" data-color-idx="${rep.colorIdx}" data-receipt-no="${rep.receiptNo || ''}" style="background:#fef2f2;color:#b91c1c;border-color:#fca5a5;font-weight:800;" title="이 원단에 대해 현장 휴대폰으로 코멘트 보내기">현장 알림</button>
             <button class="dash-action-btn ceo-rep-approve-btn" style="background:#16a34a;color:#fff;border-color:#15803d;font-weight:700;" data-id="${rep.woId}" data-color-idx="${rep.colorIdx}">정상 승인 (완료 처리)</button>
             <button class="dash-action-btn ceo-rep-fix-btn" style="background:#f97316;color:#fff;border-color:#ea580c;font-weight:700;" data-id="${rep.woId}" data-color-idx="${rep.colorIdx}">수정으로 처리</button>
             <button class="dash-action-btn ceo-rep-defect-btn" style="background:#dc2626;color:#fff;border-color:#b91c1c;font-weight:700;" data-id="${rep.woId}" data-color-idx="${rep.colorIdx}">불량으로 처리</button>
@@ -32169,6 +32190,7 @@ function validateBlendSum(blends, label) {
           <div class="ceo-report-actions">
             <button class="dash-action-btn hist-open-btn" data-hist-id="${rep.woId}" data-hist-color="${rep.colorIdx}" title="전체 작업 이력 보기" style="background:#eef2ff;color:#4338ca;border-color:#c7d2fe;font-weight:700;">작업 이력</button>
             <button class="dash-action-btn ceo-rep-view-btn" data-id="${rep.woId}">원단 보기</button>
+            <button class="dash-action-btn hw-field-rep" data-id="${rep.woId}" data-color-idx="${rep.colorIdx}" data-receipt-no="${rep.receiptNo || ''}" style="background:#fef2f2;color:#b91c1c;border-color:#fca5a5;font-weight:800;" title="이 원단에 대해 현장 휴대폰으로 코멘트 보내기">현장 알림</button>
             <button class="dash-action-btn ceo-fix-approve-btn" style="background:#16a34a;color:#fff;border-color:#15803d;font-weight:700;" data-id="${rep.woId}" data-color-idx="${rep.colorIdx}">수정 합격 인정 (완료)</button>
             <button class="dash-action-btn ceo-fix-retry-btn" style="background:#f97316;color:#fff;border-color:#ea580c;font-weight:700;" data-id="${rep.woId}" data-color-idx="${rep.colorIdx}">다시 수정</button>
             <button class="dash-action-btn ceo-fix-defect-btn" style="background:#dc2626;color:#fff;border-color:#b91c1c;font-weight:700;" data-id="${rep.woId}" data-color-idx="${rep.colorIdx}">불량</button>
@@ -55532,7 +55554,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix555';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
+  const VERSION = 'v2.53 hotfix556';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
