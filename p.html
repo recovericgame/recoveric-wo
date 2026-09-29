@@ -138,6 +138,7 @@ button,input,select{font-family:inherit}
 @keyframes cardFlash{0%{box-shadow:0 0 0 4px rgba(34,179,182,.9)}100%{box-shadow:0 0 0 0 rgba(34,179,182,0)}}
 .ribbon{margin:-16px -16px 12px;background:linear-gradient(90deg,#b91c1c,#dc2626);color:#fff;padding:10px 14px;display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:14px;font-weight:800}
 .ribbon button{border:0;background:#fff;color:#b91c1c;border-radius:9px;padding:7px 11px;font-weight:800;font-size:13.5px;white-space:nowrap}
+.ribbon.lack{flex-direction:column;align-items:stretch}.ribbon.lack em{font-style:normal;background:#fff;color:#b91c1c;border-radius:6px;padding:1px 7px;margin-right:7px;font-size:12.5px}.ribbon .rb2{display:flex;gap:8px}.ribbon .rb2 button{flex:1}
 .c-no .el{color:var(--teal);font-weight:800}
 .qty2{display:flex;gap:8px;margin-top:10px}
 .qty2 .q{flex:1;border-radius:14px;padding:9px 12px;display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 6px;background:#eef8fa;border:1px solid #cdeaf0}
@@ -392,7 +393,7 @@ import { initializeFirestore, getFirestore, doc, getDoc, updateDoc, setDoc, dele
  *   읽는 것: proc_acc/{내 uid} · proc_pub/{내 업체} · proc_log(내 업체 것만)
  *   쓰는 것: proc_log 한 줄 추가(고치기 · 지우기 없음) · 처음 로그인 때 내 기기 등록 한 번
  */
-const PVER = 'p12 (hotfix521)';
+const PVER = 'p13 (hotfix540)';
 const cfg = { apiKey: "AIzaSyAIaNFZozda5sp4Qjs7LEn-aXYLX1JZi10", authDomain: "recoveric-wo.firebaseapp.com", projectId: "recoveric-wo", storageBucket: "recoveric-wo.firebasestorage.app", messagingSenderId: "267946532287", appId: "1:267946532287:web:fcc1b597c9bf53c9d8950a" };
 const DOMAIN = 'proc.recoveric.com';
 const app = initializeApp(cfg, 'hwvendor');   /* hotfix507: 이름 붙인 앱 = 로그인 보관 칸이 직원 화면(구글 로그인)과 따로. 전에는 같은 크롬에서 가공소로 로그인하면 직원 화면이 '권한 없음'으로 로그아웃되고, 그 로그아웃이 다시 가공소 화면까지 끊었다 */
@@ -610,7 +611,7 @@ function procState(L, it) {
   let cur = -1; stages.forEach((x, i) => { if (x.c === 'ship' ? shippedAll : done[x.c]) cur = i; });
   const next = shippedAll ? null : (partial ? stages.find(x => x.c === 'ship') : (stages[cur + 1] || null));
   const reqs = live.filter(l => l.kind === 'req'); const lastReq = reqs[reqs.length - 1];
-  const openReq = (lastReq && !shippedAll && !live.some(l => l.by === 'vendor' && ['eta', 'st', 'ship', 'issue'].includes(l.kind) && tOf(l) > tOf(lastReq))) ? lastReq : null;   // hotfix509: 특이사항으로 답해도 풀림
+  const openReq = (lastReq && (!shippedAll || lastReq.reason === 'lack') && !live.some(l => l.by === 'vendor' && ['eta', 'st', 'ship', 'issue'].includes(l.kind) && tOf(l) > tOf(lastReq))) ? lastReq : null;   // hotfix509: 특이사항으로 답해도 풀림
   return { done, cur, next, eta, shippedAll, partial, sb, sr, restB, restR, openReq, issues: live.filter(l => l.kind === 'issue'), live, ships, stages, all: s, cancelled };
 }
 const stOf = it => procState(S.logs.filter(l => l.k === it.k), it);
@@ -657,7 +658,7 @@ function lsSet(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch
 function newsList() { const a = lsGet(vKey('news'), []); const lim = Date.now() - 14 * 864e5; return (Array.isArray(a) ? a : []).filter(n => n && n.at > lim).slice(0, 60); }
 function newsSave(a) { lsSet(vKey('news'), a.slice(0, 60)); paintBell(); }
 function paintBell() { const n = newsList().filter(x => !x.read).length; const i = $('bell-n'); if (i) { i.textContent = n > 99 ? '99+' : (n || ''); i.className = n ? 'on' : ''; } const b = $('bell'); if (b) b.classList.toggle('has', !!n); }
-const NT = { new: ['새 작업의뢰', 't-new'], req: ['확인 요청', 't-req'], note: ['현일텍스 안내', 't-note'] };
+const NT = { new: ['새 작업의뢰', 't-new'], req: ['확인 요청', 't-req'], lack: ['부족분 확인', 't-req'], note: ['현일텍스 안내', 't-note'] };
 function newsLine(n) { const it = S.items.find(x => x.k === n.k); const nm = it ? `${it.item} · ${it.color}` : (n.name || '원단'); const q = it ? `몸판 ${Number(it.body) || 0}절${it.rib ? ' · 리프 ' + Number(it.rib) + '절' : ''}` : ''; return { nm, sub: n.type === 'new' ? q : (n.note || (n.type === 'req' ? '출고 예정일을 알려 주십시오' : '')) }; }
 function scanNews() {
   if (!S.gotPub || !S.gotLog || !S.acc) return;
@@ -667,11 +668,11 @@ function scanNews() {
   if (!sv) { lsSet(vKey('seen'), { ks, at: maxT }); paintBell(); return; }   // 처음 여는 휴대폰은 조용히 기준만 잡는다
   const seenK = new Set(sv.ks || []); const fresh = [];
   S.items.forEach(it => { if (!seenK.has(it.k)) fresh.push({ id: 'n:' + it.k, type: 'new', k: it.k, at: Date.now(), name: `${it.item} · ${it.color}` }); });
-  us.forEach(l => { const t = tOf(l); if (t > (sv.at || 0)) fresh.push({ id: 'l:' + l.id, type: l.kind === 'req' ? 'req' : 'note', k: l.k, at: t, note: String(l.note || '').slice(0, 80) }); });
+  us.forEach(l => { const t = tOf(l); if (t > (sv.at || 0)) fresh.push({ id: 'l:' + l.id, type: l.kind === 'req' ? (l.reason === 'lack' ? 'lack' : 'req') : 'note', k: l.k, at: t, note: String(l.note || '').slice(0, 80) }); });
   lsSet(vKey('seen'), { ks: Array.from(new Set((sv.ks || []).concat(ks))).slice(-1000), at: Math.max(sv.at || 0, maxT) });
   if (!fresh.length) { paintBell(); return; }
   const all = newsList(); fresh.forEach(n => { if (!all.some(x => x.id === n.id)) all.unshift(Object.assign({ read: false }, n)); }); newsSave(all);
-  ring(); showNbox(fresh); sysNotify(fresh);
+  ring(); if (fresh.some(n => n.type === 'lack')) setTimeout(() => ring(), 1100); showNbox(fresh); sysNotify(fresh);   /* hotfix540: 부족분은 두 번 */
 }
 function showNbox(list) {
   const box = $('nbox'); if (!box) return;
@@ -756,7 +757,7 @@ function card(it, st) {
   }).join('')}</div>`;
   const iss = st.issues.slice(-2).reverse().map(l => `<button type="button" class="${l.issue === '원단 불량' ? 'b' : ''}" data-act="issue" data-id="${esc(l.id)}">특이사항 · ${esc(l.issue)}${l.note ? ' — ' + esc(l.note) : ''}<small>${esc(hhmm(tOf(l)))}</small></button>`).join('');
   return `<div class="card${st.shippedAll ? ' done' : ''}${st.openReq ? ' req' : ''}${(S.flashK === it.k && Date.now() < (S.flashTo || 0)) ? ' flash' : ''}" data-k="${esc(it.k)}">
-    ${st.openReq ? (st.openReq.reason === 'lack' ? `<div class="ribbon"><span>현일텍스 문의 — ${esc(st.openReq.note || '부족분을 확인해 주십시오')}</span><button type="button" data-act="issue">답하기</button></div>` : `<div class="ribbon"><span>현일텍스 확인 요청 — ${esc(st.openReq.note || '출고일을 알려 주십시오')}</span><button type="button" data-act="eta">날짜 알려주기</button></div>`) : ''}
+    ${st.openReq ? (st.openReq.reason === 'lack' ? `<div class="ribbon lack"><span><em>부족분 확인</em>${esc(st.openReq.note || '부족분을 확인해 주십시오')}</span><span class="rb2"><button type="button" data-act="eta">입고 예정일 알려주기</button><button type="button" data-act="issue">답하기</button></span></div>` : `<div class="ribbon"><span>현일텍스 확인 요청 — ${esc(st.openReq.note || '출고일을 알려 주십시오')}</span><button type="button" data-act="eta">날짜 알려주기</button></div>`) : ''}
     <div class="c-h"><span class="c-no">${esc(it.wo)} · <span class="el">작지 ${elapsed(it)}일째</span></span><span class="c-tags">${it.urgent ? '<span class="t-urg">긴급</span>' : ''}${it.redye ? '<span class="t-re">재염</span>' : ''}${it.tag ? '<span class="t-tag">' + esc(it.tag) + '</span>' : ''}</span></div>
     <div class="c-ic"><div class="c-icl"><div class="c-item">${esc(it.item)}</div><div class="c-color">${esc(it.color)}</div></div>${(Array.isArray(it.stamps) && it.stamps.length) ? `<div class="c-stamps">${it.stamps.slice(0, 4).map((x, i) => `<span style="--sc:${esc(x.c || '#475569')};--rt:${i % 2 ? '5deg' : '-6deg'}">${esc(x.n || '')}</span>`).join('')}</div>` : ''}</div>
     <div class="qty2">${qtyB}${qtyR}</div>${rest}
@@ -983,7 +984,7 @@ $('list').addEventListener('click', e => {
   const act = a.dataset.act;
   if (act === 'stage') stageSheet(it, a.dataset.c);
   else if (act === 'ship') shipSheet(it);
-  else if (act === 'eta') { const st = stOf(it); etaSheet(it, { rest: st.partial }); }
+  else if (act === 'eta') { const st = stOf(it); etaSheet(it, { rest: st.partial || !!(st.openReq && st.openReq.reason === 'lack') }); }   /* hotfix540: 부족 요청 답은 잔량 예정일 */
   else if (act === 'issue') issueSheet(it, a.dataset.id || '');
   else if (act === 'hist') histSheet(it);
 });
