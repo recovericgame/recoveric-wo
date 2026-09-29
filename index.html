@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="FABIWOS">
 <meta name="mobile-web-app-capable" content="yes">
-<title>FABIWOS v2.53 hotfix540</title>
+<title>FABIWOS v2.53 hotfix541</title>
 
 <!-- PWA Manifest (인라인 data URL) -->
 <link rel="manifest" id="pwa-manifest">
@@ -16537,6 +16537,25 @@ window.addEventListener('firebase-ready', () => {
     }
     return n;
   }
+  /* hotfix541: 괄호에 적은 이름이 업체코드 편직처(창고 아님)인지 */
+  function hwUniKnitVendor(t) { const x = String(t || '').trim(); if (!x) return null; const k = kfFactoryShort(x);
+    return (state.vendors || []).find(v => v && v.name && v.active !== false && !vendorIsStore(v) && vendorTypesNorm(v).includes('편직처') && (vendorHasName(v, x) || kfFactoryShort(v.name) === k || hwUniShort(v.name) === x || (v.aliases || []).some(a => kfFactoryShort(a) === k))) || null; }
+  /* hotfix541: 원래 생지의 편직공장을 바꿈 — 편직 설정(knit_fee 한 줄)을 새 공장 열쇠로 옮김 · 사종 비율 사본도 다시. 1 옮김 · 2 안 옮김(대표 선택) · 3 새 공장에 이미 있음 · 0 옮길 것 없음 */
+  async function hwUniMoveKnitFac(fid, from, to, name) {
+    const key = String(fid || '').trim(); if (!key || !to || !isOwnerUser() || specPrimaryGreige(key)) return 0;
+    const cur = knitFeeOf(key); const fk = Object.keys(cur).find(k => k && k !== KF_NO_FAC && from && hwUniShort(hwUniFacCanon(k)) === hwUniShort(hwUniFacCanon(from)));
+    if (!fk) return 0;
+    if (Object.keys(cur).some(k => hwUniShort(hwUniFacCanon(k)) === hwUniShort(to))) return 3;
+    if (!confirm(`[${name}] 편직 설정(편직비 · 사종 비율 · 기계)을 ${hwUniShort(from)} → ${hwUniShort(to)} 로 옮길까요?\n\n옮기면 이 원래 생지의 편직공장이 ${hwUniShort(to)} 로 바뀝니다.\n생지 재고 · 의뢰서 거래처(있는 곳)는 그대로입니다.\n\n[취소] = 이름만 바꾸고 편직 설정은 ${hwUniShort(from)} 에 그대로`)) return 2;
+    const next = Object.assign({}, cur); next[to] = Object.assign({}, cur[fk], { vendor_vid: vendorVidOf(to), updated_at: editLogNow(), updated_by: hwMyName() }); delete next[fk];
+    try {
+      await updateDoc(doc(db, C('cost_data'), 'knit_fee'), { ['items.' + key]: next, updated_at: serverTimestamp(), updated_by: state.user?.email || '' });
+      if (!state.knitFee || typeof state.knitFee !== 'object') state.knitFee = {}; state.knitFee[key] = next;
+      try { await kfHistAdd(key, to, ['편직공장 옮김 ' + fk + ' → ' + to + ' (품목 일원화)']); } catch (_) {}
+      try { await knitBlendSync(key); } catch (e) { console.warn('[knit_blend sync]', e && e.message); }
+      return 1;
+    } catch (e) { toast('편직 설정을 옮기지 못했습니다: ' + ((e && e.message) || ''), 'error'); return 0; }
+  }
   /* 1단계 이름을 바꾼 뒤 — 그 품목에 붙은 의뢰서 줄 글자도 새 이름으로 */
   async function hwUniRenameLines(fid, prev, name) {
     let n = 0;
@@ -16697,12 +16716,20 @@ window.addEventListener('firebase-ready', () => {
       bg.querySelectorAll('.u-nm').forEach(i => { const tr = i.closest('tr'); const sv = tr.querySelector('.u-sv');
         const go = async () => { const row = M.rows.find(x => x.k === tr.dataset.row); let nm = nameUs(i.value); const prev = i.dataset.prev; if (!nm || busy) return;
           /* hotfix535: 원래 생지 이름 = 품목명 + (공장) — 공장을 빼고 적어도 저절로 붙임 (판매 품목 이름과 겹쳐 저장이 안 되던 것) */
-          { const pm = /\(([^()]*)\)$/.exec(prev); const facN = (pm && hwUniIsFac(pm[1])) ? pm[1] : (row && row.fac); if (facN) nm = hwUniAutoName(nm, facN); }
+          let facMove = null;
+          { const pm = /\(([^()]*)\)$/.exec(prev); const facN = (pm && hwUniIsFac(pm[1])) ? pm[1] : (row && row.fac);
+            /* hotfix541: 괄호에 다른 편직처를 적으면 공장을 바꾼다 (옛 꼬리를 다시 붙이지 않음) */
+            const tm = /\(([^()]*)\)$/.exec(nm); const nt = tm ? tm[1].trim() : ''; const kv = nt ? hwUniKnitVendor(nt) : null;
+            if (kv && (!facN || hwUniShort(hwUniFacCanon(facN)) !== hwUniShort(kv.name))) { nm = hwUniAutoName(nm.replace(/\([^()]*\)$/, '').trim(), kv.name); facMove = { from: facN ? hwUniFacCanon(facN) : '', to: String(kv.name).trim() }; }
+            else if (nt && facN && hwUniIsHQ(facN) && !hwUniIsFac(nt)) { rnMsg = { k: tr.dataset.row, html: `<b>(${escapeHtml(nt)})</b> 은(는) 업체코드에 <b>편직처</b>로 등록된 공장이 아닙니다 — [업체코드]에서 ${escapeHtml(nt)} 을(를) 편직처로 넣은 뒤 다시 저장하십시오. (${escapeHtml(hwUniShort(facN))} 은(는) 창고라 편직공장이 될 수 없습니다)` }; paint(); return; }
+            else if (facN) nm = hwUniAutoName(nm, facN); }
           if (nm === prev) { rnMsg = { k: tr.dataset.row, html: `공장 이름 <b>(${escapeHtml(hwUniShort(row && row.fac))})</b>은 저절로 붙습니다 — [${escapeHtml(nm)}] 그대로라 바뀐 것이 없습니다. 판매할 때 쓰는 이름(공장 없는 이름)은 이 생지의 <b>판매 · 파생 품목</b>이 가집니다.` }; paint(); return; }
           const other = getFabricSpecs().find(x => x && specFid(x) !== i.dataset.fid && String(x.name || '').trim() === nm);
           if (other) { rnMsg = { k: tr.dataset.row, html: `<b>[${escapeHtml(nm)}]</b> 은(는) 이미 있는 품목입니다 (${escapeHtml(specFid(other))} · ${other.greige_only || !specGreigeFids(other).length ? '원래 생지' : '판매 · 파생 품목'}) — 같은 생지면 오른쪽 [정리]에서 이 줄로 모으십시오.` }; i.value = prev; paint(); return; }
           busy = true; sv.disabled = true; rnMsg = null;
-          try { const sp = itemByFid(i.dataset.fid); const ok = await saveSpecBasics(i.dataset.fid, { name: nm, gubun: sp ? sp.gubun : '', cat: sp ? sp.cat : '' }); if (ok) { editRow = tr.dataset.row; jumpTo = editRow; rnMsg = { k: tr.dataset.row, html: `<span class="ok">✓ [${escapeHtml(prev)}] → [${escapeHtml(nm)}] — 의뢰서 · 재고 표 이름도 모두 새 이름으로</span>` }; } else rnMsg = { k: tr.dataset.row, html: '저장하지 못했습니다 — 권한이나 연결을 확인해 주십시오' }; }
+          try { const sp = itemByFid(i.dataset.fid); const ok = await saveSpecBasics(i.dataset.fid, { name: nm, gubun: sp ? sp.gubun : '', cat: sp ? sp.cat : '' }); if (ok) { editRow = tr.dataset.row; jumpTo = editRow; let mv = '';
+              if (facMove) { const r0 = await hwUniMoveKnitFac(i.dataset.fid, facMove.from, facMove.to, nm); if (r0 === 1) { mv = ` · 편직 설정을 ${escapeHtml(hwUniShort(facMove.from))} → ${escapeHtml(hwUniShort(facMove.to))} 로 옮김`; editRow = jumpTo = i.dataset.fid + '|' + facMove.to; } else if (r0 === 2) mv = ` · 편직 설정은 ${escapeHtml(hwUniShort(facMove.from))} 에 그대로 둠`; else if (r0 === 3) mv = ` · ${escapeHtml(hwUniShort(facMove.to))} 편직 설정이 이미 있어 그대로 둠`; }
+              rnMsg = { k: editRow, html: `<span class="ok">✓ [${escapeHtml(prev)}] → [${escapeHtml(nm)}] — 의뢰서 · 재고 표 이름도 모두 새 이름으로${mv} · 재고 · 거래처(있는 곳)는 그대로</span>` }; } else rnMsg = { k: tr.dataset.row, html: '저장하지 못했습니다 — 권한이나 연결을 확인해 주십시오' }; }
           catch (e) { toast('바꾸지 못했습니다: ' + ((e && e.message) || ''), 'error'); } busy = false; paint(true); };
         i.addEventListener('input', () => { sv.style.visibility = nameUs(i.value) !== i.dataset.prev ? 'visible' : 'hidden'; });
         i.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); go(); } if (e.key === 'Escape') { i.value = i.dataset.prev; sv.style.visibility = 'hidden'; } });
@@ -54718,7 +54745,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix540';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
+  const VERSION = 'v2.53 hotfix541';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
