@@ -433,7 +433,7 @@ import { initializeFirestore, getFirestore, doc, getDoc, updateDoc, setDoc, dele
  *   읽는 것: proc_acc/{내 uid} · proc_pub/{내 업체} · proc_log(내 업체 것만)
  *   쓰는 것: proc_log 한 줄 추가(고치기 · 지우기 없음) · 처음 로그인 때 내 기기 등록 한 번
  */
-const PVER = 'p17 (hotfix564)';
+const PVER = 'p18 (hotfix566)';
 function hwMoved(to, name) { const d = document.createElement('div'); d.style.cssText = 'position:fixed;inset:0;z-index:99;background:#065f46;color:#fff;display:flex;flex-direction:column;justify-content:center;align-items:center;gap:12px;padding:30px;text-align:center;font-size:17px;line-height:1.6'; d.innerHTML = '<b style="font-size:22px">' + name + ' 계정입니다</b><div>' + name + ' 앱으로 옮겨 갑니다 …</div>'; document.body.appendChild(d); setTimeout(() => location.replace(to), 900); }
 const cfg = { apiKey: "AIzaSyAIaNFZozda5sp4Qjs7LEn-aXYLX1JZi10", authDomain: "recoveric-wo.firebaseapp.com", projectId: "recoveric-wo", storageBucket: "recoveric-wo.firebasestorage.app", messagingSenderId: "267946532287", appId: "1:267946532287:web:fcc1b597c9bf53c9d8950a" };
 const DOMAIN = 'proc.recoveric.com';
@@ -559,7 +559,7 @@ async function enter(user) {
   catch (e) { acc = null; }
   if (!acc) { await signOut(auth); showLogin('등록된 계정이 아닙니다. 현일텍스에 문의하십시오.'); return; }
   if (acc.active !== true) { await signOut(auth); showLogin('사용이 멈춘 계정입니다. 현일텍스에 문의하십시오.'); return; }
-  if (acc.app === 'knit') { hwMoved('k.html', '편직팀'); return; }   /* hotfix564: 편직공장 계정은 [편직팀] 앱으로 */
+  if (acc.app === 'knit') { await signOut(auth); showLogin('이 아이디는 [편직팀 앱] 전용입니다. 공정 체크 앱은 염/가공소 아이디로 들어오십시오.'); return; }   /* hotfix566(대표 10/1): 앱끼리 옮겨 가지 않는다 — 앱은 따로따로 */
   /* hotfix503(대표 9/27): 휴대폰 묶기 없앰 — 아이디 · 비밀번호만 맞으면 어느 휴대폰이든 들어온다. 마지막으로 쓴 휴대폰 정보만 남긴다(현일텍스 화면 [마지막 휴대폰]) */
   if (acc.dev !== S.dev) { try { await updateDoc(doc(db, 'proc_acc', user.uid), { dev: S.dev, dev_at: serverTimestamp(), dev_ua: navigator.userAgent.slice(0, 160) }); acc.dev = S.dev; } catch (_) {} }
   S.acc = acc; S.sess = user;
@@ -610,7 +610,7 @@ try { navigator.serviceWorker && navigator.serviceWorker.addEventListener('messa
 /* hotfix505: 실시간 — 받기를 걸어 두고, 휴대폰을 다시 켜거나 인터넷이 돌아오면 곧바로 다시 건다 (끌어내려 새로고침할 필요 없음) */
 function subscribe() {
   S.unsub.forEach(f => { try { f(); } catch (_) {} }); S.unsub = []; const acc = S.acc; if (!acc) return;
-  S.unsub.push(onSnapshot(doc(db, 'proc_pub', acc.vendor), sn => { S.live = true; S.items = (sn.exists() && Array.isArray(sn.data().items)) ? sn.data().items : []; S.items = keepStamps(S.items); S.lists = sn.exists() ? (sn.data().lists || null) : null; S.pubAt = sn.exists() ? sn.data().at : null; S.gs = (sn.exists() && Array.isArray(sn.data().gs)) ? sn.data().gs : []; S.mode = sn.exists() ? (sn.data().mode || (S.gs.length && !S.items.length ? 'knit' : 'proc')) : 'proc'; if (!acc.app && S.mode === 'knit') { hwMoved('k.html', '편직팀'); return; }   /* hotfix564: 예전 계정 — 편직 전용이면 편직팀 앱으로 */ { const pk = S.gs.filter(x => (x.pend || 0) > 0).map(x => x.k); if (S.gsKnown) { const nw = pk.filter(k => !S.gsKnown.includes(k)); if (nw.length) { ring(); toast('새 생지 출고 요청 ' + nw.length + '건'); } } S.gsKnown = pk; }   /* hotfix563: 켜 둔 동안 새 요청이 오면 울림 */ S.gotPub = true; render(); scanNews(); }, e => onDenied(e)));
+  S.unsub.push(onSnapshot(doc(db, 'proc_pub', acc.vendor), sn => { S.live = true; S.items = (sn.exists() && Array.isArray(sn.data().items)) ? sn.data().items : []; S.items = keepStamps(S.items); S.lists = sn.exists() ? (sn.data().lists || null) : null; S.pubAt = sn.exists() ? sn.data().at : null; S.gs = (sn.exists() && Array.isArray(sn.data().gs)) ? sn.data().gs : []; S.mode = sn.exists() ? (sn.data().mode || (S.gs.length && !S.items.length ? 'knit' : 'proc')) : 'proc'; if (!acc.app && S.mode === 'knit') { S.acc = null; signOut(auth).catch(() => {}); showLogin('이 아이디는 [편직팀 앱] 전용입니다. 공정 체크 앱은 염/가공소 아이디로 들어오십시오.'); return; }   /* hotfix566: 예전 계정도 옮겨 가지 않음 */ { const pk = S.gs.filter(x => (x.pend || 0) > 0).map(x => x.k); if (S.gsKnown) { const nw = pk.filter(k => !S.gsKnown.includes(k)); if (nw.length) { ring(); toast('새 생지 출고 요청 ' + nw.length + '건'); } } S.gsKnown = pk; }   /* hotfix563: 켜 둔 동안 새 요청이 오면 울림 */ S.gotPub = true; render(); scanNews(); }, e => onDenied(e)));
   S.unsub.push(onSnapshot(query(collection(db, 'proc_log'), where('vendor', '==', acc.vendor)), sn => { S.live = true; const a = []; sn.forEach(d => a.push(Object.assign({ id: d.id }, d.data({ serverTimestamps: 'estimate' })))); S.logs = a; S.gotLog = true; render(); scanNews(); }, e => onDenied(e)));
 }
 let hidAt = 0;

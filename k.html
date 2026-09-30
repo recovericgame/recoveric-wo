@@ -173,7 +173,7 @@ import { initializeFirestore, getFirestore, doc, getDoc, updateDoc, setDoc, dele
  *   읽는 것: proc_acc/{내 uid} · proc_pub/{내 업체}.gs (현일텍스가 보낸 생지출고) · proc_log(내 업체 것만)
  *   쓰는 것: proc_log 한 줄 — kind 'ship' part 'gs' (body 절 · n kg · ref 송장 사진) · kind 'st' part 'gs' stage seen | ack_cxl | photo
  *   사진: Storage gs_photos/{업체}/{생지출고}_{시각}.jpg */
-const KVER = 'k1 (hotfix564)';
+const KVER = 'k2 (hotfix566)';
 const cfg = { apiKey: "AIzaSyAIaNFZozda5sp4Qjs7LEn-aXYLX1JZi10", authDomain: "recoveric-wo.firebaseapp.com", projectId: "recoveric-wo", storageBucket: "recoveric-wo.firebasestorage.app", messagingSenderId: "267946532287", appId: "1:267946532287:web:fcc1b597c9bf53c9d8950a" };
 const DOMAIN = 'proc.recoveric.com';
 const app = initializeApp(cfg, 'hwvendor');
@@ -271,7 +271,7 @@ async function enter(user) {
   let acc = null; try { const sn = await getDoc(doc(db, 'proc_acc', user.uid)); acc = sn.exists() ? sn.data() : null; } catch (_) {}
   if (!acc) { await signOut(auth); showLogin('등록된 계정이 아닙니다. 현일텍스에 문의하십시오.'); return; }
   if (acc.active !== true) { await signOut(auth); showLogin('사용이 멈춘 계정입니다. 현일텍스에 문의하십시오.'); return; }
-  if (acc.app === 'proc') { moved('p.html', '염/가공소'); return; }   // 가공소 계정은 가공소 앱으로
+  if (acc.app === 'proc') { await signOut(auth); showLogin('이 아이디는 [염/가공소 앱] 전용입니다. 편직팀 앱은 편직공장 아이디로 들어오십시오.'); return; }   // hotfix566(대표 10/1): 앱끼리 옮겨 가지 않는다 — 앱은 따로따로
   if (acc.dev !== S.dev) { try { await updateDoc(doc(db, 'proc_acc', user.uid), { dev: S.dev, dev_at: serverTimestamp(), dev_ua: navigator.userAgent.slice(0, 160) }); } catch (_) {} }
   S.acc = acc; S.sess = user;
   $('login').classList.add('hide'); $('app').classList.remove('hide');
@@ -318,7 +318,7 @@ function subscribe() {
   S.unsub.forEach(f => { try { f(); } catch (_) {} }); S.unsub = []; const acc = S.acc; if (!acc) return;
   S.unsub.push(onSnapshot(doc(db, 'proc_pub', acc.vendor), sn => { S.live = true; const d = sn.exists() ? sn.data() : {};
     S.gs = Array.isArray(d.gs) ? d.gs : [];
-    if (!acc.app && d.mode === 'proc' && !S.gs.length) { moved('p.html', '염/가공소'); return; }   // 예전 계정(앱 종류 없음) — 가공소면 가공소 앱으로
+    if (!acc.app && d.mode === 'proc' && !S.gs.length) { S.acc = null; signOut(auth).catch(() => {}); showLogin('이 아이디는 [염/가공소 앱] 전용입니다. 편직팀 앱은 편직공장 아이디로 들어오십시오.'); return; }   // hotfix566: 예전 계정(앱 종류 없음)도 옮겨 가지 않음
     const pk = S.gs.filter(x => (x.pend || 0) > 0).map(x => x.k); if (S.gsKnown) { const nw = pk.filter(k => !S.gsKnown.includes(k)); if (nw.length) { ring(); toast('새 생지 출고 요청 ' + nw.length + '건'); } } S.gsKnown = pk;
     S.gotPub = true; render(); }, e => onDenied(e)));
   S.unsub.push(onSnapshot(query(collection(db, 'proc_log'), where('vendor', '==', acc.vendor)), sn => { S.live = true; const a = []; sn.forEach(x => { const v = x.data({ serverTimestamps: 'estimate' }); if (v && v.part === 'gs') a.push(Object.assign({ id: x.id }, v)); }); S.logs = a; render(); }, e => onDenied(e)));
