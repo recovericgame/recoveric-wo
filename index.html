@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="FABIWOS">
 <meta name="mobile-web-app-capable" content="yes">
-<title>FABIWOS v2.53 hotfix560</title>
+<title>FABIWOS v2.53 hotfix561</title>
 
 <!-- PWA Manifest (인라인 data URL) -->
 <script>
@@ -31164,6 +31164,7 @@ function validateBlendSum(blends, label) {
       ${sortableTh('gs', 'vendor', '수신처')}
       <th>출고처</th>
       <th>품목</th>
+      <th style="min-width:64px;" title="편직공장이 통을 찾는 번호 (섞어 나가면 로트마다 절수)">생지로트</th>
       <th class="col-num">수량(절)</th>
       <th class="col-num">중량(kg)</th>
       <th>송장No</th>
@@ -31191,7 +31192,8 @@ function validateBlendSum(blends, label) {
         <td style="font-weight:700;">${partTxt}</td>
         <td>${escapeHtml(wo.recipient || '-')}</td>
         <td>${escapeHtml(wo.gs_dest || '-')}</td>
-        <td>${escapeHtml(itemShow(wo.gs_item, wo.gs_item_fid, wo.gs_greige_no) || '-')}</td>
+        <td>${escapeHtml(((t, no) => (no && t.endsWith(' ' + no)) ? t.slice(0, -no.length - 1).trim() : t)(itemShow(wo.gs_item, wo.gs_item_fid, ''), greigeNoClean(wo.gs_greige_no)) || '-')}</td>
+        <td style="text-align:center;font-weight:800;color:#92400e;white-space:nowrap;">${(Array.isArray(wo.gs_mix) && wo.gs_mix.length > 1) ? wo.gs_mix.map(m => escapeHtml(greigeNoClean(m.no)) + '<span style="font-weight:400;color:#b45309;font-size:11px;"> ' + (Number(m.jul) || 0) + '절</span>').join('<br>') : (escapeHtml(greigeNoClean(wo.gs_greige_no)) || '<span style="color:#cbd5e1;font-weight:400;">-</span>')}</td>   <!-- hotfix561: 생지로트 열 (대표 지시 9/30) -->
         <td class="col-num center">${escapeHtml(String(qtyTxt))}</td>
         ${kgCell}
         <td>${escapeHtml(wo.gs_invoice_no || '-')}</td>
@@ -31203,7 +31205,7 @@ function validateBlendSum(blends, label) {
     });
 
     html += `<tr style="background:#f1f5f9;font-weight:800;border-top:2px solid #cbd5e1;">
-      <td colspan="7" style="text-align:right;padding-right:10px;">화면에 보이는 ${list.length}건 합계</td>
+      <td colspan="8" style="text-align:right;padding-right:10px;">화면에 보이는 ${list.length}건 합계</td>
       <td class="col-num center" style="color:#c0271f;">${Math.round(sumJul * 10) / 10}절</td>
       <td class="col-num center" style="color:#c0271f;">${hasEstimate ? '약 ' : ''}${sumKg.toFixed(1)}kg</td>
       <td colspan="5"></td>
@@ -31443,6 +31445,12 @@ function validateBlendSum(blends, label) {
           </select>
         </div>
       </div>`;
+      /* hotfix561(대표 지적 9/30 — 누를 때마다 새 번호 · 앞 것은 취소됨으로 쌓임): 이미 만든 부위는 [다시보기]가 먼저. 고칠 때만 [고쳐서 새로 만들기] → 앞 의뢰서는 지금처럼 취소 · 재고 되돌림 */
+      const made = prev ? `<div id="gs-made-${part}" style="display:flex;align-items:center;gap:8px;justify-content:space-between;flex-wrap:wrap;background:#ecfdf5;border:1px solid #a7f3d0;border-radius:6px;padding:9px 12px;">
+            <span style="font-size:12.5px;font-weight:700;color:#047857;">✓ ${escapeHtml(prev.wo_number || '')} 만들어져 있음 · ${escapeHtml(greigeNoClean(prev.gs_greige_no) || '-')} · ${escapeHtml(String(prev.gs_qty || 0))}절 (재고에서 빠짐)</span>
+            <span style="display:flex;gap:6px;"><button type="button" id="gs-reopen-${part}" style="padding:7px 14px;border:1px solid #047857;border-radius:5px;background:#059669;color:#fff;font-weight:700;cursor:pointer;font-size:12.5px;">${gsPartLabel(part)} 의뢰서 다시보기</button>
+            <button type="button" id="gs-remake-${part}" title="내용을 고쳐 새 번호로 다시 만듭니다. 앞 의뢰서(${escapeHtml(prev.wo_number || '')})는 취소되고 재고는 되돌아간 뒤 새로 빠집니다" style="padding:7px 10px;border:1px solid #d1d5db;border-radius:5px;background:#fff;color:#475569;cursor:pointer;font-size:12px;">고쳐서 새로 만들기</button></span>
+          </div>` : '';
       const prevInv  = prev ? (prev.gs_invoice_no || '') : '';
       const prevNote = prev ? (prev.gs_note || '') : '';
       return `
@@ -31462,9 +31470,9 @@ function validateBlendSum(blends, label) {
               style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #d1d5db;border-radius:5px;font-size:13px;font-family:inherit;resize:vertical;">${escapeHtml(prevNote)}</textarea>
           </div>
         </div>
-        <div id="gs-action-${part}">
+        <div id="gs-action-${part}">${made}
           <button type="button" id="gs-make-${part}"
-            style="width:100%;padding:10px;border:1px solid #047857;border-radius:6px;background:#059669;color:#fff;font-weight:700;cursor:pointer;font-size:13px;">
+            style="${prev ? 'display:none;' : ''}width:100%;padding:10px;border:1px solid #047857;border-radius:6px;background:#059669;color:#fff;font-weight:700;cursor:pointer;font-size:13px;">
             ${gsPartLabel(part)} 의뢰서 만들기
           </button>
         </div>
@@ -31512,6 +31520,21 @@ function validateBlendSum(blends, label) {
       }
     });
 
+    // hotfix561: 이미 만든 부위 — 칸 잠금 · [다시보기] · [고쳐서 새로 만들기]
+    [['body', bodyPrev], ['rib', ribPrev]].forEach(([part, pv]) => {
+      if (!pv) return;
+      const fields = document.getElementById(`gs-fields-${part}`);
+      if (fields) fields.querySelectorAll('input,textarea,select').forEach(el => el.disabled = true);
+      const ro = document.getElementById(`gs-reopen-${part}`);
+      if (ro) ro.addEventListener('click', () => { const w = state.allWorkOrders.find(x => x.id === pv.id) || pv; __greigeReturnFnId = fn.id; modal.classList.remove('show'); showPreviewModal(w); });
+      const rm = document.getElementById(`gs-remake-${part}`);
+      if (rm) rm.addEventListener('click', () => {
+        if (!confirm(`${pv.wo_number || ''} 을(를) 고쳐 새로 만듭니다.\n\n[만들기]를 누르면 앞 의뢰서는 취소됨으로 남고, 재고는 되돌아간 뒤 새 절수로 다시 빠집니다.\n\n칸을 고칠까요?`)) return;
+        if (fields) fields.querySelectorAll('input,textarea,select').forEach(el => el.disabled = false);
+        const md = document.getElementById(`gs-made-${part}`); if (md) md.remove();
+        const mk = document.getElementById(`gs-make-${part}`); if (mk) { mk.style.display = ''; mk.textContent = `${gsPartLabel(part)} 의뢰서 새로 만들기`; }
+      });
+    });
     // 카드별 [만들기] 핸들러
     ['body', 'rib'].forEach(part => {
       const mk = document.getElementById(`gs-make-${part}`);
@@ -52876,8 +52899,8 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
     const gsBar = isFinish ? `
       <div style="position:sticky;top:0;z-index:5;background:#fff;text-align:center;margin:0 auto 12px;padding:6px 0;">
         <button type="button" id="dash-modal-gsorder"
-          style="background:#059669;border:1px solid #047857;color:#fff;font-weight:700;font-size:13px;padding:9px 18px;border-radius:6px;cursor:pointer;">
-          생지출고의뢰서 만들기
+          style="background:${gsOrderCountFor(wo.id) ? '#fff' : '#059669'};border:1px solid #047857;color:${gsOrderCountFor(wo.id) ? '#047857' : '#fff'};font-weight:700;font-size:13px;padding:9px 18px;border-radius:6px;cursor:pointer;">
+          ${gsOrderCountFor(wo.id) ? '생지출고의뢰서 다시보기 (' + gsOrderCountFor(wo.id) + '장)' : '생지출고의뢰서 만들기'}
         </button>
       </div>` : '';
     body.innerHTML = fixBar + gsBar + `<div class="wo-doc${btClass}" id="dash-modal-wo-doc" style="margin:auto;">${html}</div>` + woHistoryHTML(wo);   // hotfix394: [이력] 펼치기
@@ -55700,7 +55723,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix560';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
+  const VERSION = 'v2.53 hotfix561';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
