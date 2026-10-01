@@ -453,24 +453,27 @@ import { initializeFirestore, getFirestore, doc, getDoc, updateDoc, setDoc, dele
  *   읽는 것: proc_acc/{내 uid} · proc_pub/{내 업체} · proc_log(내 업체 것만)
  *   쓰는 것: proc_log 한 줄 추가(고치기 · 지우기 없음) · 처음 로그인 때 내 기기 등록 한 번
  */
-const PVER = 'p29 (hotfix578)';
+const PVER = 'p30 (hotfix579)';
 /* hotfix574(대표 10/1): 거래 원단회사 고르기 (판매 대비) — 가공소 한 곳이 여러 원단회사와 거래. 앱을 열면 먼저 [거래 원단회사] 화면 — 회사마다 진행 중 · 확인 요청 · 입력 전 건수
  *   계정(proc_acc.companies [{id, name, src}])에 회사 목록 · 없으면 현일텍스 · 고른 회사는 휴대폰이 기억(hwp.co) · 위 [› 회사 이름]을 누르면 다시 고름
  *   지금 서버 = 현일텍스 자료. 다른 원단회사가 FABIWOS 를 쓰면 그 회사 자료 자리(src)를 더함 */
 const CO_DEF = [{ id: 'hyunil', name: '현일텍스' }];
 const COS = () => (S.acc && Array.isArray(S.acc.companies) && S.acc.companies.length ? S.acc.companies : CO_DEF);
-const CO = () => { const L = COS(); let id = ''; try { id = localStorage.getItem('hwp.co') || ''; } catch (_) {} return L.find(c => c.id === id) || L[0]; };
+const coLive = c => !!c && (c.id === CO_DEF[0].id || c.src === 'here' || (!c.src && COS()[0] === c));   /* hotfix579: 자료가 연결된 원단회사만 고를 수 있음 — 나머지는 [준비 중] */
+const CO = () => { const L = COS(); let id = ''; try { id = localStorage.getItem('hwp.co') || ''; } catch (_) {} const c = L.find(c => c.id === id); return (c && coLive(c)) ? c : (L.find(coLive) || L[0]); };
 const CN = () => CO().name;
-function coCounts(c) { if (c.id !== CO_DEF[0].id && c.src && c.src !== 'here') return null; const items = S.items || []; let ing = 0, req = 0, fresh = 0; items.forEach(it => { const st = stOf(it); if (!st.shippedAll) ing++; if (st.openReq) req++; if (!st.shippedAll && !(st.live || []).length) fresh++; }); return { ing, req, fresh }; }
+function coCounts(c) { if (!coLive(c)) return null; const items = S.items || []; let ing = 0, req = 0, fresh = 0; items.forEach(it => { const st = stOf(it); if (!st.shippedAll) ing++; if (st.openReq) req++; if (!st.shippedAll && !(st.live || []).length) fresh++; }); return { ing, req, fresh }; }
+function paintVn() { if (!S.acc) return; $('vn').innerHTML = esc(S.acc.vendor) + '<span class="to">›</span><span class="hq" id="hq-co" role="button" tabindex="0">' + esc(CN()) + ' ▾</span>'; }
 function coHome(force) {
   if (!S.acc || (!force && (S.coShown || !S.gotPub))) return; S.coShown = true;
   let el = document.getElementById('cohome'); if (!el) { el = document.createElement('div'); el.id = 'cohome'; document.body.appendChild(el); }
   const cur = CO();
   el.innerHTML = `<div class="ch-in"><div class="ch-h"><small>${esc(S.acc.vendor)}</small><b>거래 원단회사</b><span>일할 원단회사를 누르십시오</span></div>
-    ${COS().map(c => { const n = coCounts(c); return `<button type="button" class="ch-c${c.id === cur.id ? ' on' : ''}" data-coid="${esc(c.id)}"><b>${esc(c.name)}</b>${n ? `<span class="ch-n"><em>${n.ing}</em>진행 중</span><span class="ch-n${n.req ? ' r' : ''}"><em>${n.req}</em>확인 요청</span><span class="ch-n${n.fresh ? ' g' : ''}"><em>${n.fresh}</em>입력 전</span>` : '<span class="ch-n">불러오는 중</span>'}<i>›</i></button>`; }).join('')}
+    ${COS().map(c => { const n = coCounts(c); return `<button type="button" class="ch-c${c.id === cur.id ? ' on' : ''}" data-coid="${esc(c.id)}"><b>${esc(c.name)}</b>${n ? `<span class="ch-n"><em>${n.ing}</em>진행 중</span><span class="ch-n${n.req ? ' r' : ''}"><em>${n.req}</em>확인 요청</span><span class="ch-n${n.fresh ? ' g' : ''}"><em>${n.fresh}</em>입력 전</span>` : (coLive(c) ? '<span class="ch-n">불러오는 중</span>' : '<span class="ch-n">준비 중</span>')}<i>›</i></button>`; }).join('')}
     <div class="ch-f">원단회사가 늘면 여기에 더해집니다 · 위 [› ${esc(cur.name)}]를 누르면 다시 이 화면</div></div>`;
   el.classList.add('on');
-  el.querySelectorAll('[data-coid]').forEach(b => b.addEventListener('click', () => { try { localStorage.setItem('hwp.co', b.dataset.coid); } catch (_) {} el.classList.remove('on'); render(); }));
+  el.querySelectorAll('[data-coid]').forEach(b => b.addEventListener('click', () => { const c = COS().find(x => x.id === b.dataset.coid); if (!coLive(c)) { toast(((c && c.name) || '') + ' — 아직 연결 전입니다. 연결되면 여기서 바로 볼 수 있습니다'); return; }   /* hotfix579 */
+    try { localStorage.setItem('hwp.co', b.dataset.coid); } catch (_) {} el.classList.remove('on'); paintVn(); render(); }));
 }
 function hwMoved(to, name) { const d = document.createElement('div'); d.style.cssText = 'position:fixed;inset:0;z-index:99;background:#065f46;color:#fff;display:flex;flex-direction:column;justify-content:center;align-items:center;gap:12px;padding:30px;text-align:center;font-size:17px;line-height:1.6'; d.innerHTML = '<b style="font-size:22px">' + name + ' 계정입니다</b><div>' + name + ' 앱으로 옮겨 갑니다 …</div>'; document.body.appendChild(d); setTimeout(() => location.replace(to), 900); }
 const cfg = { apiKey: "AIzaSyAIaNFZozda5sp4Qjs7LEn-aXYLX1JZi10", authDomain: "recoveric-wo.firebaseapp.com", projectId: "recoveric-wo", storageBucket: "recoveric-wo.firebasestorage.app", messagingSenderId: "267946532287", appId: "1:267946532287:web:fcc1b597c9bf53c9d8950a" };
@@ -575,7 +578,8 @@ function closeAll() {
   try { lockScroll(false); } catch (_) {}
 }
 function showLogin(msg) {
-  closeAll(); S.gotPub = false; S.gotLog = false; try { hideNbox(false); } catch (_) {}   // hotfix509
+  closeAll(); S.gotPub = false; S.gotLog = false; S.coShown = false; try { hideNbox(false); } catch (_) {}   // hotfix509 · hotfix579: 다시 들어오면 원단회사 화면 다시
+  try { const ch = document.getElementById('cohome'); if (ch) ch.classList.remove('on'); } catch (_) {}
   S.unsub.forEach(f => { try { f(); } catch (_) {} }); S.unsub = [];
   $('app').classList.add('hide'); $('login').classList.remove('hide');
   $('lg-btn').disabled = false; $('lg-msg').textContent = msg || ''; $('lg-pw').value = '';
@@ -602,7 +606,7 @@ async function enter(user) {
   if (acc.dev !== S.dev) { try { await updateDoc(doc(db, 'proc_acc', user.uid), { dev: S.dev, dev_at: serverTimestamp(), dev_ua: navigator.userAgent.slice(0, 160) }); acc.dev = S.dev; } catch (_) {} }
   S.acc = acc; S.sess = user;
   $('login').classList.add('hide'); $('app').classList.remove('hide');
-  $('vn').innerHTML = esc(acc.vendor) + '<span class="to">›</span><span class="hq" id="hq-co" role="button" tabindex="0">' + esc(CN()) + ' ▾</span>';   /* hotfix574: 누르면 원단회사 고르기 */
+  paintVn();   /* hotfix574: 누르면 원단회사 고르기 · hotfix579: 회사를 바꾸면 위 이름도 바뀜 */
   subscribe();
   guardBack();
   (S.permP || Promise.resolve()).then(() => pushReg(false)).then(ok => { try { paintNset(); } catch (_) {} if (ok && !lsGet('hwp.pushOkShown', false)) { lsSet('hwp.pushOkShown', true); toast('알림이 켜졌습니다 — 앱을 꺼 둬도 새 작업의뢰가 오면 소리 + 진동으로 알려 드립니다'); } else if (!ok) nudgeNotify(); });   /* hotfix518 · 521: 허락했으면 들어올 때 등록 · 아직이면 한 번 권함 */

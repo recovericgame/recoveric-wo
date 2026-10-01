@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="FABIWOS">
 <meta name="mobile-web-app-capable" content="yes">
-<title>FABIWOS v2.53 hotfix578</title>
+<title>FABIWOS v2.53 hotfix579</title>
 
 <!-- PWA Manifest (인라인 data URL) -->
 <script>
@@ -27740,7 +27740,7 @@ function validateBlendSum(blends, label) {
   }
   function drProc(tag, urgent) { return (tag ? `<span class="dr-process-tag">${escapeHtml(tag)}</span>` : '') + (urgent ? `<span class="dr-urgent-tag">긴급</span>` : ''); }
   function drWait() { return `<span class="dr-bdg dr-bdg-wait">대기</span>`; }
-  window.hwProcHooks = { build: () => buildDailyReportData(), norm: v => normalizeVendorName(v), isOwner: () => isOwnerUser(), render: () => renderDashboard(), canView: () => canAccessView('procAcc'), canEdit: () => canAccessView('procAcc') && (canEditView('procAcc') || userRole() === 'admin'), canDel: () => canAccessView('procAcc') && (canEditView('procAcc') || userRole() === 'admin') && canDeleteHere('procAcc') };   /* 수정 = 사람 허용 · 그룹 [수정] · 관리자 등급 (서버 규칙과 같게) */   /* hotfix498: 가공소 공정 체크가 쓰는 것 */
+  window.hwProcHooks = { build: () => buildDailyReportData(), norm: v => normalizeVendorName(v), isOwner: () => isOwnerUser(), isAdmin: () => { try { return isAdminUser(); } catch (_) { return false; } }, render: () => renderDashboard(), canView: () => canAccessView('procAcc'), canEdit: () => canAccessView('procAcc') && (canEditView('procAcc') || userRole() === 'admin'), canDel: () => canAccessView('procAcc') && (canEditView('procAcc') || userRole() === 'admin') && canDeleteHere('procAcc') };   /* 수정 = 사람 허용 · 그룹 [수정] · 관리자 등급 (서버 규칙과 같게) */   /* hotfix498: 가공소 공정 체크가 쓰는 것 */
   function renderReportRow(item) {
     const { wo, colorIdx, processTag, isFix, statusLabel } = item;
     // 나염작지 — colors가 없으므로 전용 렌더 (디자인명 + 수량 + 공정 상태)
@@ -29990,7 +29990,9 @@ function validateBlendSum(blends, label) {
   const hfMine = m => { const k = String((m && m.k) || ''); return k.indexOf('dev:') === 0 ? k === 'dev:' + HF_DEV : String((m && m.email) || '').toLowerCase() === hfMe(); };
   const hfMe = () => String((state.user && state.user.email) || '').toLowerCase();
   const hfT = l => { const a = l && l.at; if (!a) return Date.now(); if (typeof a.toMillis === 'function') return a.toMillis(); if (a.seconds) return a.seconds * 1000; const t = Date.parse(a); return isNaN(t) ? Date.now() : t; };
-  function hfMsgs() { const L = (window.hwProc && window.hwProc.logs) || []; const del = new Set(L.filter(l => l && l.vendor === HF_V && l.kind === 'field_del' && l.ref).map(l => l.ref)); return L.filter(l => l && l.vendor === HF_V && l.kind === 'field' && l.id && !String(l.id).startsWith('tmp') && !del.has(l.id)).sort((a, b) => hfT(b) - hfT(a)); }   /* hotfix555: 지운 알림(field_del)은 빼고 */
+  const HF_DEL_CUT = Date.parse('2026-10-02T00:00:00+09:00');   /* hotfix579: 10/2 부터는 최고관리자가 지운 것만 인정 (그 전에 지운 것은 그대로) */
+  const hfDelOk = l => { const em = String((l && l.email) || '').toLowerCase(); return (typeof OWNER_EMAILS !== 'undefined' && OWNER_EMAILS.map(x => String(x).toLowerCase()).includes(em)) || hfT(l) < HF_DEL_CUT; };
+  function hfMsgs() { const L = (window.hwProc && window.hwProc.logs) || []; const del = new Set(L.filter(l => l && l.vendor === HF_V && l.kind === 'field_del' && l.ref && hfDelOk(l)).map(l => l.ref)); return L.filter(l => l && l.vendor === HF_V && l.kind === 'field' && l.id && !String(l.id).startsWith('tmp') && !del.has(l.id)).sort((a, b) => hfT(b) - hfT(a)); }   /* hotfix555: 지운 알림(field_del)은 빼고 */
   async function hfDel(id) { const P = window.hwProc; if (!P || !P.addLog) return false; return P.addLog({ vendor: HF_V, k: 'dev:' + HF_DEV, wo: '', kind: 'field_del', ref: id, note: '' }); }
   function hfAcks(id) { const L = (window.hwProc && window.hwProc.logs) || []; return L.filter(l => l && l.vendor === HF_V && l.kind === 'field_ack' && l.ref === id); }
   /* hotfix558(대표 지시 9/30): 현장 알림 답장 — kind 'field_reply' · ref = 원래 알림 id. 답장도 받는 쪽에 큰 창 + 소리 · 진동, [확인] · [답장] */
@@ -30037,13 +30039,15 @@ function validateBlendSum(blends, label) {
   window.hwFieldIsOff = hfOff;
   window.hwFieldSetOff = async on => {
     try { localStorage.setItem('hwf.off', on ? '1' : '0'); } catch (_) {}
-    if (on) { try { const last = JSON.parse(localStorage.getItem('hwf.push') || 'null'); if (last && last.id) { const F = window.firebase; await F.deleteDoc(F.doc(F.db, F.C('push_tok'), last.id)); } localStorage.removeItem('hwf.push'); } catch (_) {} window.__hfPushOn = false; }
+    if (on) { let delOk = true; try { const last = JSON.parse(localStorage.getItem('hwf.push') || 'null'); if (last && last.id) { const F = window.firebase; await F.deleteDoc(F.doc(F.db, F.C('push_tok'), last.id)); } } catch (e) { delOk = false; console.warn('[현장 알림 끄기]', e && e.message); }
+      try { if ('serviceWorker' in navigator) { const r = await navigator.serviceWorker.getRegistration('./hwq/'); if (r) await r.unregister(); } } catch (_) {}   /* hotfix579: 앱 꺼도 오던 알림 받는 곳도 내림 — 서버 열쇠를 못 지워도 더는 안 뜸 */
+      try { localStorage.removeItem('hwf.push'); } catch (_) {} window.__hfPushOn = false; if (!delOk) toast('알림 서버 기록은 지우지 못했지만, 이 기기에서는 알림을 받지 않습니다', 'warning'); }
     else { hfUnlock(); await hfPushReg(true); }
   };
   { let armed = false; const arm = () => { if (armed || hfOff() || !/(?:^|[?&])app=qc(?:&|$)/.test(location.search)) return;   // 현장 QC 앱만 (PC 는 [관리 → 현장 QC 앱 → 이 기기도 받기])
     if (typeof state === 'undefined' || !state.user || !state.user.email) return; armed = true; hfUnlock(); hfPushReg(true).catch(() => {}); };
     document.addEventListener('pointerdown', arm, { passive: true }); document.addEventListener('keydown', arm); }
-  { let tries = 0; const iv = setInterval(() => { tries++; if (tries > 120) { clearInterval(iv); return; } if (typeof state === 'undefined' || !state.user || !state.user.email) return; clearInterval(iv); setTimeout(() => { if (!hfOff()) hfPushReg(false); }, 4000); }, 1000); }   /* 알림을 이미 허락한 기기는 로그인하면 저절로 */
+  { let tries = 0; const iv = setInterval(() => { tries++; if (tries > 120) { clearInterval(iv); return; } if (typeof state === 'undefined' || !state.user || !state.user.email) return; clearInterval(iv); setTimeout(() => { let opted = false; try { opted = !!localStorage.getItem('hwf.push'); } catch (_) {} if (!hfOff() && (opted || /(?:^|[?&])app=qc(?:&|$)/.test(location.search))) hfPushReg(false); }, 4000); }, 1000); }   /* 알림을 이미 허락한 기기는 로그인하면 저절로 — hotfix579: 현장 QC 앱 · [이 기기도 받기]를 누른 PC 만 (다른 PC 는 저절로 켜지지 않음) */
   let hfAC = null;
   function hfUnlock() { try { if (!hfAC) { const Cx = window.AudioContext || window.webkitAudioContext; if (Cx) hfAC = new Cx(); } if (hfAC && hfAC.state === 'suspended') hfAC.resume(); } catch (_) {} }
   document.addEventListener('pointerdown', hfUnlock, { passive: true }); document.addEventListener('keydown', hfUnlock);
@@ -30291,18 +30295,38 @@ function validateBlendSum(blends, label) {
   }
   /* hotfix573(대표 10/1): 현장 QC [생지 재고] [조정] — 현장에서 센 절로 맞춤. 입고 조정 줄(dir 'in' · src 'adj' · 절 ± · 사유 · 누가)을 편직 줄에 적어
    *   메인 프로그램 재고절에 바로 반영 · 같은 내용을 [현장 알림]에 반드시 남김 (지우기는 최고관리자만) */
+  /* hotfix579(전체 점검): 현장 재고 조정 — ① [재고조정] 권한이 있는 사람만 ② 트랜잭션으로 그 순간의 문서를 다시 읽어 적음 (사무실 PC 가 같은 의뢰서에 출고를 적는 중이어도 안 덮어씀)
+   *   ③ ctx.target(창고에서 센 절수, 출고 대기 포함)을 주면 그 순간 재고와의 차이만 적음 → 두 사람이 같은 로트를 고쳐도 두 번 빠지지 않음 */
+  function greigePhysJul(w, sh, idx) {   // 창고에 실제로 있어야 할 절 = 편직 절 + 입고(조정 포함) − 출고 + 아직 안 나간 출고 대기
+    const it = ((w && w.items) || [])[idx] || {}; let j = parseFloat(it.jul) || 0;
+    (sh || []).filter(shLive).forEach(x => { if ((x && x.item_idx != null ? x.item_idx : 0) !== idx) return; const v = parseFloat(x.jul) || 0; if (x.dir === 'in') j += v; else if (!gsPend(x)) j -= v; });
+    return Math.round(j * 10) / 10;
+  }
+  window.hwCanStockAdjust = () => { try { return canStockAdjust(); } catch (_) { return false; } };
   async function greigeStockAdjust(woId, idx, delta, memo, ctx) {
+    if (!canStockAdjust()) { toast('재고 조정 권한이 없습니다 — [관리 → 권한 설정]에서 [재고조정]을 켜 주십시오', 'error'); return false; }
     const wo = (state.allWorkOrders || []).find(w => w && w.id === woId); if (!wo) { toast('편직 의뢰서를 찾지 못했습니다', 'error'); return false; }
-    delta = Math.round((parseFloat(delta) || 0) * 10) / 10; if (!delta) return false;
-    const it = (wo.items || [])[idx] || {}; const kpj = parseFloat(it.kg_per_jul) || 21;
-    const at = new Date().toISOString(), by = (state.user && state.user.email) || '';
+    const c = ctx || {}; const tgt = (c.target != null && isFinite(parseFloat(c.target))) ? Math.round(parseFloat(c.target) * 10) / 10 : null;
+    delta = Math.round((parseFloat(delta) || 0) * 10) / 10; if (tgt == null && !delta) return false;
+    const by = (state.user && state.user.email) || '';
     const why = String(memo || '').trim();
-    const line = { dir: 'in', src: 'adj', item_idx: idx, jul: delta, kg: Math.round(delta * kpj * 10) / 10, kg_manual: false, date: todayYMD(), memo: '현장 재고 조정 ' + (delta > 0 ? '+' : '') + delta + '절' + (why ? ' · ' + why : ''), by, at, void: false, id: stockLineId('gadj') };
-    const sh = (Array.isArray(wo.greige_shipments) ? wo.greige_shipments : []).concat([line]);
-    try { await updateDoc(doc(db, C('workorders'), wo.id), { greige_shipments: sh, updated_at: serverTimestamp(), updated_by: by }); wo.greige_shipments = sh; }
-    catch (e) { toast('조정을 적지 못했습니다: ' + e.message, 'error'); return false; }
-    const c = ctx || {}; const who = (() => { try { const u = (state.hwUsers || []).find(x => String(x.email || '').toLowerCase() === by.toLowerCase()); return (u && u.name) || by.split('@')[0]; } catch (_) { return by; } })();
-    const txt = `[생지 재고 조정] ${c.vn || wo.recipient || ''} · ${c.item || ''}${c.lot ? ' ' + c.lot : ''} · ${c.before != null ? c.before + '절 → ' + Math.round((c.before + delta) * 10) / 10 + '절' : ''} (${delta > 0 ? '+' : ''}${delta}절)${why ? ' · 사유: ' + why : ''} · 조정: ${who}`;
+    let before = null, used = 0, shNew = null;
+    try {
+      const ref = doc(db, C('workorders'), wo.id);
+      const ok = await runTransaction(db, async tx => {
+        const sn = await tx.get(ref); if (!sn.exists()) throw new Error('의뢰서가 없습니다');
+        const w = sn.data(); const sh = Array.isArray(w.greige_shipments) ? w.greige_shipments.slice() : [];
+        before = greigePhysJul(w, sh, idx);
+        const d = tgt != null ? Math.round((tgt - before) * 10) / 10 : delta; if (!d) return false;
+        const it = (w.items || [])[idx] || {}; const kpj = parseFloat(it.kg_per_jul) || 21;
+        sh.push({ dir: 'in', src: 'adj', item_idx: idx, jul: d, kg: Math.round(d * kpj * 10) / 10, kg_manual: false, date: todayYMD(), memo: '현장 재고 조정 ' + (d > 0 ? '+' : '') + d + '절' + (why ? ' · ' + why : ''), by, at: new Date().toISOString(), void: false, id: stockLineId('gadj') });
+        tx.update(ref, { greige_shipments: sh, updated_at: serverTimestamp(), updated_by: by }); used = d; shNew = sh; return true;
+      });
+      if (!ok) { toast(`${c.lot || ''} 은(는) 이미 ${before}절입니다 — 바꿀 것이 없습니다 (다른 사람이 먼저 고쳤을 수 있습니다)`, 'info'); return false; }
+      wo.greige_shipments = shNew;
+    } catch (e) { toast('조정을 적지 못했습니다: ' + ((e && e.message) || ''), 'error'); return false; }
+    const who = (() => { try { const u = (state.hwUsers || []).find(x => String(x.email || '').toLowerCase() === by.toLowerCase()); return (u && u.name) || by.split('@')[0]; } catch (_) { return by; } })();
+    const txt = `[생지 재고 조정] ${c.vn || wo.recipient || ''} · ${c.item || ''}${c.lot ? ' ' + c.lot : ''} · ${before}절 → ${Math.round((before + used) * 10) / 10}절 (${used > 0 ? '+' : ''}${used}절)${why ? ' · 사유: ' + why : ''} · 조정: ${who}`;
     try { if (window.hwFieldSend) await window.hwFieldSend(txt, (wo.wo_number || '') + (c.lot ? ' 로트 ' + c.lot : '')); } catch (_) {}
     return true;
   }
@@ -53844,27 +53868,32 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
     const shrinkLim = rib => { const t = T(); const r = rib && t.rib_shrink != null && t.rib_shrink !== '' ? num(t.rib_shrink) : null; return r != null ? r : (num(t.shrink) || SHRINK_ALERT_THRESHOLD); };
     const colorHead = x => `<div class="qm-ch"><b>${escapeHtml(x.c.name || '-')}</b><span>${escapeHtml(x.item || '-')}${x.rib ? ' · 리프 ' + escapeHtml(x.rib) : ''}</span><small>${escapeHtml(x.wo.wo_number || '')}${x.vend ? ' · ' + escapeHtml(x.vend) : ''}</small></div>`;
     /* hotfix573(대표 10/1): 생지 재고 [조정] — 품목의 로트마다 −/+ 로 센 절에 맞춤 · 사유 · 저장하면 메인 재고에 반영 + [현장 알림]에 기록 */
+    let adjOn = false;   /* hotfix579: [조정] 창이 열려 있으면 15초 새로 고침을 쉼 (적던 수량 · 사유가 지워지지 않게) */
     const adjOpen = (v, it) => {
       let R = []; try { R = window.__hwGs.stockRows().filter(r => r.vn === v && r.item === it); } catch (_) {}
-      if (!R.length) return; const nv = {}; R.forEach(r => { nv[r.k] = r.rem; });
-      const ov = document.createElement('div'); ov.className = 'qm-adjw';
+      if (!R.length) return;
+      if (window.hwCanStockAdjust && !window.hwCanStockAdjust()) { toast('재고 조정 권한이 없습니다 — 대표에게 [재고조정] 권한을 받아 주십시오', 'warning'); return; }   /* hotfix579 */
+      /* hotfix579: 기준 = 창고에 있어야 할 절(장부 재고 + 아직 안 나간 출고 대기). 센 절수를 그대로 넣으면 됨 */
+      R.forEach(r => { r.ph = Math.round(((r.rem || 0) + (r.pend || 0)) * 10) / 10; }); const nv = {}; R.forEach(r => { nv[r.k] = r.ph; });
+      const ov = document.createElement('div'); ov.className = 'qm-adjw'; adjOn = true;
       const f1 = n => String(Math.round(n * 10) / 10);
       const paint = () => { ov.innerHTML = `<div class="qm-adjb" role="dialog"><div class="qm-adjh"><b>${escapeHtml(it)}</b><span>${escapeHtml(v)} · 재고 조정</span></div>
-        ${R.map(r => { const d = Math.round((nv[r.k] - r.rem) * 10) / 10; return `<div class="qm-adjr"><div class="qm-adjl"><b>${escapeHtml(r.lot || '-')}</b><small>${escapeHtml(String(r.date || '').slice(2).replace(/-/g, '.'))} · ${escapeHtml(r.wo || '')} · 지금 ${f1(r.rem)}절</small></div>
+        <div class="qm-adjf" style="margin:0 0 6px;">창고에서 실제로 센 절수를 넣으십시오.</div>
+        ${R.map(r => { const d = Math.round((nv[r.k] - r.ph) * 10) / 10; return `<div class="qm-adjr"><div class="qm-adjl"><b>${escapeHtml(r.lot || '-')}</b><small>${escapeHtml(String(r.date || '').slice(2).replace(/-/g, '.'))} · ${escapeHtml(r.wo || '')} · 지금 ${f1(r.ph)}절${r.pend ? ` (출고 대기 ${f1(r.pend)}절 포함 · 아직 창고에 있음)` : ''}</small></div>
           <div class="qm-adjn"><button type="button" data-am="${escapeHtml(r.k)}">−</button><input inputmode="decimal" data-ai="${escapeHtml(r.k)}" value="${f1(nv[r.k])}"><button type="button" data-ap="${escapeHtml(r.k)}">+</button></div><em class="${d > 0 ? 'p' : d < 0 ? 'm' : ''}">${d ? (d > 0 ? '+' : '') + f1(d) + '절' : ''}</em></div>`; }).join('')}
         <label class="qm-adjm">사유 <input id="qm-adj-why" placeholder="예: 실제로 세어 보니 2절 적음" value="${escapeHtml(ov.__why || '')}"></label>
         <div class="qm-adjf">저장하면 메인 프로그램 재고에 바로 반영되고, [현장 알림]에 "어떻게 고쳤는지"가 남습니다.</div>
         <div class="qm-adjbt"><button type="button" class="no" data-ax>닫기</button><button type="button" class="ok" data-as>조정 저장</button></div></div>`;
-        ov.querySelector('[data-ax]').onclick = () => ov.remove();
+        ov.querySelector('[data-ax]').onclick = () => { ov.remove(); adjOn = false; };
         ov.querySelector('#qm-adj-why').oninput = e => { ov.__why = e.target.value; };
         ov.querySelectorAll('[data-am],[data-ap]').forEach(b => b.onclick = () => { const k = b.dataset.am || b.dataset.ap; nv[k] = Math.max(0, Math.round(((parseFloat(nv[k]) || 0) + (b.dataset.am ? -1 : 1)) * 10) / 10); paint(); });
         ov.querySelectorAll('[data-ai]').forEach(i => i.onchange = () => { const v2 = parseFloat(hwQcmNum(i.value)); if (v2 >= 0) nv[i.dataset.ai] = Math.round(v2 * 10) / 10; paint(); });
-        ov.querySelector('[data-as]').onclick = async e => { const ch = R.filter(r => Math.abs(nv[r.k] - r.rem) >= 0.05); if (!ch.length) { toast('바뀐 수량이 없습니다', 'info'); return; }
+        ov.querySelector('[data-as]').onclick = async e => { const ch = R.filter(r => Math.abs(nv[r.k] - r.ph) >= 0.05); if (!ch.length) { toast('바뀐 수량이 없습니다', 'info'); return; }
           const why = String(ov.__why || '').trim(); if (!why) { toast('사유를 적어 주십시오', 'warning'); ov.querySelector('#qm-adj-why').focus(); return; }
-          if (!confirm(ch.map(r => `${r.lot || '-'} : ${f1(r.rem)}절 → ${f1(nv[r.k])}절`).join('\n') + '\n\n이대로 재고를 고칩니다. [현장 알림]에 기록됩니다.')) return;
+          if (!confirm(ch.map(r => `${r.lot || '-'} : ${f1(r.ph)}절 → ${f1(nv[r.k])}절`).join('\n') + '\n\n이대로 재고를 고칩니다. [현장 알림]에 기록됩니다.')) return;
           e.target.disabled = true; let ok = 0;
-          for (const r of ch) { const wid = r.k.replace(/_\d+$/, ''), ii = parseInt(r.k.split('_').pop(), 10) || 0; if (await window.hwStockAdjust(wid, ii, nv[r.k] - r.rem, why, { vn: v, item: it, lot: r.lot, before: r.rem })) ok++; }
-          ov.remove(); toast(ok ? `재고를 고쳤습니다 (${ok}줄) — 현장 알림에 기록됨` : '고치지 못했습니다', ok ? 'success' : 'error'); list(); };
+          for (const r of ch) { const wid = r.k.replace(/_\d+$/, ''), ii = parseInt(r.k.split('_').pop(), 10) || 0; if (await window.hwStockAdjust(wid, ii, nv[r.k] - r.ph, why, { vn: v, item: it, lot: r.lot, target: nv[r.k] })) ok++; }
+          ov.remove(); adjOn = false; toast(ok ? `재고를 고쳤습니다 (${ok}줄) — 현장 알림에 기록됨` : '고치지 못했습니다', ok ? 'success' : 'error'); list(); };
       };
       paint(); bg.querySelector('.qm').appendChild(ov);
     };
@@ -53891,7 +53920,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
         return VS.map(v => { const RV = R.filter(r => r.vn === v); const tj = RV.reduce((a, r) => a + r.rem, 0), tk = RV.reduce((a, r) => a + r.kg, 0);
           const IT = Array.from(new Set(RV.map(r => r.item)));
           return `<div class="qm-sv${/현일/.test(v) ? ' us' : ''}"><div class="qm-svh"><b>${escapeHtml(v || '-')}</b>${/현일/.test(v) ? '<i>우리 회사</i>' : ''}<em>${f1(tj)}절 · ${tk.toFixed(1)}kg</em></div>${IT.map(it => { const RI = RV.filter(r => r.item === it); const ij = RI.reduce((a, r) => a + r.rem, 0);
-            return `<div class="qm-si"><div class="qm-sih"><b>${escapeHtml(it)}</b><button type="button" class="qm-adj" data-adj="${escapeHtml(v + '|' + it)}">조정</button></div>${RI.map(r => `<div class="qm-sr"><span class="lot">${escapeHtml(r.lot || '-')}</span><span class="j"><b>${f1(r.rem)}</b>절</span><span class="kg">${r.kg.toFixed(1)}kg</span><span class="d">${escapeHtml(String(r.date || '').slice(2).replace(/-/g, '.'))}${r.kind ? ' · ' + escapeHtml(r.kind) : ''}${r.pend ? ` · <em>출고 대기 ${f1(r.pend)}</em>` : ''}</span></div>`).join('')}</div>`; }).join('')}</div>`; }).join('');
+            return `<div class="qm-si"><div class="qm-sih"><b>${escapeHtml(it)}</b><button type="button" class="qm-adj" data-adj="${escapeHtml(JSON.stringify([v, it]))}"${window.hwCanStockAdjust && !window.hwCanStockAdjust() ? ' disabled title="재고 조정 권한이 없습니다" style="opacity:.45"' : ''}>조정</button></div>${RI.map(r => `<div class="qm-sr"><span class="lot">${escapeHtml(r.lot || '-')}</span><span class="j"><b>${f1(r.rem)}</b>절</span><span class="kg">${r.kg.toFixed(1)}kg</span><span class="d">${escapeHtml(String(r.date || '').slice(2).replace(/-/g, '.'))}${r.kind ? ' · ' + escapeHtml(r.kind) : ''}${r.pend ? ` · <em>출고 대기 ${f1(r.pend)}</em>` : ''}</span></div>`).join('')}</div>`; }).join('')}</div>`; }).join('');
       })();
       else body = cards.map(x => `<button type="button" class="qm-card rp ${x.rep}" data-k="${escapeHtml(x.key)}" data-rno="${x.rno}"><span class="qm-no">${x.rno}차</span>${colorHead(x)}<div class="qm-meta">${x.rep === 'hold' ? '<em class="bad">규격 이상 — 대표 확인 대기(불량 체크)</em>' : x.rep === 'wait' ? '<em>검수 완료 — 대표 확인 대기(완료 보고)</em>' : '<em class="ok">대표 확인 완료</em>'}${x.r.qc_done_by || x.r.shrink_hold_by ? ' · ' + escapeHtml(String(x.r.qc_done_by || x.r.shrink_hold_by).split('@')[0]) : ''}</div><span class="qm-go">보기 ›</span></button>`).join('');
       const vcnt = v => { const f = x => x.vk === v || !v; return { r: I0.rcv.filter(f).length, q: I0.qc.filter(f).length, p: I0.rep.filter(f).length }; };
@@ -53922,7 +53951,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
         <button type="button" class="qm-dv" data-ftest><i></i><b>소리 · 진동 시험</b></button></div>`; bg.querySelector('.qm').appendChild(d);
         d.querySelectorAll('[data-foff]').forEach(b => b.addEventListener('click', async () => { if (b.dataset.foff === 'off') { if (!confirm('현장 알림을 끕니다.\n사무실에서 보낸 알림이 이 휴대폰에서 울리지 않습니다.')) return; await window.hwFieldSetOff(true); toast('현장 알림을 껐습니다', 'info'); } else { await window.hwFieldSetOff(false); toast('현장 알림을 켰습니다', 'success'); } drawer = false; list(); }));
         d.querySelectorAll('[data-ftest]').forEach(b => b.addEventListener('click', () => { if (window.hwFieldRingTest) window.hwFieldRingTest(); })); }
-      bg.querySelectorAll('[data-adj]').forEach(b => b.addEventListener('click', () => { const [v, it] = b.dataset.adj.split('|'); adjOpen(v, it); }));   /* hotfix573: 생지 재고 [조정] */
+      bg.querySelectorAll('[data-adj]').forEach(b => b.addEventListener('click', () => { let a = []; try { a = JSON.parse(b.dataset.adj); } catch (_) {} adjOpen(a[0], a[1]); }));   /* hotfix573: 생지 재고 [조정] */
       bg.querySelectorAll('[data-menu]').forEach(b => b.addEventListener('click', () => { drawer = !drawer; list(); }));
       bg.querySelectorAll('[data-dwx]').forEach(b => b.addEventListener('click', () => { drawer = false; list(); }));
       bg.querySelectorAll('[data-v]').forEach(b => b.addEventListener('click', () => { vsel = b.dataset.v; drawer = false; rcvOpen = ''; list(); }));
@@ -54054,7 +54083,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
     };
     list();
     /* 다른 사람이 넣은 것도 보이게 — 목록 화면이면 15초마다 새로 (찾기 · 입고 입력 중에는 안 함) */
-    const iv = setInterval(() => { if (!document.body.contains(bg)) { clearInterval(iv); return; } if (!cur && !busy && !rcvOpen && !drawer && document.activeElement !== bg.querySelector('.qm-q')) list(); }, 15000);
+    const iv = setInterval(() => { if (!document.body.contains(bg)) { clearInterval(iv); return; } if (!cur && !busy && !rcvOpen && !drawer && !adjOn && document.activeElement !== bg.querySelector('.qm-q')) list(); }, 15000);
   };
   if (typeof window !== 'undefined') {
     window.addEventListener('hashchange', () => { if (location.hash === '#qc' && !document.getElementById('hw-qcm') && state.user) window.hwQcmOpen(); });
@@ -56257,7 +56286,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix578';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
+  const VERSION = 'v2.53 hotfix579';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
@@ -56869,10 +56898,12 @@ window.addEventListener('beforeunload', e => {
         { const d1 = e.target.closest('[data-hwn-del]'); if (d1) { newsHide([d1.dataset.hwnDel]); const s0 = dismissed(); s0.add(d1.dataset.hwnDel); saveDismiss(s0); P.notifyScan(); return; } }   /* hotfix514 */
         if (e.target.closest('[data-hwn-deldone]')) { const ids = P.newsAll().filter(l => P.newsDone(l)).map(l => l.id); if (!ids.length) return; if (!confirm('완료된 건의 소식 ' + ids.length + '개를 목록에서 삭제할까요?\n(출고 완료 · 완료 · 삭제된 의뢰서 — 공정 기록 · 이력은 그대로 남습니다)')) return; newsHide(ids); const s0 = dismissed(); ids.forEach(i => s0.add(i)); saveDismiss(s0); P.notifyScan(); try { rerender(); } catch (_) {} return; }
         if (x || all) { const s = dismissed(); (all ? Array.from(box.querySelectorAll('[data-hwn-id]')).map(n => n.dataset.hwnId) : [x.dataset.hwnX]).forEach(id => s.add(id)); saveDismiss(s); P.notifyScan(); return; }
-        if (go) { const [w, c] = go.dataset.hwnGo.split('|'); P.openModal(w, parseInt(c, 10)); }
+        if (go) { const gv = go.dataset.hwnGo; if (gv === 'gs:issue' || gv === 'gs:wait') { try { const G = window.__hwGs; if (gv === 'gs:issue' && G.stockIssueOpen) G.stockIssueOpen(); else if (G.openWait) G.openWait(); } catch (_) {} return; }   /* hotfix579: 편직팀 기록은 [재고 수량 확인] · [출고 확인 대기]로 */
+          const [w, c] = gv.split('|'); P.openModal(w, parseInt(c, 10)); }
       }); }
     const show = L.slice(0, P.newsOpen ? 40 : 4);
-    const itemName = l => { const w = woById(String(l.k || '').replace(/_\d+$/, '')); const ci = parseInt(String(l.k || '').split('_').pop(), 10); if (!w) return ''; const c = (w.colors || [])[ci] || {}; const bt = String(c.bt_no || '').trim();
+    const itemName = l => { if (l.part === 'gs') return `<b>${esc(l.label || l.wo || '')}</b>${l.kind === 'issue' ? `<span class="hwn-q"><em>앱 ${Number(l.body) || 0}절 → 공장 ${Number(l.n) || 0}절</em></span>` : (l.kind === 'ship' && Number(l.body) ? `<span class="hwn-q"><em>${Number(l.body)}절${Number(l.n) ? ' · ' + Number(l.n) + 'kg' : ''}</em></span>` : '')}`;   /* hotfix579: 편직팀 기록은 생지 이름 · 수량으로 */
+      const w = woById(String(l.k || '').replace(/_\d+$/, '')); const ci = parseInt(String(l.k || '').split('_').pop(), 10); if (!w) return ''; const c = (w.colors || [])[ci] || {}; const bt = String(c.bt_no || '').trim();
       return `<b>${esc((w.body || {}).item || (w.rib || {}).item || '')}</b> · ${esc(c.name || '')}${bt && !String(c.name || '').includes(bt) ? ' <span class="hwn-bt">#' + esc(bt) + '</span>' : ''}<span class="hwn-q"><em>몸판 ${Number(c.body) || 0}절</em>${Number(c.rib) ? `<em class="rib">리프 ${Number(c.rib)}절</em>` : ''}</span>`; };
     const dis = dismissed();
     box.classList.toggle('all', !!P.newsOpen);
@@ -56882,7 +56913,7 @@ window.addEventListener('beforeunload', e => {
       const tone = l.kind === 'issue' ? 'warn' : (l.kind === 'ship' ? 'ok' : (l.kind === 'eta' ? 'eta' : 'st'));
       const seen = dis.has(l.id);
       return `<div class="hwn-card ${tone}${seen && P.newsOpen ? ' seen' : ''}" data-hwn-id="${esc(l.id)}"><div class="hwn-top"><span class="hwn-v">${esc(l.vendor || '')}</span><span class="hwn-t">${hhmm(tOf(l))}</span>${seen && P.newsOpen ? '<span class="hwn-seen">읽음</span>' : ''}${P.newsOpen ? `<button type="button" class="hwn-del" data-hwn-del="${esc(l.id)}" title="이 소식을 목록에서 삭제(공정 기록은 그대로)">삭제</button>` : `<button type="button" class="hwn-x" data-hwn-x="${esc(l.id)}" aria-label="닫기">✕</button>`}</div>
-        <div class="hwn-msg">${esc(notifText(l))}</div><div class="hwn-it">${itemName(l)}</div><button type="button" class="hwn-go" data-hwn-go="${esc(woId)}|${esc(ci)}">보기</button></div>`;
+        <div class="hwn-msg">${esc(notifText(l))}</div><div class="hwn-it">${itemName(l)}</div><button type="button" class="hwn-go" data-hwn-go="${l.part === 'gs' ? (l.kind === 'issue' ? 'gs:issue' : 'gs:wait') : esc(woId) + '|' + esc(ci)}">보기</button></div>`;
     }).join('') + '</div>' + (L.length > show.length ? `<div class="hwn-more">외 ${L.length - show.length}건${P.newsOpen ? '' : ' · [공정 현황]의 [가공소 소식]에서 모두 봄'}</div>` : '');
   }
 
@@ -57210,13 +57241,14 @@ window.addEventListener('beforeunload', e => {
       const val = id => ((document.getElementById(id) || {}).value || '').trim();
       const busy = t => { b.disabled = true; b.dataset.t = b.textContent; b.textContent = t; };
       const C = P.can();
-      if (['make', 'edit', 'edsave', 'reset', 'off', 'on'].includes(act) && !C.e) { toast('수정 권한이 없습니다', 'error'); return; }
+      if (['make', 'edit', 'edsave', 'reset', 'off', 'on', 'setapp'].includes(act) && !C.e) { toast('수정 권한이 없습니다', 'error'); return; }   /* hotfix579: 앱 종류 바꾸기도 */
+      if (act === 'qctabs' && !(H().isAdmin && H().isAdmin())) { toast('현장 QC 화면 구성은 관리자만 바꿀 수 있습니다', 'error'); return; }   /* hotfix579: settings 는 관리자만 저장됨 */
       if (['del', 'delsave'].includes(act) && !C.d) { toast('삭제 권한이 없습니다', 'error'); return; }
       try {
         if (act === 'copyurl') { const ok = await copyText(P.url()); toast(ok ? '주소를 복사했습니다' : '복사가 막혔습니다', ok ? 'success' : 'error'); return; }
         if (act === 'copyurlq') { const ok = await copyText(P.urlQ()); toast(ok ? '현장 QC 주소를 복사했습니다' : '복사가 막혔습니다', ok ? 'success' : 'error'); return; }
         if (act === 'copyqctext') { const t = ['━━━━━━━━━━━━', '■ 현일텍스 현장 QC 앱', '━━━━━━━━━━━━', `▷ 주소 : ${P.urlQ()}`, '▷ 주소를 누르면 크롬으로 열립니다 → 회사 구글 계정으로 로그인', '▷ [앱 설치]를 누르면 바탕화면에 남색 [현장 QC] 아이콘이 생깁니다', '━━━━━━━━━━━━', '현일텍스 주식회사 드림'].join('\n'); const ok = await copyText(t); toast(ok ? '현장 QC 설치 안내 글을 복사했습니다' : '복사가 막혔습니다', ok ? 'success' : 'error'); return; }
-        if (act === 'qctabs') { const v = {}; box.querySelectorAll('[data-qt]').forEach(i => { if (!i.disabled) v[i.dataset.qt] = !!i.checked; }); await f.setDoc(f.doc(f.db, f.C('settings'), 'proc_cfg'), { qc_tabs: v, updated_by: email(), updated_at: f.serverTimestamp() }, { merge: true }); P.cfg.qc_tabs = v; toast('현장 QC 앱 화면 구성을 저장했습니다 — 직원 휴대폰에 바로 반영', 'success'); rerenderNow(); return; }
+        if (act === 'qctabs') { const v = {}; box.querySelectorAll('[data-qt]').forEach(i => { if (!i.disabled) v[i.dataset.qt] = !!i.checked; }); await f.setDoc(f.doc(f.db, f.C('settings'), 'proc_cfg'), { qc_tabs: v, qc_tabs_by: email(), qc_tabs_at: f.serverTimestamp() }, { merge: true });   /* hotfix579: updated_at 을 안 건드림 — [표준 일수] 잠금이 저절로 걸리지 않게 */ P.cfg.qc_tabs = v; toast('현장 QC 앱 화면 구성을 저장했습니다 — 직원 휴대폰에 바로 반영', 'success'); rerenderNow(); return; }
         if (act === 'qcpush') { const ok = window.hwFieldPushReg ? await window.hwFieldPushReg(true) : false; toast(ok ? '이 기기도 앱을 꺼 둬도 현장 알림을 받습니다' : '알림을 켜지 못했습니다' + (window.__hfPushErr ? ' — ' + window.__hfPushErr : ''), ok ? 'success' : 'error'); return; }
         if (act === 'qctok') { const box = document.getElementById('hwp-qctok'); if (!box) return; box.textContent = '불러오는 중 …';
           try { const F = window.firebase; const fm = await import(G + 'firebase-firestore.js'); const sn = await F.getDocs(F.query(F.collection(F.db, F.C('push_tok')), fm.where('role', '==', 'staff'))); const L = []; sn.forEach(d => L.push(d.data()));

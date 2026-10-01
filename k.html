@@ -235,13 +235,14 @@ import { initializeFirestore, getFirestore, doc, getDoc, updateDoc, setDoc, dele
  *   읽는 것: proc_acc/{내 uid} · proc_pub/{내 업체}.gs (현일텍스가 보낸 생지출고) · proc_log(내 업체 것만)
  *   쓰는 것: proc_log 한 줄 — kind 'ship' part 'gs' (body 절 · n kg · ref 송장 사진) · kind 'st' part 'gs' stage seen | ack_cxl | photo
  *   사진: Storage gs_photos/{업체}/{생지출고}_{시각}.jpg */
-const KVER = 'k14 (hotfix578)';
+const KVER = 'k15 (hotfix579)';
 /* hotfix572(대표 10/1): 거래 원단회사 고르기 — FABIWOS 는 여러 원단회사에 팔 프로그램. 편직공장 한 곳이 여러 원단회사와 거래하므로
  *   계정(proc_acc.companies)에 거래 원단회사 목록 · 위 [→ 원단회사 ▾] 와 삼선 메뉴에서 고름 · 고른 회사의 할 일 · 재고 · 보낸 내역만 보임
  *   지금은 현일텍스 한 곳 (이 서버 = 현일텍스 자료). 다른 원단회사가 FABIWOS 를 쓰면 그 회사 자료 자리(co.src)를 더해 같은 앱에서 바꿔 봄 */
 const CO_DEF = [{ id: 'hyunil', name: '현일텍스' }];
 const COS = () => (S.acc && Array.isArray(S.acc.companies) && S.acc.companies.length ? S.acc.companies : CO_DEF);
-const CO = () => { const L = COS(); let id = ''; try { id = localStorage.getItem('hwk.co') || ''; } catch (_) {} return L.find(c => c.id === id) || L[0]; };
+const CO = () => { const L = COS(); let id = ''; try { id = localStorage.getItem('hwk.co') || ''; } catch (_) {} const c = L.find(c => c.id === id); return (c && coLive(c)) ? c : (L.find(coLive) || L[0]); };
+const coLive = c => !!c && (c.id === CO_DEF[0].id || c.src === 'here' || (!c.src && COS()[0] === c));   /* hotfix579: 이 앱에 자료가 연결된 원단회사 — 아직 연결 안 된 곳은 [준비 중] */
 const CN = () => CO().name;
 const cfg = { apiKey: "AIzaSyAIaNFZozda5sp4Qjs7LEn-aXYLX1JZi10", authDomain: "recoveric-wo.firebaseapp.com", projectId: "recoveric-wo", storageBucket: "recoveric-wo.firebasestorage.app", messagingSenderId: "267946532287", appId: "1:267946532287:web:fcc1b597c9bf53c9d8950a" };
 const DOMAIN = 'proc.recoveric.com';
@@ -272,7 +273,9 @@ function ring(m) { m = m || nmode(); if (m === 'both' || m === 'sound') chime();
 /* 아래 창 */
 let lockY = null;
 function lockScroll(on) { const b = document.body.style; if (on) { if (lockY != null) return; lockY = window.scrollY || 0; b.position = 'fixed'; b.top = (-lockY) + 'px'; b.left = '0'; b.right = '0'; b.width = '100%'; return; } if (lockY == null) return; const y = lockY; lockY = null; b.position = ''; b.top = ''; b.left = ''; b.right = ''; b.width = ''; window.scrollTo(0, y); }
-function sheet(html) { $('sheet').innerHTML = `<div class="sh" role="dialog"><div class="grab"></div>${html}</div>`; $('sheet').classList.add('on'); lockScroll(true); }
+let SHT = 0;   /* hotfix579: 창 번호 — 늦게 끝난 보내기가 다른 창을 닫거나 다시 열지 않게 */
+function sheet(html) { SHT++; $('sheet').dataset.t = String(SHT); $('sheet').innerHTML = `<div class="sh" role="dialog"><div class="grab"></div>${html}</div>`; $('sheet').classList.add('on'); lockScroll(true); return SHT; }
+const sheetIs = t => $('sheet').classList.contains('on') && $('sheet').dataset.t === String(t);
 function closeSheet() { $('sheet').classList.remove('on'); $('sheet').innerHTML = ''; lockScroll(false); }
 $('sheet').addEventListener('click', e => { if (e.target.id === 'sheet') closeSheet(); });
 
@@ -324,6 +327,8 @@ $('lg-form').addEventListener('submit', async e => {
 function showLogin(msg) {
   try { closeSheet(); } catch (_) {}
   S.unsub.forEach(f => { try { f(); } catch (_) {} }); S.unsub = [];
+  Object.assign(S, { acc: null, gs: [], stock: [], logs: [], gotPub: false, gsKnown: null, coShown: false, tab: 'todo', kind: '', dest: '', ym: '', sq: '', push: false, sending: {} });   /* hotfix579: 다른 아이디로 들어와도 앞 사람 자료가 안 남게 */
+  try { const ch = document.getElementById('cohome'); if (ch) ch.classList.remove('on'); } catch (_) {}
   $('app').classList.add('hide'); $('login').classList.remove('hide');
   $('lg-btn').disabled = false; $('lg-msg').textContent = msg || ''; $('lg-pw').value = '';
 }
@@ -397,7 +402,7 @@ let hidAt = 0;
 document.addEventListener('visibilitychange', () => { if (document.hidden) { hidAt = Date.now(); return; } if (S.acc && Date.now() - hidAt > 20000) subscribe(); });
 window.addEventListener('online', () => { S.live = true; if (S.acc) subscribe(); render(); });
 window.addEventListener('offline', () => { S.live = false; render(); });
-async function onDenied(e) { if (e && /permission/.test(e.code || e.message || '')) { try { await signOut(auth); } catch (_) {} showLogin('계정이 멈췄거나 권한이 바뀌었습니다. 현일텍스에 문의하십시오.'); } }
+async function onDenied(e) { if (e && /permission/.test(e.code || e.message || '')) { S.acc = null; try { await signOut(auth); } catch (_) {} showLogin('계정이 멈췄거나 권한이 바뀌었습니다. 현일텍스에 문의하십시오.'); } }
 async function put(x, o) {
   const d = Object.assign({ vendor: S.acc.vendor, k: x.k, wo: x.no || '', note: '', by: 'vendor', uid: S.uid, dev: S.dev, at: serverTimestamp() }, o);
   Object.keys(d).forEach(k => { if (d[k] === undefined) delete d[k]; });
@@ -430,7 +435,7 @@ function drawDrawer() {
   $('drw-a').innerHTML = `<div class="dh"><b>${esc(S.acc.vendor)}</b><small>편직팀 · 아이디 ${esc(S.acc.login_id || '')}</small></div>
     <div class="dsec"><h4>거래 원단회사</h4>${COS().map(c => `<button type="button" class="di${c.id === CO().id ? ' on' : ''}" data-dco="${esc(c.id)}"><span class="dot" style="background:${c.id === CO().id ? '#10b981' : '#cbd5e1'}"></span>${esc(c.name)}${c.id === CO().id ? '<span class="dc">보는 중</span>' : ''}</button>`).join('')}</div>
     <div class="dsec"><h4>할 일</h4>${KINDS.map(([k, t]) => { const n = cnt(k); if (k && !n) return ''; return `<button type="button" class="di${S.tab === 'todo' && S.kind === k ? ' on' : ''}" data-dk="${k}">${esc(t)}<span class="dc${n && (k === 'new' || k === '') ? ' red' : (n && k === 'inv' ? ' amb' : '')}">${n}</span></button>`; }).join('')}
-      <button type="button" class="di${S.tab === 'stock' ? ' on' : ''}" data-dt="stock">생지 재고 (품목별)<span class="dc">${(S.stock || []).filter(r => r.rem > 0).length}</span></button>
+      <button type="button" class="di${S.tab === 'stock' ? ' on' : ''}" data-dt="stock">생지 재고 (품목별)<span class="dc">${kStockSum().R.length}</span></button>
       <button type="button" class="di${S.tab === 'hist' ? ' on' : ''}" data-dt="hist">보낸 내역</button></div>
     <div class="dsec"><h4>보낼 곳 (염색처) 고르기</h4><button type="button" class="di${!S.dest ? ' on' : ''}" data-dd=""><span class="dot" style="background:#10b981"></span>전체<span class="dc">${dc('')}</span></button>
       ${dests.map(d => `<button type="button" class="di${S.dest === d ? ' on' : ''}" data-dd="${esc(d)}"><span class="dot"></span>${esc(d)}<span class="dc">${dc(d)}</span></button>`).join('') || '<div class="dver">아직 보낼 곳이 없습니다</div>'}</div>
@@ -490,15 +495,17 @@ function kCard(x) {
 }
 /* hotfix570(대표 10/1): [재고] — 이 공장에 있는 현일텍스 생지 · 품목별 · 찾기 (현일텍스가 이 공장 것만 보냄) */
 const kNorm = t => String(t == null ? '' : t).toLowerCase().replace(/\s+/g, '');
-function kSetCo(id) { const c = COS().find(x => x.id === id); if (!c) return; try { localStorage.setItem('hwk.co', id); } catch (_) {} S.dest = ''; S.kind = ''; window.scrollTo(0, 0); if (c.src && c.src !== 'here') { toast(c.name + ' 자료로 바꿉니다'); } render(); }
+function kSetCo(id) { const c = COS().find(x => x.id === id); if (!c) return; if (!coLive(c)) { toast(c.name + ' — 아직 연결 전입니다. 연결되면 여기서 바로 볼 수 있습니다'); coHome(true); return; }   /* hotfix579 */
+  const prev = CO().id; try { localStorage.setItem('hwk.co', id); } catch (_) {} if (prev !== id) { S.dest = ''; S.kind = ''; lsSet(vKey('dest'), ''); } window.scrollTo(0, 0); render(); }   /* hotfix579: 같은 회사를 다시 누르면 고른 보낼 곳 그대로 */
 /* hotfix574(대표 10/1): 앱을 열면 먼저 [거래 원단회사] — 회사마다 할 일 · 새 요청 · 재고 절수 */
-function coCounts(c) { if (c.id !== CO_DEF[0].id && c.src && c.src !== 'here') return null; const L = kList(); const todo = L.filter(kTodo); return { todo: todo.length, fresh: todo.filter(x => kKind(x) === 'new').length, stock: Math.round((S.stock || []).filter(r => r.rem > 0).reduce((a, r) => a + r.rem, 0) * 10) / 10 }; }
+function kStockSum() { const R = (S.stock || []).filter(r => r.rem > 0 || r.pend > 0); return { R, j: Math.round(R.reduce((a, r) => a + Math.max(0, r.rem), 0) * 10) / 10, kg: R.reduce((a, r) => a + Math.max(0, r.kg || 0), 0), p: Math.round(R.reduce((a, r) => a + (r.pend || 0), 0) * 10) / 10 }; }   /* hotfix579: 재고 합계는 한 곳에서 (첫 화면 · 재고 탭 · 메뉴 같은 숫자) */
+function coCounts(c) { if (!coLive(c)) return null; const L = kList(); const todo = L.filter(kTodo); return { todo: todo.length, fresh: todo.filter(x => kKind(x) === 'new').length, stock: kStockSum().j }; }
 function coHome(force) {
   if (!S.acc || (!force && (S.coShown || !S.gotPub))) return; S.coShown = true;
   let el = document.getElementById('cohome'); if (!el) { el = document.createElement('div'); el.id = 'cohome'; document.body.appendChild(el); }
   const cur = CO();
   el.innerHTML = `<div class="ch-in"><div class="ch-h"><small>${esc(S.acc.vendor)} · 편직팀</small><b>거래 원단회사</b><span>일할 원단회사를 누르십시오</span></div>
-    ${COS().map(c => { const n = coCounts(c); return `<button type="button" class="ch-c${c.id === cur.id ? ' on' : ''}" data-coid="${esc(c.id)}"><b>${esc(c.name)}</b>${n ? `<span class="ch-n${n.todo ? ' r' : ''}"><em>${n.todo}</em>할 일</span><span class="ch-n${n.fresh ? ' r' : ''}"><em>${n.fresh}</em>새 요청</span><span class="ch-n g"><em>${kQ(n.stock)}</em>절 재고</span>` : '<span class="ch-n">불러오는 중</span>'}<i>›</i></button>`; }).join('')}
+    ${COS().map(c => { const n = coCounts(c); return `<button type="button" class="ch-c${c.id === cur.id ? ' on' : ''}" data-coid="${esc(c.id)}"><b>${esc(c.name)}</b>${n ? `<span class="ch-n${n.todo ? ' r' : ''}"><em>${n.todo}</em>할 일</span><span class="ch-n${n.fresh ? ' r' : ''}"><em>${n.fresh}</em>새 요청</span><span class="ch-n g"><em>${kQ(n.stock)}</em>절 재고</span>` : (coLive(c) ? '<span class="ch-n">불러오는 중</span>' : '<span class="ch-n">준비 중</span>')}<i>›</i></button>`; }).join('')}
     <div class="ch-f">원단회사가 늘면 여기에 더해집니다 · 위 [→ ${esc(cur.name)}]를 누르면 다시 이 화면</div></div>`;
   el.classList.add('on');
   el.querySelectorAll('[data-coid]').forEach(b => b.addEventListener('click', () => { el.classList.remove('on'); kSetCo(b.dataset.coid); }));
@@ -530,7 +537,8 @@ function kStockRes() {
     return `<div class="st-g"><div class="st-h"><b>${esc(it)}</b><span><b>${kQ(tj)}</b>절 · ${tk.toFixed(1)}kg</span></div>${tp ? `<div class="st-hp">출고 대기 ${kQ(tp)}절을 빼면 <b>${kQ(tj)}절</b> (공장에 실제 ${kQ(tj + tp)}절)</div>` : ''}${RI.map(kStockRow).join('')}</div>`; }).join('');
 }
 function kStock() {
-  const R = (S.stock || []).filter(r => r.rem > 0 || r.pend > 0); const tj = R.reduce((a, r) => a + r.rem, 0), tk = R.reduce((a, r) => a + r.kg, 0), tp = R.reduce((a, r) => a + (r.pend || 0), 0); const ni = new Set(R.map(r => r.item)).size;
+  { const ae = document.activeElement; if (ae && ae.id === 'st-q' && $('st-res')) { $('st-res').innerHTML = kStockRes(); return; } }   /* hotfix579: 찾는 글을 치는 중이면 목록만 — 자판이 닫히지 않게 */
+  const SS = kStockSum(); const R = SS.R; const tj = SS.j, tk = SS.kg, tp = SS.p; const ni = new Set(R.map(r => r.item)).size;
   $('list').innerHTML = `<div class="k-sum"><div style="font-size:15px;font-weight:800;color:#065f46">${esc(S.acc.vendor)}에 있는 ${esc(CN())} 생지</div><b>${kQ(tj)}절</b><div style="font-size:14.5px;color:#475569">${tk.toFixed(1)}kg · 품목 ${ni}개 · 로트 ${R.length}줄</div>
     ${tp ? `<div class="st-sp">출고 대기 <b>${kQ(tp)}절</b>을 빼면 <b>${kQ(tj)}절</b> — 공장에 실제로는 ${kQ(tj + tp)}절<br><small>출고 대기를 누르면 [출고했어요]로 보낸 절 · kg 을 알립니다</small></div>` : ''}</div>
     <div class="st-find"><input id="st-q" type="search" placeholder="품목 · 로트 찾기" value="${esc(S.sq || '')}" autocomplete="off"></div><div id="st-res">${kStockRes()}</div>
@@ -540,7 +548,8 @@ function kStock() {
 function kPendSheet(r) {
   const G = (r.pg || []).map(p => ({ p, x: kList().find(x => x.k === p.g) })).filter(o => o.x && kView(o.x).pend > 0);
   if (G.length === 1) { kShipSheet(G[0].x); return; }
-  if (!G.length) { toast('이 출고 대기는 할 일에서 찾지 못했습니다 — [할 일]을 보십시오', true); S.tab = 'todo'; render(); return; }
+  if (!G.length) { const W = (r.pg || []).map(p => kList().find(x => x.k === p.g)).filter(x => x && kView(x).wait); if (W.length) { toast('이미 보냈다고 알렸습니다 — ' + CN() + '가 반영하면 숫자가 바뀝니다'); return; }   /* hotfix579 */
+    toast('이 출고 대기는 할 일에서 찾지 못했습니다 — [할 일]을 보십시오', true); S.tab = 'todo'; render(); return; }
   sheet(`<h3>${esc(r.item)} ${esc(r.lot || '')} · 출고 대기</h3><div class="sub">어느 생지출고를 보냈어요?</div>
     ${G.map(o => `<button type="button" class="k-go" style="margin-top:8px" data-pk="${esc(o.x.k)}">${esc(o.x.date)} · ${esc(o.x.dest || '')} · 남은 ${kQ(kView(o.x).pend)}절</button>`).join('')}
     <div class="row2"><button type="button" class="no" data-x>닫기</button></div>`);
@@ -550,7 +559,7 @@ function kPendSheet(r) {
 function kDiffSheet(r) {
   const real = Math.round((r.rem + (r.pend || 0)) * 10) / 10; const st = { j: real, busy: false };
   const draw = () => {
-    sheet(`<h3>수량이 달라요 — ${esc(r.item)} ${esc(r.lot || '')}</h3><div class="sub">앱에 보이는 공장 재고 <b>${kQ(real)}절</b>${r.pend ? ` (출고 대기 ${kQ(r.pend)}절 포함)` : ''}<br>숫자는 ${esc(CN())}가 확인하고 고칩니다.</div>
+    st.tok = sheet(`<h3>수량이 달라요 — ${esc(r.item)} ${esc(r.lot || '')}</h3><div class="sub">앱에 보이는 공장 재고 <b>${kQ(real)}절</b>${r.pend ? ` (출고 대기 ${kQ(r.pend)}절 포함)` : ''}<br>숫자는 ${esc(CN())}가 확인하고 고칩니다.</div>
       <div class="k-lab">지금 공장에 실제로 몇 절 있어요?</div>
       <div class="k-num"><button type="button" id="d-m">−</button><input id="d-j" type="number" inputmode="decimal" value="${kQ(st.j)}"><button type="button" id="d-p">+</button></div>
       <div class="k-lab">어떻게 다른지 (안 적어도 됩니다)</div>
@@ -564,7 +573,7 @@ function kDiffSheet(r) {
       if (Math.abs(j - real) < 0.05 && !confirm('앱에 보이는 숫자와 같습니다. 그래도 보낼까요?')) return;
       st.busy = true; st.j = j; st.n = N.value; draw();
       const ok = await put({ k: r.k, no: r.wo }, { kind: 'issue', part: 'gs', issue: SI_ISSUE, body: real, n: j, label: (r.item + ' ' + (r.lot || '')).trim().slice(0, 80), note: String(N.value || '').slice(0, 200) });
-      st.busy = false; if (ok) { closeSheet(); ring(); toast(CN() + '에 보냈습니다 — 확인하고 고치면 알려 드립니다'); render(); } else draw(); });
+      st.busy = false; const mine = sheetIs(st.tok); if (ok) { if (mine) closeSheet(); ring(); toast(CN() + '에 보냈습니다 — 확인하고 고치면 알려 드립니다'); render(); } else if (mine) draw(); });
   };
   draw();
 }
@@ -607,18 +616,19 @@ async function kImg(file) {
   return { blob, prev: c2.toDataURL('image/jpeg', 0.7), mean, sharp: n ? (m2 / n - (m1 / n) * (m1 / n)) : 0, small: Math.max(cw, ch) < 700 };
 }
 function kImgMsg(q) { if (!q) return ''; if (q.mean < 60) return '사진이 어두워요. 밝은 곳에서 다시 찍어 주세요.'; if (q.sharp < 60) return '글씨가 흐려요. 휴대폰을 가만히 들고 다시 찍어 주세요.'; if (q.small) return '사진이 너무 작아요. 송장이 화면에 꽉 차게 다시 찍어 주세요.'; return ''; }
-async function kUpload(blob, k) { const m = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-storage.js'); const path = 'gs_photos/' + S.acc.vendor + '/' + k + '_' + Date.now() + '.jpg'; await m.uploadBytes(m.ref(m.getStorage(app), path), blob, { contentType: 'image/jpeg' }); return path; }
+async function kUpload(blob, k) { const m = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-storage.js'); const path = 'gs_photos/' + S.acc.vendor + '/' + k + '_' + Date.now() + '.jpg'; await Promise.race([m.uploadBytes(m.ref(m.getStorage(app), path), blob, { contentType: 'image/jpeg' }), new Promise((_, rj) => setTimeout(() => rj(new Error('timeout')), 45000))]); return path; }   /* hotfix579: 45초 넘으면 그만 (끝없이 기다리지 않게) */
 function kPhotoField(st) {
   return `<div class="k-lab">송장 사진 <small style="font-weight:600;color:#64748b">(안 찍어도 됩니다 · 한 장)</small></div>
     <button type="button" class="k-ph" id="k-ph">${st.q ? `<img src="${st.q.prev}" alt="송장">` : '송장 사진 찍기'}</button>
     <input type="file" id="k-file" accept="image/*" capture="environment" style="display:none">
     ${st.q ? (kImgMsg(st.q) ? `<div class="k-warn">${esc(kImgMsg(st.q))}<br><small style="font-weight:600">[송장 사진]을 다시 누르면 새로 찍습니다. 그래도 보낼 수 있습니다.</small></div>` : '<div class="k-okm">사진이 잘 찍혔습니다.</div>') : ''}`;
 }
-function kBindPhoto(st, redraw) { const b = $('k-ph'), f = $('k-file'); if (!b || !f) return; b.addEventListener('click', () => f.click()); f.addEventListener('change', async () => { const file = f.files && f.files[0]; if (!file) return; b.textContent = '사진 보는 중…'; try { st.q = await kImg(file); } catch (_) { st.q = null; toast('사진을 읽지 못했습니다', true); } redraw(); }); }
+function kBindPhoto(st, redraw) { const b = $('k-ph'), f = $('k-file'); if (!b || !f) return; b.addEventListener('click', () => f.click()); f.addEventListener('change', async () => { const file = f.files && f.files[0]; if (!file) return; b.textContent = '사진 보는 중…'; st.loading = true; const sb = $('k-send'); if (sb) sb.disabled = true; try { st.q = await kImg(file); } catch (_) { st.q = null; toast('사진을 읽지 못했습니다', true); } st.loading = false; redraw(); }); }   /* hotfix579: 사진을 보는 동안은 [보내기] 잠금 */
 function kShipSheet(x) {
-  const v = kView(x); const st = { j: v.pend, kg: '', q: null, busy: false };
+  S.sending = S.sending || {}; if (S.sending[x.k]) { toast('이 건은 지금 보내는 중입니다 — 잠시 뒤 [할 일]을 보십시오'); return; }   /* hotfix579: 같은 건 두 번 보내지 않게 */
+  const v = kView(x); const st = { j: v.pend, kg: '', q: null, busy: false, tok: 0 };
   const draw = () => {
-    sheet(`<h3>${esc(x.item)} <span style="color:#b45309">${esc(x.lot || '')}</span></h3><div class="sub">${esc(x.dest || '')}(으)로 보냄 · 주문 ${kQ(x.ord)}절${v.done ? ' · 보냄 ' + kQ(v.done) + '절' : ''}</div>
+    st.tok = sheet(`<h3>${esc(x.item)} <span style="color:#b45309">${esc(x.lot || '')}</span></h3><div class="sub">${esc(x.dest || '')}(으)로 보냄 · 주문 ${kQ(x.ord)}절${v.done ? ' · 보냄 ' + kQ(v.done) + '절' : ''}</div>
       <div class="k-lab">몇 절 보냈어요?</div>
       <div class="k-num"><button type="button" id="k-m">−</button><input id="k-j" type="number" inputmode="decimal" value="${kQ(st.j)}"><button type="button" id="k-p">+</button></div>
       <div class="k-lab">송장 무게 합계 (kg) <small style="font-weight:600;color:#64748b">(모르면 비워 두세요)</small></div>
@@ -632,28 +642,31 @@ function kShipSheet(x) {
     $('k-p').addEventListener('click', () => { st.j = (parseFloat(J.value) || 0) + 1; J.value = kQ(st.j); });
     kBindPhoto(st, draw);
     $('k-send').addEventListener('click', async () => {
+      if (st.loading) { toast('사진을 보는 중입니다 — 잠시 뒤 다시 누르십시오'); return; }
+      if (S.sending[x.k]) return;
       const j = parseFloat(J.value) || 0; const kg = parseFloat(K.value) || 0;
       if (!(j > 0)) { toast('보낸 절수를 넣어 주세요', true); J.focus(); return; }
+      if (kg < 0) { toast('송장 무게는 0 보다 커야 합니다', true); K.focus(); return; }   /* hotfix579 */
       if (j > v.pend && !confirm(`주문보다 많이 보냈나요? (남은 ${kQ(v.pend)}절 · 적은 ${kQ(j)}절)\n\n맞으면 [확인]`)) return;
-      st.busy = true; st.j = j; st.kg = K.value; draw();
-      let ref = ''; if (st.q && st.q.blob) { try { ref = await kUpload(st.q.blob, x.k); } catch (e) { toast('사진은 올리지 못했습니다 — 숫자만 보냅니다', true); } }
-      const ok = await put(x, { kind: 'ship', part: 'gs', body: j, n: kg || 0, ref: ref || undefined });
-      st.busy = false;
-      if (ok) { closeSheet(); ring(); toast(j < v.pend ? `${kQ(j)}절 보냈다고 알렸습니다 — 남은 ${kQ(v.pend - j)}절은 할 일에 남습니다` : `${kQ(j)}절 보냈다고 현일텍스에 알렸습니다`); render(); } else draw();
+      st.busy = true; st.j = j; st.kg = K.value; S.sending[x.k] = true; draw();
+      let ref = '', phFail = false; if (st.q && st.q.blob) { try { ref = await kUpload(st.q.blob, x.k); } catch (e) { phFail = true; } }
+      let ok = false; try { ok = await put(x, { kind: 'ship', part: 'gs', body: j, n: kg || 0, ref: ref || undefined }); } finally { delete S.sending[x.k]; }
+      st.busy = false; const mine = sheetIs(st.tok);
+      if (ok) { if (mine) closeSheet(); ring(); const m0 = j < v.pend ? `${kQ(j)}절 보냈다고 알렸습니다 — 남은 ${kQ(v.pend - j)}절은 할 일에 남습니다` : `${kQ(j)}절 보냈다고 ${CN()}에 알렸습니다`; toast(phFail ? m0 + ' · 송장 사진은 못 올렸습니다 (나중에 [송장 사진]으로 보내 주세요)' : m0, phFail); render(); } else if (mine) draw(); else toast('보내지 못했습니다 — 다시 눌러 주세요', true);
     });
   };
   draw();
 }
 function kPhotoSheet(x) {
-  const st = { q: null, busy: false };
+  const st = { q: null, busy: false, tok: 0 };
   const draw = () => {
-    sheet(`<h3>송장 사진 보내기</h3><div class="sub">${esc(x.item)} ${esc(x.lot || '')} · ${esc(x.date)} · ${esc(x.no)}</div>${kPhotoField(st)}
+    st.tok = sheet(`<h3>송장 사진 보내기</h3><div class="sub">${esc(x.item)} ${esc(x.lot || '')} · ${esc(x.date)} · ${esc(x.no)}</div>${kPhotoField(st)}
       <div class="row2"><button type="button" class="no" data-x>닫기</button><button type="button" class="ok" id="k-send"${!st.q || st.busy ? ' disabled' : ''}>${st.busy ? '보내는 중…' : '보내기'}</button></div>`);
     $('sheet').querySelector('[data-x]').addEventListener('click', () => { closeSheet(); render(); });
     kBindPhoto(st, draw);
-    $('k-send').addEventListener('click', async () => { if (!st.q) return; st.busy = true; draw(); let ref = '';
-      try { ref = await kUpload(st.q.blob, x.k); } catch (e) { st.busy = false; draw(); toast('사진을 올리지 못했습니다 — 팩스로 보내 주세요', true); return; }
-      const ok = await put(x, { kind: 'st', part: 'gs', stage: 'photo', ref }); st.busy = false; if (ok) { closeSheet(); toast('송장 사진을 보냈습니다'); render(); } else draw(); });
+    $('k-send').addEventListener('click', async () => { if (!st.q || st.busy || st.loading) return; st.busy = true; draw(); let ref = '';
+      try { ref = await kUpload(st.q.blob, x.k); } catch (e) { st.busy = false; if (sheetIs(st.tok)) draw(); toast('사진을 올리지 못했습니다 — 팩스로 보내 주세요', true); return; }
+      const ok = await put(x, { kind: 'st', part: 'gs', stage: 'photo', ref }); st.busy = false; const mine = sheetIs(st.tok); if (ok) { if (mine) closeSheet(); toast('송장 사진을 보냈습니다'); render(); } else if (mine) draw(); });   /* hotfix579: 창이 바뀌었으면 건드리지 않음 */
   };
   draw();
 }

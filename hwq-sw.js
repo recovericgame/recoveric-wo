@@ -1,4 +1,4 @@
-/* FABIWOS 현장 QC · 직원 알림 받기 전용 (hotfix569)
+/* FABIWOS 현장 QC · 직원 알림 받기 전용 (hotfix569 · 579: 알림을 누르면 현장 QC 화면으로)
  *   화면을 맡지 않는다(범위 ./hwq/ — 그 아래에는 화면이 없음). 알림 서버가 보낸 현장 알림 · 답장만 받아 휴대폰 · PC 알림창에 띄운다
  *   FABIWOS 화면이 앞에 떠 있으면 알림창 대신 그 화면이 직접 큰 창 · 소리로 알린다 */
 self.addEventListener('install', () => self.skipWaiting());
@@ -19,7 +19,7 @@ self.addEventListener('notificationclick', e => {
   const url = (e.notification.data && e.notification.data.url) || new URL('../index.html?app=qc#qc', self.registration.scope).href;
   e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(cs => {
     const want = /app=qc/.test(url);
-    const c = cs.find(w => isMain(w.url) && (/app=qc/.test(w.url) === want)) || cs.find(w => isMain(w.url));
+    const c = cs.find(w => isMain(w.url) && (/app=qc/.test(w.url) === want));   /* hotfix579: 다른 FABIWOS 화면(작지 쓰는 중 등)을 앞으로만 가져오지 않고, 맞는 화면이 없으면 새로 엶 */
     if (c) return c.focus();
     return self.clients.openWindow(url);
   }));
