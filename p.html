@@ -453,7 +453,7 @@ import { initializeFirestore, getFirestore, doc, getDoc, updateDoc, setDoc, dele
  *   읽는 것: proc_acc/{내 uid} · proc_pub/{내 업체} · proc_log(내 업체 것만)
  *   쓰는 것: proc_log 한 줄 추가(고치기 · 지우기 없음) · 처음 로그인 때 내 기기 등록 한 번
  */
-const PVER = 'p32 (hotfix581)';
+const PVER = 'p35 (hotfix584)';
 /* hotfix574(대표 10/1): 거래 원단회사 고르기 (판매 대비) — 가공소 한 곳이 여러 원단회사와 거래. 앱을 열면 먼저 [거래 원단회사] 화면 — 회사마다 진행 중 · 확인 요청 · 입력 전 건수
  *   계정(proc_acc.companies [{id, name, src}])에 회사 목록 · 없으면 현일텍스 · 고른 회사는 휴대폰이 기억(hwp.co) · 위 [› 회사 이름]을 누르면 다시 고름
  *   지금 서버 = 현일텍스 자료. 다른 원단회사가 FABIWOS 를 쓰면 그 회사 자료 자리(src)를 더함 */
@@ -656,6 +656,11 @@ function subscribe() {
   S.unsub.push(onSnapshot(query(collection(db, 'proc_log'), where('vendor', '==', acc.vendor)), sn => { S.live = true; const a = []; sn.forEach(d => a.push(Object.assign({ id: d.id }, d.data({ serverTimestamps: 'estimate' })))); S.logs = a; S.gotLog = true; render(); scanNews(); }, e => onDenied(e)));
 }
 let hidAt = 0;
+/* hotfix584(대표 10/2): 휴대폰 앱 아이콘 숫자 — 앱을 열면 알림창에 쌓인 이 앱 알림을 지움(아이콘 숫자도 같이 사라짐) · 아이콘 숫자 = 지금 할 일 수 (숫자를 지원하는 휴대폰) */
+function appBadge(n) { try { if ('setAppBadge' in navigator) { if (n > 0) navigator.setAppBadge(n); else navigator.clearAppBadge(); } } catch (_) {} }
+async function clearTray() { try { if (!('serviceWorker' in navigator)) return; const rs = await navigator.serviceWorker.getRegistrations(); for (const r of rs) { if (!/\/p$/.test(String(r.scope).replace(/\/$/, ''))) continue; (await r.getNotifications()).forEach(x => { try { x.close(); } catch (_) {} }); } } catch (_) {} }
+document.addEventListener('visibilitychange', () => { if (!document.hidden) clearTray(); });
+setTimeout(clearTray, 1500);
 document.addEventListener('visibilitychange', () => { if (document.hidden) { hidAt = Date.now(); return; } if (S.acc && Date.now() - hidAt > 20000) subscribe(); });
 window.addEventListener('online', () => { S.live = true; if (S.acc) subscribe(); render(); });
 window.addEventListener('offline', () => { S.live = false; if (S.acc) render(); });
@@ -950,6 +955,7 @@ function render() {
   const items = S.items; const sts = new Map(items.map(it => [it.k, stOf(it)]));
   const isDone = it => sts.get(it.k).shippedAll, isReq = it => !!sts.get(it.k).openReq;
   const nIng = items.filter(it => !isDone(it)).length, nReq = items.filter(isReq).length;
+  appBadge(nReq);   /* hotfix584 */
   const lastV = S.logs.filter(l => l.by === 'vendor' && l.kind !== 'dev_fail').map(tOf);
   $('meta').innerHTML = `<span class="live${navigator.onLine === false ? ' off' : ''}"></span>진행 중 ${nIng}건` + (lastV.length ? ' · 마지막 입력 ' + esc(hhmm(Math.max(...lastV))) : '');
   if (S.gotPub && !S.coShown) setTimeout(() => coHome(false), 0);   /* hotfix574: 앱을 열면 먼저 원단회사 · 건수 */
@@ -1022,7 +1028,7 @@ function lockScroll(on) {
   const b = document.body.style; b.position = ''; b.top = ''; b.left = ''; b.right = ''; b.width = ''; window.scrollTo(0, y);
 }
 function sheet(html) { SH.re = null; $('sheet').innerHTML = `<div class="sh" role="dialog"><div class="grab"></div>${html}</div>`; $('sheet').classList.add('on'); lockScroll(true); }
-function closeSheet() { $('sheet').classList.remove('on'); $('sheet').innerHTML = ''; SH.cb = null; SH.re = null; if (!$('drawer').classList.contains('on')) lockScroll(false); }
+function closeSheet() { $('sheet').classList.remove('on'); $('sheet').innerHTML = ''; $('sheet').dataset.bye = ''; SH.cb = null; SH.re = null; if (!$('drawer').classList.contains('on')) lockScroll(false); }
 /* 필수 칸을 안 골랐을 때 알려 주는 창 */
 function need(msg, focusSel) {
   const w = document.createElement('div'); w.className = 'needpop'; w.innerHTML = `<div><i>!</i><b>${esc(msg)}</b><button type="button">확인</button></div>`;
@@ -1194,15 +1200,30 @@ let guarded = false, leaving = false;
 let gN = 0;
 function pushGuard() { try { history.pushState({ hwp: 1 }, ''); gN++; } catch (_) {} }
 function guardBack() { if (guarded) return; guarded = true; pushGuard(); }
+/* hotfix583(대표 10/2 "나가기를 눌러도 안 나가짐"): 휴대폰 앱은 프로그램이 스스로 닫을 수 없어(브라우저가 막음) 이력만 되돌리고 그대로 있던 것.
+ *   이제: 목록에서 ◁ → 나가기 창(이때 이력은 이미 맨 처음) · [나가기] → 앱 닫기 시도 → 안 닫히면 화면을 덮는 "나갔습니다" (여기서 ◁ 한 번이면 휴대폰이 앱을 닫음)
+ *   · [계속 쓰기] · 바깥 누름 → 다시 지킴 · 같은 창에서 ◁ 를 한 번 더 누르면 바로 닫힘 */
+function hwpBye() {
+  leaving = true; try { closeSheet(); } catch (_) {}
+  const n = gN; gN = 0; if (n > 0) { try { history.go(-n); } catch (_) {} }
+  try { window.close(); } catch (_) {}
+  setTimeout(() => {
+    let el = document.getElementById('hwp-bye'); if (!el) { el = document.createElement('div'); el.id = 'hwp-bye'; document.body.appendChild(el); }
+    el.style.cssText = 'position:fixed;inset:0;z-index:99999;background:linear-gradient(160deg,#0f3b47,#134e5e 55%,#1e3a8a);color:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;text-align:center;padding:24px;font-family:inherit';
+    el.innerHTML = '<div style="font-size:26px;font-weight:900">나갔습니다</div><div style="font-size:16px;opacity:.85;line-height:1.6">넣은 기록은 모두 현일텍스에 저장돼 있습니다.<br>휴대폰 ◁(뒤로)를 누르면 앱이 닫힙니다.</div><button type="button" style="margin-top:18px;border:0;border-radius:14px;padding:14px 26px;font-size:17px;font-weight:800;background:#fff;color:#134e5e">다시 쓰기</button>';
+    el.querySelector('button').onclick = () => { el.remove(); leaving = false; pushGuard(); };
+  }, 250);
+}
 window.addEventListener('popstate', () => {
   if (gN > 0) gN--;
   if (leaving) { if (gN > 0) history.go(-gN); gN = 0; return; }
   if (!S.acc) return;
   if ($('drawer').classList.contains('on')) { closeDrawer(); pushGuard(); return; }
-  if ($('sheet').classList.contains('on')) { closeSheet(); pushGuard(); return; }
-  pushGuard();
+  if ($('sheet').classList.contains('on')) { if ($('sheet').dataset.bye === '1') { hwpBye(); return; } closeSheet(); pushGuard(); return; }
+  /* 이력은 맨 처음 — 여기서 다시 지키지 않음 (나가기를 누르면 휴대폰 ◁ 한 번에 닫히게) */
   sheet(`<h3>FABIWOS 공정 체크를 나가시겠습니까?</h3><div class="sub">넣은 기록은 모두 현일텍스에 저장돼 있습니다.</div><div class="row2"><button type="button" class="no" data-x>계속 쓰기</button><button type="button" class="ok teal" data-leave>나가기</button></div>`);
-  $('sheet').onclick = e => { if (e.target.id === 'sheet' || e.target.closest('[data-x]')) { closeSheet(); return; } if (e.target.closest('[data-leave]')) { leaving = true; closeSheet(); const n = gN; gN = 0; if (n > 0) history.go(-n); setTimeout(() => { try { history.back(); } catch (_) {} }, 250); } };
+  $('sheet').dataset.bye = '1';
+  $('sheet').onclick = e => { if (e.target.id === 'sheet' || e.target.closest('[data-x]')) { $('sheet').dataset.bye = ''; closeSheet(); pushGuard(); return; } if (e.target.closest('[data-leave]')) { $('sheet').dataset.bye = ''; hwpBye(); } };
 });
 $('bar').addEventListener('click', e => { const b = e.target.closest('[data-f]'); if (!b) return; S.filt = b.dataset.f; render(); });
 $('list').addEventListener('click', e => {
