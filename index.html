@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="FABIWOS">
 <meta name="mobile-web-app-capable" content="yes">
-<title>FABIWOS v2.53 hotfix569</title>
+<title>FABIWOS v2.53 hotfix570</title>
 
 <!-- PWA Manifest (인라인 data URL) -->
 <script>
@@ -94,6 +94,20 @@
 .hv-compose { background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 14px 16px; margin: 0 0 14px; display: grid; gap: 10px; }
 .hv-compose label { display: grid; gap: 5px; font-size: 12px; font-weight: 800; color: #475569; } .hv-compose textarea, .hv-compose input { padding: 10px 12px; border: 1px solid #cbd5e1; border-radius: 9px; font: inherit; font-size: 14px; font-weight: 400; }
 .hv-crow { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+/* hotfix570: 현장 QC [생지 재고] */
+#hw-qcm .qm-tabs { display: flex !important; } #hw-qcm .qm-tabs button { flex: 1 1 0; min-width: 0; white-space: nowrap; padding-left: 2px !important; padding-right: 2px !important; font-size: 14px !important; }
+#hw-qcm .qm-tabs em { margin-left: 2px !important; padding: 1px 5px !important; }
+#hw-qcm .qm-list .qm-sv { grid-column: 1 / -1; margin: 0 0 6px; overflow: visible !important; min-height: max-content; } #hw-qcm .qm-svh { border-radius: 13px 13px 0 0; }
+#hw-qcm .qm-sv { margin: 10px 12px 14px; background: #fff; border: 1px solid #e2e8f0; border-radius: 14px; overflow: hidden; }
+#hw-qcm .qm-sv.us { border-color: #93c5fd; box-shadow: 0 0 0 2px #dbeafe; }
+#hw-qcm .qm-svh { display: flex; align-items: center; gap: 8px; padding: 11px 14px; background: #0f2140; color: #fff; }
+#hw-qcm .qm-sv.us .qm-svh { background: #1d4ed8; }
+#hw-qcm .qm-svh b { font-size: 16px; } #hw-qcm .qm-svh i { font-style: normal; font-size: 11px; background: rgba(255,255,255,.2); border-radius: 8px; padding: 1px 7px; }
+#hw-qcm .qm-svh em { margin-left: auto; font-style: normal; font-weight: 800; font-size: 13.5px; }
+#hw-qcm .qm-si { border-top: 1px solid #eef2f7; padding: 8px 14px 6px; }
+#hw-qcm .qm-sih { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; } #hw-qcm .qm-sih b { font-size: 15px; color: #0f172a; } #hw-qcm .qm-sih span { margin-left: auto; font-weight: 800; color: #c0271f; }
+#hw-qcm .qm-sr { display: grid; grid-template-columns: 52px 62px 70px 1fr; gap: 6px; align-items: baseline; padding: 4px 0; font-size: 13px; color: #334155; border-top: 1px dashed #f1f5f9; }
+#hw-qcm .qm-sr .lot { font-weight: 800; color: #92400e; } #hw-qcm .qm-sr .j b { font-size: 15px; color: #c0271f; } #hw-qcm .qm-sr .d { color: #64748b; font-size: 12px; } #hw-qcm .qm-sr em { font-style: normal; color: #c2410c; font-weight: 700; }
 #hw-qcm .qm-arm { all: unset; box-sizing: border-box; display: flex; flex-direction: column; gap: 3px; margin: 10px 12px 0; padding: 12px 14px; border-radius: 12px; background: #fef2f2; border: 1px solid #fecaca; cursor: pointer; }
 #hw-qcm .qm-arm b { color: #b91c1c; font-size: 15px; } #hw-qcm .qm-arm span { color: #7f1d1d; font-size: 12.5px; }
 </style>
@@ -29462,9 +29476,32 @@ function validateBlendSum(blends, label) {
     h += `<script>window.onload=function(){setTimeout(function(){window.print()},600)}<\/script></body></html>`;
     w.document.open(); w.document.write(h); w.document.close();
   }
+  /* hotfix570(대표 10/1): 생지 재고 — 편직 줄(진행 중)마다 품목 · 로트별 재고절 (생지생산 및 재고 표와 같은 셈: 의뢰 + 입고 − 출고 · 취소 줄 빼고)
+   *   vn 을 주면 그 편직공장 것만 (편직팀 앱 [재고]) · 안 주면 전체 (현장 QC 앱 [생지 재고] — 업체별로 묶어 보여 줌) */
+  function gsStockRows(vn) {
+    const out = []; const KL = { regular: '기획', stock: '재고', sample: '샘플', done: '완료' };
+    (state.allWorkOrders || []).forEach(w => {
+      if (!w || w.deleted || w.completed || w.type !== '편직') return;
+      const v = gsNormV(w.recipient); if (vn && v !== vn) return;
+      const items = (w.items && w.items.length) ? w.items : [];
+      const sh = (w.greige_shipments || []).filter(shLive);
+      items.forEach((it, idx) => {
+        const mine = sh.filter(x => (x && x.item_idx != null ? x.item_idx : 0) === idx);
+        const jul = parseFloat(it.jul) || 0, kpj = parseFloat(it.kg_per_jul) || 21;
+        let outJ = 0, outK = 0, inJ = 0, inK = 0, pend = 0;
+        mine.forEach(x => { const j = parseFloat(x.jul) || 0, k = parseFloat(x.kg) || 0; if (x.dir === 'in') { inJ += j; inK += k; } else { outJ += j; outK += k; if (gsPend(x)) pend += j; } });
+        const rem = Math.round((jul + inJ - outJ) * 10) / 10; if (!(rem > 0) && !(pend > 0)) return;
+        const sp = it.item_fid ? itemByFid(it.item_fid) : null;
+        let nm = ''; try { nm = sp ? hwFacTailOff(String(sp.name || ''), w.recipient) : hwFacTailOff(greigeSplit(it.item || '').name || it.item || '', w.recipient); } catch (_) { nm = String(it.item || ''); }
+        const lot = greigeNoClean(it.greige_no) || greigeSplit(it.item || '').no || '';
+        out.push({ k: w.id + '_' + idx, vn: v, wo: w.wo_number || '', date: w.date || '', kind: KL[w.kind || inferKnitKind(w)] || '', item: nm || '-', lot, ord: jul, out: Math.round(outJ * 10) / 10, rem, kg: Math.round((jul * kpj + inK - outK) * 10) / 10, pend: Math.round(pend * 10) / 10 });
+      });
+    });
+    return out.sort((a, b) => a.vn.localeCompare(b.vn, 'ko') || a.item.localeCompare(b.item, 'ko') || String(a.lot).localeCompare(String(b.lot)) || String(b.date).localeCompare(String(a.date)));
+  }
   async function gsPing(g) { const st = gsStateOf(g); return gsTellVendor(g, `${g.wo_number || ''} ${itemShow(g.gs_item, g.gs_item_fid, '')} ${greigeNoClean(g.gs_greige_no) || ''} — 남은 ${st.pend}절 출고하셨으면 앱에서 [출고했어요]를 눌러 주십시오`, 'req'); }   /* hotfix564: 관리 화면 [편직팀 앱]에서도 씀 */
   const gsAll = () => (state.allWorkOrders || []).filter(w => w && w.type === '생지출고' && !w.deleted);
-  window.__hwGs = { ping: gsPing, all: gsAll, normV: gsNormV, openWait: () => hwGsWaitOpen(), itemOf: g => itemShow(g.gs_item, g.gs_item_fid, ''), lotOf: g => (Array.isArray(g.gs_mix) && g.gs_mix.length > 1) ? g.gs_mix.map(m => greigeNoClean(m.no)).join(' + ') : (greigeNoClean(g.gs_greige_no) || '-'), gsStateOf, gsLinesOf, gsWaitList, gsLineConfirm, gsRestCancel, gsPend, pubFor: gsPubFor, applyReports: gsApplyReports, tell: gsTellVendor, askInv: gsAskInvoice, hasApp: gsHasApp, seenAt: gsSeenAt, photoOpen: gsPhotoOpen, photoSheet: gsPhotoSheet };
+  window.__hwGs = { stockRows: gsStockRows, ping: gsPing, all: gsAll, normV: gsNormV, openWait: () => hwGsWaitOpen(), itemOf: g => itemShow(g.gs_item, g.gs_item_fid, ''), lotOf: g => (Array.isArray(g.gs_mix) && g.gs_mix.length > 1) ? g.gs_mix.map(m => greigeNoClean(m.no)).join(' + ') : (greigeNoClean(g.gs_greige_no) || '-'), gsStateOf, gsLinesOf, gsWaitList, gsLineConfirm, gsRestCancel, gsPend, pubFor: gsPubFor, applyReports: gsApplyReports, tell: gsTellVendor, askInv: gsAskInvoice, hasApp: gsHasApp, seenAt: gsSeenAt, photoOpen: gsPhotoOpen, photoSheet: gsPhotoSheet };
   // hotfix562: [출고 확인 대기] 목록 — 생지생산 및 재고 윗줄 단추
   function hwGsWaitOpen() {
     const bg = document.getElementById('dash-modal-bg'); if (!bg) return;
@@ -29948,7 +29985,18 @@ function validateBlendSum(blends, label) {
     } catch (e) { window.__hfPushErr = (e && (e.code || e.message)) || '오류'; console.warn('[현장 알림 · 앱 꺼도 알림]', window.__hfPushErr); return false; }
   }
   window.hwFieldPushReg = hfPushReg;
-  { let tries = 0; const iv = setInterval(() => { tries++; if (tries > 120) { clearInterval(iv); return; } if (typeof state === 'undefined' || !state.user || !state.user.email) return; clearInterval(iv); setTimeout(() => { hfPushReg(false); }, 4000); }, 1000); }   /* 알림을 이미 허락한 기기는 로그인하면 저절로 */
+  /* hotfix570(대표 10/1): 현장 알림은 늘 울림 — [켜기] 단추 없앰. 처음 화면을 한 번 누르면 소리 · 알림 허락 · 앱 꺼도 알림이 저절로 켜짐. 끄려면 [☰] 메뉴 → [현장 알림 끄기] */
+  const hfOff = () => { try { return localStorage.getItem('hwf.off') === '1'; } catch (_) { return false; } };
+  window.hwFieldIsOff = hfOff;
+  window.hwFieldSetOff = async on => {
+    try { localStorage.setItem('hwf.off', on ? '1' : '0'); } catch (_) {}
+    if (on) { try { const last = JSON.parse(localStorage.getItem('hwf.push') || 'null'); if (last && last.id) { const F = window.firebase; await F.deleteDoc(F.doc(F.db, F.C('push_tok'), last.id)); } localStorage.removeItem('hwf.push'); } catch (_) {} window.__hfPushOn = false; }
+    else { hfUnlock(); await hfPushReg(true); }
+  };
+  { let armed = false; const arm = () => { if (armed || hfOff() || !/(?:^|[?&])app=qc(?:&|$)/.test(location.search)) return;   // 현장 QC 앱만 (PC 는 [관리 → 현장 QC 앱 → 이 기기도 받기])
+    if (typeof state === 'undefined' || !state.user || !state.user.email) return; armed = true; hfUnlock(); hfPushReg(true).catch(() => {}); };
+    document.addEventListener('pointerdown', arm, { passive: true }); document.addEventListener('keydown', arm); }
+  { let tries = 0; const iv = setInterval(() => { tries++; if (tries > 120) { clearInterval(iv); return; } if (typeof state === 'undefined' || !state.user || !state.user.email) return; clearInterval(iv); setTimeout(() => { if (!hfOff()) hfPushReg(false); }, 4000); }, 1000); }   /* 알림을 이미 허락한 기기는 로그인하면 저절로 */
   let hfAC = null;
   function hfUnlock() { try { if (!hfAC) { const Cx = window.AudioContext || window.webkitAudioContext; if (Cx) hfAC = new Cx(); } if (hfAC && hfAC.state === 'suspended') hfAC.resume(); } catch (_) {} }
   document.addEventListener('pointerdown', hfUnlock, { passive: true }); document.addEventListener('keydown', hfUnlock);
@@ -29956,8 +30004,9 @@ function validateBlendSum(blends, label) {
     try { if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return; const body = ((m && m.kind === 'field_reply') ? '↩ 답장: ' : '') + String((m && m.note) || '현장 알림') + ((m && m.wo) ? '\n' + m.wo : ''); const opt = { body, tag: 'hwf-' + ((m && m.id) || Date.now()), renotify: true, requireInteraction: true, vibrate: [400, 120, 400, 120, 400], icon: 'fabiwos-qc-192.png', badge: 'fabiwos-qc-192.png' };
       if (navigator.serviceWorker && navigator.serviceWorker.getRegistration) navigator.serviceWorker.getRegistration().then(r => { if (r && r.showNotification) r.showNotification('FABIWOS 현장 알림', opt); else new Notification('FABIWOS 현장 알림', opt); }).catch(() => { try { new Notification('FABIWOS 현장 알림', opt); } catch (_) {} });
       else new Notification('FABIWOS 현장 알림', opt); } catch (_) {} }
-  window.hwFieldRingTest = () => { hfUnlock(); setTimeout(() => hfRing({ note: '시험 알림입니다' }), 60); };
+  window.hwFieldRingTest = () => { hfUnlock(); setTimeout(() => hfRing({ note: '시험 알림입니다', __test: true }), 60); };
   function hfRing(m) {
+    if (hfOff() && !(m && m.__test)) return;   /* hotfix570: [현장 알림 끄기] 한 기기는 안 울림 */
     try { if (m) hfNotify(m); } catch (_) {}   /* 가공소 앱(사인파 3음 · 0.28)과 다르게 — 세모파 '딩동' 두 번 · 0.5 · 진동 세 번 길게 */
     try { hfUnlock(); if (hfAC) { const t0 = hfAC.currentTime + .02; [[1318.5, 0], [987.8, .28], [1318.5, .75], [987.8, 1.03]].forEach(([f, d]) => { const o = hfAC.createOscillator(), g = hfAC.createGain(); o.type = 'triangle'; o.frequency.value = f; g.gain.setValueAtTime(0, t0 + d); g.gain.linearRampToValueAtTime(.5, t0 + d + .02); g.gain.exponentialRampToValueAtTime(.001, t0 + d + .55); o.connect(g); g.connect(hfAC.destination); o.start(t0 + d); o.stop(t0 + d + .6); }); } } catch (_) {}
     try { if (navigator.vibrate) navigator.vibrate([400, 120, 400, 120, 400]); } catch (_) {}
@@ -53669,7 +53718,9 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
       const I0 = hwQcmItems(); const vf = x => !vsel || x.vk === vsel; const I = { rcv: I0.rcv.filter(vf), qc: I0.qc.filter(vf), rep: I0.rep.filter(vf) };   /* hotfix538: 업체 거르기 */
       const VALL = Array.from(new Set([].concat(I0.rcv, I0.qc, I0.rep).map(x => x.vk))).sort((a, b) => a.localeCompare(b, 'ko'));
       const qq = hwGmNorm(q); const hit = x => !qq || [x.c.name, x.item, x.rib, x.wo.wo_number, x.vend].some(t => hwGmNorm(t).includes(qq));
-      const cards = (tab === 'qc' ? I.qc : tab === 'rcv' ? I.rcv : I.rep).filter(hit);
+      const QT = Object.assign({ qc: true, stock: true }, (window.hwProc && window.hwProc.cfg && window.hwProc.cfg.qc_tabs) || {});   /* hotfix570: 탭 구성 — 입고 확인 · 보고 완료는 늘 · QC 검수 · 생지 재고는 [관리]에서 켜고 끔 */
+      if ((tab === 'qc' && !QT.qc) || (tab === 'stock' && !QT.stock)) tab = 'rcv';
+      const cards = tab === 'stock' ? [] : (tab === 'qc' ? I.qc : tab === 'rcv' ? I.rcv : I.rep).filter(hit);
       if (!vsel) cards.sort((a, b) => VALL.indexOf(a.vk) - VALL.indexOf(b.vk));   /* 전체일 때 업체끼리 모음 (업체 안 순서는 그대로) */
       let body = '';
       if (tab === 'qc') body = cards.map(x => `<button type="button" class="qm-card" data-k="${escapeHtml(x.key)}"><span class="qm-no">${x.rno}차</span>${colorHead(x)}<div class="qm-meta">입고 몸판 <b>${num(x.r.received_body) || 0}</b>절 · 리프 <b>${num(x.r.received_rib) || 0}</b>절${x.r.received_at ? ' · ' + escapeHtml(new Date(x.r.received_at).toLocaleDateString('ko-KR', { month: 'numeric', day: 'numeric' })) : ''}${x.r.qc && Object.keys(x.r.qc).length ? ' · <em>임시 저장 있음</em>' : ''}</div><span class="qm-go">검수 ›</span></button>`).join('');
@@ -53677,6 +53728,17 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
         return `<div class="qm-card rc${x.kind === 'more' ? ' lack' : ''}" data-k="${escapeHtml(x.key)}" data-kind="${x.kind}">${colorHead(x)}<div class="qm-meta">${x.kind === 'more' ? `의뢰 몸판 <b>${ob}</b>절 · 리프 <b>${or}</b>절 중 입고 몸판 <b>${Math.max(0, ob - x.lackB)}</b> · 리프 <b>${Math.max(0, or - x.lackR)}</b>` : `의뢰 몸판 <b>${ob}</b>절 · 리프 <b>${or}</b>절`}</div>${x.kind === 'more' ? hwQcmLackRow(x) : ''}
           ${open ? `<div class="qm-rin"><label>몸판 절<input class="qr-b" inputmode="decimal" value="${x.kind === 'more' ? x.lackB : ob}"></label><label>리프 절<input class="qr-r" inputmode="decimal" value="${x.kind === 'more' ? x.lackR : or}"></label><input class="qr-m" placeholder="메모 (선택)"><button type="button" class="qm-b pri qr-ok">이만큼 들어옴 → QC 대기</button><button type="button" class="qm-b qr-x">취소</button></div>`
             : `<div class="qm-rbtn">${x.kind === 'first' ? `<button type="button" class="qm-b pri qr-all qb-ok">완료</button><button type="button" class="qm-b qr-part qb-lack">부족</button>` : `<button type="button" class="qm-b pri qr-part qb-add">+입고</button>`}</div>`}</div>`; }).join('');
+      else if (tab === 'stock') body = (() => {   /* hotfix570: 생지 재고 — 업체(보관 장소)별 → 품목별 → 로트 */
+        let R = []; try { R = window.__hwGs.stockRows(); } catch (_) { R = []; }
+        R = R.filter(r => r.rem > 0 && (!qq || [r.vn, r.item, r.lot, r.wo, r.kind].some(t => hwGmNorm(t).includes(qq))));
+        if (!R.length) return '';
+        const VS = Array.from(new Set(R.map(r => r.vn))).sort((a, b) => (Number(/현일/.test(b)) - Number(/현일/.test(a))) || a.localeCompare(b, 'ko'));
+        const f1 = n => String(Math.round(n * 10) / 10);
+        return VS.map(v => { const RV = R.filter(r => r.vn === v); const tj = RV.reduce((a, r) => a + r.rem, 0), tk = RV.reduce((a, r) => a + r.kg, 0);
+          const IT = Array.from(new Set(RV.map(r => r.item)));
+          return `<div class="qm-sv${/현일/.test(v) ? ' us' : ''}"><div class="qm-svh"><b>${escapeHtml(v || '-')}</b>${/현일/.test(v) ? '<i>우리 회사</i>' : ''}<em>${f1(tj)}절 · ${tk.toFixed(1)}kg</em></div>${IT.map(it => { const RI = RV.filter(r => r.item === it); const ij = RI.reduce((a, r) => a + r.rem, 0);
+            return `<div class="qm-si"><div class="qm-sih"><b>${escapeHtml(it)}</b><span>${f1(ij)}절</span></div>${RI.map(r => `<div class="qm-sr"><span class="lot">${escapeHtml(r.lot || '-')}</span><span class="j"><b>${f1(r.rem)}</b>절</span><span class="kg">${r.kg.toFixed(1)}kg</span><span class="d">${escapeHtml(String(r.date || '').slice(2).replace(/-/g, '.'))}${r.kind ? ' · ' + escapeHtml(r.kind) : ''}${r.pend ? ` · <em>출고 대기 ${f1(r.pend)}</em>` : ''}</span></div>`).join('')}</div>`; }).join('')}</div>`; }).join('');
+      })();
       else body = cards.map(x => `<button type="button" class="qm-card rp ${x.rep}" data-k="${escapeHtml(x.key)}" data-rno="${x.rno}"><span class="qm-no">${x.rno}차</span>${colorHead(x)}<div class="qm-meta">${x.rep === 'hold' ? '<em class="bad">규격 이상 — 대표 확인 대기(불량 체크)</em>' : x.rep === 'wait' ? '<em>검수 완료 — 대표 확인 대기(완료 보고)</em>' : '<em class="ok">대표 확인 완료</em>'}${x.r.qc_done_by || x.r.shrink_hold_by ? ' · ' + escapeHtml(String(x.r.qc_done_by || x.r.shrink_hold_by).split('@')[0]) : ''}</div><span class="qm-go">보기 ›</span></button>`).join('');
       const vcnt = v => { const f = x => x.vk === v || !v; return { r: I0.rcv.filter(f).length, q: I0.qc.filter(f).length, p: I0.rep.filter(f).length }; };
       const dwRow = v => { const n = vcnt(v); const todo = n.r + n.q; return `<button type="button" class="qm-dv${vsel === v ? ' on' : ''}${todo ? '' : ' idle'}" data-v="${escapeHtml(v)}"${v ? ` style="--vc:${vcol(v, VALL)}"` : ''}><i></i><b>${v ? escapeHtml(v) : '전체 업체'}</b><span>입고 ${n.r} · QC ${n.q} · 보고 ${n.p}</span></button>`; };
@@ -53685,11 +53747,11 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
       const __ol = bg.querySelector('.qm-list'); const __st = __ol ? __ol.scrollTop : 0; const __keep = bg.__lastTab === tab && bg.__lastV === vsel;   /* hotfix557: 새로 그려도 보던 자리 그대로 */
       bg.innerHTML = `<div class="qm"><div class="qm-top qm-t2"><button type="button" class="qm-ib qm-menu" data-menu aria-label="업체 고르기"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h10"/></svg></button><div class="qm-brand"><span class="qm-fab">FABIWOS</span><b>현장 QC</b></div>
         <div class="qm-acts">${window.__hwQcInstall ? '<button type="button" class="qm-inst" data-inst>앱 설치</button>' : ''}${(() => { const fu = window.hwFieldUnread ? window.hwFieldUnread() : 0; return `<button type="button" class="qm-ib qm-bell${fu ? ' on' : ''}" data-bell aria-label="현장 알림"><svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg><em>${fu || ''}</em></button>`; })()}<span class="qm-av" title="${escapeHtml(me)}">${escapeHtml((meN.replace(/[^0-9A-Za-z가-힣]/g, '')[0] || '?').toUpperCase())}</span>${QA ? '' : '<button type="button" class="qm-ib qm-x" data-x aria-label="닫기"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>'}</div></div>
-        <button type="button" class="qm-vbar" data-menu${vsel ? ` style="--vc:${vcol(vsel, VALL)}"` : ''}><i></i>염/가공 업체 <b>${vsel ? escapeHtml(vsel) : '전체'}</b><span>바꾸기 ▾</span></button>
-        <div class="qm-tabs"><button type="button" class="${tab === 'rcv' ? 'on' : ''}" data-tab="rcv">입고 확인 <em>${I.rcv.length}</em></button><button type="button" class="${tab === 'qc' ? 'on' : ''}" data-tab="qc">QC 검수 <em class="${I.qc.length ? 'p' : ''}">${I.qc.length}</em></button><button type="button" class="${tab === 'rep' ? 'on' : ''}" data-tab="rep">보고 완료 <em>${I.rep.length}</em></button></div>
-        <div class="qm-find"><input class="qm-q" placeholder="컬러 · 품목 · 의뢰서 번호 찾기" value="${escapeHtml(q)}" lang="ko" autocomplete="off"></div>
-        ${(window.hwFieldArmNeed && window.hwFieldArmNeed()) ? '<button type="button" class="qm-arm" data-arm><b>현장 알림 켜기 (앱을 꺼 둬도 울림)</b><span>한 번 눌러 두면 앱을 닫아도 · 화면이 꺼져도 사무실에서 보낸 알림이 울립니다</span></button>' : ''}
-        <div class="qm-list">${tab === 'rcv' ? '<div class="qm-help">원단이 다 들어오면 [완료], 덜 들어오면 [부족](들어온 만큼 입력), 부족분이 더 들어오면 [+입고] — 그 자리에서 QC 검수로 넘어갑니다.</div>' : tab === 'qc' ? '<div class="qm-help">들어온 원단을 차수마다 검수합니다. 먼저 들어온 것이 위에 있습니다.</div>' : '<div class="qm-help">검수한 것 — 규격 안이면 [완료 보고], 규격 밖이면 [불량 체크]로 대표에게 올라갑니다(최근 3일).</div>'}${body || '<div class="qm-empty">없습니다</div>'}</div></div>`;
+        ${tab === 'stock' ? '' : `<button type="button" class="qm-vbar" data-menu${vsel ? ` style="--vc:${vcol(vsel, VALL)}"` : ''}><i></i>염/가공 업체 <b>${vsel ? escapeHtml(vsel) : '전체'}</b><span>바꾸기 ▾</span></button>`}
+        <div class="qm-tabs"><button type="button" class="${tab === 'rcv' ? 'on' : ''}" data-tab="rcv">입고 확인 <em>${I.rcv.length}</em></button>${QT.qc ? `<button type="button" class="${tab === 'qc' ? 'on' : ''}" data-tab="qc">QC 검수 <em class="${I.qc.length ? 'p' : ''}">${I.qc.length}</em></button>` : ''}<button type="button" class="${tab === 'rep' ? 'on' : ''}" data-tab="rep">보고 완료 <em>${I.rep.length}</em></button>${QT.stock ? `<button type="button" class="${tab === 'stock' ? 'on' : ''}" data-tab="stock">생지 재고</button>` : ''}</div>
+        <div class="qm-find"><input class="qm-q" placeholder="${tab === 'stock' ? '품목 · 로트 · 업체 찾기' : '컬러 · 품목 · 의뢰서 번호 찾기'}" value="${escapeHtml(q)}" lang="ko" autocomplete="off"></div>
+        ${window.hwFieldIsOff && window.hwFieldIsOff() ? '<button type="button" class="qm-arm" data-menu><b>현장 알림이 꺼져 있습니다</b><span>[☰] 메뉴 → [현장 알림 켜기]</span></button>' : ''}
+        <div class="qm-list">${tab === 'stock' ? '<div class="qm-help">우리 회사 · 편직공장에 있는 생지 재고 (보낼 수 있는 절 — 출고 대기는 이미 빠짐). 우리 회사가 맨 위입니다.</div>' : tab === 'rcv' ? '<div class="qm-help">원단이 다 들어오면 [완료], 덜 들어오면 [부족](들어온 만큼 입력), 부족분이 더 들어오면 [+입고] — 그 자리에서 QC 검수로 넘어갑니다.</div>' : tab === 'qc' ? '<div class="qm-help">들어온 원단을 차수마다 검수합니다. 먼저 들어온 것이 위에 있습니다.</div>' : '<div class="qm-help">검수한 것 — 규격 안이면 [완료 보고], 규격 밖이면 [불량 체크]로 대표에게 올라갑니다(최근 3일).</div>'}${body || '<div class="qm-empty">없습니다</div>'}</div></div>`;
       { const nl = bg.querySelector('.qm-list'); if (nl && __keep && __st) nl.scrollTop = __st; bg.__lastTab = tab; bg.__lastV = vsel; }   /* hotfix557 */
       { const xb = bg.querySelector('[data-x]'); if (xb) xb.addEventListener('click', close); }
       { const ar = bg.querySelector('[data-arm]'); if (ar) ar.addEventListener('click', async () => { if (window.hwFieldArm) await window.hwFieldArm(); list(); }); }   /* hotfix552 */
@@ -53700,7 +53762,12 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
       { const byK = {}; [].concat(I.rcv, I.qc, I.rep).forEach(x => { byK[x.key] = x.vk; }); let last = null;
         bg.querySelectorAll('.qm-list .qm-card').forEach(el => { const v = byK[el.dataset.k]; if (!v) return; el.style.setProperty('--vc', vcol(v, VALL)); el.classList.add('vc');
           if (!vsel && v !== last) { const h = document.createElement('button'); h.type = 'button'; h.className = 'qm-vh'; h.dataset.v = v; h.style.setProperty('--vc', vcol(v, VALL)); const n = cards.filter(x => x.vk === v).length; h.innerHTML = `<i></i><b>${escapeHtml(v)}</b><em>${n}</em><span>이 업체만 보기 ›</span>`; el.parentNode.insertBefore(h, el); } last = v; }); }
-      if (drawer) { const d = document.createElement('div'); d.className = 'qm-dw-wrap'; d.innerHTML = `<div class="qm-dw-bg" data-dwx></div><div class="qm-dw" role="dialog" aria-label="업체 고르기"><div class="qm-dh"><b>염/가공 업체</b><button type="button" class="qm-x" data-dwx aria-label="닫기">✕</button></div><div class="qm-dsub">해야 할 일이 있는 업체가 위에 있습니다</div>${dwRow('')}${VORD.map(dwRow).join('')}</div>`; bg.querySelector('.qm').appendChild(d); }
+      if (drawer) { const d = document.createElement('div'); d.className = 'qm-dw-wrap'; d.innerHTML = `<div class="qm-dw-bg" data-dwx></div><div class="qm-dw" role="dialog" aria-label="업체 고르기"><div class="qm-dh"><b>염/가공 업체</b><button type="button" class="qm-x" data-dwx aria-label="닫기">✕</button></div><div class="qm-dsub">해야 할 일이 있는 업체가 위에 있습니다</div>${dwRow('')}${VORD.map(dwRow).join('')}
+        <div class="qm-dh" style="margin-top:14px"><b>현장 알림</b></div><div class="qm-dsub">${window.hwFieldIsOff && window.hwFieldIsOff() ? '꺼져 있습니다 — 사무실에서 보낸 알림이 울리지 않습니다' : '켜져 있습니다 — 앱을 닫아도 · 화면이 꺼져도 울립니다'}${window.__hfPushErr ? '<br><small>(앱 꺼도 알림: ' + escapeHtml(window.__hfPushErr) + ')</small>' : ''}</div>
+        <button type="button" class="qm-dv" data-foff="${window.hwFieldIsOff && window.hwFieldIsOff() ? 'on' : 'off'}"><i></i><b>${window.hwFieldIsOff && window.hwFieldIsOff() ? '현장 알림 켜기' : '현장 알림 끄기'}</b></button>
+        <button type="button" class="qm-dv" data-ftest><i></i><b>소리 · 진동 시험</b></button></div>`; bg.querySelector('.qm').appendChild(d);
+        d.querySelectorAll('[data-foff]').forEach(b => b.addEventListener('click', async () => { if (b.dataset.foff === 'off') { if (!confirm('현장 알림을 끕니다.\n사무실에서 보낸 알림이 이 휴대폰에서 울리지 않습니다.')) return; await window.hwFieldSetOff(true); toast('현장 알림을 껐습니다', 'info'); } else { await window.hwFieldSetOff(false); toast('현장 알림을 켰습니다', 'success'); } drawer = false; list(); }));
+        d.querySelectorAll('[data-ftest]').forEach(b => b.addEventListener('click', () => { if (window.hwFieldRingTest) window.hwFieldRingTest(); })); }
       bg.querySelectorAll('[data-menu]').forEach(b => b.addEventListener('click', () => { drawer = !drawer; list(); }));
       bg.querySelectorAll('[data-dwx]').forEach(b => b.addEventListener('click', () => { drawer = false; list(); }));
       bg.querySelectorAll('[data-v]').forEach(b => b.addEventListener('click', () => { vsel = b.dataset.v; drawer = false; rcvOpen = ''; list(); }));
@@ -56035,7 +56102,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix569';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
+  const VERSION = 'v2.53 hotfix570';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
@@ -56286,10 +56353,11 @@ window.addEventListener('beforeunload', e => {
     for (const vn of Object.keys(out)) {
       let gs = []; try { gs = (window.__hwGs && window.__hwGs.pubFor) ? window.__hwGs.pubFor(vn) : []; } catch (_) { gs = []; }   /* hotfix563: 편직 앱 — 이 공장에 보낸 생지출고 */
       let knit = gs.length > 0; try { knit = knit || ((typeof knitFactoryList === 'function') && knitFactoryList().some(x => norm(x) === vn)) || (state.allWorkOrders || []).some(w => w && !w.deleted && w.type === '편직' && norm(w.recipient) === vn); } catch (_) {}   // 편직처로 등록 · 편직 의뢰서 수신처 · 생지출고 수신처
-      const lists = P.listsOf(); const sig = hash(JSON.stringify([out[vn], lists, gs, knit, P.accs.filter(a => a.vendor === vn).map(a => a.app || '')]));
+      let stock = []; try { const isK = (P.accs.find(a => a.active && a.vendor === vn && (a.app === 'knit' || a.app === 'proc')) || {}).app; if ((isK === 'knit' || (!isK && knit)) && window.__hwGs && window.__hwGs.stockRows) stock = window.__hwGs.stockRows(vn).map(r => ({ k: r.k, wo: r.wo, date: r.date, kind: r.kind, item: r.item, lot: r.lot, ord: r.ord, out: r.out, rem: r.rem, kg: r.kg, pend: r.pend })); } catch (_) { stock = []; }   /* hotfix570: 편직팀 앱 [재고] — 그 공장 것만 */
+      const lists = P.listsOf(); const sig = hash(JSON.stringify([out[vn], lists, gs, knit, stock, P.accs.filter(a => a.vendor === vn).map(a => a.app || '')]));
       if ((P.pubs[vn] && P.pubs[vn].sig === sig) || sent[vn] === sig) continue;
       sent[vn] = sig;
-      try { await f.setDoc(f.doc(f.db, f.C('proc_pub'), vn), { vendor: vn, items: out[vn], lists, n: out[vn].length, gs, gs_n: gs.filter(x => x.pend > 0).length, mode: (P.accs.find(a => a.active && a.vendor === vn && (a.app === 'knit' || a.app === 'proc')) || {}).app || (knit && !out[vn].length ? 'knit' : (knit ? 'both' : 'proc')), sig, at: f.serverTimestamp(), by: email() }); n++; }
+      try { await f.setDoc(f.doc(f.db, f.C('proc_pub'), vn), { vendor: vn, items: out[vn], lists, n: out[vn].length, stock, gs, gs_n: gs.filter(x => x.pend > 0).length, mode: (P.accs.find(a => a.active && a.vendor === vn && (a.app === 'knit' || a.app === 'proc')) || {}).app || (knit && !out[vn].length ? 'knit' : (knit ? 'both' : 'proc')), sig, at: f.serverTimestamp(), by: email() }); n++; }
       catch (e) { sent[vn] = ''; console.warn('[공정 체크 게시]', e && e.message); }
     }
     return n;
@@ -56861,6 +56929,11 @@ window.addEventListener('beforeunload', e => {
           <button type="button" class="hwp-btn" data-hwp-act="openperm">권한 설정 열기</button></div>
         <div><b>설치 방법 (직원 휴대폰)</b><p>① 아래 [설치 안내 카톡 글 복사] → 직원에게 보냄<br>② 직원이 주소를 누르면 크롬으로 열림 → 구글 로그인 → [앱 설치]<br>③ 바탕화면에 남색 [현장 QC] 아이콘</p>
           <button type="button" class="hwp-btn" data-hwp-act="copyqctext">설치 안내 카톡 글 복사</button></div></div>
+        ${(() => { const QT = Object.assign({ qc: true, stock: true }, P.cfg.qc_tabs || {}); const ce = C.e || !!(H().isOwner && H().isOwner());   /* hotfix570: 현장 QC 앱 화면 구성 */
+          const row = (k, t, d, fixed) => `<label class="hwp-qt${fixed ? ' fx' : ''}"><input type="checkbox" ${fixed || QT[k] ? 'checked' : ''} ${fixed || !ce ? 'disabled' : ''} data-qt="${k}"><span><b>${t}</b><small>${d}</small></span>${fixed ? '<em>늘 보임</em>' : ''}</label>`;
+          return `<div class="hwp-qcbox one"><div><b>현장 QC 앱 화면 (아래 탭) 구성</b><p>직원 휴대폰 현장 QC 앱 위쪽 탭입니다. 켜고 끄면 직원 휴대폰에 바로 반영됩니다. 앞으로 휴대폰 화면이 늘면 여기에 더해집니다.</p>
+            <div class="hwp-qtw">${row('rcv', '입고 확인', '가공소에서 들어온 원단 — 완료 · 부족 · +입고', true)}${row('qc', 'QC 검수', '들어온 원단 차수별 검수 (폭 · 중량 · 축률)', false)}${row('rep', '보고 완료', '검수한 것 — 완료 보고 · 불량 체크 (최근 3일)', true)}${row('stock', '생지 재고', '우리 회사 · 편직공장 생지 재고 (업체별 · 품목별 · 찾기)', false)}</div>
+            ${ce ? '<button type="button" class="hwp-btn" data-hwp-act="qctabs">화면 구성 저장</button>' : '<span class="hwp-dim">바꾸기는 수정 권한이 있는 사람만</span>'}</div></div>`; })()}
         <div class="hwp-qcbox one"><div><b>앱을 꺼 둬도 현장 알림 받는 기기</b> <button type="button" class="hwp-btn s" data-hwp-act="qctok">새로 보기</button> <button type="button" class="hwp-btn s" data-hwp-act="qcpush">이 기기도 받기</button><div id="hwp-qctok" class="hwp-dim" style="margin-top:8px">[새로 보기]를 누르면 목록이 나옵니다. 직원 휴대폰은 현장 QC 앱에서 [현장 알림 소리 · 진동 켜기]를 한 번 누르면 여기에 생깁니다.</div></div></div>
         <div class="hwp-hint">세 앱은 서로 다른 주소 · 다른 아이콘입니다 — 현장 QC(index.html?app=qc · 남색) · 염/가공소 공정 체크(p.html · 청록) · 편직팀(k.html · 초록). 한 휴대폰에 셋 다 깔아도 섞이지 않습니다.</div></section>`;
       return h + '</div></div>';
@@ -56979,6 +57052,7 @@ window.addEventListener('beforeunload', e => {
         if (act === 'copyurl') { const ok = await copyText(P.url()); toast(ok ? '주소를 복사했습니다' : '복사가 막혔습니다', ok ? 'success' : 'error'); return; }
         if (act === 'copyurlq') { const ok = await copyText(P.urlQ()); toast(ok ? '현장 QC 주소를 복사했습니다' : '복사가 막혔습니다', ok ? 'success' : 'error'); return; }
         if (act === 'copyqctext') { const t = ['━━━━━━━━━━━━', '■ 현일텍스 현장 QC 앱', '━━━━━━━━━━━━', `▷ 주소 : ${P.urlQ()}`, '▷ 주소를 누르면 크롬으로 열립니다 → 회사 구글 계정으로 로그인', '▷ [앱 설치]를 누르면 바탕화면에 남색 [현장 QC] 아이콘이 생깁니다', '━━━━━━━━━━━━', '현일텍스 주식회사 드림'].join('\n'); const ok = await copyText(t); toast(ok ? '현장 QC 설치 안내 글을 복사했습니다' : '복사가 막혔습니다', ok ? 'success' : 'error'); return; }
+        if (act === 'qctabs') { const v = {}; box.querySelectorAll('[data-qt]').forEach(i => { if (!i.disabled) v[i.dataset.qt] = !!i.checked; }); await f.setDoc(f.doc(f.db, f.C('settings'), 'proc_cfg'), { qc_tabs: v, updated_by: email(), updated_at: f.serverTimestamp() }, { merge: true }); P.cfg.qc_tabs = v; toast('현장 QC 앱 화면 구성을 저장했습니다 — 직원 휴대폰에 바로 반영', 'success'); rerenderNow(); return; }
         if (act === 'qcpush') { const ok = window.hwFieldPushReg ? await window.hwFieldPushReg(true) : false; toast(ok ? '이 기기도 앱을 꺼 둬도 현장 알림을 받습니다' : '알림을 켜지 못했습니다' + (window.__hfPushErr ? ' — ' + window.__hfPushErr : ''), ok ? 'success' : 'error'); return; }
         if (act === 'qctok') { const box = document.getElementById('hwp-qctok'); if (!box) return; box.textContent = '불러오는 중 …';
           try { const F = window.firebase; const fm = await import(G + 'firebase-firestore.js'); const sn = await F.getDocs(F.query(F.collection(F.db, F.C('push_tok')), fm.where('role', '==', 'staff'))); const L = []; sn.forEach(d => L.push(d.data()));
@@ -57070,7 +57144,7 @@ window.addEventListener('beforeunload', e => {
     try { if (P.can().v) U.push(f.onSnapshot(f.collection(f.db, f.C('proc_secret')), snap => { const o = {}; snap.forEach(d => { o[d.id] = d.data(); }); P.secrets = o; rerender(); }, () => {})); } catch (_) {}   /* hotfix499: 대표만 */
     try { U.push(f.onSnapshot(f.doc(f.db, f.C('settings'), 'proc_cfg'), snap => { const d = snap && snap.exists && snap.exists() ? snap.data() : null;   /* hotfix502: 단계 · 표준 일수 */
       if (d && Array.isArray(d.stages)) P.cfg.stages = STAGE_DEF.map(x => Object.assign({}, x, d.stages.find(y => y && y.c === x.c) || {}));
-      if (d && d.cal) P.cfg.cal = d.cal; if (d && d.lists) P.cfg.lists = d.lists; P.cfg.saved = !!(d && d.updated_at); rerender(); }, () => {})); } catch (_) {}
+      if (d && d.cal) P.cfg.cal = d.cal; if (d && d.lists) P.cfg.lists = d.lists; if (d && d.qc_tabs) P.cfg.qc_tabs = d.qc_tabs;   /* hotfix570: 현장 QC 앱 탭 구성 */ P.cfg.saved = !!(d && d.updated_at); rerender(); }, () => {})); } catch (_) {}
     try { U.push(f.onSnapshot(f.collection(f.db, f.C('proc_pub')), snap => { const o = {}; snap.forEach(d => { o[d.id] = d.data(); }); P.pubs = o; }, () => {})); } catch (_) {}
     try {
       let q = f.collection(f.db, f.C('proc_log'));
@@ -57141,7 +57215,7 @@ window.addEventListener('beforeunload', e => {
 .hwp-apptabs em{font-style:normal;background:#f1f5f9;border-radius:10px;padding:2px 9px;font-weight:800;font-size:13px}
 .hwp-apptabs .p.on{border-color:#1e3a8a;background:#eef2ff;box-shadow:0 4px 14px -6px rgba(30,58,138,.5)}.hwp-apptabs .k.on{border-color:#059669;background:#ecfdf5;box-shadow:0 4px 14px -6px rgba(5,150,105,.55)}
 .hwp-top.qc{background:linear-gradient(135deg,#0f2140,#334155)!important}.hwp-apptabs .q .ic{background:#0f2140}.hwp-apptabs .q.on{border-color:#0f2140;background:#f1f5f9;box-shadow:0 4px 14px -6px rgba(15,33,64,.5)}
-.hwp-qcbox.one{grid-template-columns:1fr}.hwp-qcbox{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:6px 0 10px}.hwp-qcbox>div{background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px}.hwp-qcbox p{margin:6px 0 10px;font-size:13px;line-height:1.7;color:#334155}
+.hwp-qcbox.one{grid-template-columns:1fr}.hwp-qtw{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin:8px 0 12px}.hwp-qt{display:flex;align-items:center;gap:10px;background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:10px 12px;cursor:pointer}.hwp-qt input{width:18px;height:18px}.hwp-qt span{flex:1;display:flex;flex-direction:column}.hwp-qt small{color:#64748b;font-size:11.5px}.hwp-qt em{font-style:normal;font-size:11px;background:#f1f5f9;border-radius:8px;padding:1px 7px;color:#475569}.hwp-qt.fx{opacity:.8}.hwp-qcbox{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:6px 0 10px}.hwp-qcbox>div{background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px}.hwp-qcbox p{margin:6px 0 10px;font-size:13px;line-height:1.7;color:#334155}
 .hwp-top.knit{background:linear-gradient(135deg,#064e3b,#059669)!important}
 .hwp-btn.green{background:#059669!important;border-color:#047857!important;color:#fff!important}
 .hwp-admin.knit .hwp-card{border-top:3px solid #10b981}.hwp-admin.knit .hwp-vtabs2 .on{background:#059669!important;border-color:#059669!important;color:#fff!important}
