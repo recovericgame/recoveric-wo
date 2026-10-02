@@ -11539,6 +11539,7 @@ function getFormData() {
       items,
       yarn_in: (typeof kYarnInData === 'function') ? kYarnInData() : [],
       yarn_in_show: !!(document.getElementById('k-yarnin-show') || {}).checked,   /* hotfix494 */
+      ...((typeof state !== 'undefined' && state.__knitFromYarn && state.__knitFromYarn.id) ? { from_yarn: { id: state.__knitFromYarn.id, no: state.__knitFromYarn.no || '' } } : {}),   /* hotfix591 */
       cautions: getKnitCautionData(),
       notes: document.getElementById('k_notes').value,
       stamps
@@ -12295,6 +12296,29 @@ function attachVendorVids(d) {
   }
   return d;
 }
+/* hotfix591(대표 10/2): 같은 의뢰서가 두 번 저장되는 것 막기 — 원사 · 편직 새 저장 때 내용(품목 · 출고처/수신처 · 날짜 · 원사/품목 줄 수량)이 같은 의뢰서가 이미 있으면 묻는다 */
+function woDupSig(d) {
+  if (!d) return '';
+  const n = v => String(v == null ? '' : v).trim().toLowerCase().replace(/\s+/g, '');
+  if (d.type === '원사') {
+    const ys = (Array.isArray(d.yarns) ? d.yarns : []).filter(y => y && (String(y.type || '').trim() || parseFloat(y.qty) > 0)).map(y => [n(y.type), n(y.color), parseFloat(y.qty) || 0, n(y.unit), parseFloat(y.kg_per_box) || 0].join('|')).sort();
+    if (!ys.length) return '';
+    return ['원사', n(d.purpose), n(d.dest), n(d.date), ys.join('#')].join('§');
+  }
+  if (d.type === '편직') {
+    const its = (Array.isArray(d.items) ? d.items : []).filter(i => i && (String(i.item || '').trim() || parseFloat(i.jul) > 0)).map(i => [n(i.item), n(i.color), n(i.greige_no), parseFloat(i.jul) || 0, parseFloat(i.kg_per_jul) || 0].join('|')).sort();
+    if (!its.length) return '';
+    return ['편직', n(d.recipient), n(d.kind || 'regular'), n(d.date), its.join('#')].join('§');
+  }
+  return '';
+}
+function woDupFind(d, selfId) {
+  const sig = woDupSig(d); if (!sig) return null;
+  const list = (typeof state !== 'undefined' && Array.isArray(state.allWorkOrders)) ? state.allWorkOrders : [];
+  return list.filter(w => w && !w.deleted && w.id !== selfId && w.type === d.type && woDupSig(w) === sig)
+    .sort((a, b) => String(b.wo_number || '').localeCompare(String(a.wo_number || '')))[0] || null;
+}
+if (typeof window !== 'undefined') window.__woDup = { sig: woDupSig, find: woDupFind };
 function buildEditPayload(d, existing) {
   const payload = { ...d };
   // 1. 의뢰서 레벨 보호 필드 채워넣기 (폼이 안 다루는 필드)
@@ -12402,6 +12426,7 @@ function setFormData(d, opts={}) {
   if (d.type === '원사' && !yarnSeeOk()) { try { toast('원사 의뢰서는 [원사 보기] 권한이 있는 사람만 열 수 있습니다', 'error'); } catch (_) {} return; }   // hotfix480
   switchType(d.type, true);
   const isClone = opts.clone === true;
+  state.__knitFromYarn = (d.type === '편직' && !isClone && d.from_yarn && d.from_yarn.id) ? d.from_yarn : null;   /* hotfix591 */
   const isEdit = opts.edit === true;
   // v2.30/v2.32: 복사·수정 입력 중 뱃지 표시/숨김 (둘은 상호배타적)
   setCopyModeBadge(isClone);
@@ -12590,6 +12615,7 @@ function resetForm() {
   state.currentWorkOrderId = null;
   state.currentWoNumber = null;
   state.isDirty = false;
+  state.__knitFromYarn = null;   /* hotfix591 */
   try { paintWoDraftBar(); } catch (_) {}   // hotfix407: 담아 둔 의뢰서 띠
   // v2.30/v2.32: 복사·수정 모드 뱃지 모두 숨김
   setCopyModeBadge(false);
@@ -13698,14 +13724,16 @@ function yarnToKnit() {
   const purpose = String(d.purpose || '').trim();
   const dest = String(d.dest || '').trim();
   if (!purpose) { toast('품목(용도)을 먼저 골라 주십시오', 'error'); return; }
+  const fromYarn = { id: state.currentWorkOrderId, no: state.currentWoNumber || '' };   /* hotfix591: switchType 가 폼을 비우기 전에 원사 의뢰서를 기억 */
   state.knitYarnIn = (d.yarns || []).map(y => {
     const vd = String(y.vendor || '').trim();
     return { name: yarnNameClean(String(y.type || '') + (vd ? ' (' + vd + ')' : '')), color: String(y.color || ''), qty: y.qty || 0, unit: y.unit || '고리', kg_per_box: y.kg_per_box || 0, total_kg: y.total_kg || 0 };
   });
   switchType('편직');
+  state.__knitFromYarn = fromYarn;   /* hotfix591: 편직 의뢰서에 원사 의뢰서 번호를 남긴다 (원사 의뢰서 창에서 [편직의뢰서 보기]) */
   setTimeout(() => {
     try {
-      state._kyiFor = state.currentWorkOrderId || '';
+      state._kyiFor = fromYarn.id || '';
       const rec = document.getElementById('k_recipient'); if (rec) rec.value = dest;
       try { refreshVendorSelects(); } catch (_) {}
       const sel = document.querySelector('.vendor-select[data-target="k_recipient"]'); if (sel) sel.value = dest;
@@ -16121,7 +16149,9 @@ window.addEventListener('firebase-ready', () => {
         const d = snap.data();
         const items = (d.items || []).filter(it => it && it.name);
         state.fabricSpecs = items.length ? items : SEED_FABRIC_SPECS.slice();
-        state.fabricFidLast = Math.max(Number(state.fabricFidLast) || 0, parseInt(d.fid_last, 10) || 0);   /* hotfix448: 품목 코드 마지막 번호(없던 옛 문서는 0 → 지금 있는 가장 큰 번호부터) */
+        state.fabricFidLast = Math.max(Number(state.fabricFidLast) || 0, parseInt(d.fid_last, 10) || 0);
+        state.fabricQcAutoOn = d.qc_auto_on === true;   /* hotfix590 */
+        try { clearTimeout(window.__hwQcSpT); window.__hwQcSpT = setTimeout(() => { try { window.hwQcSpecSync && window.hwQcSpecSync(); } catch (_) {} }, 3000); } catch (_) {}   /* hotfix448: 품목 코드 마지막 번호(없던 옛 문서는 0 → 지금 있는 가장 큰 번호부터) */
         state.fabricGubuns = Array.isArray(d.gubuns) ? d.gubuns.filter(Boolean) : FIXED_GUBUNS.slice();
         FIXED_GUBUNS.forEach(g => { if (!state.fabricGubuns.includes(g)) state.fabricGubuns.push(g); });   // hotfix399f: 샘플이 없던 옛 문서
       } else {
@@ -17358,6 +17388,7 @@ window.addEventListener('firebase-ready', () => {
       ...(it.std_by_vendor && typeof it.std_by_vendor === 'object' && Object.keys(it.std_by_vendor).length ? { std_by_vendor: it.std_by_vendor } : {}),   // hotfix406
       ...(it.std_from && typeof it.std_from === 'object' && it.std_from.wo ? { std_from: { wo: String(it.std_from.wo), at: String(it.std_from.at || '') } } : {}),   // hotfix518: 어느 작업지시서에서 왔는지
       ...(String(it.dye_vendor || '').trim() ? { dye_vendor: String(it.dye_vendor).trim() } : {}), ...(String(it.fin_vendor || '').trim() ? { fin_vendor: String(it.fin_vendor).trim() } : {}), ...(String(it.post_vendor || '').trim() ? { post_vendor: String(it.post_vendor).trim() } : {}),   // hotfix422i: 염색소 · 가공소 · 후가공소
+      ...(it.qc_lock && typeof it.qc_lock === 'object' ? { qc_lock: it.qc_lock } : {}), ...(it.qc_auto && typeof it.qc_auto === 'object' ? { qc_auto: it.qc_auto } : {}),   /* hotfix590: QC → 폭 · 중량 (기준 설정 · 마지막 반영) */
       ...(it.updated_at ? { updated_at: it.updated_at } : {})
     })).filter(it => it.name);
     // hotfix264: 코드가 없는 품목에만 새 코드를 붙인다 (이미 있는 코드는 절대 안 바뀜)
@@ -17378,6 +17409,7 @@ window.addEventListener('firebase-ready', () => {
       items: cleaned,
       gubuns: gClean,
       fid_last: fidLast,
+      ...(state.fabricQcAutoOn ? { qc_auto_on: true } : {}),   /* hotfix590 */
       updated_at: serverTimestamp(),
       updated_by: state.user?.email || 'unknown'
     });
@@ -17389,6 +17421,168 @@ window.addEventListener('firebase-ready', () => {
       x => String(x.fid || '').trim() || ('n:' + String(x.name || '').trim().toLowerCase())));
     return true;
   }
+  /* ===== hotfix590(대표 10/2): QC 실측 → 품목 디테일 폭 · 중량 =====
+   *  · 염색가공 의뢰서 QC(몸판 · 리프)에서 품목마다 마지막 검수 값을 찾는다 — 정상(done) · 그대로 사용(accept) 차수만 (규격 이상 · 불량 · 재염 · 땡처리는 대표 확인 뒤에)
+   *  · 폭: 잰 값 하나(74) → "72/74" (−2 / 잰 값) · 튜브로 접어 잰 리프 30 → "29/30" · 두 숫자(72/74)로 쟀으면 그대로 · 더블(튜브로 접어 잼)이면 품목 [튜브] 켬
+   *  · 중량: 스퀘어 g/㎡ 를 적었으면 그 값 · 없으면 야드 g/y ÷ (큰 폭 × 0.0254 × 0.9144, 튜브 ×2) 로 스퀘어 계산 → 품목은 스퀘어 방식 · 제작 g/y = 스퀘어 × 폭 (10g 단위)
+   *  · 품목에 [기준 설정](qc_lock)이 켜져 있으면 그 뒤 QC 는 반영하지 않는다
+   *  · 처음 한 번은 [QC → 폭 · 중량] 창에서 미리 보고 백업 받고 반영 → 그 뒤부터 최고관리자 화면에서 새 QC 가 들어오면 저절로 (qc_auto_on) */
+  function hwQcTs(v) { try { if (!v) return 0; if (typeof v === 'number') return v; if (typeof v.toMillis === 'function') return v.toMillis(); if (v.seconds != null) return v.seconds * 1000; const t = Date.parse(String(v)); return isFinite(t) ? t : 0; } catch (_) { return 0; } }
+  function hwQcWidthText(a, b, tube) {   // 개폭 74 → 72/74 · 62 → 60/62 · 튜브(더블)로 접어 잰 30 → 29/30 (리프 기준 모양)
+    if (!(a > 0)) return '';
+    if (b > 0 && Math.abs(b - a) > 0.001) return qcWFmt(Math.min(a, b), Math.max(a, b));
+    return qcWN(a - (tube ? 1 : 2)) + '/' + qcWN(a);
+  }
+  function hwQcSpecOfPart(part, nameFid) {
+    const L = getFabricSpecs();
+    if (nameFid.fid) { const s = L.find(x => String(x.fid || '').trim() === nameFid.fid); if (s) return s; }
+    const nm = String(nameFid.name || '').trim(); if (!nm) return null;
+    try { const s = window.__hwFindSpec ? window.__hwFindSpec(nm) : null; if (s) return s; } catch (_) {}
+    return findFabricSpec(nm);
+  }
+  function hwQcRecOf(q, part, meta) {
+    if (!q || typeof q !== 'object') return null;
+    const wp = qcWidthPair(q); const gy = parseFloat(q.weight_g_per_y), sq = parseFloat(q.weight_g_per_sqm);
+    if (wp.a == null && !(gy > 0) && !(sq > 0)) return null;
+    const tube = !!q.width_double; const wText = hwQcWidthText(wp.a, wp.b, tube);
+    const wMax = wp.a == null ? null : Math.max(wp.a, wp.b || wp.a);
+    let gsm = null, gsmSrc = '';
+    if (sq > 0) { gsm = Math.round(sq * 10) / 10; gsmSrc = 'qc'; }
+    else if (gy > 0 && wMax > 0) { gsm = gyToGsm(gy, wMax, tube); gsmSrc = 'calc'; }
+    return Object.assign({ part, raw: wp.a == null ? '' : qcWFmt(wp.a, wp.b), tube, width: wText, gy: gy > 0 ? gy : null, sqm: sq > 0 ? sq : null, gsm, gsmSrc }, meta);
+  }
+  function hwQcLatest() {
+    const out = {};
+    (state.allWorkOrders || []).forEach(wo => {
+      if (!wo || wo.deleted || wo.type !== '염색가공') return;
+      const b = wo.body || {}, rb = wo.rib || {};
+      const bodyNF = { name: wo.rib_only ? '' : b.item, fid: wo.rib_only ? '' : String(b.item_fid || '').trim() };
+      const ribNF = { name: rb.item, fid: String(rb.item_fid || '').trim() };
+      (wo.colors || []).forEach((c, ci) => {
+        if (!c) return;
+        const recs = (Array.isArray(c.receipts) && c.receipts.length) ? c.receipts : [Object.assign({ receipt_no: 0 }, c)];
+        recs.forEach(r => {
+          if (!r || !r.qc || r.shrink_hold) return;
+          if (r.qc_status !== 'done' && r.qc_status !== 'accept') return;
+          const at = hwQcTs(r.qc_done_at) || hwQcTs(r.qc_at) || hwQcTs(r.ceo_confirm_at) || hwQcTs(r.received_at) || hwQcTs(wo.updated_at);
+          const meta = { at, woId: wo.id, wo: wo.wo_number || '', color: String(c.name || c.color || ''), rno: r.receipt_no || 0, by: r.qc_done_by || '' };
+          const put = (part, nf, q) => { const sp = hwQcSpecOfPart(part, nf); if (!sp || !sp.fid) return; const rec = hwQcRecOf(q, part, meta); if (!rec) return;
+            rec.key = wo.id + ':' + ci + ':' + (r.receipt_no || 0) + ':' + part; rec.fid = sp.fid;
+            const cur = out[sp.fid]; if (!cur || rec.at > cur.at || (rec.at === cur.at && rec.key > cur.key)) out[sp.fid] = rec; };
+          if (bodyNF.name || bodyNF.fid) put('body', bodyNF, r.qc);
+          if ((ribNF.name || ribNF.fid) && r.qc.rib) put('rib', ribNF, r.qc.rib);
+        });
+      });
+    });
+    return out;
+  }
+  // 품목 하나에 QC 값을 넣은 새 모양 (바뀐 것이 없으면 null)
+  function hwQcApplyTo(sp, rec) {
+    const n = Object.assign({}, sp);
+    if (rec.width) { n.width = rec.width; n.tube = !!rec.tube; }
+    if (rec.gsm > 0) {
+      n.gsm = rec.gsm; n.w_mode = 'gsm';
+      const g = gsmToGy(rec.gsm, specWidthInch({ width: n.width }), n.tube); const g10 = round10(g); if (g10 > 0) n.make_gy = g10;
+    }
+    n.qc_auto = { key: rec.key, at: rec.at, wo: rec.wo, color: rec.color, rno: rec.rno, part: rec.part, raw: rec.raw, tube: !!rec.tube, gy: rec.gy, sqm: rec.sqm, gsm: rec.gsm, src: rec.gsmSrc,
+      prev: { width: String(sp.width || ''), tube: !!sp.tube, gsm: specGsm(sp), make_gy: sp.make_gy == null ? null : sp.make_gy, w_mode: sp.w_mode || '' } };
+    return n;
+  }
+  // 크게 다름 — 폭 3인치 이상 · 스퀘어 10% 이상 (오타 · 다른 원단일 수 있음) → 자동으로 안 바꾸고 창에서 대표가 골라야 바뀜
+  function hwQcBig(sp, n) { const a = specWidthInch(sp), b = specWidthInch(n); if (a > 0 && b > 0 && Math.abs(a - b) >= 3) return true; const g0 = specGsm(sp), g1 = specGsm(n); return !!(g0 > 0 && g1 > 0 && Math.abs(g1 - g0) / g0 >= 0.1); }
+  function hwQcSame(sp, n) { return String(sp.width || '') === String(n.width || '') && !!sp.tube === !!n.tube && specGsm(sp) === specGsm(n) && String(sp.make_gy == null ? '' : sp.make_gy) === String(n.make_gy == null ? '' : n.make_gy); }
+  let hwQcSyncBusy = false;
+  async function hwQcSpecSync() {
+    if (hwQcSyncBusy || !state.fabricQcAutoOn || !isOwnerUser() || !canEditView('fabricSpecs') || !state.__woLoaded) return 0;
+    const last = hwQcLatest(); const list = getFabricSpecs().map(x => ({ ...x })); const done = [];
+    list.forEach((sp, i) => {
+      if (!sp || !sp.fid || sp.trashed || sp.qc_lock) return; const rec = last[sp.fid]; if (!rec) return;
+      const prev = sp.qc_auto || {}; if (prev.key === rec.key || (prev.at && rec.at < prev.at)) return;
+      const n = hwQcApplyTo(sp, rec); if (hwQcBig(sp, n)) return;   // 크게 다르면 창에서 확인 뒤에만
+      list[i] = n; done.push(sp.name + (hwQcSame(sp, n) ? '' : ' ' + (n.width || '-') + '″ ' + (n.gsm || '-') + 'g/㎡'));
+    });
+    if (!done.length) return 0;
+    hwQcSyncBusy = true;
+    try { const ok = await saveFabricSpecs(list); if (ok) toast('QC 실측으로 품목 디테일 폭 · 중량을 맞췄습니다 — ' + done.slice(0, 3).join(' · ') + (done.length > 3 ? ' 외 ' + (done.length - 3) : ''), 'success'); return ok ? done.length : 0; }
+    catch (e) { console.warn('[QC → 품목]', e); return 0; }
+    finally { hwQcSyncBusy = false; }
+  }
+  async function hwQcLockSet(fid, on) {
+    const list = getFabricSpecs().map(x => ({ ...x })); const i = list.findIndex(x => String(x.fid || '') === String(fid)); if (i < 0) return false;
+    if (on) list[i].qc_lock = { at: new Date().toISOString(), by: state.user?.email || '', width: String(list[i].width || ''), gsm: specGsm(list[i]) }; else delete list[i].qc_lock;
+    const ok = await saveFabricSpecs(list); if (ok) toast(on ? '[' + list[i].name + '] 기준으로 정했습니다 — 이제 QC 값이 들어와도 폭 · 중량이 바뀌지 않습니다' : '[' + list[i].name + '] 기준 설정을 풀었습니다 — 다음 QC 부터 다시 맞춥니다', 'success');
+    return ok;
+  }
+  function hwQcDateText(t) { if (!t) return '-'; const d = new Date(t); return (d.getMonth() + 1) + '/' + d.getDate(); }
+  function hwQcSpecOpen() {
+    if (!isOwnerUser()) { toast('최고관리자만 쓸 수 있습니다', 'error'); return; }
+    document.getElementById('hw-qcsp')?.remove();
+    const bg = document.createElement('div'); bg.id = 'hw-qcsp'; bg.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:10050;display:flex;align-items:center;justify-content:center;padding:16px;';
+    const pick = {}; let flt = 'chg';
+    const rows = () => {
+      const last = hwQcLatest();
+      return getFabricSpecs().filter(s => s && s.fid && !s.trashed && last[s.fid]).map(s => { const rec = last[s.fid]; const n = hwQcApplyTo(s, rec);
+        const same = hwQcSame(s, n); const seen = !!(s.qc_auto && s.qc_auto.key === rec.key);
+        return { s, rec, n, same, seen, big: !same && hwQcBig(s, n), lock: !!s.qc_lock, st: s.qc_lock ? 'lock' : (same ? 'same' : 'chg') }; })
+        .sort((a, b) => String(a.s.name).localeCompare(String(b.s.name), 'ko', { numeric: true }));
+    };
+    const paint = () => {
+      const R = rows(); R.forEach(r => { if (pick[r.s.fid] == null) pick[r.s.fid] = r.st === 'chg' && !r.big; });   // 크게 다른 품목은 처음에 안 고름
+      const cnt = k => R.filter(r => r.st === k).length; const V = flt === 'all' ? R : R.filter(r => r.st === flt);
+      const th = 'padding:6px 8px;border-bottom:2px solid #cbd5e1;background:#f1f5f9;font-size:12px;position:sticky;top:0;z-index:1;white-space:nowrap;';
+      const td = 'padding:5px 8px;border-bottom:1px solid #e2e8f0;font-size:12px;vertical-align:top;';
+      const wtxt = s => (s.width ? escapeHtml(s.width) + '″' + (s.tube ? '×2' : '') : '<span style="color:#cbd5e1;">-</span>');
+      const gtxt = s => (specGsm(s) != null ? specGsm(s) + 'g/㎡' : '<span style="color:#cbd5e1;">-</span>') + (s.make_gy ? '<div style="font-size:10.5px;color:#94a3b8;">제작 ' + s.make_gy + 'g/y</div>' : '');
+      const on = state.fabricQcAutoOn;
+      const tab = (k, t, n) => `<button type="button" class="qcsp-f" data-f="${k}" style="padding:4px 12px;border-radius:14px;border:1px solid ${flt === k ? '#1e3a8a' : '#cbd5e1'};background:${flt === k ? '#1e3a8a' : '#fff'};color:${flt === k ? '#fff' : '#334155'};font-size:12px;font-weight:700;cursor:pointer;">${t} ${n}</button>`;
+      bg.innerHTML = `<div style="background:#fff;border-radius:12px;width:min(1180px,100%);max-height:92vh;display:flex;flex-direction:column;box-shadow:0 20px 50px rgba(0,0,0,.3);">
+        <div style="padding:14px 18px;border-bottom:1px solid #e2e8f0;display:flex;align-items:center;gap:10px;"><b style="font-size:16px;">QC 실측 → 품목 디테일 폭 · 중량</b>
+          <span style="padding:2px 10px;border-radius:10px;font-size:11.5px;font-weight:800;${on ? 'background:#dcfce7;color:#166534;' : 'background:#f1f5f9;color:#64748b;'}">자동 반영 ${on ? '켜짐' : '꺼짐'}</span><span style="flex:1;"></span><button type="button" class="dash-action-btn qcsp-x" style="padding:4px 12px;">닫기</button></div>
+        <div style="padding:10px 18px;font-size:12px;color:#475569;line-height:1.7;background:#f8fafc;border-bottom:1px solid #e2e8f0;">
+          <b style="color:#c2410c;">주황 줄(차이 큼: 폭 3인치 · 스퀘어 10% 이상)</b>은 처음에 고르지 않았고 자동으로도 바꾸지 않습니다 — 확인하고 직접 고르십시오.<br>
+          염색가공 의뢰서 QC(정상 · 그대로 사용 차수)의 <b>마지막</b> 값으로 품목 디테일을 맞춥니다. 폭은 잰 값 74 → <b>72/74</b> (두 숫자로 쟀으면 그대로 · 더블이면 튜브), 중량은 <b>스퀘어 g/㎡</b>(적은 값 · 없으면 야드 g/y 로 계산) · 제작 g/y 는 스퀘어 × 폭으로 다시 셈.<br>
+          <b style="color:#1e3a8a;">기준 설정</b>한 품목은 그 뒤 QC 가 들어와도 바뀌지 않습니다. [백업 받고 반영]을 누르면 지금 품목 자료를 파일로 받은 뒤 고른 품목을 바꾸고, <b>그 뒤부터는 새 QC 가 들어오면 저절로</b> 맞춥니다.</div>
+        <div style="padding:8px 18px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;">${tab('chg', '바뀜', cnt('chg'))}${tab('same', '같음', cnt('same'))}${tab('lock', '기준 설정', cnt('lock'))}${tab('all', '전체', R.length)}
+          <span style="flex:1;"></span>${flt === 'chg' ? `<label style="font-size:12px;cursor:pointer;"><input type="checkbox" class="qcsp-all" ${V.length && V.every(r => pick[r.s.fid]) ? 'checked' : ''}> 모두 고르기</label>` : ''}</div>
+        <div style="overflow:auto;flex:1;padding:0 18px;"><table style="width:100%;border-collapse:collapse;">
+          <thead><tr><th style="${th}">반영</th><th style="${th}text-align:left;">품목</th><th style="${th}">지금 폭</th><th style="${th}">지금 중량</th><th style="${th}text-align:left;">마지막 QC</th><th style="${th}">QC 실측</th><th style="${th}">바뀔 폭</th><th style="${th}">바뀔 중량</th><th style="${th}">기준</th></tr></thead><tbody>
+          ${V.map(r => { const q = r.rec; const chg = r.st === 'chg';
+            return `<tr style="${r.lock ? 'background:#eff6ff;' : (r.big && chg ? 'background:#fff7ed;' : '')}"><td style="${td}text-align:center;">${chg ? `<input type="checkbox" class="qcsp-p" data-f="${escapeHtml(r.s.fid)}" ${pick[r.s.fid] ? 'checked' : ''}>` : '<span style="color:#cbd5e1;">-</span>'}</td>
+              <td style="${td}"><b>${escapeHtml(r.s.name)}</b> <span style="color:#94a3b8;font-size:11px;">${escapeHtml(r.s.fid)} · ${escapeHtml(r.s.gubun || '')}</span>${r.big && chg ? '<div style="font-size:10.5px;color:#c2410c;font-weight:800;">차이 큼 — QC 값을 확인하고 고르십시오 (자동 반영 안 함)</div>' : ''}</td>
+              <td style="${td}text-align:center;">${wtxt(r.s)}</td><td style="${td}text-align:right;">${gtxt(r.s)}</td>
+              <td style="${td}"><span style="font-size:11.5px;">${escapeHtml(q.wo)} · ${escapeHtml(q.color)}${q.rno ? ' · ' + q.rno + '차' : ''} · ${q.part === 'rib' ? '리프' : '몸판'} · ${hwQcDateText(q.at)}</span></td>
+              <td style="${td}text-align:center;white-space:nowrap;">${q.raw ? escapeHtml(q.raw) + '″' + (q.tube ? '×2' : '') : '-'}<div style="font-size:10.5px;color:#64748b;">${q.gy ? q.gy + 'g/y' : ''}${q.sqm ? (q.gy ? ' · ' : '') + q.sqm + 'g/㎡' : ''}</div></td>
+              <td style="${td}text-align:center;${chg && String(r.n.width) !== String(r.s.width || '') ? 'color:#1d4ed8;font-weight:800;' : ''}">${wtxt(r.n)}</td>
+              <td style="${td}text-align:right;${chg && specGsm(r.n) !== specGsm(r.s) ? 'color:#1d4ed8;font-weight:800;' : ''}">${gtxt(r.n)}${q.gsmSrc === 'calc' ? '<div style="font-size:10px;color:#94a3b8;">야드 g/y 로 계산</div>' : ''}</td>
+              <td style="${td}text-align:center;"><button type="button" class="dash-action-btn qcsp-lock" data-f="${escapeHtml(r.s.fid)}" data-on="${r.lock ? '0' : '1'}" style="padding:3px 9px;font-size:11.5px;font-weight:800;white-space:nowrap;${r.lock ? 'background:#1e3a8a;color:#fff;border-color:#1e3a8a;' : ''}">${r.lock ? '기준 ✓' : '기준 설정'}</button></td></tr>`; }).join('') || `<tr><td colspan="9" style="${td}text-align:center;color:#94a3b8;padding:24px;">해당하는 품목이 없습니다</td></tr>`}
+          </tbody></table></div>
+        <div style="padding:12px 18px;border-top:1px solid #e2e8f0;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+          <span style="font-size:12px;color:#475569;">고른 품목 <b>${R.filter(r => r.st === 'chg' && pick[r.s.fid]).length}</b>개</span><span style="flex:1;"></span>
+          ${on ? `<button type="button" class="dash-action-btn qcsp-off" style="padding:8px 14px;">자동 반영 끄기</button>` : ''}
+          <button type="button" class="dash-action-btn qcsp-go" style="padding:8px 18px;font-weight:800;background:#1e3a8a;color:#fff;border-color:#1e3a8a;">백업 받고 반영${on ? '' : ' · 자동 켜기'}</button></div></div>`;
+      bg.querySelector('.qcsp-x').onclick = () => bg.remove();
+      bg.querySelectorAll('.qcsp-f').forEach(b => b.onclick = () => { flt = b.dataset.f; paint(); });
+      bg.querySelectorAll('.qcsp-p').forEach(c => c.onchange = () => { pick[c.dataset.f] = c.checked; paint(); });
+      const all = bg.querySelector('.qcsp-all'); if (all) all.onchange = () => { V.forEach(r => { pick[r.s.fid] = all.checked; }); paint(); };
+      bg.querySelectorAll('.qcsp-lock').forEach(b => b.onclick = async () => { b.disabled = true; await hwQcLockSet(b.dataset.f, b.dataset.on === '1'); paint(); });
+      const off = bg.querySelector('.qcsp-off'); if (off) off.onclick = async () => { state.fabricQcAutoOn = false; const ok = await saveFabricSpecs(getFabricSpecs().map(x => ({ ...x }))); if (ok) toast('QC 자동 반영을 껐습니다', 'success'); paint(); };
+      bg.querySelector('.qcsp-go').onclick = async () => {
+        const R2 = rows(); const go = R2.filter(r => r.st === 'chg' && pick[r.s.fid]);
+        if (!confirm('품목 ' + go.length + '개의 폭 · 중량을 마지막 QC 값으로 바꿉니다.' + (state.fabricQcAutoOn ? '' : '\n그 뒤부터는 새 QC 가 들어오면 기준 설정 안 한 품목은 저절로 맞춥니다.') + '\n\n먼저 지금 품목 자료를 백업 파일로 받습니다.')) return;
+        try { const blob = new Blob([JSON.stringify({ at: new Date().toISOString(), by: state.user?.email || '', items: getFabricSpecs() }, null, 1)], { type: 'application/json' }); const a = document.createElement('a'); const d = new Date(); a.download = d.getFullYear() + String(d.getMonth() + 1).padStart(2, '0') + String(d.getDate()).padStart(2, '0') + '_품목자료_백업_QC반영전.json'; a.href = URL.createObjectURL(blob); a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 4000); } catch (e) { toast('백업 파일을 만들지 못했습니다 — 반영하지 않습니다', 'error'); return; }
+        const byFid = {}; R2.forEach(r => { byFid[r.s.fid] = r; });
+        const list = getFabricSpecs().map(x => { const r = byFid[x.fid]; if (!r || r.lock) return { ...x };
+          if (r.st === 'chg' && pick[x.fid]) return r.n;
+          return Object.assign({}, x, { qc_auto: Object.assign({}, r.n.qc_auto, { skip: r.st === 'chg' }) });   // 고르지 않은 것 · 같은 것: 이 QC 는 본 것으로 (다음 QC 부터)
+        });
+        state.fabricQcAutoOn = true;
+        const ok = await saveFabricSpecs(list);
+        if (ok) { toast('품목 ' + go.length + '개의 폭 · 중량을 QC 값으로 맞췄습니다 · 자동 반영 켜짐', 'success'); flt = 'all'; paint(); } else state.fabricQcAutoOn = false;
+      };
+    };
+    paint(); document.body.appendChild(bg);
+  }
+  if (typeof window !== 'undefined') { window.hwQcSpecSync = hwQcSpecSync; window.hwQcSpecOpen = hwQcSpecOpen; window.hwQcLockSet = hwQcLockSet; window.__hwQc590 = { latest: hwQcLatest, apply: hwQcApplyTo, wtext: hwQcWidthText }; }
   // ===== hotfix283: 품목 자료 CSV 내려받기 / 올려 고치기 =====
   //   주의사항(cautions)은 CSV에 담지 않는다. 올려도 기존 주의사항은 그대로 남는다.
   const FS_CSV_COLS_ALL = ['품목코드', '품목명', '구분', '조직', '짝리프', '기준폭', '튜브', '스퀘어g/㎡', '제작g/y', '안내최저', '안내최고', '중량g/y', '혼용률', '판매'];   // hotfix400: 스퀘어g/㎡(최종 스퀘어 중량) 열
@@ -20305,6 +20499,7 @@ function specGreigeColors(fid) {
       try { clearTimeout(window.__hwPubT); window.__hwPubT = setTimeout(() => { try { if (window.hwProc && window.hwProc.publish) window.hwProc.publish(); } catch (_) {} }, 1200); } catch (_) {}   // hotfix509: 의뢰서가 바뀌면(수정 · 입고 취소 …) 곧바로 가공소 화면에도
       state.allWorkOrders = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
       state.__woLoaded = true;   /* hotfix485 */
+      try { clearTimeout(window.__hwQcSpT); window.__hwQcSpT = setTimeout(() => { try { window.hwQcSpecSync && window.hwQcSpecSync(); } catch (_) {} }, 3000); } catch (_) {}   /* hotfix590: 새 QC → 품목 폭 · 중량 */
       try { if (!window.__hwFnCasT) window.__hwFnCasT = setTimeout(() => { window.__hwFnCasT = 0; try { if (window.hwGsFnCascade) window.hwGsFnCascade(); } catch (_) {} }, 2000); } catch (_) {}   /* hotfix581: 염/가공 삭제 → 생지출고 취소 · 재고 제자리 */
       try { if (window.hwDrRefresh) window.hwDrRefresh(); } catch (_) {}   /* hotfix513: 일일 보고가 열려 있으면 실시간으로 다시 그림(빈 창 포함) */   /* hotfix485(대표 지적 9/25): 자료 오기 전 빈 창이 떴으면 다시 그림 */
       renderHistory();
@@ -20650,6 +20845,7 @@ function specGreigeColors(fid) {
     });
   }
   
+  if (typeof window !== 'undefined') window.__hwLoadWo = wo => loadWorkOrder(wo);   /* hotfix591 */
   function loadWorkOrder(wo) {
     if (woLockedForMe(wo)) { woLockToast(); return; }   // hotfix481
     // hotfix336: 현황 화면을 보던 중에 왼쪽 이력을 누르면 작성 화면으로 돌아온다
@@ -21070,6 +21266,13 @@ function validateBlendSum(blends, label) {
         if (d.type === '원사' && (!d.lot_no || !d.lot_no.trim())) {
           d.lot_no = '';
         }
+        /* hotfix591: 같은 내용이 이미 저장되어 있으면 — 그 의뢰서 열기(기본) / 그래도 새로 저장 / 그냥 있기 */
+        { const dup = woDupFind(d, null);
+          if (dup) {
+            const ask = window.__askThree ? await window.__askThree('같은 의뢰서가 이미 저장되어 있습니다', dup.wo_number + ' (' + (dup.date || '') + ')' + ' 와 내용이 같습니다 — 품목 · ' + (d.type === '원사' ? '출고처 · 원사 · 수량' : '수신처 · 품목 · 절수') + '이 모두 같습니다.\n뒤로가기 · 다시 만들기로 한 번 더 저장하려던 것이면 [그 의뢰서 열기]를 누르십시오.', ['그 의뢰서 열기', '그래도 새로 저장', '그냥 있기']) : (confirm(dup.wo_number + ' 와 같은 의뢰서입니다. 그래도 새로 저장할까요?') ? 'drop' : 'stay');
+            if (ask === 'keep') { try { loadWorkOrder(dup); toast(dup.wo_number + ' 을(를) 열었습니다 — 새로 저장하지 않았습니다', 'info'); } catch (e) { console.warn(e); } return; }
+            if (ask !== 'drop') return;
+          } }
         const wo_number = generateWoNumber(d.type);
         const docRef = await addDoc(collection(db, C('workorders')), {
           ...d, wo_number,
@@ -34780,6 +34983,7 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
       ${editOn ? `<button class="dash-action-btn" id="fs-survey-in" style="font-weight:700;padding:6px 14px;background:#ecfdf5;border-color:#a7f3d0;color:#065f46;" title="김용범 조사 서식(xlsx)을 그대로 올립니다 — 품목명으로 찾아 기준 폭 · 튜브 · 스퀘어 g/㎡ · 몸판의 짝 리프를 미리 보고 반영합니다. 없는 품목은 만들지 않습니다">조사 xlsx 올리기</button>` : ''}
       <input type="file" id="fs-survey-file" accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv" style="display:none;">
       ${isOwnerUser() ? `<button class="dash-action-btn smg-open-btn${smgN ? ' due' : ''}" id="fs-sale-mig-btn" title="품목명 뒤 (편직공장)을 떼어 판매 품목 하나로 묶고, 공장별 품목은 생지로 남깁니다 — 미리 보기 뒤 [백업 받고 정리]">판매 품목 정리${smgN ? ` <b>${smgN}</b>` : ''}</button>` : ''}
+      ${isOwnerUser() ? `<button class="dash-action-btn" id="fs-qcsp-btn" onclick="window.hwQcSpecOpen && window.hwQcSpecOpen()" style="font-weight:700;padding:6px 14px;background:#eef2ff;border-color:#c7d2fe;color:#3730a3;" title="염색가공 QC 마지막 실측으로 품목 디테일 폭 · 스퀘어 중량을 맞춥니다 — 기준 설정한 품목은 그대로">QC → 폭 · 중량${state.fabricQcAutoOn ? ' (자동)' : ''}</button>` : ''}
       ${isOwnerUser() ? `<button class="dash-action-btn" id="fs-item-migrate-btn" style="font-weight:700;padding:6px 14px;" title="저장된 의뢰서의 품목 글자 옆에 품목 코드(F0001…)와 생지 번호를 붙입니다 (글자는 그대로)">옛 자료 맞추기</button>` : ''}
     </div>`;
     // hotfix244: 구분 탭 / hotfix246: 판매 종료 탭
@@ -34858,7 +35062,7 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
             ? `<span style="display:inline-block;background:#fffbeb;border:1px solid #fcd34d;color:#b45309;border-radius:4px;padding:1px 6px;font-size:11px;font-weight:700;" title="지금 조직 목록에 없는 옛 이름입니다. [수정]에서 새 조직으로 바꿔 주십시오">${escapeHtml(s.cat)} · 확인 필요</span>`
             : escapeHtml(normOrg(s.cat)))
           : `<span style="display:inline-block;background:#fffbeb;border:1px solid #fcd34d;color:#b45309;border-radius:4px;padding:1px 6px;font-size:11px;font-weight:700;" title="조직이 비어 있습니다. [수정]에서 골라 주십시오">조직 없음</span>`}</td>`}
-        <td style="text-align:center;">${s.width ? escapeHtml(s.width) + '″' : '-'}</td>
+        <td style="text-align:center;">${s.width ? escapeHtml(s.width) + '″' : '-'}${s.qc_lock ? `<div><span style="font-size:10px;font-weight:800;color:#fff;background:#1e3a8a;border-radius:7px;padding:0 6px;" title="기준 설정 — QC 값이 들어와도 폭 · 중량이 바뀌지 않습니다">기준</span></div>` : (s.qc_auto && !s.qc_auto.skip ? `<div><span style="font-size:10px;font-weight:800;color:#5b21b6;background:#ede9fe;border-radius:7px;padding:0 6px;" title="${escapeHtml('QC 반영 — ' + (s.qc_auto.wo || '') + ' ' + (s.qc_auto.color || '') + ' · 실측 ' + (s.qc_auto.raw || '-') + '″' + (s.qc_auto.gy ? ' · ' + s.qc_auto.gy + 'g/y' : ''))}">QC ${s.qc_auto.at ? (new Date(s.qc_auto.at).getMonth() + 1) + '/' + new Date(s.qc_auto.at).getDate() : ''}</span></div>` : '')}</td>
         <td style="text-align:center;">${s.tube ? '✔' : '-'}</td>
         ${(() => {
           const r = specGyRange(s);
@@ -34917,6 +35121,9 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
             <div id="fs-f-final-gy" style="display:none;">-</div><!-- hotfix402: 야드 중량(자동) 칸은 감춤 — 제작 g/y 와 같은 값이라 제작 g/y 칸으로 합침 -->
           </div>
           <div id="fs-f-gy-range" style="display:none;font-size:11px;color:#475569;font-weight:700;margin-top:-6px;min-height:15px;line-height:1.6;"></div><!-- hotfix402: 안내 g/y 범위는 감춤 -->
+          <div id="fs-f-qcrow" style="display:flex;align-items:flex-start;gap:10px;margin-top:-4px;padding:7px 10px;border:1px solid #e0e7ff;background:#f8faff;border-radius:8px;font-size:12px;"><!-- hotfix590: QC → 폭 · 중량 -->
+            <label style="display:flex;align-items:center;gap:5px;white-space:nowrap;font-weight:800;color:#1e3a8a;cursor:pointer;" title="켜면 이 폭 · 중량이 기준이 되고, 이후 QC 값이 들어와도 바뀌지 않습니다"><input type="checkbox" id="fs-f-qclock"> 기준 설정</label>
+            <div id="fs-f-qcinfo" style="color:#475569;line-height:1.5;"></div></div>
           <div><label style="font-size:12px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">표준 가공 사양 <span style="font-weight:400;color:#94a3b8;font-size:11px;">염/가공소를 먼저 고르고 그 업체 공정으로 넣습니다 · 업체마다 따로 · 의뢰서에서 염색처 + 품목을 고르면 마지막 저장 가공법 → 없으면 이 값이 들어감 (옛 안내: 의뢰서에서 고칠 수 있음)</span></label>
             <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px 10px;margin-bottom:6px;"><!-- hotfix406: 업체마다 표준 가공 사양 · hotfix422i: 염색소 · 가공소 · 후가공소 따로 고른다(같은 곳이면 같은 업체를 고름). 고른 곳만 주의사항 초안을 쓰고, 의뢰서 염색처 · 가공처 · 후가공처에 저절로 들어간다. 세 칸 한 줄 · 안내는 아래 한 줄 -->
               <div><label style="font-size:11px;font-weight:700;color:#7c2d12;display:block;margin-bottom:3px;">염색소</label><select id="fs-f-std-vendor" style="${inputStyle}padding:5px 8px;" title="선작업 · 염색 공정과 표준 가공 사양의 열쇠"></select></div>
@@ -48844,6 +49051,12 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
     if (a === 'order') {
       if (!yarnSeeOk() || !canAccessView('write')) { toast('원사 의뢰서를 쓸 권한이 없습니다', 'error'); return; }
       const snap = ycSnapshot(S, P); const it = itemByFid(S.fid) || {};
+      /* hotfix591(대표 10/2): 이 계산으로 이미 저장한 원사 의뢰서가 있으면 — 뒤로가기 뒤 다시 누르면 복사본이 생기던 것 */
+      { const k = s => s ? [s.fid, vendorKey(s.factory || ''), s.date, s.plan_jul, s.kg_per_jul, (s.yarns || []).map(y => vendorKey(y.name) + ':' + y.qty + y.unit).join(',')].join('|') : '';
+        const want = k(snap); const ex = (state.allWorkOrders || []).filter(w => w && !w.deleted && w.type === '원사' && w.yarn_calc && k(w.yarn_calc) === want && w.id !== state.currentWorkOrderId).sort((a, b) => String(b.wo_number || '').localeCompare(String(a.wo_number || '')))[0];
+        if (ex) { const r = await askThree('이 계산으로 저장한 원사 의뢰서가 있습니다', ex.wo_number + ' (' + (ex.date || '') + ') — 같은 품목 · 공장 · 절수 · 원사 수량입니다.\n새로 만들면 같은 의뢰서가 하나 더 생깁니다.', ['그 의뢰서 열기', '그래도 새로 만들기', '그냥 있기']);
+          if (r === 'keep') { if (opts && opts.modal && typeof opts.close === 'function') opts.close(true); try { window.__hwLoadWo(ex); } catch (e) { console.warn(e); } return; }
+          if (r !== 'drop') return; } }
       if (opts && opts.modal && typeof opts.close === 'function') opts.close(true);
       if (!(opts && opts.modal)) { try { window.__switchUiMode && window.__switchUiMode('write'); } catch (_) {} try { switchType('원사'); resetForm(); } catch (_) {} }
       setTimeout(() => {
@@ -51485,6 +51698,10 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
         fillFsCatSelect(s.cat || '');
         document.getElementById('fs-f-width').value = s.width || '';
         document.getElementById('fs-f-tube').checked = !!s.tube;
+        { const lk = document.getElementById('fs-f-qclock'), inf = document.getElementById('fs-f-qcinfo'); const qa = (idx >= 0 && s.qc_auto && !s.qc_auto.skip) ? s.qc_auto : null;   /* hotfix590 */
+          if (lk) lk.checked = !!(idx >= 0 && s.qc_lock);
+          if (inf) inf.innerHTML = (idx >= 0 && s.qc_lock ? '<b style="color:#1e3a8a;">기준으로 정한 값입니다</b> — QC 값이 들어와도 바뀌지 않습니다. ' : '끄면 염색가공 QC 마지막 실측(폭 · 스퀘어 중량)이 저절로 들어옵니다. ')
+            + (qa ? '<span style="color:#5b21b6;">마지막 QC 반영: ' + escapeHtml((qa.wo || '') + ' ' + (qa.color || '')) + (qa.rno ? ' ' + qa.rno + '차' : '') + ' · 실측 ' + escapeHtml(String(qa.raw || '-')) + '″' + (qa.tube ? '×2' : '') + (qa.gy ? ' · ' + qa.gy + 'g/y' : '') + (qa.gsm ? ' → ' + qa.gsm + 'g/㎡' + (qa.src === 'calc' ? '(계산)' : '') : '') + '</span>' : (state.fabricQcAutoOn ? '' : '<span style="color:#94a3b8;">(QC 자동 반영은 [품목(생지) 코드] → [QC → 폭 · 중량]에서 켭니다)</span>')); }
         { const gsmEl = document.getElementById('fs-f-gsm'); if (gsmEl) gsmEl.value = specGsm(s) == null ? '' : specGsm(s); }   // hotfix400
         // hotfix402: 열 때는 저장된 두 값을 그대로 보인다 (서로 덮지 않음). 방식은 제작 g/y로 되돌린다. 생지 컬러(편직 설정)도 보인다
         { const want = (String(s.w_mode || '') === 'gsm' && specGsm(s) != null) ? 'gsm' : 'gy';   /* hotfix452: 저장된 방식 그대로 연다 */
@@ -51908,6 +52125,9 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
           abbr: (document.getElementById('fs-f-abbr')?.value || '').trim().toUpperCase(),   // hotfix392: 공유코드용 줄임말
           updated_at: todayYMD()
         };
+        { const cur590 = (editingSpecIdx >= 0) ? getFabricSpecs()[editingSpecIdx] : null; const lk = document.getElementById('fs-f-qclock')?.checked;   /* hotfix590: 기준 설정 · 마지막 QC 반영 기록은 이어간다 */
+          if (cur590 && cur590.qc_auto) entry.qc_auto = cur590.qc_auto;
+          if (lk) entry.qc_lock = (cur590 && cur590.qc_lock) ? cur590.qc_lock : { at: new Date().toISOString(), by: state.user?.email || '', width: entry.width, gsm: entry.gsm }; }
         if (entry.gubun === GUBUN_RIB) entry.pair_rib = '';
         // hotfix250: 혼용률 합계가 100이 아니면 먼저 알려준다 (오타로 110% 같은 값이 들어가는 것 방지)
         const brs = parseBlendString(entry.blend);
@@ -53940,7 +54160,14 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
           ${gsOrderCountFor(wo.id) ? '생지출고의뢰서 다시보기 (' + gsOrderCountFor(wo.id) + '장)' : '생지출고의뢰서 만들기'}
         </button>
       </div>` : '';
-    body.innerHTML = fixBar + gsBar + `<div class="wo-doc${btClass}" id="dash-modal-wo-doc" style="margin:auto;">${html}</div>` + woHistoryHTML(wo);   // hotfix394: [이력] 펼치기
+    /* hotfix591(대표 10/2): 원사 의뢰서 창에도 [편직의뢰서 작성] — 이 원사 의뢰서로 만든 편직 의뢰서가 있으면 [다시보기] */
+    const knitKids = wo.type === '원사' ? (state.allWorkOrders || []).filter(w => w && !w.deleted && w.type === '편직' && w.from_yarn && w.from_yarn.id === wo.id) : [];
+    const knitBar = wo.type === '원사' ? `
+      <div style="position:sticky;top:0;z-index:5;background:#fff;text-align:center;margin:0 auto 12px;padding:6px 0;display:flex;gap:8px;justify-content:center;flex-wrap:wrap;">
+        ${knitKids.map(k => `<button type="button" class="dash-modal-knitview" data-id="${escapeHtml(k.id)}" style="background:#fff;border:1px solid #0f766e;color:#0f766e;font-weight:700;font-size:13px;padding:9px 16px;border-radius:6px;cursor:pointer;">편직의뢰서 다시보기 ${escapeHtml(k.wo_number || '')}</button>`).join('')}
+        <button type="button" id="dash-modal-toknit" style="background:#0f766e;border:1px solid #115e59;color:#fff;font-weight:700;font-size:13px;padding:9px 18px;border-radius:6px;cursor:pointer;">${knitKids.length ? '편직의뢰서 하나 더 작성' : '편직의뢰서 작성'}</button>
+      </div>` : '';
+    body.innerHTML = fixBar + gsBar + knitBar + `<div class="wo-doc${btClass}" id="dash-modal-wo-doc" style="margin:auto;">${html}</div>` + woHistoryHTML(wo);   // hotfix394: [이력] 펼치기
     if (wo.type === '원사') { try {   // hotfix479: 구매처별 한 장씩
       const vb = yarnVendorBarHTML(wo, 'id="dash-y-vendor-bar"');
       const docEl = document.getElementById('dash-modal-wo-doc');
@@ -53964,6 +54191,18 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
     if (isFinish) {
       const gsBtn = document.getElementById('dash-modal-gsorder');
       if (gsBtn) gsBtn.addEventListener('click', () => openGreigeOrderModal(wo.id));
+    }
+    if (wo.type === '원사') {   /* hotfix591: [편직의뢰서 작성] — 이 원사 의뢰서를 작성 화면에 열고 편직 의뢰서로 넘긴다 */
+      const tk = document.getElementById('dash-modal-toknit');
+      if (tk) tk.addEventListener('click', async () => {
+        if (window.__askKeepDraft && !(await window.__askKeepDraft())) return;
+        modal.classList.remove('show');
+        const cur = (state.allWorkOrders || []).find(w => w.id === wo.id) || wo;
+        try { loadWorkOrder(cur); } catch (e) { console.warn('[원사 → 편직 열기]', e); return; }
+        setTimeout(() => { try { yarnToKnit(); } catch (e) { console.error('[원사 → 편직]', e); } }, 120);
+      });
+      document.querySelectorAll('#dash-modal-body .dash-modal-knitview').forEach(b => b.addEventListener('click', () => {
+        const k = (state.allWorkOrders || []).find(w => w.id === b.dataset.id); if (k) showPreviewModal(k); }));
     }
     
     // 액션 핸들러 바인딩 (모달 열 때마다 새 wo 대상으로 갱신)
@@ -56862,7 +57101,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix589';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
+  const VERSION = 'v2.53 hotfix591';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
