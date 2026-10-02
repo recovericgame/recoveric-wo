@@ -9926,12 +9926,18 @@ function greigeNoClean(v) {
     const s = sigOf(keep); const cand = Array.from(root.querySelectorAll(keep.tagName.toLowerCase())).filter(x => sigOf(x) === s); if (cand.length !== 1) return false;
     const nk = cand[0];
     const lp = [], np = []; for (let x = keep; x && x !== host; x = x.parentNode) lp.push(x); for (let x = nk; x && x !== root; x = x.parentNode) np.push(x);
+    /* hotfix587: 표 위 고정 자리(.dash-pin)는 결과가 0건이면(표가 없으면) 안 생긴다 → 살아 있는 쪽에 맞춰 새 조각을 감싸거나 풀어서 길을 같게 (치는 칸을 옮기지 않으려고) */
+    { const isPin = x => x && x.nodeType === 1 && x.classList && x.classList.contains('dash-pin');
+      const lpi = lp.findIndex(isPin), npi = np.findIndex(isPin);
+      if (npi >= 0 && lpi < 0) { const pin = np[npi], par = pin.parentNode; while (pin.firstChild) par.insertBefore(pin.firstChild, pin); par.removeChild(pin); np.splice(npi, 1); }
+      else if (lpi >= 0 && npi < 0 && lpi - 1 < np.length) { const top = np[lpi - 1] || null; const par = top ? top.parentNode : null;
+        if (par) { const pin = document.createElement('div'); pin.className = lp[lpi].className; par.insertBefore(pin, par.firstChild); while (pin.nextSibling && pin.nextSibling !== top) pin.appendChild(pin.nextSibling); pin.appendChild(top); np.splice(lpi, 0, pin); } } }
     if (lp.length !== np.length || lp.some((x, i) => x.nodeName !== np[i].nodeName)) return false;
     for (let i = lp.length - 1; i >= 0; i--) {
       const liveP = i === lp.length - 1 ? host : lp[i + 1], newP = i === np.length - 1 ? root : np[i + 1]; const liveC = lp[i], newC = np[i];
       Array.from(liveP.childNodes).forEach(k => { if (k !== liveC) liveP.removeChild(k); });
       let after = false; Array.from(newP.childNodes).forEach(k => { if (k === newC) { after = true; return; } if (!after) liveP.insertBefore(k, liveC); else liveP.appendChild(k); });
-      syncAttrs(liveC, newC, liveC === keep);
+      if (liveC !== keep) syncAttrs(liveC, newC, false);   /* hotfix587: 치고 있는 칸 자체는 속성도 그대로 (list · lang 이 바뀌면 크롬이 조합을 다시 시작해 글자가 겹침) */
     }
     // 둘레(이미 살아 있는 칸 · 그 윗칸)에 같은 손잡이가 두 번 붙지 않게 — 이번 그리기 동안만
     lp.forEach(n => { n.addEventListener = function () {}; });
@@ -9944,7 +9950,8 @@ function greigeNoClean(v) {
     if (!d || !d.set) return;
     Object.defineProperty(Element.prototype, 'innerHTML', { configurable: true, get() { return d.get.call(this); },
       set(v) { const a = document.activeElement;
-        if (a && a !== this && (a.__composing || a.__hwPreview) && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA') && typeof v === 'string' && this.contains(a)) { try { if (morph(this, v, a, d.set)) return; } catch (e) { console.warn('[ime keep]', e && e.message); } }
+        /* hotfix587(대표 10/2 "테 → 검색, 스 → 검색 — 한 글자씩만"): 조합 중이 아니어도 지금 글자를 치고 있는 검색 칸은 갈아 끼우지 않는다 — 칸이 바뀌면 포커스 · 한글 조합이 끊겨 앞 글자가 사라졌다 */
+        if (a && a !== this && (a.__composing || a.__hwPreview || isSearch(a)) && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA') && typeof v === 'string' && this.contains(a)) { try { if (morph(this, v, a, d.set)) return; } catch (e) { console.warn('[ime keep]', e && e.message); } }
         d.set.call(this, v); } });
   } catch (e) { console.warn('[ime keep]', e && e.message); }
 })();
@@ -29938,7 +29945,7 @@ function validateBlendSum(blends, label) {
     kg = Math.round((parseFloat(kg) || 0) * 10) / 10;
     const to = String(dest || '').trim();
     if (!kg || kg < 0) { toast('옮길 kg 를 넣어 주십시오', 'error'); return false; }
-    if (!to || vendorKey(to) === vendorKey(row.vendor)) { toast('받는 곳을 골라 주십시오 (보낸 곳과 다른 편직공장)', 'error'); return false; }
+    if (!to || vendorKey(to) === vendorKey(row.vendor) || gsNormV(to) === gsNormV(row.vendor)) { toast('받는 곳을 골라 주십시오 (보낸 곳과 다른 편직공장 — ' + (row.vendor || '') + '와 ' + to + '는 같은 업체입니다)', 'error'); return false; }   /* hotfix587: 다른 표기(대철 · 대철섬유)도 같은 곳 */
     const at = new Date().toISOString(), by = state.user.email || '', mid = stockLineId('mv');
     const base = { kind: 'move', move_id: mid, yarn: row.yarn, yid: row.yid || '', color: row.color || '', memo: String(memo || '').trim(), date: dateStr || todayYMD(), by, at, void: false };
     const a = Object.assign({ id: mid + '_out', vendor: row.vendor, vendor_vid: row.vendor_vid || vendorVidOf(row.vendor) || '', kg: -kg, dest: to, dest_vid: vendorVidOf(to) || '' }, base);
@@ -29962,7 +29969,7 @@ function validateBlendSum(blends, label) {
     const it = (wo.items || [])[idx] || {};
     jul = parseFloat(jul) || 0; const to = String(dest || '').trim();
     if (!jul || jul < 0) { toast('옮길 절수를 넣어 주십시오', 'error'); return false; }
-    if (!to || vendorKey(to) === vendorKey(wo.recipient)) { toast('받는 곳을 골라 주십시오 (보낸 곳과 다른 편직공장)', 'error'); return false; }
+    if (!to || vendorKey(to) === vendorKey(wo.recipient) || gsNormV(to) === gsNormV(wo.recipient)) { toast('받는 곳을 골라 주십시오 (보낸 곳과 다른 편직공장 — 같은 업체의 다른 표기도 안 됩니다)', 'error'); return false; }   /* hotfix587 */
     const kpj = parseFloat(it.kg_per_jul) || 21; const typed = !!parseFloat(kg);
     const at = new Date().toISOString(), by = state.user.email || '';
     const line = { dir: 'out', move: true, dest: to, dest_vid: vendorVidOf(to) || '', src: 'move', item_idx: idx, jul, kg: typed ? Math.round(parseFloat(kg) * 10) / 10 : Math.round(jul * kpj * 10) / 10, kg_manual: typed, date: dateStr || todayYMD(), memo: String(memo || '').trim() || (String(wo.recipient || '') + ' → ' + to + ' 이동'), by, at, void: false, id: stockLineId('gmv') };
@@ -29987,7 +29994,7 @@ function validateBlendSum(blends, label) {
   function gmRemAt(wo, idx) { return knitFinalJul(wo, idx) - knitOutJul(wo, idx); }
   function gmWaitAt(wo, idx, exceptId) { return (wo.greige_moves || []).filter(g => g && g.id !== exceptId && (g.item_idx || 0) === idx).reduce((a, g) => a + gmLeft(g), 0); }
   function gmNextNo() { const d = todayYMD().replace(/-/g, '').slice(2); const pre = 'GM-' + d + '-'; let mx = 0; gmAll(true).forEach(x => { const m = String(x.g.no || ''); if (m.indexOf(pre) === 0) mx = Math.max(mx, parseInt(m.slice(pre.length), 10) || 0); }); return pre + String(mx + 1).padStart(2, '0'); }
-  function gmDests(wo) { return (state.vendors || []).filter(v => v && v.name && vendorIsActive(v) && (vendorTypesNorm(v).includes('편직처') || vendorIsStore(v)) && vendorKey(v.name) !== vendorKey(wo.recipient)).sort((a, b) => (vendorIsStore(b) - vendorIsStore(a)) || String(a.name).localeCompare(String(b.name), 'ko')); }
+  function gmDests(wo) { return (state.vendors || []).filter(v => v && v.name && vendorIsActive(v) && (vendorTypesNorm(v).includes('편직처') || vendorIsStore(v)) && vendorKey(v.name) !== vendorKey(wo.recipient) && gsNormV(v.name) !== gsNormV(wo.recipient)).sort((a, b) => (vendorIsStore(b) - vendorIsStore(a)) || String(a.name).localeCompare(String(b.name), 'ko')); }
   async function gmSave(wo, moves) {
     const by = (state.user && state.user.email) || '';
     await updateDoc(doc(db, C('workorders'), wo.id), { greige_moves: moves, updated_at: serverTimestamp(), updated_by: by }); wo.greige_moves = moves;
@@ -30448,7 +30455,7 @@ function validateBlendSum(blends, label) {
     const re = () => hvLack(host);
     host.querySelectorAll('[data-lk-seg]').forEach(b => b.addEventListener('click', () => { U.seg = b.dataset.lkSeg; re(); }));
     const vsel = host.querySelector('[data-lk-v]'); if (vsel) vsel.addEventListener('change', e => { U.vsel = e.target.value; re(); });
-    const qi = host.querySelector('[data-lk-q]'); if (qi) qi.addEventListener('input', () => { U.q = qi.value; clearTimeout(qi.__t); qi.__t = setTimeout(() => { re(); const q2 = host.querySelector('[data-lk-q]'); if (q2) { q2.focus(); q2.setSelectionRange(q2.value.length, q2.value.length); } }, 250); });
+    const qi = host.querySelector('[data-lk-q]'); if (qi) qi.addEventListener('input', () => { U.q = qi.value; clearTimeout(qi.__t); qi.__t = setTimeout(() => { const ae0 = document.activeElement; const was = !ae0 || ae0 === document.body || ae0 === qi; re(); const q2 = host.querySelector('[data-lk-q]'); if (q2 && was && document.activeElement !== q2) { q2.focus(); q2.setSelectionRange(q2.value.length, q2.value.length); } }, 250); });
     host.querySelectorAll('[data-lk-ck]').forEach(c => c.addEventListener('change', () => { U.sel[c.dataset.lkCk] = c.checked; re(); }));
     const la = host.querySelector('[data-lk-all]'); if (la) la.addEventListener('change', e => { L.filter(x => x.li && x.li.vn && x.st === 'new').forEach(x => { U.sel[x.pk] = e.target.checked; }); re(); });
     const send = async (go, btn) => { if (!go.length) return; if (!confirm(`${go.length}건을 가공소 앱으로 확인 요청합니다.\n\n` + go.slice(0, 15).map(x => `· ${x.vk} · ${x.item} · ${x.c.name} — 부족 ${x.lb}/${x.lr}`).join('\n') + (go.length > 15 ? `\n… 외 ${go.length - 15}건` : ''))) return;
@@ -30458,7 +30465,8 @@ function validateBlendSum(blends, label) {
     host.querySelectorAll('[data-lk-one]').forEach(b => b.addEventListener('click', ev => { const x = L.find(y => y.pk === b.dataset.lkOne); if (x) send([x], ev.currentTarget); }));
   }
   /* hotfix586(대표 10/2): 생지이동 거르기 — 구분(몸판 · 리프) · 편직공장 · 품목 · 컬러 · 글자 검색 칸은 목록 상자(초성 · 띄어쓰기 무시) · 결과와 목록은 언제나 오름차순(abc · 가나다) */
-  const gmKo = (a, b) => String(a || '').localeCompare(String(b || ''), 'ko', { numeric: true, sensitivity: 'base' });
+  const gmKoRk = t => /^[\uAC00-\uD7A3\u3131-\u318E]/.test(String(t || '').trim()) ? 1 : 0;   /* hotfix587: 숫자 · 영문(abc) 먼저, 그다음 한글(가나다) */
+  const gmKo = (a, b) => (gmKoRk(a) - gmKoRk(b)) || String(a || '').localeCompare(String(b || ''), 'ko', { numeric: true, sensitivity: 'base' });
   function gmGubun(wo, idx) { const it = (wo.items || [])[idx] || {}; let sp = it.item_fid ? itemByFid(it.item_fid) : null;
     if (!sp) { const nm = String(it.item || '').trim(); sp = (Array.isArray(state.fabricSpecs) ? state.fabricSpecs : []).find(x => x && itemHasName(x, nm) || (x && itemHasName(x, (greigeSplit(nm) || {}).name || ''))) || null; }
     const g = sp && String(sp.gubun || '').trim(); if (g) return g; return hwIsRibName(it.item || '', null) ? GUBUN_RIB : GUBUN_BODY; }
@@ -30480,18 +30488,18 @@ function validateBlendSum(blends, label) {
   }
   /* 생지이동 — 재고가 있는 생지 고르기 */
   function hvGmPick() {
-    const rows = []; (state.allWorkOrders || []).forEach(wo => { if (!wo || wo.deleted || wo.type !== '편직') return; (wo.items || []).forEach((it, idx) => { let rem = 0; try { rem = gmRemAt(wo, idx); } catch (_) {} if (!(rem > 0)) return; rows.push({ wo, idx, it, rem, wait: gmWaitAt(wo, idx), name: hwFacTailOff(gmItemName(wo, idx), wo.recipient), gb: gmGubun(wo, idx), lot: greigeNoClean(it.greige_no) || '', color: String(it.color || '').trim() }); }); });
-    rows.sort((a, b) => gmKo(a.wo.recipient, b.wo.recipient) || gmKo(a.name, b.name) || gmKo(a.color, b.color) || gmKo(a.lot, b.lot) || gmKo(a.wo.wo_number, b.wo.wo_number));
+    const rows = []; (state.allWorkOrders || []).forEach(wo => { if (!wo || wo.deleted || wo.type !== '편직') return; (wo.items || []).forEach((it, idx) => { let rem = 0; try { rem = gmRemAt(wo, idx); } catch (_) {} if (!(rem > 0)) return; rows.push({ wo, idx, it, rem, wait: gmWaitAt(wo, idx), name: hwFacTailOff(gmItemName(wo, idx), wo.recipient), gb: gmGubun(wo, idx), lot: greigeNoClean(it.greige_no) || '', color: String(it.color || '').trim(), fac: gsNormV(wo.recipient) || String(wo.recipient || '') }); }); });
+    rows.sort((a, b) => gmKo(a.fac, b.fac) || gmKo(a.name, b.name) || gmKo(a.color, b.color) || gmKo(a.lot, b.lot) || gmKo(a.wo.wo_number, b.wo.wo_number));
     const F = HVW.gmPick || (HVW.gmPick = { gb: '', fac: '', item: '', color: '', q: '' });
-    const opt = { fac: () => gmUniq(rows.map(r => r.wo.recipient)), item: () => gmUniq(rows.filter(r => (!F.gb || r.gb === F.gb) && gmFm(r.wo.recipient, F.fac, opt.fac())).map(r => r.name)), color: () => gmUniq(rows.filter(r => (!F.gb || r.gb === F.gb) && gmFm(r.wo.recipient, F.fac, opt.fac()) && gmFm(r.name, F.item, gmUniq(rows.map(x => x.name)))).map(r => r.color)) };
+    const opt = { fac: () => gmUniq(rows.map(r => r.fac)), item: () => gmUniq(rows.filter(r => (!F.gb || r.gb === F.gb) && gmFm([r.fac, r.wo.recipient], F.fac, opt.fac())).map(r => r.name)), color: () => gmUniq(rows.filter(r => (!F.gb || r.gb === F.gb) && gmFm([r.fac, r.wo.recipient], F.fac, opt.fac()) && gmFm(r.name, F.item, gmUniq(rows.map(x => x.name)))).map(r => r.color)) };
     const m = gmModal('생지이동 의뢰서 — 옮길 생지 고르기', '', null, true);
     m.querySelector('.hw-gm-b').innerHTML = gmFbarHtml(F, gmUniq(rows.map(r => r.gb)), '있는 곳(편직공장)') + `<div class="hv-bar" style="margin:0 0 10px"><input class="hv-q" data-gq placeholder="로트 · 편직 의뢰서 · 아무 글자 찾기" value="${gmEsc(F.q)}" autocomplete="off"><span class="hv-n" data-pn></span></div>
       <div class="hv-tw" style="max-height:56vh"><table class="hv-t"><thead><tr><th>구분</th><th class="l">있는 곳(편직공장)</th><th class="l">품목</th><th>로트</th><th>컬러</th><th class="r">재고 절</th><th class="r">이동 대기</th><th class="l">편직 의뢰서</th><th></th></tr></thead><tbody data-pb></tbody></table></div>`;
     const paint = () => { const fo = opt.fac(), io = gmUniq(rows.map(r => r.name)), co = gmUniq(rows.map(r => r.color));
-      const L = rows.filter(r => (!F.gb || r.gb === F.gb) && gmFm(r.wo.recipient, F.fac, fo) && gmFm(r.name, F.item, io) && gmFm(r.color, F.color, co) && (!String(F.q || '').trim() || [r.wo.recipient, r.name, r.lot, r.color, r.wo.wo_number, r.gb].some(t => hwTextMatch(t, F.q))));
+      const L = rows.filter(r => (!F.gb || r.gb === F.gb) && gmFm([r.fac, r.wo.recipient], F.fac, fo) && gmFm(r.name, F.item, io) && gmFm(r.color, F.color, co) && (!String(F.q || '').trim() || [r.wo.recipient, r.name, r.lot, r.color, r.wo.wo_number, r.gb].some(t => hwTextMatch(t, F.q))));
       m.querySelector('[data-pn]').textContent = `재고가 있는 생지 ${L.length}줄${L.length !== rows.length ? ' / ' + rows.length : ''}`;
       const cl = m.querySelector('[data-gf-clear]'); if (cl) cl.hidden = !(F.gb || F.fac || F.item || F.color || F.q);
-      m.querySelector('[data-pb]').innerHTML = L.map(r => `<tr><td><span class="gm-gb${r.gb === GUBUN_RIB ? ' rib' : ''}">${gmEsc(r.gb)}</span></td><td class="l"><b>${gmEsc(r.wo.recipient)}</b></td><td class="l">${gmEsc(r.name)}</td><td class="mono">${gmEsc(r.lot || '-')}</td><td>${gmEsc(r.color || '-')}</td><td class="r"><b>${r.rem}</b></td><td class="r">${r.wait ? '<span class="gst p">' + r.wait + '</span>' : '-'}</td><td class="l mono">${gmEsc(r.wo.wo_number || '')}</td><td><button type="button" class="hv-b pri" data-pick="${gmEsc(r.wo.id)}" data-idx="${r.idx}"${r.rem - r.wait > 0 ? '' : ' disabled title="남은 재고가 모두 이동 대기 중입니다"'}>이 생지 옮기기</button></td></tr>`).join('') || `<tr><td colspan="9" class="e">${rows.length ? '고른 조건에 맞는 생지가 없습니다' : '옮길 수 있는 생지 재고가 없습니다'}</td></tr>`;
+      m.querySelector('[data-pb]').innerHTML = L.map(r => `<tr><td><span class="gm-gb${r.gb === GUBUN_RIB ? ' rib' : ''}">${gmEsc(r.gb)}</span></td><td class="l"><b>${gmEsc(r.fac)}</b></td><td class="l">${gmEsc(r.name)}</td><td class="mono">${gmEsc(r.lot || '-')}</td><td>${gmEsc(r.color || '-')}</td><td class="r"><b>${r.rem}</b></td><td class="r">${r.wait ? '<span class="gst p">' + r.wait + '</span>' : '-'}</td><td class="l mono">${gmEsc(r.wo.wo_number || '')}</td><td><button type="button" class="hv-b pri" data-pick="${gmEsc(r.wo.id)}" data-idx="${r.idx}"${r.rem - r.wait > 0 ? '' : ' disabled title="남은 재고가 모두 이동 대기 중입니다"'}>이 생지 옮기기</button></td></tr>`).join('') || `<tr><td colspan="9" class="e">${rows.length ? '고른 조건에 맞는 생지가 없습니다' : '옮길 수 있는 생지 재고가 없습니다'}</td></tr>`;
       m.querySelectorAll('[data-pick]').forEach(b => b.addEventListener('click', () => { m.remove(); window.hwGmvForm(b.dataset.pick, b.dataset.idx); })); };
     gmFbarBind(m, F, k => opt[k](), paint);
     const qi = m.querySelector('[data-gq]'); qi.addEventListener('input', () => { F.q = qi.value; clearTimeout(qi.__t); qi.__t = setTimeout(paint, 180); });
@@ -30502,15 +30510,15 @@ function validateBlendSum(blends, label) {
     const U = HVW.gm; U.f = U.f || { gb: '', fac: '', item: '', color: '', q: '' }; if (U.q && !U.f.q) { U.f.q = U.q; U.q = ''; } const F = U.f;
     const all0 = gmAll().map(x => Object.assign(x, { nm: hwFacTailOff(gmItemName(x.wo, x.g.item_idx || 0), x.wo.recipient), gb: gmGubun(x.wo, x.g.item_idx || 0) }));
     const canNew = (typeof canStockAdjust === 'function') ? canStockAdjust() : true; const canDel = gmCanDel();
-    const fo = () => gmUniq(all0.map(x => x.wo.recipient).concat(all0.map(x => x.g.to))), io = () => gmUniq(all0.map(x => x.nm)), co = () => gmUniq(all0.map(x => x.g.color));
-    const opt = { fac: fo, item: () => gmUniq(all0.filter(x => (!F.gb || x.gb === F.gb) && gmFm([x.wo.recipient, x.g.to], F.fac, fo())).map(x => x.nm)), color: () => gmUniq(all0.filter(x => (!F.gb || x.gb === F.gb) && gmFm([x.wo.recipient, x.g.to], F.fac, fo()) && gmFm(x.nm, F.item, io())).map(x => x.g.color)) };
+    const cv = x => gsNormV(x) || String(x || ''); const fo = () => gmUniq(all0.map(x => cv(x.wo.recipient)).concat(all0.map(x => cv(x.g.to)))), io = () => gmUniq(all0.map(x => x.nm)), co = () => gmUniq(all0.map(x => x.g.color));
+    const opt = { fac: fo, item: () => gmUniq(all0.filter(x => (!F.gb || x.gb === F.gb) && gmFm([x.wo.recipient, x.g.to, cv(x.wo.recipient), cv(x.g.to)], F.fac, fo())).map(x => x.nm)), color: () => gmUniq(all0.filter(x => (!F.gb || x.gb === F.gb) && gmFm([x.wo.recipient, x.g.to, cv(x.wo.recipient), cv(x.g.to)], F.fac, fo()) && gmFm(x.nm, F.item, io())).map(x => x.g.color)) };
     host.innerHTML = hvHead('생지이동 의뢰서', '편직공장의 생지를 다른 곳(본사창고 · 다른 편직공장)으로 옮길 때 씁니다. 저장하면 <b>이동 대기</b>(재고 그대로) + 보내는 곳 · 받는 곳 <b>편직팀 앱</b>에 알림 → 공장이 앱에서 [보냈어요] · [잘 받았어요]를 누르면 <b>공장 앱</b> 칸에 나옵니다 → 확인하고 <b>[이동완료]</b>하면 그때 재고가 옮겨집니다.',
       canNew ? '<button type="button" class="hv-btn mv" data-gm-pick>+ 새 생지이동 의뢰서</button>' : '')
       + `<div class="hv-cards" data-gcards></div>` + gmFbarHtml(F, gmUniq(all0.map(x => x.gb)), '공장(보내는 곳 · 받는 곳)')
       + `<div class="hv-bar"><input class="hv-q" data-gq placeholder="의뢰번호 · 로트 · 아무 글자 찾기" value="${gmEsc(F.q)}" autocomplete="off"><span class="hv-n" data-gn></span></div>
       <div class="hv-tw"><table class="hv-t"><thead><tr><th>의뢰번호</th><th>의뢰일</th><th>구분</th><th class="l">보내는 곳</th><th class="l">받는 곳</th><th class="l">품목</th><th>로트</th><th>컬러</th><th class="r">이동(절)</th><th class="r">받은 절</th><th>희망일</th><th>상태</th><th class="l">공장 앱</th><th>보기</th><th>이동완료</th><th>취소</th>${canDel ? '<th>삭제</th>' : ''}</tr></thead><tbody data-gb></tbody></table></div>`;
     const paint = () => {
-      const hit = x => (!F.gb || x.gb === F.gb) && gmFm([x.wo.recipient, x.g.to], F.fac, fo()) && gmFm(x.nm, F.item, io()) && gmFm(x.g.color, F.color, co()) && (!String(F.q || '').trim() || [x.g.no, x.wo.recipient, x.g.to, x.nm, x.g.lot, x.g.color, x.gb].some(t => hwTextMatch(t, F.q)));
+      const hit = x => (!F.gb || x.gb === F.gb) && gmFm([x.wo.recipient, x.g.to, cv(x.wo.recipient), cv(x.g.to)], F.fac, fo()) && gmFm(x.nm, F.item, io()) && gmFm(x.g.color, F.color, co()) && (!String(F.q || '').trim() || [x.g.no, x.wo.recipient, x.g.to, x.nm, x.g.lot, x.g.color, x.gb].some(t => hwTextMatch(t, F.q)));
       const all = all0.filter(hit); const fon = all.length !== all0.length;
       all.sort(fon ? ((a, b) => gmKo(a.wo.recipient, b.wo.recipient) || gmKo(a.nm, b.nm) || gmKo(a.g.color, b.g.color) || gmKo(a.g.lot, b.g.lot) || gmKo(a.g.no, b.g.no)) : ((a, b) => String(b.g.no).localeCompare(String(a.g.no))));
       const P = all.filter(x => gmLeft(x.g) > 0), D = all.filter(x => x.g.status !== 'cancel' && gmLeft(x.g) === 0), X = all.filter(x => x.g.status === 'cancel'), A = P.filter(x => { const r = mvRep('gm:' + x.g.id); return !!(r.r || r.s); });
@@ -30833,7 +30841,7 @@ function validateBlendSum(blends, label) {
     const iS = 'width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #d1d5db;border-radius:7px;font-size:13px;font-family:inherit;';
     const lab = t => `<label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px;">${t}</label>`;
     const f1 = x => (Math.round(x * 10) / 10).toFixed(1);
-    const facs = knitFactoryList().filter(v => vendorKey(v) !== vendorKey(row.vendor));
+    const facs = knitFactoryList().filter(v => vendorKey(v) !== vendorKey(row.vendor) && gsNormV(v) !== gsNormV(row.vendor));   /* hotfix587: 보낸 곳의 다른 표기(대철 ↔ 대철섬유)도 뺌 */
     const m = document.createElement('div'); m.id = 'ym-modal';
     m.style.cssText = 'position:fixed;inset:0;z-index:2000;background:rgba(15,23,42,.45);display:flex;align-items:center;justify-content:center;';
     m.innerHTML = `<div style="background:#fff;border-radius:12px;width:min(560px,94vw);padding:18px 20px;box-shadow:0 20px 50px rgba(0,0,0,.3);">
@@ -39728,7 +39736,7 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
     const q = document.getElementById('kf-q');
     if (q) q.addEventListener('input', () => {
       clearTimeout(bindKnitFeeTab._t);
-      bindKnitFeeTab._t = setTimeout(() => { state.kfQ = q.value; renderDashboard(); const el = document.getElementById('kf-q'); if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); } }, 260);
+      bindKnitFeeTab._t = setTimeout(() => { const ae0 = document.activeElement; const was = !ae0 || ae0 === document.body || ae0.id === 'kf-q'; state.kfQ = q.value; renderDashboard(); const el = document.getElementById('kf-q'); if (el && was && document.activeElement !== el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); } }, 260);
     });
     /* hotfix515: 편직공장 · 파생 품목 거르기 = 글자로 찾는 목록 상자. 비우고 나가면 전체 */
     const kfCombo = (id, items, get, set, label) => { const el = document.getElementById(id); if (!el || typeof attachPickList !== 'function') return;
@@ -39743,7 +39751,7 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
     if (!document.getElementById('kf-hcat')) state.kfCat = ''; if (!document.getElementById('kf-hgreige')) state.kfGreige = '';   /* hotfix524: 머리 거르개를 뺐다 — 보이지 않는 거름이 남지 않게 */
     kfCombo('kf-hgreige', kfGreigeItems, () => state.kfGreige || '', v => { state.kfGreige = v; }, kfGreigeLabel);
     document.querySelectorAll('#dash-body .kf-gset').forEach(b => b.addEventListener('click', () => openGreigeSetModal(b.dataset.fid)));
-    { const hq = document.getElementById('kf-hq'); if (hq) { hq.addEventListener('click', ev => ev.stopPropagation()); hq.addEventListener('input', () => { clearTimeout(bindKnitFeeTab._t2); bindKnitFeeTab._t2 = setTimeout(() => { state.kfQ = hq.value; renderDashboard(); const el = document.getElementById('kf-hq'); if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); } }, 260); }); } }
+    { const hq = document.getElementById('kf-hq'); if (hq) { hq.addEventListener('click', ev => ev.stopPropagation()); hq.addEventListener('input', () => { clearTimeout(bindKnitFeeTab._t2); bindKnitFeeTab._t2 = setTimeout(() => { const ae0 = document.activeElement; const was = !ae0 || ae0 === document.body || ae0.id === 'kf-hq'; state.kfQ = hq.value; renderDashboard(); const el = document.getElementById('kf-hq'); if (el && was && document.activeElement !== el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); } }, 260); }); } }
     document.querySelectorAll('#dash-body .kf-sort').forEach(el => el.addEventListener('click', () => { const k = el.dataset.key; const s = state.kfSort; state.kfSort = (!s || s.key !== k) ? { key: k, dir: 1 } : (s.dir === 1 ? { key: k, dir: -1 } : null); renderDashboard(); }));
     document.getElementById('kf-closed')?.addEventListener('change', ev => { state.kfClosed = !!ev.target.checked; renderDashboard(); });
     // hotfix417: 구분 · 샘플도 보기 · [+ 생지 추가]
@@ -48264,7 +48272,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
   function pinDashTop(bodyArg) {
     const body = bodyArg || document.getElementById('dash-body');
     if (!body) return;
-    if (!bodyArg) { const a = document.activeElement; if (a && a.__composing && body.contains(a) && body.querySelector('.dash-pin')) return; }   /* hotfix559 */
+    if (!bodyArg) { const a = document.activeElement; if (a && (a.__composing || (window.hwIsSearchBox && window.hwIsSearchBox(a))) && body.contains(a) && body.querySelector('.dash-pin')) return; }   /* hotfix559 · 587: 치고 있는 검색 칸의 윗칸을 옮기지 않는다(옮기면 포커스가 빠짐) */
     // 지난번 감싸개를 먼저 푼다 (hotfix503: 안쪽 어디에 있든)
     const old = body.querySelector('.dash-pin');
     if (old) { const par = old.parentElement; while (old.firstChild) par.insertBefore(old.firstChild, old); old.remove(); }
@@ -55654,7 +55662,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
       
       // hotfix416: 다른 공장으로 이동 (공장간이동 기획서 v2 길 ③ — 출고 줄에 받는 곳 + move 표시, 양쪽 미리 보기)
       if (viewMode === 'move') {
-        const facs = knitFactoryList().filter(v => vendorKey(v) !== vendorKey(wo.recipient));
+        const facs = knitFactoryList().filter(v => vendorKey(v) !== vendorKey(wo.recipient) && (window.__hwGs ? window.__hwGs.normV(v) !== window.__hwGs.normV(wo.recipient) : true));   /* hotfix587 */
         body += `<div style="background:#eff6ff;padding:14px;border-radius:4px;border:2px solid #1e40af;">
           <div style="font-size:13px;font-weight:700;margin-bottom:10px;color:#1e40af;">다른 공장으로 이동 — ${escapeHtml(wo.recipient || '')} → 받는 곳 (판매 출고가 아닙니다)</div>
           <div style="display:grid;grid-template-columns:1.3fr 1fr 1fr 1fr 1.6fr;gap:8px;margin-bottom:10px;">
@@ -56697,7 +56705,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix586';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
+  const VERSION = 'v2.53 hotfix587';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
