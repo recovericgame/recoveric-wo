@@ -249,7 +249,7 @@ import { initializeFirestore, getFirestore, persistentLocalCache, persistentMult
  *   읽는 것: proc_acc/{내 uid} · proc_pub/{내 업체}.gs (현일텍스가 보낸 생지출고) · proc_log(내 업체 것만)
  *   쓰는 것: proc_log 한 줄 — kind 'ship' part 'gs' (body 절 · n kg · ref 송장 사진) · kind 'st' part 'gs' stage seen | ack_cxl | photo
  *   사진: Storage gs_photos/{업체}/{생지출고}_{시각}.jpg */
-const KVER = 'k36 (hotfix600)';
+const KVER = 'k37 (hotfix601)';
 /* hotfix572(대표 10/1): 거래 원단회사 고르기 — FABIWOS 는 여러 원단회사에 팔 프로그램. 편직공장 한 곳이 여러 원단회사와 거래하므로
  *   계정(proc_acc.companies)에 거래 원단회사 목록 · 위 [→ 원단회사 ▾] 와 삼선 메뉴에서 고름 · 고른 회사의 할 일 · 재고 · 보낸 내역만 보임
  *   지금은 현일텍스 한 곳 (이 서버 = 현일텍스 자료). 다른 원단회사가 FABIWOS 를 쓰면 그 회사 자료 자리(co.src)를 더해 같은 앱에서 바꿔 봄 */
@@ -703,10 +703,14 @@ const kMvL = () => (Array.isArray(S.mv) ? S.mv : []);
 function kMvMine(x, st) { return S.logs.filter(l => l.by === 'vendor' && l.kind === 'st' && l.stage === st && l.k === x.k).sort((a, b) => tOf(b) - tOf(a))[0] || null; }
 function kMvAck(l) { return l ? (S.logs.find(u => u.by === 'us' && u.kind === 'note' && u.ref === l.id) || null) : null; }
 const kMvRecent = x => (Date.now() - (Date.parse(x.date || '') || 0)) < 14 * 864e5;
+/* hotfix601: 원사이동 의뢰서(ym: + 번호 YM-)도 생지이동 의뢰서처럼 — 보내는 곳 [보냈어요] · 받는 곳은 남은 것이 있을 때만 할 일 · 받은 수 = 지금까지 받은 합계 */
+const kMvYm = x => String(x.k).startsWith('ym:') && !!x.no;
+const kMvTracked = x => String(x.k).startsWith('gm:') || kMvYm(x);
 function kMvTodo(x) {
   if (!x || x.st === 'cancel') return false;
-  if (x.role === 'out') return String(x.k).startsWith('gm:') && x.left > 0 && !kMvMine(x, 'mv_send');
+  if (x.role === 'out') return kMvTracked(x) && x.left > 0 && !kMvMine(x, 'mv_send');
   if (kMvMine(x, 'mv_recv')) return false;
+  if (kMvYm(x)) return x.left > 0;
   if (String(x.k).startsWith('gm:')) return x.st === 'part' || x.st === 'done' ? kMvRecent(x) || x.st === 'part' : false;
   return kMvRecent(x);
 }
@@ -715,6 +719,7 @@ const kMvU = x => x.u || (String(x.k).startsWith('ym:') ? 'kg' : '절');
 function kMvStat(x) {
   if (x.st === 'cancel') return ['취소됨', 't-s'];
   if (String(x.k).startsWith('gm:')) return x.st === 'done' ? [CN() + ' 이동완료', 't-g'] : x.st === 'part' ? [`일부 이동 ${kQ(x.got)}/${kQ(x.qty)}`, 't-o'] : [CN() + ' 이동 대기', 't-y'];
+  if (kMvYm(x)) return x.st === 'done' ? [CN() + ' 이동완료', 't-g'] : x.st === 'part' ? [`일부 받음 ${kQ(x.got)}/${kQ(x.qty)}${kMvU(x)}`, 't-o'] : ['이동 중', 't-y'];
   return [CN() + ' 기록 완료', 't-g'];
 }
 function kMvCard(x) {
@@ -727,13 +732,13 @@ function kMvCard(x) {
   const oth = other ? `<div class="k-meta" style="margin-top:4px">${out ? '받는 곳' : '보내는 곳'}: ${other.stage === 'mv_send' ? '보냈어요 ' + kQ(other.n) + u : (other.reason === 'diff' ? '수량 다름 ' + kQ(other.n) + u : '잘 받았어요 ' + kQ(other.n) + u)}</div>` : '';
   let btn = '';
   if (x.st !== 'cancel') {
-    if (out && String(x.k).startsWith('gm:') && x.left > 0) btn = `<button type="button" class="k-go${s ? ' gray' : ''}" data-mvs="${esc(x.k)}">${s ? '다시 알리기 (보낸 수 고침)' : '보냈어요'}</button>`;
-    if (!out) btn = `<div class="row2" style="margin-top:10px"><button type="button" class="no" data-mvd="${esc(x.k)}">수량이 달라요</button><button type="button" class="ok" data-mvr="${esc(x.k)}">${r ? '다시 · 잘 받았어요' : '잘 받았어요'}</button></div>`;
+    if (out && kMvTracked(x) && x.left > 0) btn = `<button type="button" class="k-go${s ? ' gray' : ''}" data-mvs="${esc(x.k)}">${s ? '다시 알리기 (보낸 수 고침)' : '보냈어요'}</button>`;
+ if (!out && !(kMvYm(x) && !(x.left > 0))) btn = `<div class="row2" style="margin-top:10px"><button type="button" class="no" data-mvd="${esc(x.k)}">수량이 달라요</button><button type="button" class="ok" data-mvr="${esc(x.k)}">${r ? '다시 · 잘 받았어요' : '잘 받았어요'}</button></div>`;
   }
   const big = out ? (x.left > 0 ? x.left : x.qty) : (String(x.k).startsWith('gm:') && x.left > 0 && !x.got ? x.qty : (x.got || x.qty));
   return `<div class="k-card ${kMvTodo(x) ? 'new' : ''}" data-mk="${esc(x.k)}"><span class="k-tag ${out ? 't-o' : 't-g'}">${out ? '보낼 것 → ' + esc(x.to) : '받을 것 ← ' + esc(x.from)}</span> <span class="k-tag ${st[1]}">${esc(st[0])}</span> <span class="k-tag t-s">${x.t === 'y' ? '원사' : '생지'}</span>
     <div class="k-it">${esc(x.item)}${lot}${x.color ? ' <span style="font-size:15px;color:#475569">· ' + esc(x.color) + '</span>' : ''}</div>
-    <div class="k-q3"><div><small>${String(x.k).startsWith('gm:') ? '의뢰' : '이동'}</small><b>${kQ(x.qty)}${u}</b></div><div><small>${out ? '남음' : '들어온 것'}</small><b>${out ? kQ(x.left) : kQ(x.got)}</b></div><div class="left"><small>${esc(x.date ? x.date.slice(5).replace('-', '/') : '')}</small><b style="font-size:12.5px;line-height:1.3;word-break:break-all">${x.no ? esc(x.no) : '-'}</b></div></div>
+    <div class="k-q3"><div><small>${kMvTracked(x) ? '의뢰' : '이동'}</small><b>${kQ(x.qty)}${u}</b></div><div><small>${out ? '남음' : '들어온 것'}</small><b>${out ? kQ(x.left) : kQ(x.got)}</b></div><div class="left"><small>${esc(x.date ? x.date.slice(5).replace('-', '/') : '')}</small><b style="font-size:12.5px;line-height:1.3;word-break:break-all">${x.no ? esc(x.no) : '-'}</b></div></div>
     <div class="k-meta">${esc(x.from)} → <b>${esc(x.to)}</b>${x.want ? ' · 희망일 ' + esc(x.want.slice(5).replace('-', '/')) : ''}${x.kg ? ' · ' + kQ(x.kg) + 'kg' : ''}</div>
     ${x.memo ? `<div class="k-note">${esc(x.memo)}</div>` : ''}${rep}${oth}${btn}</div>`;
 }
@@ -749,12 +754,12 @@ function kMv() {
   return h + `<div class="empty" style="padding:14px 10px;font-size:12.5px">보내는 곳은 [보냈어요] · 받는 곳은 [잘 받았어요] / [수량이 달라요]<br>숫자는 ${esc(CN())}가 확인하고 맞춥니다</div>`;
 }
 function kMvSheet(x, mode) {   /* mode: send | recv | diff */
-  const u = kMvU(x); const exp = mode === 'send' ? (x.left > 0 ? x.left : x.qty) : (String(x.k).startsWith('gm:') && x.left > 0 ? x.left : (x.got || x.qty));
+  const u = kMvU(x); const exp = mode === 'send' ? (x.left > 0 ? x.left : x.qty) : kMvYm(x) ? Math.round(((x.got || 0) + (x.left || 0)) * 10) / 10 : (String(x.k).startsWith('gm:') && x.left > 0 ? x.left : (x.got || x.qty));   /* 원사이동: 받은 합계로 */
   const st = { j: exp, n: '', busy: false, tok: 0 };
-  if (mode === 'recv') { if (!confirm(`${x.item} ${x.lot || ''}\n${x.from} → ${x.to}\n\n${kQ(exp)}${u} 잘 받았나요?`)) return; kMvPut(x, 'mv_recv', exp, exp, '', ''); return; }
+  if (mode === 'recv') { if (!confirm(`${x.item} ${x.lot || ''}\n${x.from} → ${x.to}\n\n${kMvYm(x) && x.got ? '지금까지 받은 합계 ' : ''}${kQ(exp)}${u} 잘 받았나요?`)) return; kMvPut(x, 'mv_recv', exp, exp, '', ''); return; }
   const draw = () => {
     st.tok = sheet(`<h3>${mode === 'send' ? '보냈어요' : '수량이 달라요'} — ${esc(x.item)} <span style="color:#b45309">${esc(x.lot || '')}</span></h3><div class="sub">${esc(x.from)} → ${esc(x.to)} · ${mode === 'send' ? '의뢰' : '들어와야 할 것'} ${kQ(exp)}${u}</div>
-      <div class="k-lab">${mode === 'send' ? '몇 ' + u + ' 보냈어요?' : '실제로 몇 ' + u + ' 받았어요?'}</div>
+      <div class="k-lab">${mode === 'send' ? '몇 ' + u + ' 보냈어요?' : (kMvYm(x) ? '지금까지 실제로 받은 합계 (' + u + ')' : '실제로 몇 ' + u + ' 받았어요?')}</div>
       <div class="k-num"><button type="button" id="mv-m">−</button><input id="mv-j" type="number" inputmode="decimal" value="${kQ(st.j)}"><button type="button" id="mv-p">+</button></div>
       <div class="k-lab">${mode === 'send' ? '송장 번호 · 메모' : '어떻게 다른지'} (안 적어도 됩니다)</div>
       <div class="k-num"><input id="mv-n" type="text" placeholder="${mode === 'send' ? '예: 송장 1002-03 · 오후 차' : '예: 2절 덜 왔음'}" style="font-size:17px;font-weight:600;text-align:left;padding:0 12px" value="${esc(st.n)}"></div>

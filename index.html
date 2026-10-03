@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="FABIWOS">
 <meta name="mobile-web-app-capable" content="yes">
-<title>FABIWOS v2.53 hotfix600</title>
+<title>FABIWOS v2.53 hotfix601</title>
 
 <!-- PWA Manifest (인라인 data URL) -->
 <script>
@@ -89,6 +89,13 @@
 .hw-ns-row td { background: #fff7f7 !important; } .hw-ns-memo { color: #b91c1c; font-weight: 800; font-size: 12px; line-height: 1.5; } .hw-ns-memo small { display: block; color: #9f1239; font-weight: 600; font-size: 10.5px; }
 .hw-ns-acts { display: flex; gap: 5px; margin-top: 4px; flex-wrap: nowrap; } .hw-ns-acts button { font-size: 11px; padding: 3px 9px; white-space: nowrap; } .hw-ns-acts .hw-ns-knit { background: #1e3a8a; color: #fff; border-color: #1e3a8a; font-weight: 800; } .hw-ns-acts .hw-ns-buy { background: #0f766e; color: #fff; border-color: #0f766e; font-weight: 800; }
 .gst.mvd { color: #991b1b; background: #fee2e2; border-radius: 8px; padding: 1px 6px; }
+/* hotfix601: 원사이동 · 반품 · 업체별 입출고 내역 */
+.gst.r { color: #b91c1c; }
+.ys-vlog { margin-top: 14px; border: 1px solid #e2e8f0; border-radius: 10px; background: #fff; overflow: hidden; }
+.ys-vlog-h { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: baseline; padding: 9px 12px; background: #f8fafc; border-bottom: 1px solid #e2e8f0; font-size: 12.5px; color: #475569; }
+.ys-vlog-h b { color: #0f172a; }
+.ys-vlog-t { width: 100%; border-collapse: collapse; font-size: 12.5px; } .ys-vlog-t th { position: sticky; top: 0; background: #f1f5f9; color: #475569; font-weight: 800; padding: 7px 8px; border-bottom: 1px solid #e2e8f0; text-align: center; white-space: nowrap; }
+.ys-vlog-t td { padding: 6px 8px; border-bottom: 1px solid #f1f5f9; text-align: center; } .ys-vlog-t .l { text-align: left; } .ys-vlog-t .r { text-align: right; }
 .hv-bar select { padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 9px; font: inherit; font-size: 13px; } .hv-n { font-size: 12px; color: #64748b; font-weight: 700; }
 .hv-tw { background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; overflow: auto; }
 .hv-seg2 { display: flex; gap: 6px; margin: 12px 0 8px; } .hv-seg2 button { border: 1px solid #d7dde7; background: #fff; border-radius: 18px; padding: 7px 14px; font-weight: 800; font-size: 13px; color: #475569; cursor: pointer; font-family: inherit; } .hv-seg2 button.on { background: #0f2140; border-color: #0f2140; color: #fff; } .hv-seg2 em { font-style: normal; background: #dc2626; color: #fff; border-radius: 9px; padding: 0 7px; margin-left: 4px; font-size: 12px; }
@@ -15147,11 +15154,13 @@ window.addEventListener('firebase-ready', () => {
     const wo = (state.allWorkOrders || []).find(x => x && x.id === id); if (!wo) { toast('의뢰서를 찾지 못했습니다', 'error'); return false; }
     if (!canDeleteWo(wo)) { toast('삭제 권한이 없습니다', 'info'); return false; }
     const nC = (wo.colors || []).filter(c => c && (c.name || c.body || c.rib)).length; const it = (wo.body && wo.body.item) || (wo.rib && wo.rib.item) || '';
-    if (!confirm(`이 의뢰서를 휴지통으로 보낼까요?\n\n[${wo.wo_number || ''}] ${it}${nC > 1 ? '\n이 의뢰서의 컬러 ' + nC + '개가 모두 빠집니다' : ''}\n\n· 가공소 휴대폰 화면 · 일일 보고에서도 빠집니다\n· 휴지통에서 복구할 수 있습니다(완전 삭제가 아닙니다)`)) return false;
+    let __yr601 = null; if (wo.type === '원사' && window.hwYarnDelGate) { __yr601 = await window.hwYarnDelGate(wo); if (__yr601 === false) return false; }   /* hotfix601: 원사 완전 반품 */
+    if (!__yr601 && !confirm(`이 의뢰서를 휴지통으로 보낼까요?\n\n[${wo.wo_number || ''}] ${it}${nC > 1 ? '\n이 의뢰서의 컬러 ' + nC + '개가 모두 빠집니다' : ''}\n\n· 가공소 휴대폰 화면 · 일일 보고에서도 빠집니다\n· 휴지통에서 복구할 수 있습니다(완전 삭제가 아닙니다)`)) return false;
     try {
       await updateDoc(doc(db, C('workorders'), id), { deleted: true, deleted_at: serverTimestamp(), deleted_by: state.user.email, updated_at: serverTimestamp(), updated_by: state.user.email });
       wo.deleted = true; if (state.currentWorkOrderId === id) { state.currentWorkOrderId = null; state.currentWoNumber = null; }
       toast('휴지통으로 보냈습니다 (복구 가능)', 'success');
+      if (__yr601 && window.hwYarnFullReturn) { try { await window.hwYarnFullReturn(wo, __yr601); } catch (e) { console.warn('[완전 반품]', e && e.message); } }
       try { if (window.hwProc && window.hwProc.publish) window.hwProc.publish(); } catch (_) {} try { if (window.hwDrRefresh) window.hwDrRefresh(); } catch (_) {}
       return true;
     } catch (e) { toast('삭제 실패: ' + ((e && e.message) || e), 'error'); return false; }
@@ -16423,6 +16432,12 @@ window.addEventListener('firebase-ready', () => {
       state.yarnLedger = []; state.yarnLedgerLoaded = true; state.yarnLedgerErr = String(err.message || err);
       if (state.uiMode === 'dashboard' && (state.dashView === 'yarnStock' || state.dashView === 'moves')) renderDashboard();
     });
+    // hotfix601: 원사이동 · 반품 의뢰서 구독 — stock/yarn_mv (재고는 stock/yarn 원장만 셈 · 이 문서는 의뢰서 기록)
+    onSnapshot(doc(db, C('stock'), 'yarn_mv'), snap => {
+      const d = snap.exists() ? snap.data() : null; state.yarnMv = (d && Array.isArray(d.items)) ? d.items : []; state.yarnMvLoaded = true;
+      if (state.uiMode === 'dashboard' && (state.dashView === 'yarn' || state.dashView === 'yarnStock' || state.dashView === 'moves')) renderDashboard();
+      try { if (window.__hwYmListRefresh) window.__hwYmListRefresh(); } catch (_) {} try { if (window.hwYmAutoRecv) window.hwYmAutoRecv(); } catch (_) {}
+    }, err => { console.warn('[yarnMv sub]', err.message); state.yarnMv = []; state.yarnMvLoaded = true; });
     // hotfix413: 생지 원장 구독 — stock/greige (편직완료 · 뒤에 이동·조정)
     onSnapshot(doc(db, C('stock'), 'greige'), snap => {
       const d = snap.exists() ? snap.data() : null;
@@ -20969,7 +20984,8 @@ function specGreigeColors(fid) {
         const wo = state.allWorkOrders.find(x => x.id === id);
         if (!wo) return;
         if (!canDeleteWo(wo)) { toast('삭제 권한이 없습니다', 'info'); return; }
-        if (!confirm(`이 의뢰서를 휴지통으로 보낼까요?\n\n[${wo.wo_number || ''}]\n\n(휴지통에서 복구할 수 있습니다. 완전 삭제가 아닙니다.)`)) return;
+        let __yr601 = null; if (wo.type === '원사' && window.hwYarnDelGate) { __yr601 = await window.hwYarnDelGate(wo); if (__yr601 === false) return; }   /* hotfix601: 원사 완전 반품 */
+        if (!__yr601 && !confirm(`이 의뢰서를 휴지통으로 보낼까요?\n\n[${wo.wo_number || ''}]\n\n(휴지통에서 복구할 수 있습니다. 완전 삭제가 아닙니다.)`)) return;
         { const G = (wo.type === '원사' && typeof yarnVendorGroups === 'function') ? yarnVendorGroups(wo) : [];   /* hotfix493: 구매처별 카드는 한 건 — 모든 장이 같이 간다 */
           if (G.length > 1 && !confirm(`한 번 더 확인합니다.\n\n[${wo.wo_number || ''}] 는 원사 투입량 계산기 등으로 만든 한 건이라\n구매처별 의뢰서 ${G.length}장이 모두 지워집니다.\n\n${G.map((g, n) => (n + 1) + '. ' + (g.vendor || '구매처 없음')).join('\n')}\n\n${G.length}장 모두 휴지통으로 보낼까요?`)) return; }
         btn.disabled = true;
@@ -20983,6 +20999,7 @@ function specGreigeColors(fid) {
           });
           if (state.currentWorkOrderId === id) { state.currentWorkOrderId = null; state.currentWoNumber = null; }
           toast('휴지통으로 이동했습니다 (복구 가능)', 'success');
+          if (__yr601 && window.hwYarnFullReturn) { try { await window.hwYarnFullReturn(wo, __yr601); } catch (e2) { console.warn('[완전 반품]', e2 && e2.message); } }
         } catch (err) {
           btn.disabled = false;
           toast('삭제 실패: ' + (err.message || err), 'error');
@@ -21464,7 +21481,9 @@ function validateBlendSum(blends, label) {
   
   document.getElementById('delete-btn').addEventListener('click', async () => {
     if (!state.currentWorkOrderId) return;
-    if (!confirm('이 의뢰서를 삭제하시겠습니까?\n(휴지통으로 이동되며, 대시보드에서 "삭제됨 포함" 체크 시 복구할 수 있습니다)')) return;
+    const __w601 = (state.allWorkOrders || []).find(w => w && w.id === state.currentWorkOrderId); let __yr601 = null;
+    if (__w601 && __w601.type === '원사' && window.hwYarnDelGate) { __yr601 = await window.hwYarnDelGate(__w601); if (__yr601 === false) return; }   /* hotfix601: 원사 완전 반품 */
+    if (!__yr601 && !confirm('이 의뢰서를 삭제하시겠습니까?\n(휴지통으로 이동되며, 대시보드에서 "삭제됨 포함" 체크 시 복구할 수 있습니다)')) return;
     try {
       // Soft delete: 실제 삭제 대신 deleted=true 플래그
       await updateDoc(doc(db, C('workorders'), state.currentWorkOrderId), {
@@ -21473,6 +21492,7 @@ function validateBlendSum(blends, label) {
         deleted_by: state.user.email
       });
       toast('삭제 완료 (휴지통 이동)', 'success');
+      if (__yr601 && window.hwYarnFullReturn) { try { await window.hwYarnFullReturn(__w601, __yr601); } catch (e2) { console.warn('[완전 반품]', e2 && e2.message); } }
       resetForm();
     } catch (e) { toast('삭제 실패: ' + e.message, 'error'); }
   });
@@ -29652,22 +29672,36 @@ function validateBlendSum(blends, label) {
     yarnLedger().forEach(r => {
       if (!r || r.void) return;
       const k = yarnLedgerKey(r);
-      const o = bag[k] || (bag[k] = { key: k, yarn: r.yarn, yid: r.yid || '', color: r.color || '', vendor: r.vendor || '', vendor_vid: r.vendor_vid || '', in_kg: 0, use_kg: 0, adjust_kg: 0, move_kg: 0, stock_kg: 0, n: 0 });
+      const o = bag[k] || (bag[k] = { key: k, yarn: r.yarn, yid: r.yid || '', color: r.color || '', vendor: r.vendor || '', vendor_vid: r.vendor_vid || '', in_kg: 0, use_kg: 0, adjust_kg: 0, move_kg: 0, ret_kg: 0, stock_kg: 0, n: 0 });   /* hotfix601: ret_kg = 반품(−) */
       const kg = parseFloat(r.kg) || 0;
-      if (r.kind === 'in') o.in_kg += kg; else if (r.kind === 'adjust') o.adjust_kg += kg; else if (r.kind === 'move') o.move_kg += kg; else if (r.kind === 'use') o.use_kg += kg;
+      if (r.kind === 'in') o.in_kg += kg; else if (r.kind === 'adjust') o.adjust_kg += kg; else if (r.kind === 'move') o.move_kg += kg; else if (r.kind === 'use') o.use_kg += kg; else if (r.kind === 'return') o.ret_kg += kg;
       if (!o.color && r.color) o.color = r.color;
       o.stock_kg += (r.kind === 'use' ? -kg : kg); o.n++;
     });
     return Object.values(bag).sort((a, b) => (a.yarn + a.color + a.vendor).localeCompare(b.yarn + b.color + b.vendor, 'ko'));
   }
+  /* hotfix601(검토 지적): 원장을 통째로 덮지 않음 — 이 PC 가 바꾼 줄(더함 · 고침 · 뺌)만 서버 최신본에 얹는다 (트랜잭션)
+   *   다른 PC 가 그 사이 넣은 줄(원사이동 · 반품 · 입고 …)이 지워지지 않게. 줄은 모두 id 가 있음 */
   async function yarnLedgerSave(items) {
     if (!state.user) return false;
+    const base = yarnLedger(); const bm = new Map(base.filter(r => r && r.id).map(r => [r.id, JSON.stringify(r)]));
+    const nm = new Map((items || []).filter(r => r && r.id).map(r => [r.id, r]));
+    const removed = new Set(base.filter(r => r && r.id && !nm.has(r.id)).map(r => r.id));
+    const changed = (items || []).filter(r => r && r.id && bm.get(r.id) !== JSON.stringify(r));
+    const ref = doc(db, C('stock'), 'yarn'); let out = null;
     try {
-      await setDoc(doc(db, C('stock'), 'yarn'), { items, updated_at: serverTimestamp(), updated_by: state.user.email || '' });
-      state.yarnLedger = items;
+      await runTransaction(db, async tx => {
+        const s = await tx.get(ref); const fresh = (s.exists() && Array.isArray(s.data().items)) ? s.data().items : [];
+        const ch = new Map(changed.map(r => [r.id, r])); const seen = new Set();
+        const merged = fresh.filter(r => !(r && r.id && removed.has(r.id))).map(r => { if (r && r.id && ch.has(r.id)) { seen.add(r.id); return ch.get(r.id); } return r; });
+        changed.forEach(r => { if (!seen.has(r.id)) merged.push(r); });
+        out = merged; tx.set(ref, { items: merged, updated_at: serverTimestamp(), updated_by: state.user.email || '' });
+      });
+      state.yarnLedger = out || items;
       return true;
     } catch (e) { toast('원사 재고 원장 저장 실패: ' + e.message, 'error'); return false; }
   }
+  window.__hwYarnLedgerSave = items => yarnLedgerSave(items);   /* 시험용 */
   // 발주서의 사종 줄마다 입고 kg — 송장 kg(총량)를 넣었으면 발주 kg 비율로 나눠 담고, 안 넣었으면 발주 kg 그대로
   function yarnReceiveLines(wo, totalKg) {
     const ys = (wo.yarns || []).filter(y => y && (y.type || y.total_kg));
@@ -29676,7 +29710,7 @@ function validateBlendSum(blends, label) {
     return ys.map(y => {
       const own = parseFloat(y.total_kg) || 0;
       const kg = (t > 0 && sum > 0) ? Math.round(t * own / sum * 10) / 10 : own;
-      return { yarn: String(y.type || '').trim(), yid: (typeof yarnYidOf === 'function' ? yarnYidOf(y.type) : '') || '', color: String(y.color || '').trim(), brand: String(y.brand || '').trim(), vendor: String(y.dest || '').trim(), vendor_vid: (typeof vendorVidOf === 'function' ? vendorVidOf(y.dest) : '') || '', kg };
+      return { yarn: String(y.type || '').trim(), yid: (typeof yarnYidOf === 'function' ? yarnYidOf(y.type) : '') || '', color: String(y.color || '').trim(), brand: String(y.brand || '').trim(), vendor: String(y.dest || '').trim(), vendor_vid: (typeof vendorVidOf === 'function' ? vendorVidOf(y.dest) : '') || '', supplier: String(y.vendor || wo.supplier || '').trim(), kg };   /* hotfix601: 줄마다 구매처(반품 받는 곳) */
     });
   }
   // [입고완료] — 발주서에 received 를 적고, 원장에 kind 'in' 줄을 넣고(같은 wo_id 는 갈아 끼움), 완료로 바꾼다
@@ -29700,6 +29734,7 @@ function validateBlendSum(blends, label) {
   // 되돌리기(최고관리자) — 원장 줄은 void, 의뢰서는 진행 중으로
   async function yarnReceiveUndo(wo) {
     if (!isOwnerUser()) { toast('입고완료 되돌리기는 최고관리자만 됩니다', 'error'); return false; }
+    if (yarnLedger().some(r => r && !r.void && r.kind === 'return' && r.wo_id === wo.id)) { toast('이 구매 건에 반품 기록이 있습니다 — [원사이동 · 반품]에서 반품을 먼저 취소한 뒤 되돌리십시오', 'warning'); return false; }   /* hotfix601 */
     const at = new Date().toISOString(), by = state.user.email || '';
     const items = yarnLedger().map(r => (r && r.wo_id === wo.id && r.kind === 'in' && !r.void) ? Object.assign({}, r, { void: true, void_by: by, void_at: at }) : r);
     if (!(await yarnLedgerSave(items))) return false;
@@ -30731,7 +30766,11 @@ function validateBlendSum(blends, label) {
       const it = (wo.items || [])[x.item_idx != null ? x.item_idx : 0] || {}; const j = parseFloat(x.jul) || 0;
       out.push({ k: 'gl:' + x.id, t: 'g', no: wo.wo_number || '', date: String(x.date || '').slice(0, 10), role: fr === v ? 'out' : 'in', from: wo.recipient || '', to: x.dest || '', item: hwFacTailOff(gmItemName(wo, x.item_idx || 0), wo.recipient), lot: greigeNoClean(it.greige_no) || '', color: String(it.color || ''), qty: j, got: j, left: 0, st: 'done', kg: Math.round((parseFloat(x.kg) || 0) * 10) / 10, memo: String(x.memo || '').slice(0, 200), u: '절' }); }); });
     const seen = new Set(); const YL = (typeof yarnLedger === 'function') ? yarnLedger() : [];
-    YL.forEach(r => { if (!r || r.kind !== 'move' || !r.move_id || seen.has(r.move_id)) return; seen.add(r.move_id);
+    (window.hwYmAll ? window.hwYmAll() : []).forEach(m => { if (!m || m.kind !== 'move') return; seen.add(m.id); const fr = gsNormV(m.from), to = gsNormV(m.to); if (fr !== v && to !== v) return;   /* hotfix601: 원사이동 의뢰서 */
+      const left = window.hwYmLeft(m), got = Math.round((m.rec || []).filter(x => x && !x.void).reduce((a, x) => a + (parseFloat(x.kg) || 0), 0) * 10) / 10; const st = m.status === 'cancel' ? 'cancel' : left === 0 ? 'done' : got ? 'part' : 'wait';
+      if ((st === 'done' || st === 'cancel') && !recent(m.cancel_at || ((m.rec || []).length ? m.rec[m.rec.length - 1].date : m.date))) return;
+      out.push({ k: 'ym:' + m.id, t: 'y', u: 'kg', no: m.no || '', date: m.date || '', role: fr === v ? 'out' : 'in', from: m.from || '', to: m.to || '', item: m.yarn || '', lot: '', color: (m.color && !yarnColorIsLW(m.color)) ? m.color : '', qty: parseFloat(m.kg) || 0, got, left, st, want: m.want || '', memo: String(m.memo || '').slice(0, 120) }); });
+    YL.forEach(r => { if (!r || r.kind !== 'move' || !r.move_id || seen.has(r.move_id) || r.ym) return; seen.add(r.move_id);
       const o = YL.find(x => x && x.move_id === r.move_id && (parseFloat(x.kg) || 0) < 0) || r; if (o.void || !recent(o.date)) return;
       const fr = gsNormV(o.vendor), to = gsNormV(o.dest); if (fr !== v && to !== v) return; const kg = Math.abs(parseFloat(o.kg) || 0);
       out.push({ k: 'ym:' + r.move_id, t: 'y', no: '', date: String(o.date || '').slice(0, 10), role: fr === v ? 'out' : 'in', from: o.vendor || '', to: o.dest || '', item: o.yarn || '', lot: '', color: (o.color && !yarnColorIsLW(o.color)) ? o.color : '', qty: kg, got: kg, left: 0, st: 'done', memo: String(o.memo || '').slice(0, 200), u: 'kg' }); });
@@ -30824,6 +30863,365 @@ function validateBlendSum(blends, label) {
     const obs = () => { if (document.getElementById('hw-gm-list')) paint(document.getElementById('hw-gm-list')); };
     window.__hwGmvListRefresh = obs;
   };
+  /* ===== hotfix601(대표 10/3): 원사이동 의뢰서 · 원사 반품 (일부 · 완전) — 데이터 흐름
+   *   (보내는 곳 · 반품 줄의 업체 코드는 그 재고 줄의 것을 그대로 씀 — 다르면 다른 재고 줄로 갈라짐)
+   *   의뢰서 상자 stock/yarn_mv { items: [ { id, no(YM-· YR-), kind:'move'|'return', date, yarn, yid, color, from, from_vid, to, to_vid, kg, want, memo, status:'wait'|'part'|'done'|'cancel', rec:[{id,kg,date,by,at,log_id,src}], cut, wo_id, wo_number, src, by, at, deleted } ] }
+   *   원장 stock/yarn (재고는 여기만 셈 — 의뢰서는 기록) :
+   *     이동 저장  → 보내는 곳 kind 'move' −kg (ym 표시 · 이동 중)  · 받는 곳은 아직 그대로 ('입고 대기'로만 보임)
+   *     받음(앱 [잘 받았어요] 그대로면 저절로 · 수량이 다르면 PC [받음 처리]) → 받는 곳 kind 'move' +받은 kg
+   *     남은 것 취소 → 보내는 곳으로 kind 'move' +남은 kg (돌아옴)   · 삭제(최고관리자) → 그 의뢰서 줄을 모두 void (처음 그대로)
+   *     반품 → 있는 곳 kind 'return' −kg · 원사 구매의뢰서(YN)에 returns[] 기록 · 완전 반품 = 구매의뢰서를 휴지통으로 보낼 때 남은 입고 kg 전부 반품 줄
+   *       (재고가 모자라도 반품 줄은 남김 — 기록이 우선 · 대신 창에서 "재고 부족 · 마이너스" 알림) · 휴지통 [복구] = 그 반품 줄을 void
+   *   원장 · 의뢰서는 한 트랜잭션(runTransaction)으로 같이 씀 — 두 PC 가 동시에 받아도 두 번 들어가지 않음(앱 보고 id 로 막음) ===== */
+  const ymAll = incDel => (Array.isArray(state.yarnMv) ? state.yarnMv : []).filter(x => x && (incDel || !x.deleted));
+  const ymF1 = x => Math.round((parseFloat(x) || 0) * 10) / 10;
+  const ymNum = v => ymF1(typeof hwNumNorm === 'function' ? hwNumNorm(v) : String(v || '').replace(/,/g, ''));   /* 598 숫자 읽기 (1,050 · 72,5) */
+  const ymGot = m => ymF1((m.rec || []).filter(r => r && !r.void).reduce((a, r) => a + (parseFloat(r.kg) || 0), 0));
+  const ymLeft = m => (!m || m.kind !== 'move' || m.status === 'cancel' || m.deleted) ? 0 : Math.max(0, ymF1((parseFloat(m.kg) || 0) - ymGot(m) - (parseFloat(m.cut) || 0)));
+  const ymNm = m => yarnNameShow(m.yarn || '') + (m.color && !yarnColorIsLW(m.color) ? ' ' + m.color : '');
+  window.hwYmAll = ymAll; window.hwYmLeft = ymLeft;
+  const ymSameYarn = (r, m) => (r.yid && m.yid) ? r.yid === m.yid : vendorKey(r.yarn || '') === vendorKey(m.yarn || '');
+  function ymDstLine(L, m) { return (L || yarnLedger()).filter(r => r && !r.void && gsNormV(r.vendor) === gsNormV(m.to) && ymSameYarn(r, m) && yarnColorKey(r.color || '') === yarnColorKey(m.color || '')).pop() || null; }
+  function ymNextNo(M, pre) { const d = todayYMD().replace(/-/g, '').slice(2); const p = pre + '-' + d + '-'; let mx = 0; (M || []).forEach(x => { const s = String((x && x.no) || ''); if (s.indexOf(p) === 0) mx = Math.max(mx, parseInt(s.slice(p.length), 10) || 0); }); return p + String(mx + 1).padStart(3, '0'); }
+  function ymDests(from) { return (state.vendors || []).filter(v => v && v.name && vendorIsActive(v) && (vendorTypesNorm(v).includes('편직처') || vendorIsStore(v)) && vendorKey(v.name) !== vendorKey(from) && gsNormV(v.name) !== gsNormV(from)).sort((a, b) => (Number(vendorIsStore(b)) - Number(vendorIsStore(a))) || a.name.localeCompare(b.name, 'ko')); }
+  /* 원장 + 의뢰서를 한 번에 — fn(L, M) 이 { L, M, ret } 또는 거짓을 돌려줌 */
+  async function ymTx(fn) {
+    if (!state.user) return false; const by = state.user.email || '';
+    const ra = doc(db, C('stock'), 'yarn'), rb = doc(db, C('stock'), 'yarn_mv'); let out = null;
+    try {
+      await runTransaction(db, async tx => {
+        const a = await tx.get(ra), b = await tx.get(rb);
+        const L = (a.exists() && Array.isArray(a.data().items)) ? a.data().items.slice() : [];
+        const M = (b.exists() && Array.isArray(b.data().items)) ? b.data().items.map(x => Object.assign({}, x)) : [];
+        const r = fn(L, M); out = r || null; if (!r) return;
+        if (r.L) tx.set(ra, { items: r.L, updated_at: serverTimestamp(), updated_by: by });
+        tx.set(rb, { items: r.M, updated_at: serverTimestamp(), updated_by: by });
+      });
+    } catch (e) { toast('원사 이동 · 반품을 저장하지 못했습니다: ' + ((e && e.message) || e), 'error'); return false; }
+    if (!out) return false;
+    if (out.L) state.yarnLedger = out.L; state.yarnMv = out.M;
+    return out.ret === undefined ? true : out.ret;
+  }
+  const ymBase = (row, by, at, date) => ({ yarn: row.yarn, yid: row.yid || '', color: row.color || '', by, at, date: date || todayYMD(), void: false });
+  /* 이동 의뢰서 만들기 — 보내는 곳에서 바로 빠짐(이동 중) */
+  async function ymCreate(row, to, kg, want, memo) {
+    if (!canStockAdjust()) { toast('원사 이동 권한이 없습니다 — [권한 설정]에서 재고조정을 허용받은 사람만 됩니다', 'error'); return false; }
+    kg = ymF1(kg); to = String(to || '').trim();
+    if (!(kg > 0)) { toast('옮길 kg 를 넣어 주십시오', 'warning'); return false; }
+    if (!to || vendorKey(to) === vendorKey(row.vendor) || gsNormV(to) === gsNormV(row.vendor)) { toast('받는 곳을 고르십시오 (보내는 곳과 다른 곳)', 'warning'); return false; }
+    const by = state.user.email || '', at = new Date().toISOString();
+    const res = await ymTx((L, M) => {
+      const id = stockLineId('ym'), no = ymNextNo(M, 'YM');
+      const m = { id, no, kind: 'move', date: todayYMD(), yarn: row.yarn, yid: row.yid || '', color: row.color || '', from: row.vendor, from_vid: row.vendor_vid != null ? row.vendor_vid : (vendorVidOf(row.vendor) || ''), to, to_vid: vendorVidOf(to) || '', kg, want: want || '', memo: String(memo || '').trim(), status: 'wait', rec: [], by, at };
+      L.push(Object.assign(ymBase(row, by, at), { id: id + '_out', kind: 'move', move_id: id, ym: no, vendor: m.from, vendor_vid: m.from_vid, kg: -kg, dest: to, dest_vid: m.to_vid, memo: no + (m.memo ? ' · ' + m.memo : '') }));
+      M.push(m); return { L, M, ret: m };
+    });
+    if (res && res.no) { const w = res.want ? ' · 희망일 ' + res.want.slice(5).replace('-', '/') : '';
+      try { mvTell(res.from, 'ym:' + res.id, res.no, `원사이동 의뢰 ${res.no} — ${ymNm(res)} ${res.kg}kg → ${res.to}${w} · 보내면 [이동]에서 [보냈어요]`, 'req'); mvTell(res.to, 'ym:' + res.id, res.no, `원사가 들어옵니다 ${res.no} — ${res.from} → ${ymNm(res)} ${res.kg}kg${w} · 받으면 [이동]에서 [잘 받았어요]`, 'note'); } catch (_) {} }
+    return res;
+  }
+  /* 받음 — 받는 곳에 더함 (logId = 편직팀 앱 보고 id · 같은 보고는 한 번만) */
+  async function ymRecv(id, kg, date, memo, logId) {
+    const by = (state.user && state.user.email) || '', at = new Date().toISOString();
+    return ymTx((L, M) => {
+      const m = M.find(x => x && x.id === id); if (!m || m.deleted || m.kind !== 'move' || m.status === 'cancel') return false;
+      if (logId && (m.rec || []).some(r => r && r.log_id === logId)) return false;
+      const left = ymLeft(m), q = ymF1(Math.min(ymF1(kg), left)); if (!(q > 0)) return false;
+      const lid = id + '_in' + (m.rec || []).length; const dst = ymDstLine(L, m);   /* 받는 곳에 같은 원사 줄이 있으면 그 열쇠(업체 코드 · 사종 코드)를 그대로 */
+      L.push(Object.assign(ymBase(m, by, at, date), dst ? { yarn: dst.yarn, yid: dst.yid || '', color: dst.color || m.color || '' } : {}, { id: lid, kind: 'move', move_id: id, ym: m.no, vendor: dst ? dst.vendor : m.to, vendor_vid: dst ? (dst.vendor_vid || '') : (m.to_vid || vendorVidOf(m.to) || ''), kg: q, from: m.from, from_vid: m.from_vid || '', memo: m.no + (memo ? ' · ' + memo : '') }));
+      m.rec = (m.rec || []).concat([{ id: lid, kg: q, date: date || todayYMD(), by, at, log_id: logId || '', src: logId ? 'app' : 'pc', memo: String(memo || '') }]);
+      m.status = ymLeft(m) <= 0 ? 'done' : 'part'; return { L, M, ret: { m, q } };
+    });
+  }
+  /* 남은 것 취소 — 보내는 곳으로 돌아옴 */
+  async function ymCancel(id) {
+    const by = (state.user && state.user.email) || '', at = new Date().toISOString();
+    return ymTx((L, M) => {
+      const m = M.find(x => x && x.id === id); if (!m || m.deleted || m.kind !== 'move') return false; const left = ymLeft(m); if (!(left > 0)) return false;
+      L.push(Object.assign(ymBase(m, by, at), { id: id + '_back' + (m.rec || []).length, kind: 'move', move_id: id, ym: m.no, vendor: m.from, vendor_vid: m.from_vid || '', kg: left, from: m.to, memo: m.no + ' · 이동 취소 — 돌아옴' }));
+      m.cut = ymF1((parseFloat(m.cut) || 0) + left); m.status = ymGot(m) > 0 ? 'done' : 'cancel'; m.cancel_at = at; m.cancel_by = by; return { L, M, ret: m };
+    });
+  }
+  /* 반품 — 있는 곳에서 빠지고 구매의뢰서(YN)에 기록 */
+  /* 그 입고 줄의 구매처 — 줄에 적힌 것 · 옛 줄은 구매의뢰서 사종 줄(y.vendor) · 없으면 의뢰서 구매처 */
+  function yrSupOf(wo, r) { if (r && r.supplier) return String(r.supplier).trim(); const ys = (wo && wo.yarns) || []; const y = ys.find(y => y && String(y.type || '').trim() === String((r && r.yarn) || '').trim() && gsNormV(y.dest) === gsNormV(r && r.vendor)) || ys.find(y => y && String(y.type || '').trim() === String((r && r.yarn) || '').trim()); return String((y && y.vendor) || (wo && wo.supplier) || '').trim(); }
+  async function yrCreate(row, wo, kg, date, memo, src, sup) {
+    kg = ymF1(kg); if (!(kg > 0)) { toast('반품 kg 를 넣어 주십시오', 'warning'); return false; }
+    const by = (state.user && state.user.email) || '', at = new Date().toISOString();
+    const res = await ymTx((L, M) => {
+      const id = stockLineId('yr'), no = ymNextNo(M, 'YR');
+      const m = { id, no, kind: 'return', date: date || todayYMD(), yarn: row.yarn, yid: row.yid || '', color: row.color || '', from: row.vendor, from_vid: row.vendor_vid != null ? row.vendor_vid : (vendorVidOf(row.vendor) || ''), to: String(sup || (wo && wo.supplier) || '').trim() || '원사 구매처', kg, memo: String(memo || '').trim(), status: 'done', rec: [], wo_id: wo ? wo.id : '', wo_number: wo ? (wo.wo_number || '') : '', src: src || 'part', by, at };
+      L.push(Object.assign(ymBase(row, by, at, m.date), { id: id + '_ret', kind: 'return', ym_id: id, ym: no, vendor: m.from, vendor_vid: m.from_vid, kg: -kg, dest: m.to, wo_id: m.wo_id, wo_number: m.wo_number, src: m.src, memo: no + (m.memo ? ' · ' + m.memo : '') }));
+      M.push(m); return { L, M, ret: m };
+    });
+    if (res && res.no && wo) {
+      const rs = (Array.isArray(wo.returns) ? wo.returns : []).concat([{ id: res.id, no: res.no, kg, date: res.date, vendor: res.from, yarn: res.yarn, color: res.color, src: res.src, by, at }]);
+      try { await updateDoc(doc(db, C('workorders'), wo.id), { returns: rs, returned_kg: ymF1(rs.filter(x => x && !x.void).reduce((a, x) => a + (parseFloat(x.kg) || 0), 0)), updated_at: serverTimestamp(), updated_by: by }); wo.returns = rs; } catch (e) { toast('재고는 반품했지만 구매의뢰서에 적지 못했습니다: ' + ((e && e.message) || ''), 'warning'); }
+      try { mvTell(res.from, 'yr:' + res.id, res.no, `원사 반품 ${res.no} — ${ymNm(res)} ${kg}kg → ${res.to} 로 보내 주십시오`, 'req'); } catch (_) {}
+    }
+    return res;
+  }
+  /* 반품 · 이동 의뢰서 취소(반품) / 삭제(이동) — 원장 줄 void */
+  async function ymVoid(id, why) {
+    const by = (state.user && state.user.email) || '', at = new Date().toISOString(); let wo = null;
+    const res = await ymTx((L, M) => {
+      const m = M.find(x => x && x.id === id); if (!m) return false;
+      if (!L.some(r => r && !r.void && (r.move_id === id || r.ym_id === id))) return false;   /* 이미 취소된 것 */
+      L = L.map(r => (r && !r.void && (r.move_id === id || r.ym_id === id)) ? Object.assign({}, r, { void: true, void_by: by, void_at: at, void_why: why || '' }) : r);
+      if (m.kind === 'return') { m.status = 'cancel'; m.cancel_at = at; m.cancel_by = by; m.cancel_why = why || ''; } else { m.deleted = { at, by, why: why || '' }; }
+      return { L, M, ret: m };
+    });
+    if (res && res.kind === 'return' && res.wo_id) { wo = (state.allWorkOrders || []).find(w => w && w.id === res.wo_id);
+      if (wo) { const rs = (wo.returns || []).map(x => x && x.id === id ? Object.assign({}, x, { void: true, void_at: at, void_by: by }) : x);
+        try { await updateDoc(doc(db, C('workorders'), wo.id), { returns: rs, returned_kg: ymF1(rs.filter(x => x && !x.void).reduce((a, x) => a + (parseFloat(x.kg) || 0), 0)), updated_at: serverTimestamp(), updated_by: by }); wo.returns = rs; } catch (_) {} } }
+    return res;
+  }
+  /* 이 재고 줄(사종 · 컬러 · 업체)로 들어온 구매의뢰서들 — 입고 kg · 이미 반품 kg */
+  function yrSources(row) {
+    const key = row.key || yarnLedgerKey(row); const L = yarnLedger(); const by = {};
+    L.forEach(r => { if (!r || r.void || r.kind !== 'in' || !r.wo_id || yarnLedgerKey(r) !== key) return; const o = by[r.wo_id] || (by[r.wo_id] = { wo_id: r.wo_id, no: r.wo_number || '', in: 0, ret: 0, line: r }); o.in += parseFloat(r.kg) || 0; });
+    L.forEach(r => { if (!r || r.void || r.kind !== 'return' || !r.wo_id || !by[r.wo_id] || yarnLedgerKey(r) !== key) return; by[r.wo_id].ret += -(parseFloat(r.kg) || 0); });
+    return Object.values(by).map(o => { const wo = (state.allWorkOrders || []).find(w => w && w.id === o.wo_id) || null; return Object.assign(o, { in: ymF1(o.in), ret: ymF1(o.ret), wo, sup: yrSupOf(wo, o.line) }); }).sort((a, b) => String(b.no).localeCompare(String(a.no)));
+  }
+  /* ---------- 완전 반품 (구매의뢰서를 휴지통으로) ---------- */
+  function yrFullLines(wo, stockMap) {
+    const L = yarnLedger(); const SM = stockMap || new Map(yarnStockRows().map(r => [r.key, r.stock_kg])); const acc = [];
+    L.filter(r => r && !r.void && r.kind === 'in' && r.wo_id === wo.id).forEach(r => { const key = yarnLedgerKey(r); let o = acc.find(y => y.key === key);
+      if (!o) { o = { key, row: { key, yarn: r.yarn, yid: r.yid || '', color: r.color || '', vendor: r.vendor, vendor_vid: r.vendor_vid || '' }, in: 0, sup: yrSupOf(wo, r) }; acc.push(o); } o.in += parseFloat(r.kg) || 0; });
+    return acc.map(o => { const ret = -L.filter(x => x && !x.void && x.kind === 'return' && x.wo_id === wo.id && yarnLedgerKey(x) === o.key).reduce((a, x) => a + (parseFloat(x.kg) || 0), 0);
+      o.in = ymF1(o.in); o.ret = ymF1(ret); o.amt = ymF1(o.in - o.ret); o.stock = ymF1(SM.get(o.key) || 0); o.short = o.amt > 0 && o.stock < o.amt; return o; }).filter(x => x.amt > 0);
+  }
+  /* 휴지통으로 보내기 전에 — 반품할 것이 있으면 창(재고 부족이면 알림) · 없으면 null(원래 확인 창) · 그만두면 false */
+  window.hwYarnDelGate = function (wo) {
+    if (!wo || wo.type !== '원사') return Promise.resolve(null);
+    if (!state.yarnLedgerLoaded) { toast('원사 재고 원장을 아직 읽는 중입니다 — 잠시 뒤 다시 지워 주십시오', 'warning'); return Promise.resolve(false); }   /* 검토 지적: 원장 전에 지우면 반품이 빠짐 */
+    const lines = yrFullLines(wo); if (!lines.length) return Promise.resolve(null);
+    return new Promise(res => {
+      const short = lines.filter(x => x.short); let done = false; const fin = v => { if (done) return; done = true; res(v); };
+      const m = gmModal('원사 완전 반품 — ' + (wo.wo_number || ''), `
+        <div class="hw-gm-note" style="margin-top:0">이 원사 구매의뢰서를 휴지통으로 보내면 <b>입고된 원사가 모두 반품</b>된 것으로 기록합니다.</div>
+        <div class="hw-gm-tw"><table class="hw-gm-t"><thead><tr><th>사종</th><th>컬러</th><th>있는 곳</th><th>반품 받는 곳</th><th>입고 kg</th><th>이미 반품</th><th>이번 반품</th><th>지금 재고</th></tr></thead><tbody>
+        ${lines.map(x => `<tr class="${x.short ? 'pend' : ''}"><td class="l">${gmEsc(yarnNameShow(x.row.yarn))}</td><td>${gmEsc(x.row.color || '-')}</td><td>${gmEsc(x.row.vendor || '-')}</td><td>${gmEsc(x.sup || '-')}</td><td>${x.in}</td><td>${x.ret || '-'}</td><td><b>${x.amt}</b></td><td style="${x.short ? 'color:#b91c1c;font-weight:800' : ''}">${x.stock}</td></tr>`).join('')}</tbody></table></div>
+        ${short.length ? `<div class="hw-gm-note" style="background:#fef2f2;border-color:#fecaca;color:#991b1b"><b>재고가 모자랍니다</b> — ${short.map(x => `${gmEsc(x.row.vendor)} ${gmEsc(yarnNameShow(x.row.yarn))}: 반품 ${x.amt}kg · 재고 ${x.stock}kg`).join(' / ')}<br>이미 편직에 쓰였거나 다른 곳으로 옮겨졌을 수 있습니다. 그래도 반품하면 기록은 남고 그 재고는 <b>마이너스</b>로 보입니다 (실제 재고를 확인해 [재고조정]으로 맞추십시오).</div>` : ''}
+        <div class="hw-gm-acts"><button type="button" class="hw-gm-btn" data-x>돌아가기</button><button type="button" class="hw-gm-btn red" id="yr-full-ok">완전 반품하고 휴지통으로</button></div>`, (m, close) => {
+        m.querySelector('[data-x]').addEventListener('click', () => { close(); fin(false); });
+        m.querySelector('#yr-full-ok').addEventListener('click', () => { close(); fin(lines); });
+      });
+      new MutationObserver((_, o) => { if (!document.body.contains(m)) { o.disconnect(); fin(false); } }).observe(document.body, { childList: true });
+    });
+  };
+  /* 여러 건을 한 번에 휴지통으로 (선택 삭제 · 완료 목록 전체 삭제) — 입고된 원사 구매의뢰서는 완전 반품 · 한 번에 묻기 */
+  window.hwYarnBulkGate = function (targets) {
+    const W = (targets || []).filter(w => w && w.type === '원사'); if (!W.length) return [];
+    if (!state.yarnLedgerLoaded) { toast('원사 재고 원장을 아직 읽는 중입니다 — 잠시 뒤 다시', 'warning'); return false; }
+    const SM = new Map(yarnStockRows().map(r => [r.key, r.stock_kg])); const G = W.map(wo => ({ wo, lines: yrFullLines(wo, SM) })).filter(g => g.lines.length); if (!G.length) return [];
+    const kg = G.reduce((a, g) => a + g.lines.reduce((b, x) => b + x.amt, 0), 0), sh = G.reduce((a, g) => a + g.lines.filter(x => x.short).length, 0);
+    if (!confirm(`원사 구매의뢰서 ${G.length}건(${G.map(g => g.wo.wo_number || '').slice(0, 4).join(', ')}${G.length > 4 ? ' …' : ''})은 입고된 원사 ${ymF1(kg)}kg 가 '완전 반품'으로 원사 재고에서 빠집니다.${sh ? `\n재고가 모자란 줄 ${sh}개 — 그대로 반품하면 그 재고는 마이너스로 보입니다.` : ''}\n\n그대로 진행할까요?`)) return false;
+    return G;
+  };
+  window.hwYarnFullReturn = async function (wo, lines) {
+    if (!wo || !Array.isArray(lines) || !lines.length) return 0; let n = 0; const ids = [];
+    for (const x of lines) { const r = await yrCreate(x.row, wo, x.amt, todayYMD(), '완전 반품 (구매의뢰서 삭제)', 'full', x.sup); if (r && r.id) { n++; ids.push(r.id); } }
+    if (n < lines.length) toast(`완전 반품 ${lines.length - n}줄을 적지 못했습니다 — 원사 재고 현황 위 빨간 띠에서 다시 [반품 처리]`, 'error');
+    if (!ids.length) return 0;
+    try { await updateDoc(doc(db, C('workorders'), wo.id), { full_return: { at: new Date().toISOString(), by: (state.user && state.user.email) || '', ids }, updated_at: serverTimestamp(), updated_by: (state.user && state.user.email) || '' }); wo.full_return = { ids }; } catch (_) {}
+    if (n) toast(`원사 완전 반품 ${n}줄 — 원사 재고에서 뺐습니다`, 'success');
+    return n;
+  };
+  /* 휴지통 [복구] — 완전 반품 줄을 되돌림 */
+  window.hwYarnFullReturnUndo = async function (wo) {
+    const ids = (wo && wo.full_return && Array.isArray(wo.full_return.ids)) ? wo.full_return.ids : []; let n = 0;
+    const fail = []; for (const id of ids) { const r = await ymVoid(id, '구매의뢰서 복구'); if (r) n++; else if ((ymAll(true).find(x => x.id === id) || {}).status !== 'cancel') fail.push(id); }
+    if (fail.length) { toast(`완전 반품 ${fail.length}줄을 되돌리지 못했습니다 — 다시 복구를 눌러 주십시오`, 'error'); try { await updateDoc(doc(db, C('workorders'), wo.id), { full_return: Object.assign({}, wo.full_return, { ids: fail }), updated_at: serverTimestamp(), updated_by: (state.user && state.user.email) || '' }); wo.full_return = Object.assign({}, wo.full_return, { ids: fail }); } catch (_) {} return n; }
+    try { await updateDoc(doc(db, C('workorders'), wo.id), { full_return: null, updated_at: serverTimestamp(), updated_by: (state.user && state.user.email) || '' }); wo.full_return = null; } catch (_) {}
+    if (n) toast(`완전 반품 ${n}줄을 되돌렸습니다 — 원사 재고에 다시 들어갔습니다`, 'success');
+    return n;
+  };
+  /* 휴지통에 있는데 입고가 재고에 남은 구매의뢰서 (601 전에 지운 것) — 대표가 눌러서 반품 처리 */
+  function yrOrphans() { const W = (state.allWorkOrders || []).filter(w => w && w.deleted && w.type === '원사' && !(w.full_return && (w.full_return.ids || []).length)); if (!W.length) return [];
+    const ids = new Set(yarnLedger().filter(r => r && !r.void && r.kind === 'in').map(r => r.wo_id)); const W2 = W.filter(w => ids.has(w.id)); if (!W2.length) return [];
+    const SM = new Map(yarnStockRows().map(r => [r.key, r.stock_kg])); return W2.filter(w => yrFullLines(w, SM).length); }
+  window.hwYrOrphans = yrOrphans;
+  /* ---------- 받는 곳 고르기 + [＋ 업체 등록] ---------- */
+  function ymDestSelect(from, cur) {
+    const D = ymDests(from); const pick = cur || ((D.find(v => vendorIsStore(v)) || D[0] || {}).name || '');
+    const grp = (t, A) => A.length ? `<optgroup label="${t}">${A.map(v => `<option${v.name === pick ? ' selected' : ''}>${gmEsc(v.name)}</option>`).join('')}</optgroup>` : '';
+    return grp('창고', D.filter(v => vendorIsStore(v))) + grp('편직공장', D.filter(v => !vendorIsStore(v))) + '<option value="__add">＋ 업체 등록 …</option>';
+  }
+  function ymVendorAddBind(m, sel, from) {
+    const box = m.querySelector('#ym-vadd'); let prev = sel.value;
+    sel.addEventListener('change', () => { if (sel.value !== '__add') { prev = sel.value; box.hidden = true; return; }
+      if (!canEditView('vendors')) { toast('업체를 등록할 권한이 없습니다 — [업체코드] 권한이 있는 분께 부탁하십시오', 'warning'); sel.value = prev; return; }
+      box.hidden = false; sel.value = prev; const n = box.querySelector('#ym-vn'); if (n) n.focus(); });
+    box.querySelector('#ym-vx').addEventListener('click', () => { box.hidden = true; });
+    box.querySelector('#ym-vok').addEventListener('click', async ev => { const b = ev.currentTarget; const nm = box.querySelector('#ym-vn').value.trim(); const ty = box.querySelector('[name="ym-vt"]:checked').value;
+      if (!nm) { toast('업체 이름을 넣어 주십시오', 'warning'); return; }
+      if ((state.vendors || []).some(v => v && (vendorKey(v.name) === vendorKey(nm) || gsNormV(v.name) === gsNormV(nm) || (typeof vendorHasName === 'function' && vendorHasName(v, nm))))) { toast(nm + ' — 이미 있는 업체입니다. 목록에서 고르십시오', 'warning'); return; }
+      b.disabled = true; let ok = false; try { ok = await saveVendors((state.vendors || []).concat([{ name: nm, types: [ty], address: box.querySelector('#ym-va').value.trim(), phone: box.querySelector('#ym-vp').value.trim(), active: true }])); } catch (e) { toast('업체를 저장하지 못했습니다: ' + ((e && e.message) || ''), 'error'); } finally { b.disabled = false; } if (!ok) return;
+      sel.innerHTML = ymDestSelect(from, nm); prev = nm; box.hidden = true; toast(nm + ' 등록했습니다 (업체코드 · ' + ty + ')', 'success'); });
+  }
+  const ymVaddHtml = `<div id="ym-vadd" class="hw-gm-note" hidden style="background:#f0fdf4;border-color:#bbf7d0"><b>＋ 업체 등록</b> — 여기서 넣으면 [업체코드]에도 저장됩니다
+      <div class="hw-gm-fg" style="margin-top:8px"><label>업체 이름<input id="ym-vn" placeholder="예: 현일2창고"></label><label>구분<span style="display:flex;gap:12px;align-items:center;height:38px"><label style="display:flex;gap:4px;align-items:center;font-weight:600"><input type="radio" name="ym-vt" value="본사창고" checked>창고</label><label style="display:flex;gap:4px;align-items:center;font-weight:600"><input type="radio" name="ym-vt" value="편직처">편직공장</label></span></label>
+      <label>주소<input id="ym-va" placeholder="받는 주소 (의뢰서에 나옴)"></label><label>전화<input id="ym-vp"></label></div>
+      <div class="hw-gm-acts" style="margin-top:6px"><button type="button" class="hw-gm-btn" id="ym-vx">닫기</button><button type="button" class="hw-gm-btn ok" id="ym-vok">업체 등록</button></div></div>`;
+  /* ---------- 작성 창 ---------- */
+  window.hwYmForm = function (row) {
+    if (!canStockAdjust()) { toast('원사 이동 권한이 없습니다 — [권한 설정]에서 재고조정을 허용받은 사람만 됩니다', 'error'); return; }
+    const st = ymF1(yarnStockOf(row.key));
+    gmModal('원사이동 의뢰서 작성', `
+      <div class="hw-gm-src"><b>${gmEsc(row.vendor)}</b> · ${gmEsc(yarnNameShow(row.yarn))}${row.color && !yarnColorIsLW(row.color) ? ' · ' + gmEsc(row.color) : ''} · 재고 <b>${st}kg</b></div>
+      <div class="hw-gm-fg">
+        <label>받는 곳 (편직공장 · 창고)<select id="ym-to">${ymDestSelect(row.vendor)}</select></label>
+        <label>옮길 kg<input id="ym-kg" inputmode="decimal" value="${st > 0 ? st : ''}"></label>
+        <label>희망일<input id="ym-want" type="date"></label>
+        <label class="full">메모<input id="ym-memo" placeholder="예: 편직 공장 변경"></label></div>
+      ${ymVaddHtml}
+      <div class="hw-gm-note">저장하면 <b>${gmEsc(row.vendor)}</b> 재고에서 바로 빠지고(이동 중), 받는 곳이 편직팀 앱에서 [잘 받았어요]를 누르거나 여기서 [받음 처리]를 하면 받는 곳 재고에 들어갑니다.</div>
+      <div class="hw-gm-acts"><button type="button" class="hw-gm-btn" data-x>닫기</button><button type="button" class="hw-gm-btn mv" id="ym-ok">의뢰서 저장</button></div>`, (m, close) => {
+      m.querySelector('[data-x]').addEventListener('click', close); const sel = m.querySelector('#ym-to'); ymVendorAddBind(m, sel, row.vendor);
+      m.querySelector('#ym-ok').addEventListener('click', async ev => { const b = ev.currentTarget; if (b.disabled) return;
+        const kg = ymNum(m.querySelector('#ym-kg').value); const to = sel.value;
+        if (!to || to === '__add') { toast('받는 곳을 고르십시오', 'warning'); return; }
+        if (kg > st && !confirm(`재고 ${st}kg 보다 많이 옮깁니다 (${kg}kg).\n${row.vendor} 재고가 마이너스로 보입니다. 그대로 저장할까요?`)) return;
+        b.disabled = true; const r = await ymCreate(row, to, kg, m.querySelector('#ym-want').value, m.querySelector('#ym-memo').value); b.disabled = false;
+        if (!r) return; close(); toast(`${r.no} 원사이동 의뢰서 — ${r.from} → ${r.to} ${r.kg}kg (이동 중)`, 'success'); try { renderDashboard(); } catch (_) {} window.hwYmPaper(r.id, true); });
+    });
+  };
+  window.hwYrForm = function (row) {
+    if (!canStockAdjust()) { toast('원사 반품 권한이 없습니다 — [권한 설정]에서 재고조정을 허용받은 사람만 됩니다', 'error'); return; }
+    const st = ymF1(yarnStockOf(row.key)); const S = yrSources(row).filter(s => s.wo && !s.wo.deleted);
+    if (!S.length) { toast('이 원사로 입고된 구매의뢰서가 없습니다 — 반품은 구매의뢰서([입고완료]) 건에 연결합니다', 'warning'); return; }
+    gmModal('원사 반품', `
+      <div class="hw-gm-src"><b>${gmEsc(row.vendor)}</b> · ${gmEsc(yarnNameShow(row.yarn))}${row.color && !yarnColorIsLW(row.color) ? ' · ' + gmEsc(row.color) : ''} · 재고 <b>${st}kg</b></div>
+      <div class="hw-gm-fg">
+        <label class="full">어느 구매 건의 반품입니까<select id="yr-wo">${S.map(s => `<option value="${gmEsc(s.wo_id)}">${gmEsc(s.no)} · ${gmEsc(s.sup || s.wo.supplier || '')} · 입고 ${s.in}kg${s.ret ? ' · 반품 ' + s.ret + 'kg' : ''} · 남은 ${ymF1(s.in - s.ret)}kg</option>`).join('')}</select></label>
+        <label>반품 kg<input id="yr-kg" inputmode="decimal"></label><label>반품일<input id="yr-d" type="date" value="${todayYMD()}"></label>
+        <label class="full">사유 · 메모<input id="yr-m" placeholder="예: 불량 · 남은 원사"></label></div>
+      <div class="hw-gm-note">저장하면 ${gmEsc(row.vendor)} 원사 재고에서 빠지고, 구매의뢰서에 반품 kg 가 적힙니다. 전부 반품은 구매의뢰서를 휴지통으로 보내면 됩니다(완전 반품).</div>
+      <div class="hw-gm-acts"><button type="button" class="hw-gm-btn" data-x>닫기</button><button type="button" class="hw-gm-btn red" id="yr-ok">반품 저장</button></div>`, (m, close) => {
+      m.querySelector('[data-x]').addEventListener('click', close);
+      m.querySelector('#yr-ok').addEventListener('click', async ev => { const b = ev.currentTarget; if (b.disabled) return; const s = S.find(x => x.wo_id === m.querySelector('#yr-wo').value);
+        const kg = ymNum(m.querySelector('#yr-kg').value); if (!(kg > 0)) { toast('반품 kg 를 넣어 주십시오', 'warning'); return; }
+        const room = ymF1(s.in - s.ret); const warn = []; if (kg > room) warn.push(`이 구매 건에서 남은 ${room}kg 보다 많습니다`); if (kg > st) warn.push(`${row.vendor} 재고 ${st}kg 보다 많아 재고가 마이너스로 보입니다`);
+        if (warn.length && !confirm(warn.join('\n') + '\n\n그대로 반품할까요?')) return;
+        b.disabled = true; const r = await yrCreate(row, s.wo, kg, m.querySelector('#yr-d').value, m.querySelector('#yr-m').value, 'part', s.sup); b.disabled = false;
+        if (!r) return; close(); toast(`${r.no} 반품 ${kg}kg — ${row.vendor} 재고에서 뺐습니다`, 'success'); try { renderDashboard(); } catch (_) {} window.hwYmPaper(r.id, true); });
+    });
+  };
+  /* ---------- 받음 처리 · 취소 · 삭제 ---------- */
+  window.hwYmRecv = function (id) {
+    if (!canStockAdjust()) { toast('권한이 없습니다', 'error'); return; }
+    const m0 = ymAll().find(x => x.id === id); if (!m0) return; const left = ymLeft(m0); if (!(left > 0)) return;
+    const AR = mvRep('ym:' + id); const pre = (AR.r && ymF1(+AR.r.n - ymGot(m0)) > 0) ? Math.min(left, ymF1(+AR.r.n - ymGot(m0))) :   /* 앱 보고 = 받은 합계 */ (AR.s && +AR.s.n > 0) ? Math.min(left, +AR.s.n) : left;
+    gmModal('받음 처리 — ' + m0.no, `
+      ${AR.s || AR.r ? `<div class="hw-gm-note" style="margin:0 0 10px;background:#eef2ff;border-color:#c7d2fe">편직팀 앱 보고 — ${mvRepHtml('ym:' + id, 'kg', m0.from, m0.to)}${AR.r && AR.r.note ? '<br>받는 곳 메모: ' + gmEsc(AR.r.note) : ''}</div>` : ''}
+      <div class="hw-gm-fg"><label>받은 kg<input id="ym-rq" inputmode="decimal" value="${pre}"></label><label>받은 날<input id="ym-rd" type="date" value="${todayYMD()}"></label><label class="full">메모<input id="ym-rm" placeholder="송장 번호 등"></label></div>
+      <div class="hw-gm-note">${gmEsc(m0.to)} 재고에 들어갑니다. 요청 ${m0.kg}kg 중 남은 ${left}kg — 일부만 넣으면 나머지는 계속 이동 중입니다. 다 안 올 것이면 [남은 것 취소](보내는 곳으로 돌아감).</div>
+      <div class="hw-gm-acts"><button type="button" class="hw-gm-btn" data-x>닫기</button><button type="button" class="hw-gm-btn ok" id="ym-rok">받음 처리</button></div>`, (m, close) => {
+      m.querySelector('[data-x]').addEventListener('click', close);
+      m.querySelector('#ym-rok').addEventListener('click', async ev => { const b = ev.currentTarget; if (b.disabled) return; const q = ymNum(m.querySelector('#ym-rq').value);
+        if (!(q > 0) || q > left) { toast(`받은 kg 는 0 ~ ${left}kg`, 'warning'); return; }
+        b.disabled = true; const r = await ymRecv(id, q, m.querySelector('#ym-rd').value, m.querySelector('#ym-rm').value, ''); b.disabled = false; if (!r) return;
+        close(); toast(`${m0.no} 받음 ${q}kg — ${m0.to} 재고에 넣었습니다${ymLeft(r.m) > 0 ? ' · 남은 ' + ymLeft(r.m) + 'kg 이동 중' : ''}`, 'success'); try { renderDashboard(); } catch (_) {}
+        try { const t = `${m0.no} 현일텍스 받음 처리 ${q}kg`; if (AR.r && !AR.rAck) mvTell(m0.to, 'ym:' + id, m0.no, t, 'note', AR.r.id); if (AR.s && !AR.sAck) mvTell(m0.from, 'ym:' + id, m0.no, t, 'note', AR.s.id); } catch (_) {} });
+    });
+  };
+  window.hwYmCancel = async function (id) {
+    if (!canStockAdjust()) { toast('원사 이동 권한이 없습니다', 'error'); return false; }
+    const m0 = ymAll().find(x => x.id === id); if (!m0) return false; const left = ymLeft(m0); if (!(left > 0)) return false;
+    if (!confirm(`${m0.no} — 아직 안 받은 ${left}kg 를 취소합니다.\n${m0.from} 재고로 돌아갑니다.${ymGot(m0) ? `\n(이미 받은 ${ymGot(m0)}kg 는 그대로)` : ''}\n\n취소할까요?`)) return false;
+    const r = await ymCancel(id); if (!r) return false; toast(`${m0.no} 남은 ${left}kg 취소 — ${m0.from} 재고로 돌아갔습니다`, 'success');
+    try { mvTell(m0.from, 'ym:' + id, m0.no, `${m0.no} 원사이동 취소 — 보내지 않으셔도 됩니다`, 'note'); mvTell(m0.to, 'ym:' + id, m0.no, `${m0.no} 원사이동 취소 — 들어오지 않습니다`, 'note'); } catch (_) {}
+    try { renderDashboard(); } catch (_) {} return true;
+  };
+  window.hwYmDelete = async function (id) {
+    const m0 = ymAll(true).find(x => x.id === id); if (!m0) return false;
+    if (m0.kind === 'move' && !(isOwnerUser() || gmCanDel())) { toast('원사이동 의뢰서 삭제는 최고관리자 · 허용받은 사람만 됩니다', 'error'); return false; }
+    if (m0.kind === 'return' && !(isOwnerUser() || canStockAdjust())) { toast('반품 취소 권한이 없습니다', 'error'); return false; }
+    const msg = m0.kind === 'return' ? `${m0.no} 반품 ${m0.kg}kg 를 취소합니다.\n${m0.from} 재고에 다시 들어가고 구매의뢰서 반품 기록도 취소됨으로 남습니다.` : `${m0.no} 원사이동 의뢰서를 삭제합니다.\n이 의뢰서로 옮긴 것(받은 ${ymGot(m0)}kg 포함)을 모두 처음대로 되돌립니다 (기록은 취소됨으로 남음).`;
+    if (!confirm(msg + '\n\n진행할까요?')) return false;
+    const r = await ymVoid(id, m0.kind === 'return' ? '반품 취소' : '의뢰서 삭제'); if (!r) return false;
+    toast(m0.kind === 'return' ? `${m0.no} 반품을 취소했습니다` : `${m0.no} 삭제 — 재고를 처음대로 되돌렸습니다`, 'success'); try { renderDashboard(); } catch (_) {} return true;
+  };
+  /* 편직팀 앱 [잘 받았어요] (수량 그대로) → 저절로 받음 처리 · 수량이 다르면 PC 에서 [받음 처리] */
+  let ymAutoBusy = false;
+  async function ymAutoRecv() {
+    if (ymAutoBusy || !state.user || !canStockAdjust() || /(?:^|[?&])app=qc(?:&|$)/.test(location.search)) return; ymAutoBusy = true;
+    try { for (const m of ymAll().filter(x => x.kind === 'move' && ymLeft(x) > 0)) { const R = mvRep('ym:' + m.id); const r = R.r; if (!r || R.diff || !(+r.n > 0) || (m.rec || []).some(x => x && x.log_id === r.id)) continue;
+        const d = (() => { try { const t = new Date(mvT(r)); return t.getFullYear() + '-' + String(t.getMonth() + 1).padStart(2, '0') + '-' + String(t.getDate()).padStart(2, '0'); } catch (_) { return todayYMD(); } })();
+        const q = ymF1(Math.min(+r.n - ymGot(m), ymLeft(m))); if (!(q > 0)) continue;   /* 앱 보고 수 = 받은 합계 — 이미 넣은 만큼 빼고 */
+        const res = await ymRecv(m.id, q, d, '편직팀 앱 [잘 받았어요]', r.id);
+        if (res) { try { mvTell(m.to, 'ym:' + m.id, m.no, `${m.no} 현일텍스 확인 — ${res.q}kg 재고에 넣었습니다`, 'note', r.id); } catch (_) {} try { if (state.uiMode === 'dashboard' && /^(yarnStock|moves)$/.test(state.dashView || '')) renderDashboard(); } catch (_) {} } } }
+    catch (e) { console.warn('[원사이동 앱 받음]', e && e.message); } finally { ymAutoBusy = false; }
+  }
+  window.hwYmAutoRecv = ymAutoRecv; setInterval(() => { if (!document.hidden) ymAutoRecv(); }, 15000);
+  /* ---------- 의뢰서 보기 · 카톡 · 이미지 ---------- */
+  function ymKakao(m) { const addr = gmStoreAddr(m.to); const w = String(m.want || ''); const md = w ? (parseInt(w.slice(5, 7), 10) + '월 ' + parseInt(w.slice(8, 10), 10) + '일') : '-';
+    return m.kind === 'return'
+      ? ['━━━━━━━━━━━━', '■ 원사 반품 (' + m.no + ')', '━━━━━━━━━━━━', '▷ 보내는 곳 : ' + m.from, '▷ 받는 곳(구매처) : ' + m.to, '▷ 사종 : ' + yarnNameShow(m.yarn) + (m.color && !yarnColorIsLW(m.color) ? ' · ' + m.color : ''), '▷ 반품 kg : ' + m.kg + 'kg', '▷ 구매 건 : ' + (m.wo_number || '-'), '▷ 사유 : ' + (m.memo || '-'), '━━━━━━━━━━━━', '현일텍스 주식회사 드림'].join('\n')
+      : ['━━━━━━━━━━━━', '■ 원사이동 의뢰 (' + m.no + ')', '━━━━━━━━━━━━', '▷ 보내는 곳 : ' + m.from, '▷ 받는 곳 : ' + m.to + (addr ? ' (' + addr + ')' : ''), '▷ 사종 : ' + yarnNameShow(m.yarn) + (m.color && !yarnColorIsLW(m.color) ? ' · ' + m.color : ''), '▷ 이동 kg : ' + m.kg + 'kg', '▷ 희망일 : ' + md, '▷ 메모 : ' + (m.memo || '-'), '━━━━━━━━━━━━', '현일텍스 주식회사 드림'].join('\n'); }
+  const ymStTxt = m => m.deleted ? '삭제' : m.kind === 'return' ? (m.status === 'cancel' ? '반품 취소' : '반품') : m.status === 'cancel' ? '취소' : ymLeft(m) === 0 ? (parseFloat(m.cut) > 0 ? `이동완료 ${ymGot(m)}kg (${ymF1(m.cut)}kg 취소)` : '이동완료') : ymGot(m) ? `일부 ${ymGot(m)}/${m.kg}kg` : '이동 중';
+  window.hwYmPaper = function (id, fresh) {
+    const m0 = ymAll(true).find(x => x.id === id); if (!m0) return; const ret = m0.kind === 'return'; const addr = gmStoreAddr(m0.to); const left = ymLeft(m0);
+    gmModal((fresh ? '저장했습니다 — ' : '') + (ret ? '원사 반품 ' : '원사이동 의뢰서 ') + m0.no, `
+      <div class="hw-gm-paper" id="ym-paper"><h4>${ret ? '원사 반품' : '원사이동 의뢰서'}</h4><div class="s">${gmEsc(m0.no)} · ${gmEsc(m0.date)}</div>
+        <table><tr><th>보내는 곳</th><td>${gmEsc(m0.from)}</td></tr><tr><th>${ret ? '받는 곳(구매처)' : '받는 곳'}</th><td>${gmEsc(m0.to)}${addr ? ' (' + gmEsc(addr) + ')' : ''}</td></tr>
+        <tr><th>사종</th><td>${gmEsc(yarnNameShow(m0.yarn))}</td></tr><tr><th>컬러</th><td>${gmEsc(m0.color || '-')}</td></tr><tr><th>${ret ? '반품' : '이동'} kg</th><td><b>${m0.kg}kg</b></td></tr>
+        ${ret ? `<tr><th>구매 건</th><td>${gmEsc(m0.wo_number || '-')}</td></tr>` : `<tr><th>희망일</th><td>${gmEsc(m0.want || '-')}</td></tr>`}<tr><th>${ret ? '사유' : '메모'}</th><td>${gmEsc(m0.memo || '-')}</td></tr></table>
+        <div class="ft">현일텍스 주식회사 드림</div></div>
+      <div class="hw-gm-note">상태: <b>${ymStTxt(m0)}</b>${(m0.rec || []).length ? ' · ' + m0.rec.map(r => `${gmEsc(r.date)} ${r.kg}kg${r.src === 'app' ? '(앱)' : ''}`).join(' / ') : ''}${!ret ? ' · 앱 ' + mvRepHtml('ym:' + id, 'kg', m0.from, m0.to) : ''}</div>
+      <div class="hw-gm-acts left"><button type="button" class="hw-gm-btn pri" id="ym-img">이미지 복사</button><button type="button" class="hw-gm-btn" id="ym-kk">카톡 글 복사</button><span style="flex:1"></span>
+        ${!m0.deleted && left > 0 && canStockAdjust() ? '<button type="button" class="hw-gm-btn ok" id="ym-rc">받음 처리</button><button type="button" class="hw-gm-btn" id="ym-cx">남은 것 취소</button>' : ''}
+        ${!m0.deleted && !(ret && m0.status === 'cancel') && (ret ? (isOwnerUser() || canStockAdjust()) : (isOwnerUser() || gmCanDel())) ? `<button type="button" class="hw-gm-btn red" id="ym-del">${ret ? '반품 취소' : '삭제'}</button>` : ''}</div>
+      <textarea class="hw-gm-kk" id="ym-kkt" readonly hidden></textarea>`, (m, close) => {
+      m.querySelector('#ym-kk').addEventListener('click', async () => { const t = ymKakao(m0); const ta = m.querySelector('#ym-kkt'); ta.hidden = false; ta.value = t;
+        try { await navigator.clipboard.writeText(t); toast('카톡 글을 복사했습니다 — 카톡에 붙여 넣으십시오', 'success'); } catch (_) { ta.select(); toast('글을 선택해 두었습니다 — Ctrl+C', 'info'); } });
+      m.querySelector('#ym-img').addEventListener('click', async () => { try { const cv = await html2canvas(m.querySelector('#ym-paper'), { backgroundColor: '#ffffff', scale: 2 }); cv.toBlob(async blob => { try { await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]); toast('이미지를 복사했습니다 — 카톡에 붙여 넣으십시오', 'success'); } catch (_) { toast('이미지 복사가 막혀 있습니다 — 카톡 글 복사를 쓰십시오', 'warning'); } }); } catch (e) { toast('이미지를 만들지 못했습니다', 'error'); } });
+      const rc = m.querySelector('#ym-rc'); if (rc) rc.addEventListener('click', () => { close(); window.hwYmRecv(id); });
+      const cx = m.querySelector('#ym-cx'); if (cx) cx.addEventListener('click', async () => { if (await window.hwYmCancel(id)) close(); });
+      const dl = m.querySelector('#ym-del'); if (dl) dl.addEventListener('click', async () => { if (await window.hwYmDelete(id)) close(); });
+    });
+  };
+  /* ---------- 목록 (원사 재고 현황 위 [원사이동 · 반품]) ---------- */
+  window.hwYmList = function () {
+    let seg = 'wait';
+    const paint = m => {
+      const all = ymAll().slice().sort((a, b) => String(b.no).localeCompare(String(a.no))); const P = all.filter(x => x.kind === 'move' && ymLeft(x) > 0), D = all.filter(x => x.kind === 'move' && ymLeft(x) === 0), R = all.filter(x => x.kind === 'return');
+      const L = seg === 'wait' ? P : seg === 'done' ? D : seg === 'ret' ? R : all;
+      m.querySelector('.hw-gm-b').innerHTML = `<div class="hw-gm-seg">${[['wait', '이동 중', P.length], ['done', '이동완료', D.length], ['ret', '반품', R.length], ['all', '전체', all.length]].map(([k, t, n]) => `<button type="button" data-seg="${k}" class="${seg === k ? 'on' : ''}">${t} <em>${n}</em></button>`).join('')}</div>
+        <div class="hw-gm-tw"><table class="hw-gm-t"><thead><tr><th>번호</th><th>날짜</th><th>구분</th><th>사종</th><th>컬러</th><th>보내는 곳</th><th>받는 곳</th><th>kg</th><th>받음</th><th>상태</th><th>앱</th><th></th><th></th></tr></thead><tbody>
+        ${L.map(x => { const left = ymLeft(x); const st = ymStTxt(x); const cls = x.status === 'cancel' ? 'x' : x.kind === 'return' ? 'r' : left === 0 ? 'd' : ymGot(x) ? 'p' : 'w';
+          return `<tr class="${left > 0 ? 'pend' : ''}"><td>${gmEsc(x.no)}</td><td>${gmEsc(x.date)}</td><td>${x.kind === 'return' ? '반품' : '이동'}</td><td class="l">${gmEsc(yarnNameShow(x.yarn))}</td><td>${gmEsc(x.color || '-')}</td><td>${gmEsc(x.from)}</td><td>${gmEsc(x.to)}</td><td>${x.kg}</td><td>${x.kind === 'move' ? ymGot(x) : '-'}</td><td><span class="gst ${cls}">${gmEsc(st)}</span></td><td>${x.kind === 'move' ? mvRepHtml('ym:' + x.id, 'kg', x.from, x.to) : '-'}</td>
+            <td><button type="button" class="gm-b" data-ym-view="${gmEsc(x.id)}">보기</button></td><td>${left > 0 && canStockAdjust() ? `<button type="button" class="gm-b ok" data-ym-recv="${gmEsc(x.id)}">받음 처리</button>` : ''}</td></tr>`; }).join('') || '<tr><td colspan="13" style="color:#94a3b8;padding:18px">없습니다</td></tr>'}</tbody></table></div>
+        <div class="hw-gm-note">이동은 저장할 때 보내는 곳에서 빠지고(이동 중), 받는 곳이 편직팀 앱에서 [잘 받았어요](수량 그대로)를 누르면 저절로 받는 곳에 들어갑니다. 수량이 다르거나 앱이 없는 곳(창고)은 [받음 처리].</div>`;
+      m.querySelectorAll('[data-seg]').forEach(b => b.addEventListener('click', () => { seg = b.dataset.seg; paint(m); }));
+    };
+    const m = gmModal('원사이동 · 반품', '', null, true); m.id = 'hw-ym-list'; paint(m); window.__hwYmListRefresh = () => { const e = document.getElementById('hw-ym-list'); if (e) paint(e); };
+  };
+  document.addEventListener('click', e => { const t = e.target && e.target.closest ? e.target.closest('[data-ym-view],[data-ym-recv]') : null; if (!t) return; e.preventDefault(); e.stopPropagation();
+    if (t.dataset.ymView) window.hwYmPaper(t.dataset.ymView); else window.hwYmRecv(t.dataset.ymRecv); });
+  /* ---------- 업체별 입 · 출고 내역 (원사 재고 현황에서 업체를 고르면) ---------- */
+  function ymVendorLog(vname, from, to) {
+    const vk = gsNormV(vname); const inR = d => { const x = String(d || '').slice(0, 10); return (!from || !x || x >= from) && (!to || !x || x <= to); };
+    const rows = yarnLedger().filter(r => r && gsNormV(r.vendor) === vk && inR(r.date)).map(r => { const kg = r.kind === 'use' ? -(parseFloat(r.kg) || 0) : (parseFloat(r.kg) || 0);
+      const what = r.kind === 'in' ? '입고(구매)' : r.kind === 'use' ? '편직 사용' : r.kind === 'adjust' ? '재고조정' : r.kind === 'return' ? '반품 → ' + (r.dest || '구매처') : r.kind === 'move' ? (kg < 0 ? '이동 보냄 → ' + (r.dest || '') : (/돌아옴/.test(r.memo || '') ? '이동 취소 · 돌아옴' : '이동 받음 ← ' + (r.from || ''))) : (r.kind || '');
+      return { date: String(r.date || '').slice(0, 10), what, yarn: r.yarn, color: r.color, kg: ymF1(kg), ref: r.ym || r.wo_number || '', memo: r.memo || '', void: !!r.void }; });
+    ymAll().filter(m => m.kind === 'move' && ymLeft(m) > 0 && gsNormV(m.to) === vk).forEach(m => rows.push({ date: m.date, what: '입고 대기 ← ' + m.from + ' (이동 중)', yarn: m.yarn, color: m.color, kg: ymLeft(m), ref: m.no, memo: m.memo || '', pend: true }));
+    return rows.sort((a, b) => String(b.date).localeCompare(String(a.date)));
+  }
+  window.hwYmVendorLog = ymVendorLog;
+  function ymVendorLogHtml(vname, from, to) {
+    const R = ymVendorLog(vname, from, to); const f1 = x => (Math.round(x * 10) / 10).toFixed(1);
+    const sIn = R.filter(r => !r.void && !r.pend && r.kg > 0).reduce((a, r) => a + r.kg, 0), sOut = R.filter(r => !r.void && !r.pend && r.kg < 0).reduce((a, r) => a + r.kg, 0), sP = R.filter(r => r.pend).reduce((a, r) => a + r.kg, 0);
+    return `<div class="ys-vlog"><div class="ys-vlog-h"><b>${escapeHtml(vname)} — 원사 입 · 출고 내역</b><span>들어옴 <b>+${f1(sIn)}</b>kg · 나감 <b>${f1(sOut)}</b>kg${sP ? ` · 입고 대기 <b>${f1(sP)}</b>kg` : ''}${from || to ? ` · ${escapeHtml(from || '…')} ~ ${escapeHtml(to || '…')}` : ''}</span></div>
+      <div style="max-height:340px;overflow:auto"><table class="ys-vlog-t"><thead><tr><th>날짜</th><th>구분</th><th class="l">사종</th><th>컬러</th><th class="r">kg</th><th>의뢰서</th><th class="l">메모</th></tr></thead><tbody>
+      ${R.map(r => `<tr style="${r.void ? 'color:#9ca3af;text-decoration:line-through;' : r.pend ? 'background:#fffbeb;' : ''}"><td>${escapeHtml(r.date)}</td><td style="white-space:nowrap">${escapeHtml(r.what)}${r.void ? ' (취소됨)' : ''}</td><td style="text-align:left">${escapeHtml(yarnNameShow(r.yarn))}</td><td>${escapeHtml(r.color || '-')}</td><td style="text-align:right;font-weight:800;color:${r.pend ? '#b45309' : r.kg < 0 ? '#b91c1c' : '#047857'}">${r.kg > 0 ? '+' : ''}${f1(r.kg)}</td><td>${escapeHtml(r.ref)}</td><td style="text-align:left;color:#64748b">${escapeHtml(String(r.memo).slice(0, 60))}</td></tr>`).join('') || '<tr><td colspan="7" style="color:#94a3b8;padding:14px">기록이 없습니다</td></tr>'}
+      </tbody></table></div></div>`;
+  }
+  window.hwYmVendorLogHtml = ymVendorLogHtml;
+  window.__hwYmCreate = (row, to, kg, want, memo) => ymCreate(row, to, kg, want, memo);   /* 시험용 */
+  window.hwYmTransitIn = vname => { const vk = gsNormV(vname); return ymF1(ymAll().filter(m => m.kind === 'move' && gsNormV(m.to) === vk).reduce((a, m) => a + ymLeft(m), 0)); };
+  window.hwYmTransitKey = key => ymF1(ymAll().filter(m => { if (m.kind !== 'move' || !(ymLeft(m) > 0)) return false; const d = ymDstLine(null, m); return yarnLedgerKey(d || { yarn: m.yarn, yid: m.yid, color: m.color, vendor: m.to, vendor_vid: m.to_vid }) === key; }).reduce((a, m) => a + ymLeft(m), 0));
   /* ===== hotfix546(대표 지시 9/29): 부족분 현황 한 화면 — 부족이 남은 컬러를 모아 보고, 여러 건을 골라 가공소 앱에 한 번에 확인 요청
    *   상태: 요청 전 · 답 기다림 · 가공소 답 · 앱 계정 없음(카톡) · 업체 거르기 · 빨간 부족 숫자 ===== */
   function hwLackRows() {
@@ -31314,7 +31712,7 @@ function validateBlendSum(blends, label) {
       if (!r || r.kind !== 'move' || !r.move_id || seen.has(r.move_id)) return;
       seen.add(r.move_id);
       const o = yarnLedger().find(x => x && x.move_id === r.move_id && (parseFloat(x.kg) || 0) < 0) || r;
-      out.push({ kind: '원사', date: String(o.date || '').slice(0, 10), item: o.yarn || '', color: (o.color && !yarnColorIsLW(o.color)) ? o.color : '', lot: '', qty: Math.abs(parseFloat(o.kg) || 0).toFixed(1) + 'kg', from: o.vendor || o.from || '', to: o.dest || '', by: o.by || '', memo: o.memo || '', dead: !!o.void, ledger_id: o.id, mk: 'ym:' + r.move_id, mno: '' });
+      out.push({ kind: '원사', date: String(o.date || '').slice(0, 10), item: o.yarn || '', color: (o.color && !yarnColorIsLW(o.color)) ? o.color : '', lot: '', qty: Math.abs(parseFloat(o.kg) || 0).toFixed(1) + 'kg', from: o.vendor || o.from || '', to: o.dest || '', by: o.by || '', memo: o.memo || '', dead: !!o.void, ledger_id: o.id, mk: 'ym:' + r.move_id, mno: o.ym || '', ymid: o.ym ? r.move_id : '' });
     });
     return out.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
   }
@@ -31326,7 +31724,7 @@ function validateBlendSum(blends, label) {
     rows.forEach(r => {
       h += `<tr style="${r.dead ? 'color:#9ca3af;text-decoration:line-through;' : ''}"><td>${escapeHtml(r.date)}</td><td style="text-align:center;"><span style="padding:1px 7px;border-radius:9px;background:${r.kind === '생지' ? '#dbeafe' : '#dcfce7'};color:${r.kind === '생지' ? '#1e40af' : '#166534'};font-weight:700;font-size:11px;text-decoration:none;">${r.kind}</span></td><td style="text-align:left;">${escapeHtml(r.item)}${r.wo_number ? `<div style="font-size:10.5px;color:#94a3b8;">${escapeHtml(r.wo_number)}</div>` : ''}</td><td>${escapeHtml(r.color || '-')}</td><td style="font-family:var(--font-gothic);font-weight:700;color:#1e3a8a;">${escapeHtml(r.lot || '-')}</td><td style="text-align:right;font-weight:700;">${escapeHtml(r.qty)}</td><td>${escapeHtml(r.from)}</td><td style="font-weight:700;color:#1e40af;">${escapeHtml(r.to)}</td><td style="font-size:11px;color:#64748b;">${escapeHtml(String(r.by).split('@')[0])}</td><td style="text-align:left;">${escapeHtml(r.memo)}</td>
         <td style="text-align:left;white-space:nowrap;text-decoration:none;">${(() => { if (r.dead || !window.hwMvRepHtml) return '-'; const u = r.kind === '원사' ? 'kg' : '절'; let t = window.hwMvRepHtml(r.mk, u, r.from, r.to); const R2 = window.hwMvRep(r.mk); if (R2.diff && !R2.rAck) t += ` <button class="dash-action-btn mv-ack" data-k="${escapeHtml(r.mk)}" data-v="${escapeHtml(r.to)}" data-l="${escapeHtml(R2.r.id)}" data-no="${escapeHtml(r.mno || '')}" style="font-size:11px;padding:2px 8px;background:#059669;color:#fff;border-color:#047857;">확인 완료</button>`; return t; })()}</td>
-        <td style="text-align:center;">${r.dead ? '<span style="font-size:11px;color:#b91c1c;font-weight:700;text-decoration:none;">취소됨</span>' : (owner ? `<button class="dash-action-btn mv-undo" data-kind="${r.kind}" data-wo="${escapeHtml(r.wo_id || '')}" data-sh="${escapeHtml(r.sh_id || '')}" data-ledger="${escapeHtml(r.ledger_id || '')}" style="font-size:11px;padding:2px 8px;">되돌리기</button>` : '<span style="font-size:11px;color:#9ca3af;">최고관리자</span>')}</td></tr>`;
+        <td style="text-align:center;">${r.dead ? '<span style="font-size:11px;color:#b91c1c;font-weight:700;text-decoration:none;">취소됨</span>' : (r.ymid ? `<button class="dash-action-btn" data-ym-view="${escapeHtml(r.ymid)}" style="font-size:11px;padding:2px 8px;">의뢰서</button>` : owner ? `<button class="dash-action-btn mv-undo" data-kind="${r.kind}" data-wo="${escapeHtml(r.wo_id || '')}" data-sh="${escapeHtml(r.sh_id || '')}" data-ledger="${escapeHtml(r.ledger_id || '')}" style="font-size:11px;padding:2px 8px;">되돌리기</button>` : '<span style="font-size:11px;color:#9ca3af;">최고관리자</span>')}</td></tr>`;
     });
     return h + `</tbody></table></div>`;
   }
@@ -31469,7 +31867,7 @@ function validateBlendSum(blends, label) {
     const q = String(S.yarn || '').trim().toLowerCase();
     const inRange = d => { const x = String(d || '').slice(0, 10); if (S.from && x && x < S.from) return false; if (S.to && x && x > S.to) return false; return true; };
     const rows = all.filter(r => (!vk || vendorKey(r.vendor || '(업체 없음)') === vk) && (!q || hwTextMatch(String(r.yarn || ''), q) || hwTextMatch(String(r.color || ''), q)));
-    const tot = rows.reduce((a, r) => { a.in += r.in_kg; a.use += r.use_kg; a.adj += r.adjust_kg; a.mv += r.move_kg; a.st += r.stock_kg; return a; }, { in: 0, use: 0, adj: 0, mv: 0, st: 0 });
+    const tot = rows.reduce((a, r) => { a.in += r.in_kg; a.use += r.use_kg; a.adj += r.adjust_kg; a.mv += r.move_kg; a.ret += r.ret_kg || 0; a.st += r.stock_kg; return a; }, { in: 0, use: 0, adj: 0, mv: 0, ret: 0, st: 0 });
     const f1 = x => (Math.round(x * 10) / 10).toFixed(1);
     const iS = 'padding:6px 9px;border:1px solid #d1d5db;border-radius:7px;font-size:12.5px;font-family:inherit;';
     // 사종별 총합 (업체 무관)
@@ -31480,8 +31878,11 @@ function validateBlendSum(blends, label) {
       <input type="text" lang="ko" id="ys-q" value="${escapeHtml(S.yarn || '')}" placeholder="사종 · 컬러 찾기" style="${iS}min-width:200px;">
       <label style="font-size:12px;color:#475569;">기간 <input type="date" id="ys-from" value="${escapeHtml(S.from || '')}" style="${iS}"> ~ <input type="date" id="ys-to" value="${escapeHtml(S.to || '')}" style="${iS}"></label>
       <span style="font-size:11.5px;color:#94a3b8;">${rows.length}줄 · 기간은 아래 기록에만 적용</span>
-      ${canStockAdjust() ? `<button class="dash-action-btn" id="ys-base" style="margin-left:auto;font-weight:700;padding:6px 14px;" title="원장에 없는 사종 · 업체의 기초 재고를 넣습니다 (재고조정과 같은 창, 사유 = 기초 재고)">+ 기초 재고 넣기</button>` : ''}
+      ${(() => { const A = window.hwYmAll ? window.hwYmAll() : []; const n = A.filter(m => m.kind === 'move' && window.hwYmLeft(m) > 0).length; return `<button class="dash-action-btn" id="ys-ym" style="margin-left:auto;font-weight:800;padding:6px 14px;color:#1e40af;border-color:#bfdbfe;" title="원사이동 의뢰서 · 반품 목록 (hotfix601)">원사이동 · 반품${n ? ` <span style="background:#f59e0b;color:#fff;border-radius:9px;padding:0 7px;">이동 중 ${n}</span>` : ''}</button>`; })()}
+      ${canStockAdjust() ? `<button class="dash-action-btn" id="ys-base" style="font-weight:700;padding:6px 14px;" title="원장에 없는 사종 · 업체의 기초 재고를 넣습니다 (재고조정과 같은 창, 사유 = 기초 재고)">+ 기초 재고 넣기</button>` : ''}
     </div>
+    ${(() => { const O = window.hwYrOrphans ? window.hwYrOrphans() : []; if (!O.length) return '';   /* hotfix601: 601 전에 휴지통으로 보낸 원사 구매의뢰서 — 입고가 재고에 남아 있음 (데이터는 대표가 눌러야 바뀜) */
+      return `<div class="ys-in" style="border-color:#fecaca;background:#fef2f2;"><div style="padding:10px 12px;font-size:12.5px;color:#7f1d1d;line-height:1.7;"><b>휴지통에 있는 원사 구매의뢰서 ${O.length}건의 입고가 아직 원사 재고에 남아 있습니다</b> — 반품(완전 반품)으로 처리하면 재고에서 빠지고 기록이 남습니다.<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;">${O.map(w => `<button class="dash-action-btn ys-orph" data-id="${escapeHtml(w.id)}" style="font-size:11.5px;padding:3px 10px;">${escapeHtml(w.wo_number || '')} · ${escapeHtml(w.supplier || '')} → 반품 처리</button>`).join('')}</div></div></div>`; })()}
     ${(() => { /* hotfix552(대표 지적): 원사를 산 것(입고)이 안 나오던 것 — 원사 의뢰서에 [입고완료]를 안 누르면 입고가 안 잡힌다. 입고 기록이 없는 원사 의뢰서를 여기서 바로 [입고 반영] */
       const P = (state.allWorkOrders || []).filter(w => w && !w.deleted && w.type === '원사' && !w.received && (w.yarns || []).some(y => y && y.type)).sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
       if (!P.length) return '';
@@ -31499,38 +31900,39 @@ function validateBlendSum(blends, label) {
       <div>
         <div class="dash-table-wrap"><table class="dash-table"><thead><tr>
           <th style="text-align:left !important;min-width:180px;">사종</th><th style="text-align:center;width:80px;">컬러</th><th style="text-align:center;width:110px;">업체</th>
-          <th style="text-align:right !important;width:100px;">입고 kg</th><th style="text-align:right !important;width:100px;">사용 kg</th><th style="text-align:right !important;width:80px;">조정</th><th style="text-align:right !important;width:80px;">이동</th><th style="text-align:right !important;width:110px;">재고 kg</th><th style="text-align:center;width:60px;">펼치기</th><th style="text-align:center;width:140px;">작업</th>
+          <th style="text-align:right !important;width:100px;">입고 kg</th><th style="text-align:right !important;width:100px;">사용 kg</th><th style="text-align:right !important;width:80px;">조정</th><th style="text-align:right !important;width:80px;">이동</th><th style="text-align:right !important;width:70px;">반품</th><th style="text-align:right !important;width:110px;">재고 kg</th><th style="text-align:center;width:60px;">펼치기</th><th style="text-align:center;width:140px;">작업</th>
         </tr></thead><tbody>`;
     const canAdj = canStockAdjust();
-    if (!rows.length) h += `<tr><td colspan="10" style="text-align:center;color:#9ca3af;padding:20px;">아직 원사 재고 기록이 없습니다 — [원사 구매내역]의 [입고완료]가 첫 줄을 만듭니다${canAdj ? ' (또는 위 [+ 기초 재고 넣기])' : ''}.</td></tr>`;
+    if (!rows.length) h += `<tr><td colspan="11" style="text-align:center;color:#9ca3af;padding:20px;">아직 원사 재고 기록이 없습니다 — [원사 구매내역]의 [입고완료]가 첫 줄을 만듭니다${canAdj ? ' (또는 위 [+ 기초 재고 넣기])' : ''}.</td></tr>`;
     rows.forEach(r => {
       const open = S.open === r.key;
       h += `<tr class="ys-row" data-key="${escapeHtml(r.key)}" style="cursor:pointer;${open ? 'background:#eef2ff;' : ''}">
         <td style="text-align:left;font-weight:700;" title="${escapeHtml(r.yarn || '')}">${escapeHtml(yarnNameShow(r.yarn))}</td><td style="text-align:center;">${escapeHtml(r.color || YARN_LW)}</td><td style="text-align:center;">${escapeHtml(r.vendor || '(업체 없음)')}</td>
-        <td style="text-align:right;">${f1(r.in_kg)}</td><td style="text-align:right;color:#b45309;">${r.use_kg ? '−' + f1(r.use_kg) : '-'}</td><td style="text-align:right;">${r.adjust_kg ? f1(r.adjust_kg) : '-'}</td><td style="text-align:right;">${r.move_kg ? f1(r.move_kg) : '-'}</td>
-        <td style="text-align:right;font-weight:800;color:${r.stock_kg < 0 ? '#1d4ed8' : '#0f172a'};">${f1(r.stock_kg)}</td><td style="text-align:center;color:#64748b;">${open ? '▲' : '▼'}</td>
-        <td style="text-align:center;white-space:nowrap;">${canAdj ? `<button class="dash-action-btn ys-adjust" data-key="${escapeHtml(r.key)}" style="font-size:11px;padding:2px 8px;" title="시스템 재고 vs 실측(청구서) kg — 차이를 조정 줄로">재고조정</button> <button class="dash-action-btn ys-move" data-key="${escapeHtml(r.key)}" style="font-size:11px;padding:2px 8px;color:#1e40af;border-color:#bfdbfe;" title="다른 편직공장으로 원사 이동">이동</button>` : '<span style="font-size:11px;color:#9ca3af;">허용자만</span>'}</td></tr>`;
+        <td style="text-align:right;">${f1(r.in_kg)}</td><td style="text-align:right;color:#b45309;">${r.use_kg ? '−' + f1(r.use_kg) : '-'}</td><td style="text-align:right;">${r.adjust_kg ? f1(r.adjust_kg) : '-'}</td><td style="text-align:right;">${r.move_kg ? f1(r.move_kg) : '-'}</td><td style="text-align:right;color:#b91c1c;">${r.ret_kg ? f1(r.ret_kg) : '-'}</td>
+        <td style="text-align:right;font-weight:800;color:${r.stock_kg < 0 ? '#1d4ed8' : '#0f172a'};">${f1(r.stock_kg)}${(() => { const t = window.hwYmTransitKey ? window.hwYmTransitKey(r.key) : 0; return t ? `<div style="font-size:10.5px;color:#b45309;font-weight:700;" title="원사이동 의뢰서로 오는 중">입고 대기 +${f1(t)}</div>` : ''; })()}</td><td style="text-align:center;color:#64748b;">${open ? '▲' : '▼'}</td>
+        <td style="text-align:center;white-space:nowrap;">${canAdj ? `<button class="dash-action-btn ys-adjust" data-key="${escapeHtml(r.key)}" style="font-size:11px;padding:2px 8px;" title="시스템 재고 vs 실측(청구서) kg — 차이를 조정 줄로">재고조정</button> <button class="dash-action-btn ys-move" data-key="${escapeHtml(r.key)}" style="font-size:11px;padding:2px 8px;color:#1e40af;border-color:#bfdbfe;" title="원사이동 의뢰서 — 다른 편직공장 · 창고로">이동</button> <button class="dash-action-btn ys-ret" data-key="${escapeHtml(r.key)}" style="font-size:11px;padding:2px 8px;color:#b91c1c;border-color:#fecaca;" title="원사 구매처로 반품 (구매의뢰서에 연결)">반품</button>` : '<span style="font-size:11px;color:#9ca3af;">허용자만</span>'}</td></tr>`;
       if (open) {
         const ls = yarnStockLines(r.key);
         const uses = ls.filter(x => x.kind === 'use');
         const recs = yarnLedger().filter(x => x && yarnLedgerKey(x) === r.key && x.kind !== 'use' && inRange(x.date));
-        h += `<tr><td colspan="10" style="background:#f8fafc;padding:10px 14px;">
+        h += `<tr><td colspan="11" style="background:#f8fafc;padding:10px 14px;">
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
             <div><div style="font-size:11.5px;font-weight:800;color:#334155;margin-bottom:5px;">어느 통이 얼마 썼나 (${uses.length})</div>
               ${uses.length ? `<table class="dash-table" style="font-size:12px;"><thead><tr><th>통</th><th>절</th><th>kg/절</th><th>비율</th><th>사용 kg</th></tr></thead><tbody>` + uses.map(u => { const wo = state.allWorkOrders.find(w => w.id === u.wo_id); const done = !!(wo && wo.knit_done); return `<tr><td style="text-align:left;">${escapeHtml(u.item || '')} ${escapeHtml(u.color && !yarnColorIsLW(u.color) ? '' : '')}<span style="font-family:var(--font-gothic);font-weight:700;color:#1e3a8a;">${escapeHtml(u.greige_no || '')}</span> <span style="font-size:10.5px;color:#94a3b8;">${escapeHtml(u.wo_number || '')} · ${done ? '편직완료' : '기획 중(출고분)'}</span></td><td style="text-align:right;">${u.jul}</td><td style="text-align:right;">${u.kg_per_jul}</td><td style="text-align:right;">${u.pct}%</td><td style="text-align:right;font-weight:700;">${f1(u.kg)}</td></tr>`; }).join('') + `</tbody></table>` : '<div style="font-size:12px;color:#9ca3af;">아직 쓴 통이 없습니다.</div>'}</div>
             <div><div style="font-size:11.5px;font-weight:800;color:#334155;margin-bottom:5px;">입고 · 조정 · 이동 기록 (${recs.length})</div>
-              ${recs.length ? `<table class="dash-table" style="font-size:12px;"><thead><tr><th>날짜</th><th>구분</th><th>kg</th><th>비고</th><th>누가</th><th></th></tr></thead><tbody>` + recs.sort((a, b) => String(b.date || '').localeCompare(String(a.date || ''))).map(x => `<tr style="${x.void ? 'color:#9ca3af;text-decoration:line-through;' : ''}"><td>${escapeHtml(String(x.date || '').slice(0, 10))}</td><td style="text-align:center;">${{ in: '입고', adjust: '조정', move: '이동' }[x.kind] || escapeHtml(x.kind || '')}${x.kind === 'move' ? `<div style="font-size:10.5px;color:#1e40af;font-weight:700;">${(parseFloat(x.kg) || 0) < 0 ? '→ ' + escapeHtml(x.dest || '') : escapeHtml(x.from || '') + ' →'}</div>` : ''}${x.kind === 'adjust' ? `<div style="font-size:10.5px;color:#64748b;">${escapeHtml(yarnAdjReasonLabel(x.reason))}${x.before != null ? ' · ' + f1(parseFloat(x.before) || 0) + ' → ' + f1(parseFloat(x.after) || 0) : ''}</div>` : ''}${x.wo_number ? `<div style="font-size:10.5px;color:#94a3b8;">${escapeHtml(x.wo_number)}</div>` : ''}</td><td style="text-align:right;font-weight:700;">${(parseFloat(x.kg) || 0) > 0 && x.kind !== 'in' ? '+' : ''}${f1(parseFloat(x.kg) || 0)}</td><td style="text-align:left;">${escapeHtml(x.memo || '')}</td><td style="text-align:center;font-size:11px;color:#64748b;">${escapeHtml(String(x.by || '').split('@')[0])}</td><td style="text-align:center;">${x.void ? '<span style="font-size:10.5px;color:#b91c1c;font-weight:700;text-decoration:none;">취소됨</span>' : ((x.kind === 'adjust' || x.kind === 'move') && isOwnerUser() ? `<button class="dash-action-btn ys-void" data-id="${escapeHtml(x.id || '')}" style="font-size:10.5px;padding:1px 6px;">취소</button>` : '')}</td></tr>`).join('') + `</tbody></table>` : '<div style="font-size:12px;color:#9ca3af;">기간 안 기록이 없습니다.</div>'}</div>
+              ${recs.length ? `<table class="dash-table" style="font-size:12px;"><thead><tr><th>날짜</th><th>구분</th><th>kg</th><th>비고</th><th>누가</th><th></th></tr></thead><tbody>` + recs.sort((a, b) => String(b.date || '').localeCompare(String(a.date || ''))).map(x => `<tr style="${x.void ? 'color:#9ca3af;text-decoration:line-through;' : ''}"><td>${escapeHtml(String(x.date || '').slice(0, 10))}</td><td style="text-align:center;">${{ in: '입고', adjust: '조정', move: '이동', return: '반품' }[x.kind] || escapeHtml(x.kind || '')}${x.kind === 'move' ? `<div style="font-size:10.5px;color:#1e40af;font-weight:700;">${(parseFloat(x.kg) || 0) < 0 ? '→ ' + escapeHtml(x.dest || '') : escapeHtml(x.from || '') + ' →'}</div>` : ''}${x.kind === 'adjust' ? `<div style="font-size:10.5px;color:#64748b;">${escapeHtml(yarnAdjReasonLabel(x.reason))}${x.before != null ? ' · ' + f1(parseFloat(x.before) || 0) + ' → ' + f1(parseFloat(x.after) || 0) : ''}</div>` : ''}${x.wo_number ? `<div style="font-size:10.5px;color:#94a3b8;">${escapeHtml(x.wo_number)}</div>` : ''}</td><td style="text-align:right;font-weight:700;">${(parseFloat(x.kg) || 0) > 0 && x.kind !== 'in' ? '+' : ''}${f1(parseFloat(x.kg) || 0)}</td><td style="text-align:left;">${escapeHtml(x.memo || '')}</td><td style="text-align:center;font-size:11px;color:#64748b;">${escapeHtml(String(x.by || '').split('@')[0])}</td><td style="text-align:center;">${x.void ? '<span style="font-size:10.5px;color:#b91c1c;font-weight:700;text-decoration:none;">취소됨</span>' : ((x.kind === 'adjust' || (x.kind === 'move' && !x.ym)) && isOwnerUser() ? `<button class="dash-action-btn ys-void" data-id="${escapeHtml(x.id || '')}" style="font-size:10.5px;padding:1px 6px;">취소</button>` : '')}</td></tr>`).join('') + `</tbody></table>` : '<div style="font-size:12px;color:#9ca3af;">기간 안 기록이 없습니다.</div>'}</div>
           </div></td></tr>`;
       }
     });
     h += `</tbody></table></div>
         <div style="display:flex;gap:18px;flex-wrap:wrap;margin-top:10px;padding:10px 14px;background:#0f172a;color:#fff;border-radius:9px;font-size:12.5px;">
-          <span>입고 합계 <strong>${f1(tot.in)}</strong> kg</span><span>사용 합계 <strong>${f1(tot.use)}</strong> kg</span>${tot.adj ? `<span>조정 <strong>${f1(tot.adj)}</strong></span>` : ''}${tot.mv ? `<span>이동 <strong>${f1(tot.mv)}</strong></span>` : ''}<span style="margin-left:auto;">재고 합계 <strong style="font-size:14px;">${f1(tot.st)}</strong> kg</span>
+          <span>입고 합계 <strong>${f1(tot.in)}</strong> kg</span><span>사용 합계 <strong>${f1(tot.use)}</strong> kg</span>${tot.adj ? `<span>조정 <strong>${f1(tot.adj)}</strong></span>` : ''}${tot.mv ? `<span>이동 <strong>${f1(tot.mv)}</strong></span>` : ''}${tot.ret ? `<span>반품 <strong>${f1(tot.ret)}</strong></span>` : ''}${(() => { const t = (window.hwYmAll ? window.hwYmAll() : []).filter(m => m.kind === 'move').reduce((a, m) => a + window.hwYmLeft(m), 0); return t ? `<span style="color:#fbbf24;">이동 중 <strong>${f1(t)}</strong> kg (재고 합계에 안 들어감)</span>` : ''; })()}<span style="margin-left:auto;">재고 합계 <strong style="font-size:14px;">${f1(tot.st)}</strong> kg</span>
         </div>
         <div style="margin-top:12px;font-size:11.5px;font-weight:800;color:#334155;">사종별 총합 (모든 업체)</div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px;">${Object.values(byYarn).sort((a, b) => (a.yarn + a.color).localeCompare(b.yarn + b.color, 'ko')).map(o => `<span style="border:1px solid #e2e8f0;border-radius:9px;padding:4px 10px;font-size:12px;background:#fff;">${escapeHtml(o.yarn)} ${escapeHtml(o.color && !yarnColorIsLW(o.color) ? o.color : '')} <strong>${f1(o.st)}</strong>${o.n > 1 ? ` <span style="color:#94a3b8;">(${o.n}곳)</span>` : ''}</span>`).join('') || '<span style="font-size:12px;color:#9ca3af;">없음</span>'}</div>
       </div>
     </div>`;
+    if (S.vendor && window.hwYmVendorLogHtml) h += window.hwYmVendorLogHtml(S.vendor, S.from, S.to);   /* hotfix601: 고른 업체의 원사 입 · 출고 내역 */
     return h;
   }
   function bindYarnStockDash() {
@@ -31543,7 +31945,10 @@ function validateBlendSum(blends, label) {
     // hotfix416: 재고조정 · 이동 · 기초 재고 · 취소
     const rowOf = key => yarnStockRows().find(r => r.key === key);
     document.querySelectorAll('#dash-body .ys-adjust').forEach(b => b.addEventListener('click', e => { e.stopPropagation(); const r = rowOf(b.dataset.key); if (r) openYarnAdjustModal(r); }));
-    document.querySelectorAll('#dash-body .ys-move').forEach(b => b.addEventListener('click', e => { e.stopPropagation(); const r = rowOf(b.dataset.key); if (r) openYarnMoveModal(r); }));
+    document.querySelectorAll('#dash-body .ys-move').forEach(b => b.addEventListener('click', e => { e.stopPropagation(); const r = rowOf(b.dataset.key); if (r) { if (window.hwYmForm) window.hwYmForm(r); else openYarnMoveModal(r); } }));   /* hotfix601: 원사이동 의뢰서 */
+    document.querySelectorAll('#dash-body .ys-ret').forEach(b => b.addEventListener('click', e => { e.stopPropagation(); const r = rowOf(b.dataset.key); if (r && window.hwYrForm) window.hwYrForm(r); }));
+    document.getElementById('ys-ym')?.addEventListener('click', () => { if (window.hwYmList) window.hwYmList(); });
+    document.querySelectorAll('#dash-body .ys-orph').forEach(b => b.addEventListener('click', async () => { if (!canStockAdjust()) { toast('반품 처리 권한이 없습니다 — 재고조정을 허용받은 사람만 됩니다', 'error'); return; } const w = (state.allWorkOrders || []).find(x => x && x.id === b.dataset.id); if (!w || !window.hwYarnDelGate) return; const g = await window.hwYarnDelGate(w); if (g) { await window.hwYarnFullReturn(w, g); renderDashboard(); } }));
     document.getElementById('ys-base')?.addEventListener('click', () => openYarnAdjustModal(null));
     document.querySelectorAll('#dash-body .ys-void').forEach(b => b.addEventListener('click', async e => {
       e.stopPropagation();
@@ -31566,7 +31971,8 @@ function validateBlendSum(blends, label) {
   function yarnReceiveStamp(wo) {
     const r = wo.received; if (!r) return '';
     const d = String(r.date || '').slice(5).replace('-', '/');
-    return `입고완료 ${escapeHtml(d)} · ${(parseFloat(r.kg) || 0).toFixed(1)}kg`;
+    const rk = (wo.returns || []).filter(x => x && !x.void).reduce((a, x) => a + (parseFloat(x.kg) || 0), 0);   /* hotfix601 */
+    return `입고완료 ${escapeHtml(d)} · ${(parseFloat(r.kg) || 0).toFixed(1)}kg${rk ? ` <span style="color:#b91c1c;">· 반품 ${(Math.round(rk * 10) / 10).toFixed(1)}kg</span>` : ''}`;
   }
   // 입고완료 창 — 입고일 · 송장 kg(비우면 발주 kg) · 메모
   function openYarnReceiveModal(wo) {
@@ -31601,6 +32007,7 @@ function validateBlendSum(blends, label) {
     });
   }
   // [입고완료] 칸 — 진행 중: 단추 · 입고완료됨: 도장 + 되돌리기(최고관리자) · 옛 완료(received 없음): [입고완료로]
+  window.__hwYarnStamp = wo => yarnReceiveStamp(wo);   /* 시험용 */
   function yarnReceiveCellHtml(wo) {
     if (wo.received) return `<span style="font-size:11.5px;font-weight:800;color:#047857;">${yarnReceiveStamp(wo)}</span>${isOwnerUser() ? `<div><button class="dash-action-btn yr-undo" data-id="${wo.id}" style="font-size:10.5px;padding:2px 7px;margin-top:2px;">되돌리기</button></div>` : ''}`;
     if (wo.completed) return `<span style="font-size:11px;color:#94a3b8;">완료(옛)</span><div><button class="dash-action-btn yr-done" data-id="${wo.id}" style="font-size:10.5px;padding:2px 7px;margin-top:2px;" title="옛 완료 의뢰서 — 원사 재고에 넣으려면 입고완료로">입고완료로</button></div>`;
@@ -47093,6 +47500,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
     if (targets.length > 5) msg += `\n• ... 외 ${targets.length - 5}건`;
     msg += `\n\n("삭제됨 포함" 체크 시 복구할 수 있습니다)`;
     if (!confirm(msg)) return;
+    const __G601 = window.hwYarnBulkGate ? window.hwYarnBulkGate(targets) : []; if (__G601 === false) return;   /* hotfix601 */
     try {
       await Promise.all(targets.map(w => updateDoc(doc(db, C('workorders'), w.id), {
         deleted: true,
@@ -47102,6 +47510,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
         updated_by: state.user.email
       })));
       toast(`✓ ${targets.length}건 일괄 삭제됨 (휴지통)`, 'success');
+      for (const g of (__G601 || [])) { try { await window.hwYarnFullReturn(g.wo, g.lines); } catch (e2) { console.warn('[완전 반품]', e2 && e2.message); } }
     } catch (e) {
       toast('일괄 삭제 실패: ' + e.message, 'error');
     }
@@ -53011,7 +53420,8 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
         const wo = state.allWorkOrders.find(w => w.id === id);
         if (!wo) return;
         if (!canDeleteWo(wo)) { toast('이 화면에서 삭제할 권한이 없습니다', 'info'); return; }
-        if (!confirm(`이 의뢰서를 삭제하시겠습니까?\n\n[${wo.wo_number || ''}]\n\n(휴지통으로 이동되며, "삭제됨 포함" 체크 시 복구할 수 있습니다)`)) return;
+        let __yr601 = null; if (wo.type === '원사' && window.hwYarnDelGate) { __yr601 = await window.hwYarnDelGate(wo); if (__yr601 === false) return; }   /* hotfix601: 원사 완전 반품 */
+        if (!__yr601 && !confirm(`이 의뢰서를 삭제하시겠습니까?\n\n[${wo.wo_number || ''}]\n\n(휴지통으로 이동되며, "삭제됨 포함" 체크 시 복구할 수 있습니다)`)) return;
         try {
           await updateDoc(doc(db, C('workorders'), id), {
             deleted: true,
@@ -53021,6 +53431,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
             updated_by: state.user.email
           });
           toast('삭제 완료 (휴지통 이동)', 'success');
+          if (__yr601 && window.hwYarnFullReturn) { try { await window.hwYarnFullReturn(wo, __yr601); } catch (e2) { console.warn('[완전 반품]', e2 && e2.message); } }
         } catch (e) { toast('삭제 실패: ' + e.message, 'error'); }
       });
     });
@@ -53041,6 +53452,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
             updated_by: state.user.email
           }));
           toast('복구되었습니다', 'success');
+          if (_w && _w.type === '원사' && _w.full_return && (_w.full_return.ids || []).length && window.hwYarnFullReturnUndo) { try { await window.hwYarnFullReturnUndo(_w); } catch (e2) { console.warn('[완전 반품 되돌림]', e2 && e2.message); } }   /* hotfix601 */
         } catch (e) { toast('복구 실패: ' + e.message, 'error'); }
       });
     });
@@ -54318,9 +54730,10 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
         if (!confirm(`한 번 더 확인합니다. ${targets.length}건을 휴지통으로 이동할까요?`)) return;
       }
       
+      const __G601 = window.hwYarnBulkGate ? window.hwYarnBulkGate(targets) : []; if (__G601 === false) return;   /* hotfix601 */
       cfDeleteAll.disabled = true;
       cfDeleteAll.textContent = '삭제 중...';
-      let okCount = 0, failCount = 0;
+      let okCount = 0, failCount = 0; const __ok601 = new Set();
       for (const wo of targets) {
         try {
           await updateDoc(doc(db, C('workorders'), wo.id), {
@@ -54328,13 +54741,14 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
             updated_at: serverTimestamp(),
             updated_by: state.user.email
           });
-          okCount++;
+          okCount++; __ok601.add(wo.id);
         } catch (e) {
           console.error('삭제 실패:', wo.wo_number, e);
           failCount++;
         }
       }
       toast(`${okCount}건 휴지통 이동 완료${failCount > 0 ? ` (실패 ${failCount}건)` : ''}`, failCount === 0 ? 'success' : 'error');
+      for (const g of (__G601 || [])) { if (!__ok601.has(g.wo.id)) continue; try { await window.hwYarnFullReturn(g.wo, g.lines); } catch (e2) { console.warn('[완전 반품]', e2 && e2.message); } }
       // 필터는 유지하고 리렌더 (onSnapshot으로 자동 갱신되지만 명시적 호출)
       render();
     });
@@ -57468,7 +57882,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix600';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
+  const VERSION = 'v2.53 hotfix601';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
