@@ -249,7 +249,7 @@ import { initializeFirestore, getFirestore, persistentLocalCache, persistentMult
  *   읽는 것: proc_acc/{내 uid} · proc_pub/{내 업체}.gs (현일텍스가 보낸 생지출고) · proc_log(내 업체 것만)
  *   쓰는 것: proc_log 한 줄 — kind 'ship' part 'gs' (body 절 · n kg · ref 송장 사진) · kind 'st' part 'gs' stage seen | ack_cxl | photo
  *   사진: Storage gs_photos/{업체}/{생지출고}_{시각}.jpg */
-const KVER = 'k35 (hotfix599)';
+const KVER = 'k36 (hotfix600)';
 /* hotfix572(대표 10/1): 거래 원단회사 고르기 — FABIWOS 는 여러 원단회사에 팔 프로그램. 편직공장 한 곳이 여러 원단회사와 거래하므로
  *   계정(proc_acc.companies)에 거래 원단회사 목록 · 위 [→ 원단회사 ▾] 와 삼선 메뉴에서 고름 · 고른 회사의 할 일 · 재고 · 보낸 내역만 보임
  *   지금은 현일텍스 한 곳 (이 서버 = 현일텍스 자료). 다른 원단회사가 FABIWOS 를 쓰면 그 회사 자료 자리(co.src)를 더해 같은 앱에서 바꿔 봄 */
@@ -366,7 +366,7 @@ async function enter(user) {
   $('login').classList.add('hide'); $('app').classList.remove('hide');
   $('vn').textContent = acc.vendor; $('meta').textContent = '→ ' + CN();
   S.dest = ''; S.kind = '';   // hotfix581(대표 10/1): [보낼 곳] 거르기 없앰 — 카드에 보낼 곳은 그대로 보임
-  subscribe(); render();
+  subscribe(); render(); hwbInit();   /* hotfix600 */
   (S.permP || Promise.resolve()).then(() => pushReg(false)).then(ok => { if (ok && !lsGet('hwk.pushOkShown', false)) { lsSet('hwk.pushOkShown', true); toast('알림이 켜졌습니다 — 앱을 꺼 둬도 출고 요청이 오면 울립니다'); } else if (!ok) nudgeNotify(); });
 }
 /* ---------- 앱을 꺼 둬도 알림 ---------- */
@@ -545,6 +545,7 @@ function render() {
   $('meta').innerHTML = `<span class="live${navigator.onLine === false ? ' off' : ''}"></span><button type="button" class="cob" data-cop>→ ${esc(CN())}${COS().length > 1 ? ' ▾' : ''}</button>`;
   const nt = $('n-todo'); nt.textContent = todoAll.length; nt.classList.toggle('hide', !todoAll.length);
   document.querySelectorAll('#nav [data-tab]').forEach(b => b.classList.toggle('on', b.dataset.tab === S.tab));
+  try { if (window.HWBack) HWBack.note(); } catch (_) {}   /* hotfix600: 탭이 바뀌면 ◁ 로 돌아갈 자리 */
   if ($('sheet').classList.contains('on')) return;   // 창이 떠 있으면 뒤는 그대로
   if (S.tab === 'stock') { kStock(); return; }
   if (S.tab === 'mv') { $('list').innerHTML = kMv(); return; }
@@ -911,6 +912,95 @@ document.addEventListener('click', async e => {
   else if (t.dataset.kph) kPhotoSheet(x);
   else { const a = lsGet(vKey('ack'), []); lsSet(vKey('ack'), a.concat(x.k + ':' + x.cxl).slice(-300)); put(x, { kind: 'st', part: 'gs', stage: 'ack_cxl' }); render(); }
 });
+/* hotfix600(대표 10/3): 휴대폰 ◁(뒤로) — 세 앱(공정 체크 · 현장 QC · 편직팀) 같은 규칙
+ *   ① 열린 창(입력 창 · 메뉴 · 목록 고르기 …)이 있으면 그 창만 닫음 — 적던 값은 그대로 보관 · 아래 [되돌리기]를 누르면 적던 그대로 다시 열림
+ *   ② 창이 없고 앞에 보던 화면(탭 · 업체 · 거르기)이 있으면 그 화면으로 — [되돌리기]로 방금 화면으로 다시
+ *   ③ 첫 화면이면 "나가시겠습니까?" — [나가기] 또는 ◁ 한 번 더 = 나감 · [계속 쓰기] = 그대로
+ *   이력 지킴: 손가락이 화면에 닿을 때마다 이력을 3칸까지 채워 둠(사용자 동작 안에서 넣어야 크롬이 건너뛰지 않음) → ◁ 를 연달아 눌러도 앱이 받음 */
+(function () {
+  if (window.HWBack) return;
+  const K = 3;
+  const B = { on: false, depth: 0, leaving: false, stack: [], last: null, lastKey: '', restoring: false, undo: null, ad: null, snackT: 0, log: [] };
+  const key = s => { try { return JSON.stringify(s && s.k !== undefined ? s.k : s); } catch (_) { return ''; } };
+  const push = () => { try { history.pushState({ hwb: 600 }, ''); B.depth++; return true; } catch (_) { return false; } };
+  const arm = () => { if (!B.on || B.leaving) return; let n = 0; while (B.depth < K && n++ < K) { if (!push()) break; } };
+  ['pointerdown', 'touchend', 'keydown', 'click'].forEach(t => document.addEventListener(t, arm, true));
+  const css = `#hwb-snack{position:fixed;left:50%;bottom:calc(var(--hwb-nav,84px) + 10px + env(safe-area-inset-bottom));transform:translateX(-50%) translateY(16px);z-index:2147483000;background:#0f172a;color:#fff;border-radius:14px;padding:6px 6px 6px 16px;display:flex;align-items:center;gap:12px;font-size:15px;font-weight:700;box-shadow:0 10px 30px rgba(15,23,42,.35);opacity:0;pointer-events:none;transition:opacity .2s,transform .2s;max-width:calc(100vw - 24px);font-family:inherit}
+#hwb-snack.on{opacity:.97;transform:translateX(-50%);pointer-events:auto}
+#hwb-snack span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#hwb-snack button{flex:0 0 auto;border:0;border-radius:10px;background:#fbbf24;color:#0f172a;font-size:15px;font-weight:900;padding:10px 14px;font-family:inherit}
+#hwb-exit{position:fixed;inset:0;z-index:2147483001;background:rgba(15,23,42,.55);display:none;align-items:flex-end;justify-content:center;font-family:inherit}
+#hwb-exit.on{display:flex}
+#hwb-exit .b{width:100%;max-width:520px;background:#fff;border-radius:22px 22px 0 0;padding:22px 18px calc(18px + env(safe-area-inset-bottom));box-shadow:0 -10px 40px rgba(15,23,42,.25)}
+#hwb-exit b{display:block;font-size:19px;color:#0f172a;margin-bottom:6px}
+#hwb-exit p{margin:0 0 16px;color:#64748b;font-size:14.5px;line-height:1.55}
+#hwb-exit .r{display:flex;gap:10px}
+#hwb-exit .r button{flex:1;height:54px;border-radius:14px;font-size:17px;font-weight:900;font-family:inherit;border:1px solid #cbd5e1;background:#fff;color:#334155}
+#hwb-exit .r button.go{border:0;background:#0f766e;color:#fff}
+#hwb-bye{position:fixed;inset:0;z-index:2147483002;background:linear-gradient(160deg,#0f3b47,#134e5e 55%,#1e3a8a);color:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;text-align:center;padding:24px;font-family:inherit}
+#hwb-bye div{font-size:15.5px;opacity:.88;line-height:1.6}#hwb-bye b{font-size:26px}
+#hwb-bye button{margin-top:16px;border:0;border-radius:14px;padding:14px 26px;font-size:17px;font-weight:800;background:#fff;color:#0f3b47;font-family:inherit}`;
+  const el = id => document.getElementById(id);
+  function ensure() {
+    if (!el('hwb-css')) { const s = document.createElement('style'); s.id = 'hwb-css'; s.textContent = css; document.head.appendChild(s); }
+    if (!el('hwb-snack')) { const d = document.createElement('div'); d.id = 'hwb-snack'; d.setAttribute('role', 'status'); d.innerHTML = '<span></span><button type="button" data-hwb-undo>되돌리기</button>'; document.body.appendChild(d);
+      d.querySelector('button').addEventListener('click', () => { const f = B.undo; hideSnack(); if (f) { B.restoring = true; try { f(); } catch (e) { console.warn('[hwb undo]', e); } finally { B.restoring = false; } try { B.last = B.ad.snap(); B.lastKey = key(B.last); } catch (_) {} B.log.push('undo'); } }); }
+    if (!el('hwb-exit')) { const d = document.createElement('div'); d.id = 'hwb-exit'; d.innerHTML = '<div class="b" role="dialog"><b></b><p>넣은 기록은 모두 저장돼 있습니다.<br>◁(뒤로)를 한 번 더 눌러도 나갑니다.</p><div class="r"><button type="button" data-no>계속 쓰기</button><button type="button" class="go" data-go>나가기</button></div></div>'; document.body.appendChild(d);
+      d.addEventListener('click', e => { if (e.target === d || e.target.closest('[data-no]')) { closeExit(); return; } if (e.target.closest('[data-go]')) bye(); }); }
+  }
+  function navH() { try { const n = B.ad && B.ad.navEl && B.ad.navEl(); const h = n && n.offsetParent !== null ? n.getBoundingClientRect().height : 0; document.documentElement.style.setProperty('--hwb-nav', Math.round(h || 12) + 'px'); } catch (_) {} }
+  function snack(msg, fn) { ensure(); navH(); const s = el('hwb-snack'); s.querySelector('span').textContent = msg; B.undo = fn || null; s.querySelector('button').style.display = fn ? '' : 'none'; s.classList.add('on'); clearTimeout(B.snackT); B.snackT = setTimeout(hideSnack, 6000); }
+  function hideSnack() { clearTimeout(B.snackT); B.undo = null; const s = el('hwb-snack'); if (s) s.classList.remove('on'); }
+  function exitOpen() { const e = el('hwb-exit'); return !!(e && e.classList.contains('on')); }
+  function openExit() { ensure(); hideSnack(); const e = el('hwb-exit'); e.querySelector('b').textContent = ((B.ad && B.ad.title) || '앱') + ' — 나가시겠습니까?'; e.classList.add('on'); B.log.push('exit-ask'); }
+  function closeExit() { const e = el('hwb-exit'); if (e) e.classList.remove('on'); }
+  function bye() {
+    closeExit(); hideSnack(); B.leaving = true; B.log.push('bye');
+    const n = B.depth; B.depth = 0; if (n > 0) { try { history.go(-n); } catch (_) {} }
+    try { window.close(); } catch (_) {}
+    setTimeout(() => { if (!B.leaving) return; let d = el('hwb-bye'); if (!d) { d = document.createElement('div'); d.id = 'hwb-bye'; document.body.appendChild(d); }
+      d.innerHTML = '<b>나갔습니다</b><div>넣은 기록은 모두 저장돼 있습니다.<br>휴대폰 ◁(뒤로)를 한 번 더 누르면 앱이 닫힙니다.</div><button type="button">다시 쓰기</button>';
+      d.querySelector('button').onclick = () => { d.remove(); B.leaving = false; arm(); }; }, 260);
+  }
+  function go(s) { B.restoring = true; try { B.ad.apply(s); } catch (e) { console.warn('[hwb apply]', e); } finally { B.restoring = false; } try { B.last = B.ad.snap(); B.lastKey = key(B.last); } catch (_) { B.last = s; B.lastKey = key(s); } }
+  function back() {
+    if (!B.ad) return 'none';
+    if (exitOpen()) { bye(); return 'bye'; }
+    let Ls = []; try { Ls = B.ad.layers() || []; } catch (_) {}
+    for (const L of Ls) {
+      let o = false; try { o = !!L.open(); } catch (_) {} if (!o) continue;
+      let st; try { st = L.close(); } catch (e) { console.warn('[hwb close]', e); }
+      if (L.reopen && st !== false) snack((L.label || '창') + ' 닫음', () => L.reopen(st)); else hideSnack();
+      B.log.push('layer:' + (L.name || '')); return 'layer:' + (L.name || '');
+    }
+    if (B.stack.length) { const cur = B.last; const prev = B.stack.pop(); go(prev); snack('이전 화면으로 돌아왔습니다', () => { B.stack.push(B.last); go(cur); }); B.log.push('view'); return 'view'; }
+    openExit(); return 'exit';
+  }
+  window.addEventListener('popstate', e => { if (!B.on) return; if (B.leaving) return; if (B.depth > 0) B.depth--; try { e.stopImmediatePropagation(); } catch (_) {} if (B.depth < 1) push(); back(); });   /* 손을 안 대고 ◁ 를 계속 눌러도 맨 처음 칸까지 내려가지 않게 한 칸은 늘 남김 */
+  window.addEventListener('scroll', () => { if (!B.on || B.restoring || !B.last || !B.ad || !B.ad.scrollOf) return; try { B.last.y = B.ad.scrollOf(); } catch (_) {} }, { capture: true, passive: true });
+  window.HWBack = {
+    init(ad) { B.ad = ad; ensure(); if (!B.on) { B.on = true; push(); } try { B.last = ad.snap(); B.lastKey = key(B.last); } catch (_) {} },
+    note() { if (!B.on || !B.ad || B.restoring) return; let s; try { s = B.ad.snap(); } catch (_) { return; } if (!s) return; const k = key(s); if (B.last && k !== B.lastKey) { B.stack.push(B.last); if (B.stack.length > 30) B.stack.shift(); if (B.undo) hideSnack(); } B.last = s; B.lastKey = k; },
+    reset() { B.stack = []; hideSnack(); try { B.last = B.ad.snap(); B.lastKey = key(B.last); } catch (_) {} },
+    off() { B.on = false; hideSnack(); closeExit(); },
+    back, arm, get on() { return B.on; }, get restoring() { return B.restoring; }, _B: B
+  };
+})();
+/* hotfix600: 편직팀 앱 ◁ — 창(출고 · 사진 · 원단회사 · 메뉴) 먼저(적던 값 보관 · [되돌리기]) · 그다음 앞 탭(할 일 · 재고 · 이동 · 보낸 내역 · 설정) · 첫 화면이면 나가기 묻기 */
+function hwbInit() {
+  if (!window.HWBack || HWBack.on) return;
+  HWBack.init({ title: '편직팀', navEl: () => $('nav'),
+    snap: () => ({ k: { t: S.tab, kd: S.kind, d: S.dest, co: CO().id }, y: window.scrollY || 0 }),
+    scrollOf: () => window.scrollY || 0,
+    apply: s => { const c = s.k || {}; if (c.co && c.co !== CO().id) { try { localStorage.setItem('hwk.co', c.co); } catch (_) {} } S.tab = c.t || 'todo'; S.kind = c.kd || ''; S.dest = c.d || ''; render(); const y = s.y || 0; requestAnimationFrame(() => window.scrollTo(0, y)); },
+    layers: () => [
+      { name: 'sheet', label: '창', open: () => $('sheet').classList.contains('on'),
+        close: () => { const sh = $('sheet'); const st = { nodes: Array.from(sh.childNodes), ds: Object.assign({}, sh.dataset), y: (sh.querySelector('.sh') || {}).scrollTop || 0 }; sh.classList.remove('on'); sh.replaceChildren(); lockScroll(false); render(); return st; },
+        reopen: st => { const sh = $('sheet'); if (sh.classList.contains('on')) return; sh.replaceChildren(...st.nodes); Object.keys(sh.dataset).forEach(k => delete sh.dataset[k]); Object.assign(sh.dataset, st.ds); sh.classList.add('on'); lockScroll(true); const b = sh.querySelector('.sh'); if (b) b.scrollTop = st.y; } },
+      { name: 'drawer', label: '메뉴', open: () => $('drw').classList.contains('on'), close: () => { openDrw(false); return 1; }, reopen: () => openDrw(true) },
+      { name: 'cohome', label: '원단회사 고르기', open: () => { const e = document.getElementById('cohome'); return !!(e && e.classList.contains('on')); }, close: () => { document.getElementById('cohome').classList.remove('on'); return 1; }, reopen: () => coHome(true) }
+    ] });
+}
 window.__hwk = { S, render, kView, kPhotoBg };
 </script>
 </body>
