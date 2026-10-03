@@ -242,14 +242,14 @@ button{font-family:inherit;cursor:pointer}
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
 import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut, setPersistence, browserLocalPersistence } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
-import { initializeFirestore, getFirestore, doc, getDoc, updateDoc, setDoc, deleteDoc, collection, query, where, onSnapshot, addDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { initializeFirestore, getFirestore, persistentLocalCache, persistentMultipleTabManager, doc, getDoc, updateDoc, setDoc, deleteDoc, collection, query, where, onSnapshot, addDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
 /* 편직팀 — 현일텍스 편직공장 휴대폰 앱 (HIWOS hotfix564 · k1)
  *   가공소 앱(p.html)과 따로 설치되는 앱 · 로그인 계정은 같은 체계(proc_acc · app 'knit')
  *   읽는 것: proc_acc/{내 uid} · proc_pub/{내 업체}.gs (현일텍스가 보낸 생지출고) · proc_log(내 업체 것만)
  *   쓰는 것: proc_log 한 줄 — kind 'ship' part 'gs' (body 절 · n kg · ref 송장 사진) · kind 'st' part 'gs' stage seen | ack_cxl | photo
  *   사진: Storage gs_photos/{업체}/{생지출고}_{시각}.jpg */
-const KVER = 'k29 (hotfix593)';
+const KVER = 'k35 (hotfix599)';
 /* hotfix572(대표 10/1): 거래 원단회사 고르기 — FABIWOS 는 여러 원단회사에 팔 프로그램. 편직공장 한 곳이 여러 원단회사와 거래하므로
  *   계정(proc_acc.companies)에 거래 원단회사 목록 · 위 [→ 원단회사 ▾] 와 삼선 메뉴에서 고름 · 고른 회사의 할 일 · 재고 · 보낸 내역만 보임
  *   지금은 현일텍스 한 곳 (이 서버 = 현일텍스 자료). 다른 원단회사가 FABIWOS 를 쓰면 그 회사 자료 자리(co.src)를 더해 같은 앱에서 바꿔 봄 */
@@ -263,7 +263,7 @@ const DOMAIN = 'proc.recoveric.com';
 const app = initializeApp(cfg, 'hwknit');   // hotfix567: 로그인 보관 자리를 공정 체크 앱(hwvendor)과 따로 — 한 휴대폰에 두 앱을 깔아도 서로 로그인 · 로그아웃이 안 섞임
 const auth = getAuth(app);
 try { await setPersistence(auth, browserLocalPersistence); } catch (_) {}
-let db; try { db = initializeFirestore(app, { experimentalForceLongPolling: true, useFetchStreams: false }); } catch (e) { db = getFirestore(app); }
+let db; try { db = initializeFirestore(app, { experimentalForceLongPolling: true, useFetchStreams: false, localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }) }); } catch (e0) { try { db = initializeFirestore(app, { experimentalForceLongPolling: true, useFetchStreams: false }); } catch (e) { db = getFirestore(app); } }   /* hotfix596: 휴대폰에 기록을 남겨 둠 — 신호 없을 때 누른 것이 앱을 닫아도 사라지지 않고, 연결되면 자동으로 보냄 */
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -339,6 +339,7 @@ $('lg-form').addEventListener('submit', async e => {
   catch (err) { const c = err && err.code || ''; $('lg-msg').textContent = /invalid-credential|wrong-password|user-not-found|invalid-email/.test(c) ? '아이디 또는 비밀번호가 맞지 않습니다.' : (/too-many/.test(c) ? '여러 번 틀려 잠시 막혔습니다. 몇 분 뒤 다시 하십시오.' : (/network/.test(c) ? '인터넷 연결을 확인하십시오.' : '들어가지 못했습니다 (' + c + ')')); $('lg-btn').disabled = false; S.go = false; }
 });
 function showLogin(msg) {
+  S.tmp = new Map();   /* hotfix597 */
   try { closeSheet(); } catch (_) {}
   S.unsub.forEach(f => { try { f(); } catch (_) {} }); S.unsub = [];
   Object.assign(S, { acc: null, gs: [], stock: [], mv: [], mvKnown: null, logs: [], gotPub: false, gsKnown: null, coShown: false, tab: 'todo', kind: '', dest: '', ym: '', sq: '', push: false, sending: {}, hp: null, photoUp: {}, usBoot: false });   /* hotfix579: 다른 아이디로 들어와도 앞 사람 자료가 안 남게 */
@@ -382,9 +383,9 @@ async function pushReg(ask) {
     const token = await M.getToken(M.getMessaging(app), { serviceWorkerRegistration: reg });
     if (!token) { S.pushErr = '열쇠를 못 받음'; return false; }
     const id = await sha40(token); const last = lsGet('hwk.push', null);
-    if (!last || last.id !== id || last.uid !== S.uid || Date.now() - (last.t || 0) > 7 * 864e5) {
+    if (!last || last.id !== id || last.uid !== S.uid || last.vn !== S.acc.vendor || Date.now() - (last.t || 0) > 7 * 864e5) {   /* hotfix597: 업체 이름이 바뀌면 알림 열쇠도 새 이름으로 */
       await setDoc(doc(db, 'push_tok', id), { token, role: 'proc', vendor: S.acc.vendor, uid: S.uid, url: new URL('k.html?app=1', location.href).href, ua: navigator.userAgent.slice(0, 160), at: serverTimestamp() });
-      lsSet('hwk.push', { id, uid: S.uid, t: Date.now() });
+      lsSet('hwk.push', { id, uid: S.uid, vn: S.acc.vendor, t: Date.now() });
     }
     S.push = true; return true;
   } catch (e) { S.pushErr = (e && (e.code || e.message)) || '오류'; return false; }
@@ -405,6 +406,8 @@ try { navigator.serviceWorker && navigator.serviceWorker.addEventListener('messa
 /* ---------- 받기 ---------- */
 function subscribe() {
   S.unsub.forEach(f => { try { f(); } catch (_) {} }); S.unsub = []; const acc = S.acc; if (!acc) return;
+  vMigrate(acc);   /* hotfix597 */
+  S.unsub.push(onSnapshot(doc(db, 'proc_acc', S.uid), sn => { if (!sn.exists() || !S.acc) return; const d = sn.data() || {}; if (d.vendor && d.vendor !== S.acc.vendor) { S.acc = Object.assign({}, S.acc, { vendor: d.vendor, vendor_old: Array.isArray(d.vendor_old) ? d.vendor_old : [] }); toast('업체 이름이 ' + d.vendor + '(으)로 바뀌었습니다'); subscribe(); try { pushReg(false); } catch (_) {} } }, () => {}));   /* hotfix597: 앱을 켜 둔 채 PC 에서 업체를 바꾸면 바로 따라감 (전에는 옛 이름으로 쓰다 막히고 로그아웃) */
   S.unsub.push(onSnapshot(doc(db, 'proc_pub', acc.vendor), sn => { S.live = true; const d = sn.exists() ? sn.data() : {};
     S.gs = Array.isArray(d.gs) ? d.gs : []; S.stock = Array.isArray(d.stock) ? d.stock : [];   // hotfix570: 이 공장 생지 재고
     S.mv = Array.isArray(d.mv) ? d.mv : [];   /* hotfix586: 공장 간 이동 (보내는 곳 · 받는 곳) */
@@ -412,7 +415,7 @@ function subscribe() {
     if (!acc.app && d.mode === 'proc' && !S.gs.length) { S.acc = null; signOut(auth).catch(() => {}); showLogin('이 아이디는 [염/가공소 앱] 전용입니다. 편직팀 앱은 편직공장 아이디로 들어오십시오.'); return; }   // hotfix566: 예전 계정(앱 종류 없음)도 옮겨 가지 않음
     const pk = S.gs.filter(x => (x.pend || 0) > 0).map(x => x.k); if (S.gsKnown) { const nw = pk.filter(k => !S.gsKnown.includes(k)); if (nw.length) { ring(); toast('새 생지 출고 요청 ' + nw.length + '건'); } } S.gsKnown = pk;
     S.gotPub = true; render(); }, e => onDenied(e)));
-  S.unsub.push(onSnapshot(query(collection(db, 'proc_log'), where('vendor', '==', acc.vendor)), sn => { S.live = true; const a = []; sn.forEach(x => { const v = x.data({ serverTimestamps: 'estimate' }); if (v && v.part === 'gs') a.push(Object.assign({ id: x.id }, v)); }); S.logs = a; kUsNew(); render(); }, e => onDenied(e)));
+  logSubs(acc, v => v.part === 'gs', a => { S.live = true; S.logs = a; kUsNew(); render(); }, e => onDenied(e));   /* hotfix597 */
 }
 let hidAt = 0;
 /* hotfix584(대표 10/2): 휴대폰 앱 아이콘 숫자 — 앱을 열면 알림창에 쌓인 이 앱 알림을 지움(아이콘 숫자도 같이 사라짐) · 아이콘 숫자 = 지금 할 일 수 (숫자를 지원하는 휴대폰) */
@@ -432,10 +435,49 @@ function kUsNew() {
   lsSet(vKey('us'), Array.from(seen).concat(nw.map(l => l.id)).slice(-400));
   const l = nw.sort((a, b) => tOf(b) - tOf(a))[0]; ring(); toast((l.kind === 'req' ? '확인 요청 · ' : '') + CN() + ': ' + String(l.note || '새 소식').slice(0, 80));
 }
+/* hotfix596: 신호가 약해 아직 못 보낸 기록 수 — 화면 아래에 [전송 대기 N건] (연결되면 저절로 사라짐) */
+function kPendChip() { try { let c = document.getElementById('hw-pend'); const n = S.pendN || 0; if (!n) { if (c) c.remove(); return; } if (!c) { c = document.createElement('div'); c.id = 'hw-pend'; c.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);bottom:calc(76px + env(safe-area-inset-bottom));z-index:9998;background:#7c2d12;color:#fff;font-weight:800;font-size:13.5px;padding:8px 14px;border-radius:20px;box-shadow:0 4px 14px rgba(0,0,0,.25);pointer-events:none'; document.body.appendChild(c); } c.textContent = '전송 대기 ' + n + '건 — 연결되면 자동으로 보냅니다'; } catch (_) {} }
+/* hotfix597(대표 10/3): 공정 기록은 최근 150일만 읽음(PC 와 같은 기간 · 읽기량 줄임) · 실시간은 그대로
+   · Firebase 색인(proc_log: vendor + at)이 아직 없으면 저절로 전부 읽기로 (지금과 같음 — 멈추지 않음)
+   · 업체 이름을 바꾼 계정(vendor_old)은 옛 이름 기록도 같이 읽음 (규칙 rules597 게시 전엔 조용히 건너뜀)
+   · 내가 보낸 기록은 서버 답을 기다리지 않고 바로 화면에 (임시 줄 — 서버 것이 오면 바뀜) */
+const LOG_DAYS = 150;
+function logSubs(acc, filt, onData, onErr) {
+  S.tmp = S.tmp || new Map();
+  const names = [acc.vendor].concat(Array.isArray(acc.vendor_old) ? acc.vendor_old.filter(v => v && v !== acc.vendor) : []).slice(0, 6);
+  const parts = {}, got = new Set();
+  const emit = () => { if (got.size < names.length) return;   /* 이름마다 한 번씩 다 받은 뒤에만 화면에 (옛 이름 기록이 늦게 와서 '새 소식'으로 울리지 않게) */
+    const all = [], ids = new Set(); names.forEach(nm => (parts[nm] || []).forEach(x => { if (!ids.has(x.id)) { ids.add(x.id); all.push(x); } })); S.tmp.forEach((t, id) => { if (ids.has(id)) S.tmp.delete(id); else if (filt(t)) all.push(t); else S.tmp.delete(id); }); onData(all); };
+  S.logEmit = emit;
+  names.forEach((nm, i) => {
+    const sub = full => {
+      const q = full ? query(collection(db, 'proc_log'), where('vendor', '==', nm)) : query(collection(db, 'proc_log'), where('vendor', '==', nm), where('at', '>=', new Date(Date.now() - LOG_DAYS * 864e5)));
+      let u = null;
+      u = onSnapshot(q, sn => { const a = []; sn.forEach(d => { const v = d.data({ serverTimestamps: 'estimate' }); if (v && filt(v)) a.push(Object.assign({ id: d.id }, v)); }); parts[nm] = a; got.add(nm); emit(); },
+        e => { if (!full && e && e.code === 'failed-precondition') { S.logFull = true; sub(true); return; } if (i === 0) onErr(e); else { parts[nm] = []; got.add(nm); emit(); } });
+      S.unsub.push(() => { try { u && u(); } catch (_) {} });
+    };
+    sub(!!S.logFull || (typeof navigator !== 'undefined' && navigator.onLine === false));   /* 인터넷 없이 열면 전부 읽기(휴대폰에 보관된 것만 — 아직 못 보낸 기록도 보이게) */
+  });
+}
+/* hotfix597: 업체 이름이 바뀌면 — 이 휴대폰에 적어 둔 '본 것 · 알림 확인' 기록을 새 이름으로 옮김 (옛 소식이 새것처럼 울리지 않게) */
+function vMigrate(acc) { try { const olds = Array.isArray(acc && acc.vendor_old) ? acc.vendor_old : []; if (!olds.length) return; const ks = []; for (let i = 0; i < localStorage.length; i++) ks.push(localStorage.key(i)); olds.forEach(o => { if (!o || o === acc.vendor) return; ks.forEach(k => { if (k && k.startsWith('hwk.') && k.endsWith('.' + o)) { const nk = k.slice(0, k.length - o.length) + acc.vendor; if (localStorage.getItem(nk) == null) localStorage.setItem(nk, localStorage.getItem(k)); } }); }); } catch (_) {} }
+/* hotfix598: 숫자 읽기 — 전각 숫자 · 앞뒤 빈칸 · 쉼표(210,4 = 210.4 · 1,050 = 1050) · 단위 글자 */
+function hwNum(v) { let s = String(v == null ? '' : v).replace(/[\uFF01-\uFF5E]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0)).replace(/[\u2212\u2013\u2014]/g, '-').trim(); if (/^-?[1-9]\d{0,2}(,\d{3})+(\.\d+)?$/.test(s)) s = s.replace(/,/g, ''); else s = s.replace(/,/g, '.'); const m = s.match(/-?(?:\d+(?:\.\d+)?|\.\d+)/); return m ? parseFloat(m[0]) : NaN; }   /* PC 와 같은 규칙 (0,125 · .5 · −3) */
+window.__hwNum = hwNum;   /* 시험용 */
 async function put(x, o) {
   const d = Object.assign({ vendor: S.acc.vendor, k: x.k, wo: x.no || '', note: '', by: 'vendor', uid: S.uid, dev: S.dev, at: serverTimestamp() }, o);
   Object.keys(d).forEach(k => { if (d[k] === undefined) delete d[k]; });
-  try { await addDoc(collection(db, 'proc_log'), d); return true; } catch (e) { toast('보내지 못했습니다 — 인터넷을 확인하십시오', true); return false; }
+  const sig = JSON.stringify([d.k, d.kind, d.stage, d.mode, d.part, d.body, d.rib, d.n, d.ref, d.issue, d.date, d.note]);   /* hotfix596: 같은 내용을 보내는 중에 또 누르면 무시 — 느린 인터넷에서 두 번 눌러 출고가 두 번 잡히던 것 (다른 기록은 막지 않음) */
+  S.putBusy = S.putBusy || new Set(); if (S.putBusy.has(sig)) { toast('보내는 중입니다 — 잠시만 기다려 주십시오'); return false; } S.putBusy.add(sig);
+  try {
+    const ref = doc(collection(db, 'proc_log')); const w = setDoc(ref, d);   /* hotfix597: 이름을 먼저 정해 보냄 → 보낸 줄을 바로 화면에 (임시) */
+    S.tmp = S.tmp || new Map(); S.tmp.set(ref.id, Object.assign({}, d, { id: ref.id, at: { seconds: Date.now() / 1000, nanoseconds: 0 }, __local: true })); w.catch(() => { S.tmp.delete(ref.id); try { S.logEmit && S.logEmit(); } catch (_) {} }); try { S.logEmit && S.logEmit(); } catch (_) {}
+    const r = await Promise.race([w.then(() => 'ok'), new Promise(res => setTimeout(() => res('wait'), 10000))]);
+    if (r === 'wait') { S.pendN = (S.pendN || 0) + 1; kPendChip(); w.then(() => {}, () => {}).finally(() => { S.pendN = Math.max(0, (S.pendN || 1) - 1); kPendChip(); }); w.catch(() => toast('보내지 못했습니다 — 인터넷을 확인하십시오', true)); setTimeout(() => toast('신호가 약합니다 — 이 휴대폰에 저장해 두었고, 연결되면 자동으로 보냅니다'), 1600); }   /* 10초 안에 답이 없으면 기다리게 하지 않음 (다시 누르지 않게) */
+    return true;
+  } catch (e) { toast('보내지 못했습니다 — 인터넷을 확인하십시오', true); return false; }
+  finally { S.putBusy.delete(sig); }
 }
 
 /* ---------- 화면 ---------- */
@@ -445,8 +487,8 @@ function kRejOf(l) { return S.logs.find(u => u.by === 'us' && u.ref === l.id && 
 function kSent(x) { const apl = new Set(x.apl || []); return S.logs.filter(l => l.by === 'vendor' && l.kind === 'ship' && l.k === x.k && !apl.has(l.id) && !kCxOf(l) && !kRejOf(l)); }   /* hotfix581: 취소 · 반려한 보고는 뺌 → 다시 할 일로 */
 function kShipStat(l) {   /* hotfix581: 내가 보낸 출고 보고의 지금 상태 */
   const cx = kCxOf(l); if (cx) return S.logs.some(u => u.by === 'us' && u.ref === cx.id) ? ['cx', '취소됨', 't-s'] : ['cxw', '취소 요청 · 현일 확인 중', 't-y'];
+  const x = kList().find(i => i.k === l.k); if (x && (x.apl || []).includes(l.id)) return ['ok', '현일 확인 완료', 't-g'];   /* hotfix596: 확인이 먼저 — 확인된 보고에 '반려됨'이 떠서 다시 보내 두 번 잡히던 것 */
   if (kRejOf(l)) return ['rej', '반려됨 · 다시 보내 주세요', 't-r'];
-  const x = kList().find(i => i.k === l.k); if (x && (x.apl || []).includes(l.id)) return ['ok', '현일 확인 완료', 't-g'];
   return ['wait', '현일 확인 대기', 't-o'];
 }
 const kPhFail = () => lsGet(vKey('phfail'), []);
@@ -614,7 +656,7 @@ function kDiffSheet(r) {
     $('d-send').addEventListener('click', async () => { const j = parseFloat(J.value); if (!(j >= 0)) { toast('절수를 넣어 주세요', true); return; }
       if (Math.abs(j - real) < 0.05 && !confirm('앱에 보이는 숫자와 같습니다. 그래도 보낼까요?')) return;
       st.busy = true; st.j = j; st.n = N.value; draw();
-      const ok = await put({ k: r.k, no: r.wo }, { kind: 'issue', part: 'gs', issue: SI_ISSUE, body: real, n: j, label: (r.item + ' ' + (r.lot || '')).trim().slice(0, 80), note: String(N.value || '').slice(0, 200) });
+      const ok = await put({ k: r.k, no: r.wo }, { kind: 'issue', part: 'gs', issue: SI_ISSUE, body: real, n: j, label: (r.item + ' ' + (r.lot || '')).trim().slice(0, 80), note: String(N.value || '').trim().slice(0, 200) });
       st.busy = false; const mine = sheetIs(st.tok); if (ok) { if (mine) closeSheet(); ring(); toast(CN() + '에 보냈습니다 — 확인하고 고치면 알려 드립니다'); render(); } else if (mine) draw(); });
   };
   draw();
@@ -648,7 +690,7 @@ function kCxSheet(l) {
     $('sheet').querySelector('[data-x]').addEventListener('click', () => { closeSheet(); render(); });
     const N = $('cx-n'); N.addEventListener('input', () => { st.n = N.value; });
     $('cx-send').addEventListener('click', async () => { if (st.busy) return; st.busy = true; draw();
-      const ok = await put({ k: l.k, no: l.wo }, { kind: 'cancel', part: 'gs', ref: l.id, note: String(st.n || '').slice(0, 200) });
+      const ok = await put({ k: l.k, no: l.wo }, { kind: 'cancel', part: 'gs', ref: l.id, note: String(st.n || '').trim().slice(0, 200) });
       st.busy = false; const mine = sheetIs(st.tok); if (ok) { if (mine) closeSheet(); toast('취소를 보냈습니다 — ' + CN() + '가 확인하면 알려 드립니다'); render(); } else if (mine) draw(); });
   };
   draw();
@@ -723,7 +765,7 @@ function kMvSheet(x, mode) {   /* mode: send | recv | diff */
     $('mv-go').addEventListener('click', async () => { const j = parseFloat(J.value); if (!(j >= 0) || (mode === 'send' && !(j > 0))) { toast('수를 넣어 주세요', true); return; }
       if (mode === 'diff' && Math.abs(j - exp) < 0.05 && !confirm('들어와야 할 수와 같습니다. [잘 받았어요]로 보낼까요?')) return;
       st.busy = true; st.j = j; st.n = N.value; draw();
-      const ok = await kMvPut(x, mode === 'send' ? 'mv_send' : 'mv_recv', j, exp, String(N.value || '').slice(0, 200), mode === 'diff' && Math.abs(j - exp) >= 0.05 ? 'diff' : '');
+      const ok = await kMvPut(x, mode === 'send' ? 'mv_send' : 'mv_recv', j, exp, String(N.value || '').trim().slice(0, 200), mode === 'diff' && Math.abs(j - exp) >= 0.05 ? 'diff' : '');
       st.busy = false; const mine = sheetIs(st.tok); if (ok) { if (mine) closeSheet(); render(); } else if (mine) draw(); });
   };
   draw();
@@ -808,7 +850,7 @@ function kShipSheet(x) {
       <div class="k-lab">몇 절 보냈어요?</div>
       <div class="k-num"><button type="button" id="k-m">−</button><input id="k-j" type="number" inputmode="decimal" value="${kQ(st.j)}"><button type="button" id="k-p">+</button></div>
       <div class="k-lab">송장 무게 합계 (kg) <small style="font-weight:600;color:#64748b">(모르면 비워 두세요)</small></div>
-      <div class="k-num"><input id="k-kg" type="number" inputmode="decimal" placeholder="예: 210.4" value="${esc(st.kg)}"></div>
+      <div class="k-num"><input id="k-kg" type="text" inputmode="decimal" autocomplete="off" placeholder="예: 210.4" value="${esc(st.kg)}"></div>
       ${kPhotoField(st)}
       <div class="row2"><button type="button" class="no" data-x>닫기</button><button type="button" class="ok" id="k-send"${st.busy ? ' disabled' : ''}>${st.busy ? '보내는 중…' : '보내기'}</button></div>`);
     $('sheet').querySelector('[data-x]').addEventListener('click', () => { closeSheet(); render(); });
@@ -820,7 +862,8 @@ function kShipSheet(x) {
     $('k-send').addEventListener('click', async () => {
       if (st.loading) { toast('사진을 보는 중입니다 — 잠시 뒤 다시 누르십시오'); return; }
       if (S.sending[x.k]) return;
-      const j = parseFloat(J.value) || 0; const kg = parseFloat(K.value) || 0;
+      const j = hwNum(J.value) || 0; const kgN = hwNum(K.value); const kg = isNaN(kgN) ? 0 : kgN;   /* hotfix598: 210,4 처럼 쉼표 소수점 휴대폰도 · 전각 숫자 */
+      if (String(K.value || '').trim() && isNaN(kgN)) { toast('송장 무게는 숫자로 넣어 주세요 (예: 210.4)', true); K.focus(); return; }
       if (!(j > 0)) { toast('보낸 절수를 넣어 주세요', true); J.focus(); return; }
       if (kg < 0) { toast('송장 무게는 0 보다 커야 합니다', true); K.focus(); return; }   /* hotfix579 */
       if (j > v.pend && !confirm(`주문보다 많이 보냈나요? (남은 ${kQ(v.pend)}절 · 적은 ${kQ(j)}절)\n\n맞으면 [확인]`)) return;

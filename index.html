@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="FABIWOS">
 <meta name="mobile-web-app-capable" content="yes">
-<title>FABIWOS v2.53 hotfix585</title>
+<title>FABIWOS v2.53 hotfix599</title>
 
 <!-- PWA Manifest (인라인 data URL) -->
 <script>
@@ -8101,7 +8101,7 @@
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
-import { getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, addDoc, updateDoc, deleteDoc, doc, getDoc, getDocs, setDoc, deleteField, writeBatch, query, orderBy, onSnapshot, serverTimestamp, arrayUnion, runTransaction } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, addDoc, updateDoc, deleteDoc, doc, getDoc, getDocs, setDoc, deleteField, writeBatch, query, orderBy, onSnapshot, serverTimestamp, arrayUnion, runTransaction, getDocFromServer } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAIaNFZozda5sp4Qjs7LEn-aXYLX1JZi10",
@@ -8230,8 +8230,38 @@ const __wrappedAddDoc = __withWriteTimeout(function (colRef, data) {
   } catch (e) {}
   return addDoc(colRef, data);
 });
-const __wrappedUpdateDoc = __withWriteTimeout(function (ref, updates) {
+/* hotfix596(대표 10/3 점검): 컬러 줄(colors) 저장은 '내가 바꾼 컬러만' 서버의 최신 의뢰서에 얹는다.
+   전에는 화면 사본의 컬러 목록 전체를 덮어써서 — 현장 휴대폰 QC 와 PC 가 같은 의뢰서의 다른 컬러를 거의 같이 저장하면 먼저 저장한 쪽 내용이 사라질 수 있었음.
+   · 저장 직전 서버 최신본을 받아(1.5초까지) 바꾼 컬러만 그 위에 얹고, 보통 저장(updateDoc)으로 씀 → 신호가 약해도 지금처럼 휴대폰에 보관됐다가 자동 전송 (트랜잭션 안 씀)
+   · 바꾼 컬러 = 화면 사본(__hiwosWoCache)과 내용이 다르거나, 사본과 같은 물건(같은 참조)이라 바뀌었는지 알 수 없는 컬러 → 그런 컬러는 지금처럼 내 것을 씀
+   · 서버에서 컬러 줄 수 · 이름 순서가 바뀌었으면 저장을 멈추고 알림 (엉뚱한 컬러에 적지 않게)
+   · 1.5초 안에 최신본을 못 받거나(신호 약함) 인터넷이 없으면 지금처럼 전체 저장 */
+function __canon(v) { if (Array.isArray(v)) return v.map(__canon); if (v && typeof v === 'object') { if (typeof v.seconds === 'number' && typeof v.nanoseconds === 'number') return v.seconds + '.' + v.nanoseconds; if (typeof v.toMillis === 'function') return String(v.toMillis()); const o = {}; Object.keys(v).sort().forEach(k => { const x = v[k]; if (x === undefined) return; o[k] = __canon(x); }); return o; } return v; }   /* 칸 순서 · 날짜 모양만 같게 봄 — false · 빈 칸 · 글자/숫자 차이는 바뀐 것으로 (모르면 지금처럼 전체 저장) */
+function __colorKey(v) { try { return JSON.stringify(__canon(v)); } catch (e) { return String(Math.random()); } }
+window.__hw596 = { colorPatch: 0, colorFull: 0, colorStop: 0 };   /* 시험 · 점검용 셈 */
+const __getFresh596 = ref => Promise.race([getDocFromServer(ref), new Promise(r => setTimeout(() => r(null), 1500))]).catch(() => null);   /* 1.5초까지만 기다림 */
+const __wrappedUpdateDoc = __withWriteTimeout(async function (ref, updates) {
   const line = __histForUpdate(ref, updates);
+  try {
+    const prev = (ref && ref.parent && ref.parent.id === C('workorders') && updates && Array.isArray(updates.colors) && typeof window.__hiwosWoCache === 'function') ? window.__hiwosWoCache(ref.id) : null;
+    const base = prev && Array.isArray(prev.colors) ? prev.colors : null, nw = updates && updates.colors;
+    if (base && nw !== base && base.length === nw.length && !(typeof navigator !== 'undefined' && navigator.onLine === false)) {
+      const changed = []; for (let i = 0; i < nw.length; i++) { const same = nw[i] && typeof nw[i] === 'object' && nw[i] === base[i]; if (same || __colorKey(base[i]) !== __colorKey(nw[i])) changed.push(i); }
+      if (changed.length && changed.length < nw.length) {
+        const sn = await __getFresh596(ref);
+        if (sn && sn.exists && sn.exists()) {
+          const fresh = Array.isArray(sn.data().colors) ? sn.data().colors : [];
+          const names = base.map(c => String((c && c.name) || '').trim());
+          if (fresh.length !== base.length || fresh.some((c, i) => String((c && c.name) || '').trim() !== names[i])) { window.__hw596.colorStop++; const e = new Error('그 사이 다른 곳에서 이 의뢰서의 컬러 줄이 바뀌었습니다 — 화면을 다시 연 뒤 저장해 주십시오 (엉뚱한 컬러에 적지 않도록 저장을 멈췄습니다)'); e.__hw596 = true; throw e; }
+          const colors = fresh.slice(); changed.forEach(i => { colors[i] = nw[i]; });
+          window.__hw596.colorPatch++;
+          const up = Object.assign({}, updates, { colors }); if (line) up.history = arrayUnion(line);
+          return updateDoc(ref, up);
+        }
+      }
+    }
+  } catch (e) { if (e && e.__hw596) throw e; }
+  window.__hw596.colorFull += (updates && Array.isArray(updates.colors)) ? 1 : 0;
   if (line) updates = Object.assign({}, updates, { history: arrayUnion(line) });
   return updateDoc(ref, updates);
 });
@@ -9413,25 +9443,47 @@ function hwZf() { try { return parseFloat(getComputedStyle(document.body).zoom) 
 const HW_CHO = 'ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ';
 function hwChoOf(ch) { const c = ch.charCodeAt(0); return (c >= 0xAC00 && c <= 0xD7A3) ? HW_CHO[Math.floor((c - 0xAC00) / 588)] : ch; }
 function hwNorm(s) { return String(s == null ? '' : s).replace(/\s+/g, '').toLowerCase(); }
-/* 찾는 글자 q 가 text 안에 있는가 — q 의 자음(ㄱ~ㅎ)은 text 글자의 초성과, 나머지는 글자 그대로 맞춘다 */
-function hwTextMatch(text, q) {
-  const t = Array.from(hwNorm(text)), k = Array.from(hwNorm(q)); if (!k.length) return true;
+/* 찾는 글자 q 가 text 안에 있는가 — q 의 자음(ㄱ~ㅎ)은 text 글자의 초성과, 나머지는 글자 그대로 맞춘다
+   hotfix598(대표 10/3 "검색 전체 점검"):
+   · 치는 중 받침 — "쭈리"를 치면 잠깐 "쭐", "기모"는 "김", "다이아"는 "당" 이 됨 → 그 받침이 다음 글자 첫소리면 맞음 (전에는 이때 목록이 닫혔다 다시 열림)
+   · 기호 · 전각 무시 — rs2x1 → RS-2X1 · TDEG쭈리세원 → TDEG쭈리(세원) · ＴＤＥＧ → TDEG (그대로 맞추기를 먼저 하고, 안 맞으면 기호를 빼고 한 번 더) */
+const HW_JONG = ['', 'ㄱ', 'ㄲ', 'ㄳ', 'ㄴ', 'ㄵ', 'ㄶ', 'ㄷ', 'ㄹ', 'ㄺ', 'ㄻ', 'ㄼ', 'ㄽ', 'ㄾ', 'ㄿ', 'ㅀ', 'ㅁ', 'ㅂ', 'ㅄ', 'ㅅ', 'ㅆ', 'ㅇ', 'ㅈ', 'ㅊ', 'ㅋ', 'ㅌ', 'ㅍ', 'ㅎ'];
+const HW_JONG2 = { 3: [1, 'ㅅ'], 5: [4, 'ㅈ'], 6: [4, 'ㅎ'], 9: [8, 'ㄱ'], 10: [8, 'ㅁ'], 11: [8, 'ㅂ'], 12: [8, 'ㅅ'], 13: [8, 'ㅌ'], 14: [8, 'ㅍ'], 15: [8, 'ㅎ'], 18: [17, 'ㅅ'] };
+function hwWide2(s) { return String(s == null ? '' : s).replace(/[！-～]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0)).replace(/　/g, ' '); }
+/* hotfix598: 숫자 읽기 하나로 — 전각(７２) · 앞뒤 빈칸 · 단위 글자(30절 · 약72) · 쉼표: 1,050 / 1,200 처럼 뒤가 세 자리면 천 단위, 72,5 처럼 아니면 소수점 */
+function hwNumNorm(v) { let s = hwWide2(String(v == null ? '' : v)).replace(/[\u2212\u2013\u2014]/g, '-').trim();
+  if (/^-?[1-9]\d{0,2}(,\d{3})+(\.\d+)?$/.test(s)) s = s.replace(/,/g, '');   // 1,200 · 1,050 = 천 단위
+  else if (hwCommaRange(s)) s = s.split(',')[0];   // 72,74 = 폭 두 값(앞 값)
+  else s = s.replace(/,/g, '.');   // 72,5 · 58,75 · 0,125 = 소수점
+  const m = s.match(/-?(?:\d+(?:\.\d+)?|\.\d+)/); return m ? m[0] : ''; }
+/* hotfix598: '72,74' 처럼 쉼표로 쓴 폭 두 값 — 뒤 값이 앞 값보다 크고 10 이내일 때만 (58,75 · 12,25 는 소수) */
+function hwCommaRange(s) { const r = String(s || '').trim().match(/^(\d{2,3}),(\d{2,3})$/); return !!(r && +r[2] > +r[1] && +r[2] - +r[1] <= 10); }
+function __qn598(v) { if (v == null || v === '') return null; if (typeof v === 'number') return isNaN(v) ? null : v; const t = hwNumNorm(v); return t === '' ? null : parseFloat(t); }
+if (typeof window !== 'undefined') { window.hwNumNorm = hwNumNorm; window.__qn598 = __qn598; }
+function hwStrip(s) { return hwWide2(s).toLowerCase().replace(/[\s\-_·,()\[\]{}~+'"`:;|*#]/g, ''); }   /* / 와 . 는 남김 (30/1 · 1.5 같은 숫자가 날짜 · 15수 에 맞지 않게) */
+function hwTextMatchArr(t, k) {
+  if (!k.length) return true;
   const isJ = ch => /[ㄱ-ㅎ]/.test(ch);
+  const headOk = (i, n) => { for (let j = 0; j < n; j++) { const a = t[i + j], b = k[j]; if (a === undefined) return false; if (isJ(b) ? !(hwChoOf(a) === b || a === b) : a !== b) return false; } return true; };
+  for (let i = 0; i + k.length <= t.length; i++) if (headOk(i, k.length)) return true;
+  // 마지막 글자를 치는 중(예: "울리ㅍ" · "우" · "쭐")이면 앞은 그대로, 끝 글자는 넓게 맞춘다
+  const last = k[k.length - 1]; const lc = last.charCodeAt(0); if (!(lc >= 0xAC00 && lc <= 0xD7A3)) return false;
+  const n = k.length - 1, jong = (lc - 0xAC00) % 28, base = lc - jong;
   for (let i = 0; i + k.length <= t.length; i++) {
-    let ok = true;
-    for (let j = 0; j < k.length; j++) { const a = t[i + j], b = k[j]; if (isJ(b) ? !(hwChoOf(a) === b || a === b) : a !== b) { ok = false; break; } }
-    if (ok) return true;
-  }
-  // 마지막 글자를 치는 중(예: "울리ㅍ" · "우")이면 앞은 그대로, 끝 글자는 초성 · 받침 전 글자로도 맞춘다
-  const last = k[k.length - 1]; const lc = last.charCodeAt(0);
-  if (lc >= 0xAC00 && lc <= 0xD7A3 && (lc - 0xAC00) % 28 === 0) {   // 받침 없는 글자 — 받침 있는 글자도 맞게(우 → 울)
-    const head = k.slice(0, -1);
-    for (let i = 0; i + k.length <= t.length; i++) {
-      let ok = true; for (let j = 0; j < head.length; j++) { const a = t[i + j], b = head[j]; if (isJ(b) ? hwChoOf(a) !== b : a !== b) { ok = false; break; } }
-      if (!ok) continue; const a = t[i + head.length].charCodeAt(0); if (a >= 0xAC00 && a <= 0xD7A3 && Math.floor((a - 0xAC00) / 28) === Math.floor((lc - 0xAC00) / 28)) return true;
-    }
+    if (!headOk(i, n)) continue; const a = t[i + n].charCodeAt(0); if (!(a >= 0xAC00 && a <= 0xD7A3)) continue;
+    if (jong === 0) { if (a - ((a - 0xAC00) % 28) === base) return true; continue; }   // 받침 없는 글자 — 받침 있는 글자도 맞게(우 → 울)
+    if (!hwTextMatchArr.live) continue;   /* 받침 나누기는 글자를 치는 중(조합 중)일 때만 — 다 친 '울' 이 '우레탄' 에 맞지 않게 */
+    const nx = t[i + n + 1]; if (!nx) continue; const nc = hwChoOf(nx);
+    if (HW_JONG2[jong]) { const [j1, c2] = HW_JONG2[jong]; if (a === base + j1 && nc === c2) return true; }   // 겹받침 — 닭 → 달 + ㄱ(걀)
+    else if (a === base && nc === HW_JONG[jong]) return true;   // 홑받침 — 쭐 → 쭈 + ㄹ(리)
   }
   return false;
+}
+function hwTextMatch(text, q) {
+  { const ae = typeof document !== 'undefined' ? document.activeElement : null; hwTextMatchArr.live = !!(ae && ae.__composing); }
+  if (hwTextMatchArr(Array.from(hwNorm(hwWide2(text))), Array.from(hwNorm(hwWide2(q))))) return true;
+  const k2 = Array.from(hwStrip(q)); if (!k2.length) return false;
+  return hwTextMatchArr(Array.from(hwStrip(text)), k2);
 }
 window.hwTextMatch = hwTextMatch;
 function attachPickList(inp, itemsFn, onPick, opts) {
@@ -9440,9 +9492,11 @@ function attachPickList(inp, itemsFn, onPick, opts) {
   if (inp.hasAttribute('list')) { inp.dataset.pickDl = inp.getAttribute('list'); inp.removeAttribute('list'); }   // 브라우저 기본 목록이 같이 뜨지 않게
   const O = opts || {};
   let box = null, hits = [], cur = -1;
-  const place = (first) => { if (!box || !box.isConnected) return; const r = inp.getBoundingClientRect(); if (!first && (r.bottom < 0 || r.top > window.innerHeight)) { close(); return; } const z = hwZf(); const below = window.innerHeight - r.bottom; const h = Math.min(box.scrollHeight, 300);
-    box.style.left = (r.left / z) + 'px'; box.style.minWidth = Math.max(200, r.width / z) + 'px';
-    if (below < h + 12 && r.top > below) { box.style.top = ''; box.style.bottom = ((window.innerHeight - r.top + 2) / z) + 'px'; } else { box.style.bottom = ''; box.style.top = ((r.bottom + 2) / z) + 'px'; } };
+  const place = (first) => { if (!box || !box.isConnected) return; const r = inp.getBoundingClientRect(); const vv = window.visualViewport; const VH = vv ? vv.height + vv.offsetTop : window.innerHeight; const VW = window.innerWidth;   /* hotfix598: 휴대폰 자판이 올라와 있으면 보이는 높이로 · 화면 폭 안으로 */
+    if (!first && (r.bottom < 0 || r.top > VH)) { close(); return; } const z = hwZf(); const below = VH - r.bottom; const h = Math.min(box.scrollHeight, 300);
+    box.style.maxWidth = ((VW - 16) / z) + 'px'; box.style.minWidth = Math.min(Math.max(200, r.width), VW - 16) / z + 'px'; box.style.left = (r.left / z) + 'px';
+    if (below < h + 12 && r.top > below) { box.style.top = ''; box.style.bottom = ((window.innerHeight - r.top + 2) / z) + 'px'; } else { box.style.bottom = ''; box.style.top = ((r.bottom + 2) / z) + 'px'; }
+    { const b = box.getBoundingClientRect(); if (b.right > VW - 8) box.style.left = (Math.max(8, VW - 8 - b.width) / z) + 'px'; } };
   const onScroll = e => { if (box && e && e.target && box.contains(e.target)) return; place(); };
   const close = () => { if (box && box.isConnected) box.remove(); box = null; cur = -1; document.removeEventListener('scroll', onScroll, true); window.removeEventListener('resize', onScroll); };
   const reset = () => { cache = null; };   /* hotfix544: 위 조건이 바뀌면 목록을 다시 만들게 */
@@ -9456,6 +9510,9 @@ function attachPickList(inp, itemsFn, onPick, opts) {
     if (inp.__pickSkip) return;
     if (inp.readOnly || inp.disabled) return;
     const typed0 = ev && ev.type === 'input';
+    if (typed0 && document.activeElement !== inp) return;   /* hotfix598: 떠난 칸의 늦은 거르기가 새 칸 목록을 지우지 않게 */
+    if (typed0 && !box && lastQ !== null && inp.value === lastQ) return;   /* hotfix598: 고른 뒤 글자가 그대로면 목록을 다시 열지 않음 */
+    if (document.activeElement === inp) startPoll();
     if (typed0 && cache && !ev.__now) { clearTimeout(tmr); tmr = setTimeout(() => open({ type: 'input', __now: true }), 60); return; }
     document.querySelectorAll('.pick-list').forEach(b => { if (b !== box) b.remove(); });
     let items = []; if (typed0 && cache) items = cache; else { try { items = (itemsFn() || []).map(norm); } catch (_) { items = []; } cache = items; }
@@ -9465,9 +9522,9 @@ function attachPickList(inp, itemsFn, onPick, opts) {
     const fm = t => hwTextMatch(t.search || t.label || t.value, q) || hwTextMatch(t.label || '', q);
     if (!typed && String(inp.value || '').trim() && !items.some(t => !t.typedOnly && hwNorm(t.value) === hwNorm(inp.value))) { q = inp.value; if (items.some(fm)) typed = true; else q = ''; }
     lastQ = inp.value;
-    hits = items.filter(t => !t.always && (q ? fm(t) : !t.typedOnly)).slice(0, 300).concat(items.filter(t => t.always));   /* hotfix588: always = 거르기와 상관없이 맨 끝에 */
+    hits = (() => { const L = items.filter(t => !t.always && (q ? fm(t) : !t.typedOnly)); if (!q) return L; const nq = hwNorm(q), a = [], b = []; L.forEach(t => (hwNorm(t.search || t.label || t.value).includes(nq) ? a : b).push(t)); return a.concat(b); })().slice(0, 300)   /* hotfix598: 친 글자가 그대로 든 것을 먼저 (Enter 로 첫 줄을 고를 때 엉뚱한 것이 안 오게) */.concat(items.filter(t => t.always));   /* hotfix588: always = 거르기와 상관없이 맨 끝에 */
     if (!hits.length) { close(); return; }
-    if (!box || !box.isConnected) { close(); box = document.createElement('div'); box.className = 'pick-list' + (O.head ? ' pick-table' : ''); document.body.appendChild(box); }
+    if (!box || !box.isConnected) { close(); box = document.createElement('div'); box.className = 'pick-list' + (O.head ? ' pick-table' : ''); box.addEventListener('mousedown', e => e.preventDefault()); document.body.appendChild(box); }   /* hotfix598: 목록 빈 곳 · 스크롤 막대 · 표 머리를 눌러도 칸에서 안 빠짐 */
     const now = hwNorm(inp.value);
     const cols = !!O.head;
     const cellHtml = t => cols ? `<span class="pc-row">${(t.cols || [t.label]).map((c, i) => `<span class="pc c${i}">${escapeHtml(String(c == null ? '' : c))}</span>`).join('')}</span>`
@@ -9482,16 +9539,22 @@ function attachPickList(inp, itemsFn, onPick, opts) {
   };
   inp.addEventListener('focus', open); inp.addEventListener('input', open); inp.addEventListener('click', open);
   /* hotfix548: 한글 조합이 끝났을 때 · 키를 뗐는데 글자가 바뀌어 있으면 다시 거른다(입력기마다 input 이 빠지는 때가 있어서) */
-  inp.addEventListener('compositionend', () => { if (document.activeElement === inp) open({ type: 'input' }); });
-  { let pv = 0; inp.addEventListener('focus', () => { clearInterval(pv); pv = setInterval(() => { if (document.activeElement !== inp) { clearInterval(pv); return; } if (lastQ !== null && inp.value !== lastQ && !inp.__pickSkip) open({ type: 'input', __now: true }); }, 200); }); }
+  inp.addEventListener('compositionend', () => { const pe = inp.__pickEnter; inp.__pickEnter = 0; if (document.activeElement !== inp) return;
+    if (pe && Date.now() - pe < 500) { setTimeout(() => { if (document.activeElement !== inp) return; open({ type: 'input', __now: true }); if (box && hits.length) pick(hits[cur >= 0 ? cur : 0]); }, 0); return; }   /* hotfix598: 조합 중 누른 Enter — 글자가 다 들어간 뒤 고름 (글자가 덧붙거나 엉뚱한 것을 고르지 않게) */
+    open({ type: 'input' }); });
+  let pv = 0; function startPoll() { if (pv) return; pv = setInterval(() => { if (document.activeElement !== inp) { clearInterval(pv); pv = 0; return; } if (lastQ !== null && inp.value !== lastQ && !inp.__pickSkip) open({ type: 'input', __now: true }); }, 200); }   /* hotfix598: 목록을 열 때도 시작(datalist 칸은 처음 누를 때 빠졌음) */
+  inp.addEventListener('focus', startPoll);
   inp.addEventListener('keyup', ev => { if (document.activeElement !== inp || ['Enter', 'Escape', 'Tab', 'ArrowDown', 'ArrowUp'].includes(ev.key)) return; if (inp.value !== lastQ) open({ type: 'input' }); });
-  inp.addEventListener('blur', () => setTimeout(close, 150));
+  inp.addEventListener('blur', () => { clearTimeout(tmr); inp.__pickEnter = 0; setTimeout(close, 150); });
   inp.addEventListener('keydown', ev => {
-    if (ev.key === 'Escape') { close(); return; }
+    if (ev.key === 'Escape') { if (box) { close(); ev.stopPropagation(); ev.preventDefault(); } return; }   /* hotfix598: 목록이 열려 있으면 목록만 닫음 (창까지 닫히지 않게) */
+    const comp = ev.isComposing || inp.__composing;
+    if (ev.key === 'Enter' && comp) { if (box) { inp.__pickEnter = Date.now(); ev.stopPropagation(); } return; }   /* hotfix598: 조합 중 Enter → compositionend 뒤에 고름 */
     if (!box) { if (ev.key === 'ArrowDown') { open({ type: 'focus' }); ev.preventDefault(); } return; }
     if (ev.key === 'ArrowDown') { cur = Math.min(hits.length - 1, cur + 1); paintCur(); ev.preventDefault(); }
     else if (ev.key === 'ArrowUp') { cur = Math.max(0, cur - 1); paintCur(); ev.preventDefault(); }
-    else if (ev.key === 'Enter' && cur >= 0 && hits[cur]) { ev.preventDefault(); ev.stopPropagation(); pick(hits[cur]); }
+    else if (ev.key === 'Enter') { if (inp.value !== lastQ) { clearTimeout(tmr); open({ type: 'input', __now: true }); }   /* hotfix598: 빨리 치고 바로 Enter — 지금 글자로 다시 거른 뒤 고름 */
+      if (box && cur >= 0 && hits[cur]) { ev.preventDefault(); ev.stopPropagation(); pick(hits[cur]); } }
   });
   inp.__pick = { open, close, reset };
   return inp.__pick;
@@ -9856,7 +9919,16 @@ function codeClashOf(M, Pp, wos) {
   return out;
 }
 // 글자(이름·다른 표기와 정확히 같음) → 코드. 둘 이상 맞거나 못 찾으면 ''
+/* hotfix594: 이름 → 품목 코드 찾기를 기억 (품목 자료가 바뀌면 다시) — 재고 · 목록 계산이 이름마다 품목 250개를 다시 훑던 것 */
+const __ifoMemo = { s: null, m: new Map() };
 function itemFidOf(name) {
+  const specs0 = (typeof state !== 'undefined' && Array.isArray(state.fabricSpecs)) ? state.fabricSpecs : null;
+  if (__ifoMemo.s !== specs0) { __ifoMemo.s = specs0; __ifoMemo.m = new Map(); }
+  const mk = String(name == null ? '' : name);
+  if (__ifoMemo.m.has(mk)) return __ifoMemo.m.get(mk);
+  const r = itemFidOfRaw(name); if (__ifoMemo.m.size > 5000) __ifoMemo.m.clear(); __ifoMemo.m.set(mk, r); return r;
+}
+function itemFidOfRaw(name) {
   if (!vendorKey(name)) return '';
   const specs = (typeof state !== 'undefined' && Array.isArray(state.fabricSpecs)) ? state.fabricSpecs : [];
   const hits = Array.from(new Set(specs.filter(s => s && s.fid && itemHasName(s, name)).map(s => String(s.fid))));
@@ -9919,6 +9991,20 @@ function greigeNoClean(v) {
   document.addEventListener('compositionstart', e => { if (e.target) e.target.__composing = true; }, true);
   document.addEventListener('compositionend', e => { const el = e.target; if (!el) return; el.__composing = false; setTimeout(() => { try { el.dispatchEvent(new Event('input', { bubbles: true })); } catch (_) {} }, 0); }, true);
   document.addEventListener('input', e => { if ((e.isComposing || (e.target && e.target.__composing)) && !(e.target && e.target.__hwPreview)) e.stopPropagation(); }, true);
+  /* hotfix598: 숫자 칸에 마우스를 올린 채 휠을 굴리면 값이 바뀌던 것(30 → 29.5) — 휠을 굴리면 칸에서 빠짐 */
+  document.addEventListener('wheel', e => { const t = e.target; if (t && t.tagName === 'INPUT' && t.type === 'number' && document.activeElement === t) t.blur(); }, { passive: true });
+  /* hotfix598(대표 10/3 "입력 칸 전체 점검"): 한글을 치는 중(조합 중)에 누른 Enter — 칸마다 따로 처리하던 것을 한곳에서.
+     조합 중 Enter 는 그 자리에서 칸의 처리에 넘기지 않고, 글자가 다 들어간(compositionend) 뒤에 Enter 를 한 번 다시 보냄.
+     → 윈도우: Enter 한 번으로 마지막 글자까지 들어간 뒤 추가 · 저장 · 보내기 (전에는 칸에 따라 두 번 눌러야 하거나 마지막 글자가 빠짐)
+     → 맥: Enter 가 두 번 오던 것(조합 중 1 + 끝난 뒤 1)이 한 번만
+     · 목록 고르기 칸(attachPickList)은 그 칸이 직접 처리 */
+  window.addEventListener('keydown', e => { const t = e.target; if (e.key !== 'Enter' || !t || !(t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
+    if (!(e.isComposing || t.__composing)) { t.__hwEnterAt = Date.now(); return; }   /* 229 만으로는 조합 중이라 보지 않음 (맥 사파리 · 안드로이드는 조합이 끝난 뒤에도 229 를 보냄) */
+    if (t.dataset && t.dataset.pickBound) return;
+    e.stopImmediatePropagation(); t.__hwEnterAfter = { at: Date.now(), ctrlKey: e.ctrlKey, metaKey: e.metaKey, shiftKey: e.shiftKey, altKey: e.altKey }; }, true);   /* Ctrl · Cmd · Shift 함께 누른 것도 그대로 */
+  document.addEventListener('focusout', e => { if (e.target && e.target.__hwEnterAfter) e.target.__hwEnterAfter = null; }, true);
+  document.addEventListener('compositionend', e => { const t = e.target; const w = t && t.__hwEnterAfter; if (!w) return; t.__hwEnterAfter = null; if (Date.now() - w.at > 500) return; const at = Date.now();   /* 0.5초 넘게 묵은 것은 버림 */
+    setTimeout(() => { if (!t.isConnected || document.activeElement !== t || (t.__hwEnterAt || 0) >= at) return; t.__hwEnterAt = Date.now(); try { t.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true, ctrlKey: w.ctrlKey, metaKey: w.metaKey, shiftKey: w.shiftKey, altKey: w.altKey })); } catch (_) {} }, 40); }, true);
   try { const ssr = HTMLInputElement.prototype.setSelectionRange; HTMLInputElement.prototype.setSelectionRange = function () { if (this.__composing) return; return ssr.apply(this, arguments); }; } catch (_) {}
 })();
 // hotfix559(대표 지시 9/30 — "검색 전체 점검"): 한글 검색 — 마지막 글자(조합 중인 글자)까지 바로 거른다.
@@ -10083,7 +10169,7 @@ function qcWN(v) { return Math.round(Number(v) * 100) / 100; }
 function qcWFmt(a, b) { if (a == null || a === '' || !isFinite(Number(a))) return '-'; return (b != null && b !== '' && isFinite(Number(b)) && Math.abs(Number(b) - Number(a)) > 0.001) ? `${qcWN(a)}/${qcWN(b)}` : `${qcWN(a)}`; }
 function qcWidthPair(d) {
   if (!d) return { a: null, b: null };
-  const nums = String(d.width_inch == null ? '' : d.width_inch).replace(/,/g, '.').match(/\d+(?:\.\d+)?/g) || [];
+  const nums = (s => hwCommaRange(s) ? s.replace(',', '/') : s)(hwWide2(String(d.width_inch == null ? '' : d.width_inch)).trim()).replace(/,/g, '.').match(/\d+(?:\.\d+)?/g) || [];   /* hotfix598: 72,74 = 두 값 · 전각 숫자 */
   const a = nums.length ? parseFloat(nums[0]) : null; let b = nums.length > 1 ? parseFloat(nums[1]) : null;
   if (b == null && d.width_inch_max != null && d.width_inch_max !== '' && isFinite(parseFloat(d.width_inch_max))) b = parseFloat(d.width_inch_max);
   return { a: (a > 0 ? a : null), b: (b > 0 ? b : null) };
@@ -10203,8 +10289,21 @@ function greigeOldTextIs(g, text, wo) {
   const gsp = itemByFid(g); if (!gsp || vendorKey(gsp.name).indexOf(vendorKey(sale.name) + '(') !== 0) return false;
   const rec = (wo && wo.recipient) || ''; return gs.length === 1 || greigeAtFactory(g, rec) || (gs[0] === g && !gs.some(x => greigeAtFactory(x, rec)));   /* 받은 곳이 어느 생지 공장도 아니면(창고 · 다른 공장) 첫 생지 — 정리 전과 같게 */
 }
+/* hotfix594(대표 10/2 — 염/가공 의뢰서 품목 검색이 늦음): 같은 자료로 같은 품목을 다시 물으면 계산해 둔 값을 돌려준다.
+   의뢰서 · 품목 · 편직 설정 자료가 바뀌면(스냅샷 = 새 배열) 저절로 다시 셈. 받는 쪽이 고쳐도 기억이 안 바뀌게 사본을 준다 */
+const __gslMemo = { k: null, m: new Map() };
+function greigeStockList(name, fid, opts) {
+  const S = (typeof state !== 'undefined') ? state : {};
+  const tok = [S.allWorkOrders, S.fabricSpecs, S.knitBlend, S.knitFee];
+  const now = Date.now();   /* 4초 넘은 기억은 버림 — 화면 안에서 바로 고친 재고(트랜잭션 등)가 늦게 보이지 않게 */
+  if (!__gslMemo.k || __gslMemo.k.some((x, i) => x !== tok[i]) || now - (__gslMemo.t || 0) > 4000) { __gslMemo.k = tok; __gslMemo.m = new Map(); __gslMemo.t = now; }
+  const key = String(name == null ? '' : name) + '\u0001' + String(fid == null ? '' : fid) + '\u0001' + (opts && opts.moved ? 1 : 0);
+  let v = __gslMemo.m.get(key);
+  if (!v) { v = greigeStockListRaw(name, fid, opts); if (__gslMemo.m.size > 3000) __gslMemo.m.clear(); __gslMemo.m.set(key, v); }
+  return v.map(o => Object.assign({}, o));
+}
 // hotfix392: 그 품목의 편직 생지 목록 (번호·컬러·남은 절·공장) — 남은 절 = 의뢰 + 입고 − 출고 (예상재고 공식 그대로)
-function greigeStockList(name, fid, opts) {   // hotfix422i: opts.moved = 이동해 간 곳의 로트 줄도 낸다(의뢰서 입고처 로트 목록용)
+function greigeStockListRaw(name, fid, opts) {   // hotfix422i: opts.moved = 이동해 간 곳의 로트 줄도 낸다(의뢰서 입고처 로트 목록용)
   const id = String(fid || '').trim() || itemFidOf(name);
   const k = vendorKey(greigeSplit(name).name || name);
   const srcs = itemSourceFids(name, fid);   /* hotfix434 */
@@ -11515,7 +11614,7 @@ function getFormData() {
       dest: (document.getElementById('y_dest') || {}).value || '',
       dest_phone: (document.getElementById('y_dest_phone') || {}).value || '',
       purpose: document.getElementById('y_purpose').value,
-      notes: document.getElementById('y_notes').value,
+      notes: document.getElementById('y_notes').value.replace(/\s+$/, ''),   /* hotfix598: 빈칸만 있으면 메모 없음 · 끝 빈칸 뺌 */
       ...((typeof state !== 'undefined' && state.__ycSnap) ? { yarn_calc: state.__ycSnap } : {}),   // hotfix484: 원사 투입량 계산 기록
       lot_no: (document.getElementById('y_lot_no')?.value || '').trim(),
       arrival_date: document.getElementById('y_arrival')?.value || '',
@@ -11545,7 +11644,7 @@ function getFormData() {
       yarn_in_show: !!(document.getElementById('k-yarnin-show') || {}).checked,   /* hotfix494 */
       ...((typeof state !== 'undefined' && state.__knitFromYarn && state.__knitFromYarn.id) ? { from_yarn: { id: state.__knitFromYarn.id, no: state.__knitFromYarn.no || '' } } : {}),   /* hotfix591 */
       cautions: getKnitCautionData(),
-      notes: document.getElementById('k_notes').value,
+      notes: document.getElementById('k_notes').value.replace(/\s+$/, ''),   /* hotfix598 */
       stamps
     };
   }
@@ -11559,7 +11658,7 @@ function getFormData() {
       blend: document.getElementById('bt_blend').value,
       caution: document.getElementById('bt_caution').value,
       colors: state.btColors.map(c => ({ name: c.name || '', hex: c.hex || '' })),
-      memo: document.getElementById('bt_memo').value,
+      memo: document.getElementById('bt_memo').value.replace(/\s+$/, ''),   /* hotfix598 */
       stamps: state.btStamps.filter(s => s.selected).map(s => s.name),
       stampDefs: state.btStamps.map(s => ({ name: s.name, selected: !!s.selected }))
     };
@@ -11640,7 +11739,7 @@ function getFormData() {
     },
     caution: getCautionData(),
     colors,
-    notes: getVal('f_notes'),
+    notes: getVal('f_notes').replace(/\s+$/, ''),   /* hotfix598 */
     stamps
   };
 }
@@ -12323,6 +12422,18 @@ function woDupFind(d, selfId) {
     .sort((a, b) => String(b.wo_number || '').localeCompare(String(a.wo_number || '')))[0] || null;
 }
 if (typeof window !== 'undefined') window.__woDup = { sig: woDupSig, find: woDupFind };
+/* hotfix598: 저장하면 컬러 '몇 번째' 가 바뀌는지 — 가공소 공정 기록(proc_log, 열쇠 = 의뢰서id_컬러순번)이 있는 순번만 본다 */
+function hwColorShift598(existing, payload) {
+  try {
+    if (!existing || existing.type !== '염색가공' || !payload || !Array.isArray(payload.colors) || !Array.isArray(existing.colors)) return [];
+    const P = window.hwProc; const logs = (P && Array.isArray(P.logs)) ? P.logs : []; if (!logs.length) return [];
+    const has = new Set(); const pre = existing.id + '_'; logs.forEach(l => { if (l && l.part !== 'gs' && typeof l.k === 'string' && l.k.startsWith(pre)) { const i = parseInt(l.k.slice(pre.length), 10); if (i >= 0) has.add(i); } });
+    const nm = c => String((c && c.name) || '').trim(); const out = [];
+    Array.from(has).sort((a, b) => a - b).forEach(i => { const a = nm(existing.colors[i]), b = nm(payload.colors[i]); if (a && a !== b) out.push({ i, from: a, to: b }); });
+    return out;
+  } catch (e) { return []; }
+}
+if (typeof window !== 'undefined') window.__hwColorShift598 = hwColorShift598;
 function buildEditPayload(d, existing) {
   const payload = { ...d };
   // 1. 의뢰서 레벨 보호 필드 채워넣기 (폼이 안 다루는 필드)
@@ -14890,8 +15001,27 @@ window.addEventListener('firebase-ready', () => {
   }
   /* hotfix581: 즐겨찾기 — 이 PC · 이 계정에 기억 (의뢰서 자료와 상관없는 화면 설정이라 서버에는 안 씀) */
   function hwFavKey() { return 'hiwos.side.fav.' + String((state.user && state.user.email) || '').toLowerCase(); }
-  function hwFavs() { try { const a = JSON.parse(localStorage.getItem(hwFavKey()) || '[]'); return Array.isArray(a) ? a.filter(x => typeof x === 'string').slice(0, 8) : []; } catch (_) { return []; } }
-  function hwFavSet(a) { try { localStorage.setItem(hwFavKey(), JSON.stringify((a || []).slice(0, 8))); } catch (_) {} }
+  /* hotfix595(대표 10/2): 즐겨찾기를 서버(user_prefs/메일열쇠)에도 — 어느 PC 에서 로그인해도 같게. 서버 규칙이 아직 없으면(권한 없음) 지금처럼 이 PC 에만 기억하고 조용히 넘어감 */
+  const hwFavSrv = { who: '', loaded: false, busy: false, denied: false, dirty: false, retryAt: 0, req: 0 };   /* req = 몇 번째 읽기인지 — 계정이 바뀌면 옛 읽기 답은 버림 */   /* dirty = 서버 것을 받기 전에 이 PC 에서 ★ 를 바꿈 → 받은 옛 것으로 덮지 않음 · retryAt = 연결 오류 뒤 다시 해 볼 때 */
+  function hwFavDocId() { return String((state.user && state.user.email) || '').toLowerCase(); }   /* 문서 이름 = 내 메일(소문자) — 규칙이 자기 것만 읽고 쓰게 */
+  function hwFavLoad() {
+    const em = String((state.user && state.user.email) || '').toLowerCase(); if (!em) return;
+    if (hwFavSrv.who !== em) { hwFavSrv.who = em; hwFavSrv.loaded = false; hwFavSrv.denied = false; hwFavSrv.dirty = false; hwFavSrv.retryAt = 0; hwFavSrv.busy = false; hwFavSrv.req++; }   // 계정이 바뀜 → 하던 읽기는 버리고 새로
+    if (hwFavSrv.loaded || hwFavSrv.busy || hwFavSrv.denied || Date.now() < hwFavSrv.retryAt) return;
+    hwFavSrv.busy = true; const my = ++hwFavSrv.req; const mine = () => hwFavSrv.req === my && hwFavSrv.who === em;
+    getDoc(doc(db, C('user_prefs'), em)).then(s => {
+      if (!mine()) return;   // 그 사이 다른 계정으로 바뀜 → 이 답은 버림 (다른 사람 PC 기억에 섞지 않음)
+      hwFavSrv.loaded = true; const d = s && s.exists() ? s.data() : null; const srv = (d && Array.isArray(d.fav)) ? d.fav.filter(x => typeof x === 'string').slice(0, 8) : null;
+      let loc = []; try { const a = JSON.parse(localStorage.getItem(hwFavKey()) || '[]'); loc = Array.isArray(a) ? a.filter(x => typeof x === 'string').slice(0, 8) : []; } catch (_) {}
+      if (hwFavSrv.dirty) { hwFavPush(loc); return; }   // 받는 사이 이 PC 에서 바꿈 → 이 PC 것이 최신
+      if (srv && JSON.stringify(srv) !== JSON.stringify(loc)) { try { localStorage.setItem(hwFavKey(), JSON.stringify(srv)); } catch (_) {} try { hwTopPaint(); } catch (_) {} }   // 왼쪽 메뉴를 바로 다시 그림 (hwSideApply 는 몸통 표시만 바꿔서 ★ 칸이 안 바뀌었음)
+      else if (!srv && Array.isArray(loc) && loc.length) hwFavPush(loc);   // 서버에 아직 없으면 이 PC 것을 올려 둔다
+    }).catch(e => { if (!mine()) return; const c = e && e.code; if (c === 'permission-denied') hwFavSrv.denied = true; else hwFavSrv.retryAt = Date.now() + 60000; console.info('[즐겨찾기] 서버 저장 안 됨 — 이 PC 에만 기억', c); }).finally(() => { if (hwFavSrv.req === my) hwFavSrv.busy = false; });
+  }
+  if (typeof window !== 'undefined') window.__hwFav595 = { reset: () => { hwFavSrv.who = ''; hwFavSrv.loaded = false; hwFavSrv.denied = false; hwFavSrv.dirty = false; hwFavSrv.retryAt = 0; hwFavSrv.busy = false; hwFavSrv.req++; }, st: () => Object.assign({}, hwFavSrv) };   /* 시험용 */
+  function hwFavPush(a) { if (hwFavSrv.denied || !state.user) return; if (!hwFavSrv.loaded) hwFavSrv.dirty = true; const w = hwFavSrv.who; setDoc(doc(db, C('user_prefs'), hwFavDocId()), { fav: (a || []).slice(0, 8), email: String(state.user.email || '').toLowerCase(), updated_at: serverTimestamp() }, { merge: true }).catch(e => { const c = e && e.code; if (c === 'permission-denied' && hwFavSrv.who === w) hwFavSrv.denied = true; console.info('[즐겨찾기] 서버 저장 실패 — 이 PC 에만 기억', c); }); }
+  function hwFavs() { try { hwFavLoad(); } catch (_) {} try { const a = JSON.parse(localStorage.getItem(hwFavKey()) || '[]'); return Array.isArray(a) ? a.filter(x => typeof x === 'string').slice(0, 8) : []; } catch (_) { return []; } }
+  function hwFavSet(a) { try { localStorage.setItem(hwFavKey(), JSON.stringify((a || []).slice(0, 8))); } catch (_) {} try { hwFavPush(a); } catch (_) {} }
   function hwSidePaint(cur) {
     const host = document.getElementById('hwside-nav'); if (!host) return;
     const fold = hwSideFold();
@@ -20247,7 +20377,7 @@ function specGreigeColors(fid) {
       window.__autoPickGno = autoPickGno;
       [['f_body_item', 'f_body_gno', 'f_receiving'], ['f_rib_item', 'f_rib_gno', 'f_rib_receiving']].forEach(([itemId, gId, vId]) => { const g = document.getElementById(gId); if (!g || g.dataset.pickBound) return;
         attachPickList(g, () => {
-          const el = document.getElementById(itemId); const nm = el ? el.value.trim() : ''; if (!nm) return [{ value: '없음', label: '품목을 먼저 고르십시오', cols: ['', '', '', '', '품목을 먼저 고르십시오'] }];
+          const el = document.getElementById(itemId); const nm = el ? el.value.trim() : ''; if (!nm) return [{ value: '', label: '품목을 먼저 고르십시오', cols: ['', '', '', '', '품목을 먼저 고르십시오'], muted: true, act: () => { const it = document.getElementById(itemId); if (it) { toast('품목을 먼저 고르십시오', 'warning'); it.focus(); } } }];   /* hotfix598: 안내 줄을 누르면 '없음'이 적히던 것 → 품목 칸으로 */
           const vf = String((document.getElementById(vId) || {}).value || '').trim();
           const all = greigeStockList(nm, itemFidOf(nm), { moved: true }).filter(r => r.rem > 0).sort((a, b) => String(a.date || '').localeCompare(String(b.date || '')) || String(a.no || '').localeCompare(String(b.no || ''), 'ko', { numeric: true }));
           const here = vf ? all.filter(r => vendorSameAs(r.vendor, r.vendor_vid, vf)) : all; const other = vf ? all.filter(r => !here.includes(r)) : [];
@@ -21152,6 +21282,13 @@ function validateBlendSum(blends, label) {
       attachVendorVids(d);   // hotfix389: 거래처 글자 옆에 코드(vid) 병기
       attachItemFids(d);     // hotfix390: 품목 글자 옆에 코드(fid) 병기 + 생지 번호 정리
       attachYarnYids(d);     // hotfix391: 사종 글자 옆에 코드(yid) 병기
+      /* hotfix598(대표 10/3 "입력 칸 전체 점검"): 숫자 칸에 숫자가 아닌 글자(1,200 · 30절 · ７２)를 넣으면 칸이 비어 0 으로 저장되던 것 → 저장을 멈추고 그 칸으로 */
+      { const bad = Array.from(document.querySelectorAll('#form-panel input[type=number]')).find(el => el.offsetParent !== null && el.validity && el.validity.badInput);
+        if (bad) { toast('숫자 칸에 숫자가 아닌 글자가 있습니다 — 쉼표 · 단위(절 · kg) 없이 숫자만 넣어 주십시오 (예: 1200 · 30.5)', 'error'); try { bad.focus(); if (bad.select) bad.select(); } catch (_) {} return; } }
+      if (d.type === '편직') { const items = d.items || [];
+        const ng = items.findIndex(it => (parseFloat(it.jul) || 0) < 0 || (parseFloat(it.kg_per_jul) || 0) < 0); if (ng >= 0) { toast(`편직 ${ng + 1}번째 줄 — 절수 · 절당 kg 에 마이너스는 넣을 수 없습니다`, 'error'); return; }
+        const zj = items.findIndex(it => !((parseFloat(it.jul) || 0) > 0)); if (zj >= 0 && !confirm(`편직 ${zj + 1}번째 줄(${items[zj].item || items[zj].wo_no || ''})의 절수가 0(빈칸)입니다.\n\n그대로 저장할까요?`)) return; }
+      if (d.type === '염색가공') { const ng = (d.colors || []).find(c => (parseFloat(c.body) || 0) < 0 || (parseFloat(c.rib) || 0) < 0); if (ng) { toast(`[${ng.name || ''}] 몸판 · 리프 절수에 마이너스는 넣을 수 없습니다`, 'error'); return; } }
       if (d.type === '편직' && d.kind === 'sample') {   /* hotfix592(대표 10/2): 샘플은 생지로트 없음 → S (성격이 저절로 샘플로 바뀐 경우도) */
         (d.items || []).forEach(it => { it.greige_no = 'S'; });
         document.querySelectorAll('#knit-items .knit-row .k-gno').forEach(g => { g.value = 'S'; g.dataset.auto = '1'; });
@@ -21253,6 +21390,8 @@ function validateBlendSum(blends, label) {
         // v2.51 hotfix9: 수정 저장 시 메모/긴급/컬러 라이프사이클 보호
         const existing = state.allWorkOrders.find(w => w.id === state.currentWorkOrderId);
         const payload = existing ? buildEditPayload(d, existing) : d;
+        { const mv = hwColorShift598(existing, payload);   /* hotfix598(대표 10/3): 가공소 공정 기록이 있는 의뢰서에서 컬러 순서가 바뀌면 — 기록이 '몇 번째 컬러'로 묶여 있어 다른 컬러로 옮겨 붙음 → 저장 전 경고 */
+          if (mv.length && !confirm(`이 의뢰서에는 가공소 공정 기록(앱)이 있습니다.\n저장하면 컬러 순서가 바뀌어 기록이 다른 컬러로 옮겨 붙습니다:\n\n${mv.slice(0, 8).map(m => `· ${m.i + 1}번 [${m.from}] 의 기록 → ${m.to ? '[' + m.to + ']' : '(컬러 없음 — 기록이 화면에서 빠짐)'}`).join('\n')}${mv.length > 8 ? `\n… 외 ${mv.length - 8}건` : ''}\n\n· 컬러 줄은 지우지 말고, 맨 아래 줄을 지우거나 새 줄은 맨 아래에 넣으면 순서가 안 바뀝니다\n· 그래도 저장하려면 [확인] — 가공소 앱 화면이 위처럼 바뀝니다 (가공소에 꼭 알려 주십시오)`)) { try { const sb = document.getElementById('save-btn'); if (sb) { sb.disabled = false; } } catch (_) {} return; } }
         // v2.53 hotfix13: 염색가공 의뢰서는 저장 시 자동 완료 판정.
         //   v2.53 hotfix14: "닫힘" 기준을 isColorClosed로 변경 — 정상완료뿐 아니라
         //   재염 이관/땡처리로 닫힌 컬러(completed 플래그 빠져 있어도)도 닫힘으로 인정.
@@ -22441,23 +22580,23 @@ function validateBlendSum(blends, label) {
     if (targetIdx < 0) targetIdx = getActiveReceiptIndex(c); // 차수 미지정 시 활성 차수
 
     const buildQc = (prevQc) => ({
-      width_inch: qcData.width_inch === '' ? null : (isNaN(parseFloat(qcData.width_inch)) ? null : parseFloat(qcData.width_inch)), width_inch_max: qcWidthPair(qcData).b,
+      width_inch: __qn598(qcData.width_inch), width_inch_max: qcWidthPair(qcData).b,
       width_double: !!qcData.width_double,
-      weight_g_per_y: qcData.weight_g_per_y === '' ? null : (isNaN(parseFloat(qcData.weight_g_per_y)) ? null : parseFloat(qcData.weight_g_per_y)),
-      weight_g_per_sqm: qcData.weight_g_per_sqm === '' ? null : (isNaN(parseFloat(qcData.weight_g_per_sqm)) ? null : parseFloat(qcData.weight_g_per_sqm)),
-      shrink_width_pct: qcData.shrink_width_pct === '' ? null : (isNaN(parseFloat(qcData.shrink_width_pct)) ? null : parseFloat(qcData.shrink_width_pct)),
-      shrink_length_pct: qcData.shrink_length_pct === '' ? null : (isNaN(parseFloat(qcData.shrink_length_pct)) ? null : parseFloat(qcData.shrink_length_pct)),
+      weight_g_per_y: __qn598(qcData.weight_g_per_y),
+      weight_g_per_sqm: __qn598(qcData.weight_g_per_sqm),
+      shrink_width_pct: __qn598(qcData.shrink_width_pct),
+      shrink_length_pct: __qn598(qcData.shrink_length_pct),
       notes: qcData.notes || '',
       lot_no: qcData.lot_no || '',
       rib_checked: qcData.rib_checked !== undefined ? !!qcData.rib_checked : !!(prevQc && prevQc.rib_checked),
       rib: (qcData.rib !== undefined)
         ? (qcData.rib ? {
-            width_inch: qcData.rib.width_inch === '' ? null : (isNaN(parseFloat(qcData.rib.width_inch)) ? null : parseFloat(qcData.rib.width_inch)), width_inch_max: qcWidthPair(qcData.rib).b,
+            width_inch: __qn598(qcData.rib.width_inch), width_inch_max: qcWidthPair(qcData.rib).b,
             width_double: !!qcData.rib.width_double,
-            weight_g_per_y: qcData.rib.weight_g_per_y === '' ? null : (isNaN(parseFloat(qcData.rib.weight_g_per_y)) ? null : parseFloat(qcData.rib.weight_g_per_y)),
-            weight_g_per_sqm: qcData.rib.weight_g_per_sqm === '' ? null : (isNaN(parseFloat(qcData.rib.weight_g_per_sqm)) ? null : parseFloat(qcData.rib.weight_g_per_sqm)),
-            shrink_width_pct: qcData.rib.shrink_width_pct === '' ? null : (isNaN(parseFloat(qcData.rib.shrink_width_pct)) ? null : parseFloat(qcData.rib.shrink_width_pct)),
-            shrink_length_pct: qcData.rib.shrink_length_pct === '' ? null : (isNaN(parseFloat(qcData.rib.shrink_length_pct)) ? null : parseFloat(qcData.rib.shrink_length_pct)),
+            weight_g_per_y: __qn598(qcData.rib.weight_g_per_y),
+            weight_g_per_sqm: __qn598(qcData.rib.weight_g_per_sqm),
+            shrink_width_pct: __qn598(qcData.rib.shrink_width_pct),
+            shrink_length_pct: __qn598(qcData.rib.shrink_length_pct),
             notes: qcData.rib.notes || ''
           } : null)
         : ((prevQc && prevQc.rib) || null),
@@ -22776,12 +22915,12 @@ function validateBlendSum(blends, label) {
     
     const prevQc = r.qc || {};
     r.qc = {
-      width_inch: qcData.width_inch === '' ? null : (isNaN(parseFloat(qcData.width_inch)) ? null : parseFloat(qcData.width_inch)), width_inch_max: qcWidthPair(qcData).b,
+      width_inch: __qn598(qcData.width_inch), width_inch_max: qcWidthPair(qcData).b,
       width_double: !!qcData.width_double,
-      weight_g_per_y: qcData.weight_g_per_y === '' ? null : (isNaN(parseFloat(qcData.weight_g_per_y)) ? null : parseFloat(qcData.weight_g_per_y)),
-      weight_g_per_sqm: qcData.weight_g_per_sqm === '' ? null : (isNaN(parseFloat(qcData.weight_g_per_sqm)) ? null : parseFloat(qcData.weight_g_per_sqm)),
-      shrink_width_pct: qcData.shrink_width_pct === '' ? null : (isNaN(parseFloat(qcData.shrink_width_pct)) ? null : parseFloat(qcData.shrink_width_pct)),
-      shrink_length_pct: qcData.shrink_length_pct === '' ? null : (isNaN(parseFloat(qcData.shrink_length_pct)) ? null : parseFloat(qcData.shrink_length_pct)),
+      weight_g_per_y: __qn598(qcData.weight_g_per_y),
+      weight_g_per_sqm: __qn598(qcData.weight_g_per_sqm),
+      shrink_width_pct: __qn598(qcData.shrink_width_pct),
+      shrink_length_pct: __qn598(qcData.shrink_length_pct),
       notes: qcData.notes || '',
       lot_no: qcData.lot_no || '',
       judgment: 'normal',
@@ -23396,13 +23535,13 @@ function validateBlendSum(blends, label) {
     }
     const r = c.receipts[targetIdx];
     const prevQc = r.qc || {};
-    const wPct = qcData.shrink_width_pct === '' ? null : (isNaN(parseFloat(qcData.shrink_width_pct)) ? null : parseFloat(qcData.shrink_width_pct));
-    const lPct = qcData.shrink_length_pct === '' ? null : (isNaN(parseFloat(qcData.shrink_length_pct)) ? null : parseFloat(qcData.shrink_length_pct));
+    const wPct = __qn598(qcData.shrink_width_pct);
+    const lPct = __qn598(qcData.shrink_length_pct);
     r.qc = {
-      width_inch: qcData.width_inch === '' ? null : (isNaN(parseFloat(qcData.width_inch)) ? null : parseFloat(qcData.width_inch)), width_inch_max: qcWidthPair(qcData).b,
+      width_inch: __qn598(qcData.width_inch), width_inch_max: qcWidthPair(qcData).b,
       width_double: !!qcData.width_double,
-      weight_g_per_y: qcData.weight_g_per_y === '' ? null : (isNaN(parseFloat(qcData.weight_g_per_y)) ? null : parseFloat(qcData.weight_g_per_y)),
-      weight_g_per_sqm: qcData.weight_g_per_sqm === '' ? null : (isNaN(parseFloat(qcData.weight_g_per_sqm)) ? null : parseFloat(qcData.weight_g_per_sqm)),
+      weight_g_per_y: __qn598(qcData.weight_g_per_y),
+      weight_g_per_sqm: __qn598(qcData.weight_g_per_sqm),
       shrink_width_pct: wPct,
       shrink_length_pct: lPct,
       notes: qcData.notes || '',
@@ -24029,12 +24168,12 @@ function validateBlendSum(blends, label) {
     
     const prevQc = r.qc || {};
     r.qc = {
-      width_inch: qcData.width_inch === '' ? null : (isNaN(parseFloat(qcData.width_inch)) ? null : parseFloat(qcData.width_inch)), width_inch_max: qcWidthPair(qcData).b,
+      width_inch: __qn598(qcData.width_inch), width_inch_max: qcWidthPair(qcData).b,
       width_double: !!qcData.width_double,
-      weight_g_per_y: qcData.weight_g_per_y === '' ? null : (isNaN(parseFloat(qcData.weight_g_per_y)) ? null : parseFloat(qcData.weight_g_per_y)),
-      weight_g_per_sqm: qcData.weight_g_per_sqm === '' ? null : (isNaN(parseFloat(qcData.weight_g_per_sqm)) ? null : parseFloat(qcData.weight_g_per_sqm)),
-      shrink_width_pct: qcData.shrink_width_pct === '' ? null : (isNaN(parseFloat(qcData.shrink_width_pct)) ? null : parseFloat(qcData.shrink_width_pct)),
-      shrink_length_pct: qcData.shrink_length_pct === '' ? null : (isNaN(parseFloat(qcData.shrink_length_pct)) ? null : parseFloat(qcData.shrink_length_pct)),
+      weight_g_per_y: __qn598(qcData.weight_g_per_y),
+      weight_g_per_sqm: __qn598(qcData.weight_g_per_sqm),
+      shrink_width_pct: __qn598(qcData.shrink_width_pct),
+      shrink_length_pct: __qn598(qcData.shrink_length_pct),
       notes: qcData.notes || '',
       lot_no: qcData.lot_no || '',
       judgment: 'defect',
@@ -24111,12 +24250,12 @@ function validateBlendSum(blends, label) {
 
     const prevQc = r.qc || {};
     r.qc = {
-      width_inch: qcData.width_inch === '' ? null : (isNaN(parseFloat(qcData.width_inch)) ? null : parseFloat(qcData.width_inch)), width_inch_max: qcWidthPair(qcData).b,
+      width_inch: __qn598(qcData.width_inch), width_inch_max: qcWidthPair(qcData).b,
       width_double: !!qcData.width_double,
-      weight_g_per_y: qcData.weight_g_per_y === '' ? null : (isNaN(parseFloat(qcData.weight_g_per_y)) ? null : parseFloat(qcData.weight_g_per_y)),
-      weight_g_per_sqm: qcData.weight_g_per_sqm === '' ? null : (isNaN(parseFloat(qcData.weight_g_per_sqm)) ? null : parseFloat(qcData.weight_g_per_sqm)),
-      shrink_width_pct: qcData.shrink_width_pct === '' ? null : (isNaN(parseFloat(qcData.shrink_width_pct)) ? null : parseFloat(qcData.shrink_width_pct)),
-      shrink_length_pct: qcData.shrink_length_pct === '' ? null : (isNaN(parseFloat(qcData.shrink_length_pct)) ? null : parseFloat(qcData.shrink_length_pct)),
+      weight_g_per_y: __qn598(qcData.weight_g_per_y),
+      weight_g_per_sqm: __qn598(qcData.weight_g_per_sqm),
+      shrink_width_pct: __qn598(qcData.shrink_width_pct),
+      shrink_length_pct: __qn598(qcData.shrink_length_pct),
       notes: qcData.notes || '',
       lot_no: qcData.lot_no || '',
       judgment: 'defect',  // 사유는 불량 그대로 보존
@@ -24201,12 +24340,12 @@ function validateBlendSum(blends, label) {
 
     const prevQc = r.qc || {};
     r.qc = {
-      width_inch: qcData.width_inch === '' ? null : (isNaN(parseFloat(qcData.width_inch)) ? null : parseFloat(qcData.width_inch)), width_inch_max: qcWidthPair(qcData).b,
+      width_inch: __qn598(qcData.width_inch), width_inch_max: qcWidthPair(qcData).b,
       width_double: !!qcData.width_double,
-      weight_g_per_y: qcData.weight_g_per_y === '' ? null : (isNaN(parseFloat(qcData.weight_g_per_y)) ? null : parseFloat(qcData.weight_g_per_y)),
-      weight_g_per_sqm: qcData.weight_g_per_sqm === '' ? null : (isNaN(parseFloat(qcData.weight_g_per_sqm)) ? null : parseFloat(qcData.weight_g_per_sqm)),
-      shrink_width_pct: qcData.shrink_width_pct === '' ? null : (isNaN(parseFloat(qcData.shrink_width_pct)) ? null : parseFloat(qcData.shrink_width_pct)),
-      shrink_length_pct: qcData.shrink_length_pct === '' ? null : (isNaN(parseFloat(qcData.shrink_length_pct)) ? null : parseFloat(qcData.shrink_length_pct)),
+      weight_g_per_y: __qn598(qcData.weight_g_per_y),
+      weight_g_per_sqm: __qn598(qcData.weight_g_per_sqm),
+      shrink_width_pct: __qn598(qcData.shrink_width_pct),
+      shrink_length_pct: __qn598(qcData.shrink_length_pct),
       notes: qcData.notes || '',
       lot_no: qcData.lot_no || '',
       judgment: 'defect',
@@ -29730,11 +29869,67 @@ function validateBlendSum(blends, label) {
     return all.filter(l => l && l.by === 'vendor' && l.part === 'gs' && l.kind === 'cancel' && l.ref && l.id && !String(l.id).startsWith('tmp') && !R.us.has(l.id)).map(c => { const sh = all.find(x => x && x.id === c.ref) || null; const g = (state.allWorkOrders || []).find(w => w && w.id === c.k) || null; const applied = !!(g && gsLinesOf(g.id).some(o => o.x.conf_log === c.ref && !o.x.void)); return { c, sh, g, applied }; }).filter(o => o.sh);
   }
   async function gsUsNote(g, text, extra) { const vn = gsNormV(g && g.recipient); if (!vn) return false; try { await addDoc(collection(db, C('proc_log')), Object.assign({ kind: 'note', part: 'gs', vendor: vn, k: g.id, wo: g.wo_number || '', note: String(text || '').slice(0, 300), by: 'us', email: (state.user && state.user.email) || '', at: serverTimestamp() }, extra || {})); return true; } catch (e) { toast('기록하지 못했습니다: ' + ((e && e.message) || ''), 'error'); return false; } }
+  /* hotfix596(대표 10/3 점검): 로트가 섞인 생지출고(대기 줄 여러 개)에 공장 보고가 첫 줄보다 많으면 — 전에는 첫 줄에 전부 적어 그 로트를 더 빼고 다른 줄은 대기로 남아 두 번 출고로 잡혔음.
+     이제 대기 줄 순서대로 나눠 적음(한 트랜잭션 · 같은 보고는 한 번만). 마지막 줄은 남은 만큼 전부(보고가 더 많으면 지금처럼 마지막 줄에) */
+  async function gsConfirmSpread(g, l, pend, j, kg) {
+    const by = (state.user && state.user.email) || ''; const ids = Array.from(new Set(pend.map(h => h.wo.id))); const refs = ids.map(id => doc(db, C('workorders'), id));
+    let touched = [];
+    try {
+      const done = await runTransaction(db, async tx => {
+        const sns = []; for (const r of refs) sns.push(await tx.get(r));
+        const D = sns.map((sn, n) => sn.exists() ? { id: ids[n], ref: refs[n], w: sn.data(), sh: Array.isArray(sn.data().greige_shipments) ? sn.data().greige_shipments.slice() : [], ch: false } : null).filter(Boolean);
+        if (D.some(d => d.sh.some(x => x && x.conf_log === l.id))) return false;
+        const lines = []; D.forEach(d => d.sh.forEach((x, i) => { if (x && x.src === 'gs' && x.gs_id === g.id && gsPend(x)) lines.push({ d, i, x }); }));
+        if (!lines.length) return false;
+        const at = new Date().toISOString(); let left = j; touched = []; const touchedLines = [];
+        for (let n = 0; n < lines.length && left > 1e-9; n++) {
+          const { d, i, x } = lines[n]; const orig = parseFloat(x.jul) || 0; const last = n === lines.length - 1;
+          const take = last ? Math.round(left * 10) / 10 : Math.round(Math.min(left, orig) * 10) / 10; if (!(take > 0)) continue; left = Math.round((left - take) * 10) / 10;
+          const it = (d.w.items || [])[x.item_idx || 0] || {}; const kpj = parseFloat(it.kg_per_jul) || 21;
+          d.sh[i] = Object.assign({}, x, { jul: take, kg: kg > 0 ? Math.round(kg * take / j * 10) / 10 : Math.round(take * kpj * 10) / 10, kg_manual: kg > 0, conf: true, conf_at: at, conf_by: by, conf_via: 'app', conf_rep: 'app:' + String(l.uid || '').slice(0, 12), conf_log: l.id, conf_split: true, ord_jul: x.ord_jul || orig, ...(l.ref ? { photo: String(l.ref) } : {}), ...(l.note ? { conf_note: String(l.note).slice(0, 300) } : {}) });
+          if (take < orig) { const rest = Math.round((orig - take) * 10) / 10; d.sh.push(Object.assign({ dir: 'out', item_idx: x.item_idx, jul: rest, kg: Math.round(rest * kpj * 10) / 10, kg_manual: false, date: x.date, memo: String(x.memo || '').replace(/ \(남은 것\)$/, '') + ' (남은 것)', src: 'gs', gs_id: x.gs_id, gs_number: x.gs_number || '', void: false, gs_rest: true, rest_of: l.id, conf: false, by, at }, x.gs_lot ? { gs_lot: x.gs_lot } : {})); }
+          d.ch = true; touched.push(d.id); touchedLines.push({ d, i });
+        }
+        if (kg > 0 && touchedLines.length > 1) { const lastT = touchedLines[touchedLines.length - 1]; const others = touchedLines.slice(0, -1).reduce((a, t) => a + (parseFloat(t.d.sh[t.i].kg) || 0), 0); lastT.d.sh[lastT.i] = Object.assign({}, lastT.d.sh[lastT.i], { kg: Math.max(0, Math.round((kg - others) * 10) / 10) }); }   // kg 합이 보고 kg 와 딱 맞게
+        D.forEach(d => { if (d.ch) tx.update(d.ref, { greige_shipments: d.sh, updated_at: serverTimestamp(), updated_by: by }); });
+        return touched.length > 0;
+      });
+      if (!done) { toast('이미 확인했거나 출고 대기 줄이 없습니다', 'warning'); return false; }
+    } catch (e) { toast('출고 확인을 적지 못했습니다: ' + ((e && e.message) || ''), 'error'); return false; }
+    if (l.ref && !(g.gs_photo && g.gs_photo.path)) { try { await updateDoc(doc(db, C('workorders'), g.id), { gs_photo: { path: String(l.ref), at: new Date().toISOString(), log: l.id }, gs_inv_req: false }); } catch (_) {} }
+    for (const id of Array.from(new Set(touched))) { try { const w2 = state.allWorkOrders.find(w => w.id === id); if (w2) await knitUseRefresh(w2); } catch (_) {} }
+    toast(`출고 확인 — ${g.wo_number || ''} ${j}절${kg ? ' · ' + kg + 'kg' : ''} (대기 줄 ${touched.length}개에 나눠 적음)`, 'success');
+    return true;
+  }
+  /* hotfix596: 공장 보고 확인 전 주의 표시 — 대기보다 많음 · 같은 수량 보고 10분 안 2건(두 번 누름?) */
+  function gsRepFlags(st, l) { const F = []; if (!st || !l) return F; const j = parseFloat(l.body) || 0; if (j > (parseFloat(st.pend) || 0) + 1e-9) F.push(`출고 대기 ${st.pend}절보다 많음`);
+    const t = x => { const a = x && x.at; if (!a) return 0; if (typeof a.seconds === 'number') return a.seconds * 1000; if (typeof a.toMillis === 'function') return a.toMillis(); return Date.parse(a) || 0; };
+    if ((st.rep || []).some(o => o && o.id !== l.id && (parseFloat(o.body) || 0) === j && Math.abs(t(o) - t(l)) < 600000)) F.push('같은 수량 보고가 10분 안에 2건 — 두 번 보낸 것일 수 있음');
+    return F; }
+  if (typeof window !== 'undefined') window.__gsRepFlags = gsRepFlags;
+  /* hotfix596: 나눠 적은 보고를 공장이 취소하면 — 그 보고로 확정한 줄 전부를 출고 대기로 되돌림 (한 트랜잭션) */
+  async function gsUnconfSpread(g, o, H) {
+    const by = (state.user && state.user.email) || ''; const ids = Array.from(new Set(H.map(h => h.wo.id))); const refs = ids.map(id => doc(db, C('workorders'), id));
+    try {
+      await runTransaction(db, async tx => {
+        const sns = []; for (const r of refs) sns.push(await tx.get(r));
+        const at = new Date().toISOString(); const W = [];
+        sns.forEach((sn, n) => { if (!sn.exists()) return; const w = sn.data(); const sh = Array.isArray(w.greige_shipments) ? w.greige_shipments.slice() : []; let ch = false;
+          sh.forEach((x, i) => { if (!x || x.conf_log !== o.c.ref || x.void) return; const it = (w.items || [])[x.item_idx || 0] || {}; const kpj = parseFloat(it.kg_per_jul) || 21;
+            const nx = Object.assign({}, x, { conf: false, kg: Math.round((parseFloat(x.jul) || 0) * kpj * 10) / 10, kg_manual: false, unconf: { log: o.c.id, ship: o.c.ref, at, by } }); ['conf_at', 'conf_by', 'conf_via', 'conf_rep', 'conf_log', 'conf_note', 'photo', 'conf_split'].forEach(k => { delete nx[k]; }); sh[i] = nx; ch = true; });
+          if (ch) W.push([refs[n], sh]); });
+        W.forEach(([r, sh]) => tx.update(r, { greige_shipments: sh, updated_at: serverTimestamp(), updated_by: by }));
+      });
+    } catch (e) { toast('되돌리지 못했습니다: ' + ((e && e.message) || ''), 'error'); return false; }
+    for (const id of ids) { try { const w2 = state.allWorkOrders.find(w => w.id === id); if (w2) await knitUseRefresh(w2); } catch (_) {} }
+    return true;
+  }
   // 보고대로 확정 — 트랜잭션 · 같은 보고는 한 번만 (conf_log)
   async function gsConfirmReport(g, l) {
     if (!g || !l) return false; if (typeof canWriteWo === 'function' && !canWriteWo()) { toast('출고 확인 권한이 없습니다', 'error'); return false; }
     const L = gsLinesOf(g.id); const o = L.find(o => gsPend(o.x)); if (!o) { toast('출고 대기 줄이 없습니다 — 이미 확인했거나 취소됐습니다', 'warning'); return false; }
     const j = parseFloat(l.body) || 0, kg = parseFloat(l.n) || 0; if (!(j > 0)) { toast('보고한 절수가 없습니다', 'error'); return false; }
+    { const pend = L.filter(h => gsPend(h.x)); if (pend.length > 1 && j > (parseFloat(o.x.jul) || 0)) return gsConfirmSpread(g, l, pend, j, kg); }   // hotfix596: 대기 줄 여러 개 · 첫 줄보다 많은 보고 → 나눠 적기
     const ref = doc(db, C('workorders'), o.wo.id); const by = (state.user && state.user.email) || '';
     try {
       const done = await runTransaction(db, async tx => {
@@ -29757,12 +29952,15 @@ function validateBlendSum(blends, label) {
     return true;
   }
   async function gsRejectReport(g, l, why) {
+    if (g && l && gsLinesOf(g.id).some(h => h.x.conf_log === l.id && !h.x.void)) { toast('이미 [보고대로 확인]한 보고입니다 — 반려하지 않았습니다 (다른 PC 에서 먼저 확인했을 수 있음)', 'warning'); return false; }   // hotfix596: 확인과 반려가 함께 되지 않게
     const ok = await gsUsNote(g, `보내 주신 ${parseFloat(l.body) || 0}절${Number(l.n) ? ' · ' + l.n + 'kg' : ''} 보고를 확인하지 못했습니다${why ? ' — ' + why : ''}. 맞는 수량으로 다시 [출고했어요]를 눌러 주십시오`, { ref: l.id, rej: true });
     if (ok) toast('반려했습니다 — 편직공장 앱에 다시 보내 달라고 알렸습니다', 'success'); return ok;
   }
   // 공장이 "보낸 것 취소" — 확정했던 것이면 그 줄을 출고 대기로 되돌림 (공장에 실제 있는 절이 다시 채워짐)
   async function gsCancelAck(o) {
     if (!o || !o.c) return false; const g = o.g; const by = (state.user && state.user.email) || '';
+    if (g) { const H = gsLinesOf(g.id).filter(h => h.x.conf_log === o.c.ref && !h.x.void); if (H.length && !o.applied) o.applied = true;   // hotfix596: 화면을 연 뒤 다른 PC 가 확정했어도 되돌림을 빠뜨리지 않음
+      if (H.length > 1 && !(await gsUnconfSpread(g, o, H))) return false; }   // hotfix596: 나눠 적은 보고는 모든 줄을 되돌림
     if (o.applied && g) {
       const L = gsLinesOf(g.id); const hit = L.find(h => h.x.conf_log === o.c.ref && !h.x.void); if (hit) {
         const ref = doc(db, C('workorders'), hit.wo.id);
@@ -29784,7 +29982,7 @@ function validateBlendSum(blends, label) {
   /* hotfix581: 염/가공 의뢰서가 휴지통에 가면 — 딸린 생지출고가 없던 것이 됨(shLive) · 편직 의뢰서의 원사 사용량 다시 셈 · 편직공장 앱에 "취소" 알림 (한 번만) */
   const gsFnDone = new Set(); let gsFnBusy = false;
   async function gsFnCascade() {
-    if (gsFnBusy || !state.user || (typeof canWriteWo === 'function' && !canWriteWo())) return; gsFnBusy = true;
+    if (gsFnBusy || !state.user || (typeof canWriteWo === 'function' && !canWriteWo())) return; if (/(?:^|[?&])app=qc(?:&|$)/.test(location.search)) return;   /* hotfix596: 현장 QC 휴대폰은 의뢰서 정리를 하지 않음 (PC 가 함) */ gsFnBusy = true;
     try {
       const keyOf = g => { const f = woById581(g.source_fn_id); if (!f) return 'gone'; const t = f && f.deleted_at; return 'del:' + ((t && (t.seconds || (typeof t.toMillis === 'function' ? Math.floor(t.toMillis() / 1000) : 0))) || String(t || '')); };
       /* hotfix584: 염/가공 때문에 휴지통에 간 생지출고 — 염/가공을 되살리면 같이 되살림 */
@@ -30034,7 +30232,7 @@ function validateBlendSum(blends, label) {
         const rest = st.lines.find(o => gsPend(o.x) && o.x.gs_rest);
         const lot = (Array.isArray(g.gs_mix) && g.gs_mix.length > 1) ? g.gs_mix.map(m => greigeNoClean(m.no)).join(' + ') : (greigeNoClean(g.gs_greige_no) || '-');
         const fl = fails(g.id);
-        const repH = st.rep.map(l => `<div style="margin-top:5px;padding:5px 7px;border:1px solid #ddd6fe;background:#f5f3ff;border-radius:7px;text-align:left;white-space:normal;"><b style="color:#6d28d9;">공장 보고</b> <b>${parseFloat(l.body) || 0}절${Number(l.n) ? ' · ' + escapeHtml(String(l.n)) + 'kg' : ''}</b> <span style="color:#64748b;font-size:11px;">${escapeHtml(hm(l))}</span>${l.note ? `<div style="font-size:11px;color:#475569;">${escapeHtml(l.note)}</div>` : ''}${(l.ref || (g.gs_photo && g.gs_photo.path)) ? ` <button class="dash-action-btn gs-photo-pop" data-path="${escapeHtml(l.ref || g.gs_photo.path)}" data-t="${escapeHtml(g.wo_number || '')}" style="font-size:10.5px;padding:1px 7px;">송장 보기</button>` : ''}
+        const repH = st.rep.map(l => `<div style="margin-top:5px;padding:5px 7px;border:1px solid #ddd6fe;background:#f5f3ff;border-radius:7px;text-align:left;white-space:normal;"><b style="color:#6d28d9;">공장 보고</b> <b>${parseFloat(l.body) || 0}절${Number(l.n) ? ' · ' + escapeHtml(String(l.n)) + 'kg' : ''}</b>${gsRepFlags(st, l).map(t => ` <span class="hw-gsr-flag" style="display:inline-block;margin-top:3px;padding:1px 7px;border-radius:8px;background:#fee2e2;color:#991b1b;font-size:11px;font-weight:800;">주의 · ${escapeHtml(t)}</span>`).join('')} <span style="color:#64748b;font-size:11px;">${escapeHtml(hm(l))}</span>${l.note ? `<div style="font-size:11px;color:#475569;">${escapeHtml(l.note)}</div>` : ''}${(l.ref || (g.gs_photo && g.gs_photo.path)) ? ` <button class="dash-action-btn gs-photo-pop" data-path="${escapeHtml(l.ref || g.gs_photo.path)}" data-t="${escapeHtml(g.wo_number || '')}" style="font-size:10.5px;padding:1px 7px;">송장 보기</button>` : ''}
           <div style="margin-top:4px;"><button class="dash-action-btn hw-gsr-ok" data-id="${escapeHtml(g.id)}" data-log="${escapeHtml(l.id)}" style="background:#059669;color:#fff;border-color:#047857;font-weight:800;">보고대로 확인</button> <button class="dash-action-btn danger hw-gsr-no" data-id="${escapeHtml(g.id)}" data-log="${escapeHtml(l.id)}">반려</button></div></div>`).join('');
         h += `<tr><td style="${td}text-align:center;white-space:nowrap;">${escapeHtml(g.wo_number || '')}</td><td style="${td}text-align:center;">${escapeHtml(formatYMD(g.date))}</td><td style="${td}text-align:center;font-weight:700;">${escapeHtml(g.recipient || '-')}</td><td style="${td}text-align:center;">${gsPartLabel(g.gs_part)}</td>
           <td style="${td}">${escapeHtml(itemShow(g.gs_item, g.gs_item_fid, '') || '-')}</td><td style="${td}text-align:center;font-weight:800;color:#92400e;">${escapeHtml(lot)}</td><td style="${td}text-align:center;">${escapeHtml(g.gs_dest || '-')}</td>
@@ -30049,6 +30247,7 @@ function validateBlendSum(blends, label) {
     const body = document.getElementById('dash-modal-body');
     const again = () => setTimeout(() => { if (bg.classList.contains('show')) hwGsWaitOpen(); }, 400);
     body.querySelectorAll('.hw-gsr-ok').forEach(b => b.addEventListener('click', async () => { const g = state.allWorkOrders.find(x => x.id === b.dataset.id); const l = gsLogs().find(x => x && x.id === b.dataset.log); if (!g || !l) return;
+      { const fl = gsRepFlags(gsStateOf(g), l); if (fl.length && !confirm(`주의\n\n${fl.map(t => '· ' + t).join('\n')}\n\n송장과 맞는지 확인하셨습니까? 맞으면 [확인]`)) return; }   /* hotfix596 */
       if (!confirm(`${g.recipient || ''} 보고대로 확정합니다.\n\n${g.wo_number || ''} · ${parseFloat(l.body) || 0}절${Number(l.n) ? ' · ' + l.n + 'kg' : ''}\n\n재고에 출고로 확정됩니다.`)) return;
       b.disabled = true; if (await gsConfirmReport(g, l)) again(); else b.disabled = false; }));
     body.querySelectorAll('.hw-gsr-no').forEach(b => b.addEventListener('click', async () => { const g = state.allWorkOrders.find(x => x.id === b.dataset.id); const l = gsLogs().find(x => x && x.id === b.dataset.log); if (!g || !l) return;
@@ -30812,7 +31011,7 @@ function validateBlendSum(blends, label) {
   function hvLack(host) {
     const U = HVW.lack; const all = hwLackRows(); const vs = Array.from(new Set(all.map(x => x.vk))).sort((a, b) => a.localeCompare(b, 'ko'));
     const inV = x => !U.vsel || x.vk === U.vsel; const cnt = k => all.filter(x => (k === 'all' || x.st === k) && inV(x)).length;
-    const qq = hwGmNorm(U.q); const hit = x => !qq || [x.c.name, x.item, x.rib, x.wo.wo_number, x.vend].some(t => hwGmNorm(t).includes(qq));
+    const qq = hwGmNorm(U.q); const hit = x => !qq || [x.c.name, x.item, x.rib, x.wo.wo_number, x.vend].some(t => hwGmNorm(t).includes(qq) || hwTextMatch(t, U.q));   /* hotfix598 */
     const L = all.filter(x => (U.seg === 'all' || x.st === U.seg) && inV(x) && hit(x));
     const n = L.filter(x => U.sel[x.pk] && x.li && x.li.vn).length;
     const sumB = L.reduce((a, x) => a + x.lb, 0), sumR = L.reduce((a, x) => a + x.lr, 0);
@@ -30932,7 +31131,7 @@ function validateBlendSum(blends, label) {
     box.querySelectorAll('[data-hf-rp]').forEach(b => b.addEventListener('click', () => { U.rp = U.rp === b.dataset.hfRp ? '' : b.dataset.hfRp; U.rt = ''; box.__hfSig = ''; hvFieldList(box); const i = box.querySelector('#hf-rin'); if (i) i.focus(); }));
     { const i = box.querySelector('#hf-rin'); if (i) { if (__rf) { i.focus(); try { i.setSelectionRange(i.value.length, i.value.length); } catch (_) {} } i.addEventListener('input', () => { U.rt = i.value; }); i.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); const s = box.querySelector('[data-hf-send]'); if (s) s.click(); } }); } }
     box.querySelectorAll('[data-hf-qk]').forEach(b => b.addEventListener('click', () => { const i = box.querySelector('#hf-rin'); if (i) { i.value = b.textContent; U.rt = i.value; i.focus(); } }));
-    box.querySelectorAll('[data-hf-send]').forEach(b => b.addEventListener('click', async () => { const id = b.dataset.hfSend; const t = String(U.rt || '').trim(); if (!t) { toast('답장 글을 적거나 빠른 답을 누르십시오', 'warning'); return; } b.disabled = true;
+    box.querySelectorAll('[data-hf-send]').forEach(b => b.addEventListener('click', async () => { const id = b.dataset.hfSend; { const ri = box.querySelector('#hf-rin'); if (ri) U.rt = ri.value; }   /* hotfix598: 보내는 순간 칸 글자를 직접 읽음 — 마지막 한글 글자가 빠지던 것 */ const t = String(U.rt || '').trim(); if (!t) { toast('답장 글을 적거나 빠른 답을 누르십시오', 'warning'); return; } b.disabled = true;
       const ok = await hfReply(id, t); if (ok) { const m = M.find(x => x.id === id); const todo = (hfAckedByMe(id) || (m && hfMine(m)) ? [] : [id]).concat(m ? newR(m).map(r => r.id) : []); await Promise.all(todo.map(x => hfAck(x))); U.rp = ''; U.rt = ''; toast('답장을 보냈습니다 — 현장 휴대폰에 알림이 뜹니다', 'success'); box.__hfSig = ''; setTimeout(() => { if (document.activeElement) document.activeElement.blur(); hvFieldList(box); try { hwTopPaint(); } catch (_) {} }, 500); } else b.disabled = false; }));
     box.querySelectorAll('[data-hf-del]').forEach(b => b.addEventListener('click', async () => { if (!(typeof isOwnerUser === 'function' && isOwnerUser())) { toast('현장 알림 삭제는 최고관리자만 할 수 있습니다', 'error'); return; } const m = M.find(x => x.id === b.dataset.hfDel);   /* hotfix573(대표 10/1): 삭제는 최고관리자만 — 조정 기록이 지워지지 않게 */ if (!confirm('이 현장 알림을 지웁니다.\n\n' + ((m && m.note) || '') + '\n\n현장 휴대폰에도 더 이상 뜨지 않습니다.')) return; b.disabled = true; if (await hfDel(b.dataset.hfDel)) { toast('현장 알림을 지웠습니다', 'success'); setTimeout(() => { hvFieldList(box); try { hwTopPaint(); } catch (_) {} }, 500); } else b.disabled = false; }));
   }
@@ -30942,7 +31141,7 @@ function validateBlendSum(blends, label) {
     { const ae = document.activeElement; const sig = A.length + ':' + (A[0] ? A[0].id : '') + ':' + (U.tv || '') + ':' + (U.tq || ''); if (ae && box.contains(ae) && box.__tsig === sig) return; box.__tsig = sig; }
     const vs = Array.from(new Set(A.map(x => x.vendor))).sort((a, b) => a.localeCompare(b, 'ko'));
     const q = String(U.tq || '').trim().toLowerCase();
-    const L = A.filter(x => (!U.tv || x.vendor === U.tv) && (!q || (x.vendor + ' ' + x.text + ' ' + x.wo).toLowerCase().includes(q))).slice(0, 200);
+    const L = A.filter(x => (!U.tv || x.vendor === U.tv) && (!q || (x.vendor + ' ' + x.text + ' ' + x.wo).toLowerCase().includes(q) || hwTextMatch(x.vendor + ' ' + x.text + ' ' + x.wo, q))).slice(0, 200);   /* hotfix598 */
     const fe = document.activeElement && document.activeElement.id === 'hv-tq';
     box.innerHTML = `<div class="hv-tbar"><select id="hv-tv"><option value="">모든 업체</option>${vs.map(v => `<option${v === U.tv ? ' selected' : ''}>${gmEsc(v)}</option>`).join('')}</select><input id="hv-tq" placeholder="글 · 의뢰서 번호 찾기" value="${gmEsc(U.tq || '')}"><span class="hv-n">${L.length}건 · 실시간 (최근 150일)</span></div>
       <table class="hv-t"><thead><tr><th>때</th><th>업체</th><th>방향</th><th class="l">내용</th><th class="l">관련</th></tr></thead><tbody>
@@ -44187,7 +44386,7 @@ function openVendorPick(w){
     const used=w==='knit'?D.knits:(w==='fin'?D.fins:D.posts);
     const list=vendorsOf(...ps).filter(v=>vendorHit(v,q)&&!used[v.name]);
     const sel=$('vd_name');
-    sel.innerHTML=list.map(v=>`<option value="${v.name}">${v.name}${(v.alias||[]).length?'  ('+v.alias.join(', ')+')':''}</option>`).join('')
+    sel.innerHTML=list.map(v=>`<option value="${escapeHtml(v.name)}">${escapeHtml(v.name)}${(v.alias||[]).length?'  ('+escapeHtml(v.alias.join(', '))+')':''}</option>`).join('')   /* hotfix598: 이름에 " & < 가 있어도 잘리지 않게 */
       ||'<option value="">더 고를 업체가 없습니다</option>';
     sel.ondblclick=()=>addVendor();
     sel.onkeydown=e=>{ if(e.key==='Enter') addVendor(); };
@@ -54669,7 +54868,10 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
   }
   if (typeof window !== 'undefined') window.__hf536 = { base: HW_QC_CHIP_BASE, added: () => hwQcChipAdded(), openQc: (id, i) => openQcModal(id, i), aw: (w, d) => calcActualWidth(w, d) };   /* 검사용 창구 */
   /* hotfix536: 첫 숫자 하나만 ("60/62" 를 6062 로 읽던 것) */
-  function hwQcmNum(v) { const m = String(v == null ? '' : v).replace(/,/g, '.').match(/-?\d+(?:\.\d+)?/); return m ? m[0] : ''; }
+  /* hotfix596(대표 10/3 점검): 현장 QC 는 컬러를 '몇 번째'로 기억 — 화면을 열어 둔 사이 PC 에서 컬러 줄이 빠지거나 순서가 바뀌면 엉뚱한 컬러에 적힐 수 있었음 → 저장 직전 이름이 같은지 확인 */
+  function hwQcIdxGuard(woId, i, nm) { const w = (state.allWorkOrders || []).find(z => z && z.id === woId); const c = w && Array.isArray(w.colors) ? w.colors[i] : null; if (!c || String(c.name || '').trim() !== String(nm || '').trim()) { const e = new Error('그 사이 PC 에서 컬러 줄이 바뀌었습니다 — 목록을 다시 열어 주십시오 (엉뚱한 컬러에 적지 않도록 멈춤)'); e.__hw596 = true; throw e; } }
+  if (typeof window !== 'undefined') window.__hwQcIdxGuard = hwQcIdxGuard;
+  function hwQcmNum(v) { return hwNumNorm(v); }   /* hotfix598: 1,050 g/y 가 1.05 로 저장되던 것 · 전각 숫자 — 공통 숫자 읽기로 */
   function hwQcmItems() {
     const out = { rcv: [], qc: [], rep: [] }; const now = Date.now();
     (state.allWorkOrders || []).forEach(wo => {
@@ -54754,7 +54956,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
     const list = () => {
       const I0 = hwQcmItems(); const vf = x => !vsel || x.vk === vsel; const I = { rcv: I0.rcv.filter(vf), qc: I0.qc.filter(vf), rep: I0.rep.filter(vf) };   /* hotfix538: 업체 거르기 */
       const VALL = Array.from(new Set([].concat(I0.rcv, I0.qc, I0.rep).map(x => x.vk))).sort((a, b) => a.localeCompare(b, 'ko'));
-      const qq = hwGmNorm(q); const hit = x => !qq || [x.c.name, x.item, x.rib, x.wo.wo_number, x.vend].some(t => hwGmNorm(t).includes(qq));
+      const qq = hwGmNorm(q); const hit = x => !qq || [x.c.name, x.item, x.rib, x.wo.wo_number, x.vend].some(t => hwGmNorm(t).includes(qq) || hwTextMatch(t, q));   /* hotfix598: 초성(ㅉㄹ) · 치는 중 글자도 — 다른 검색 칸과 같게 */
       const QT = Object.assign({ qc: true, stock: true }, (window.hwProc && window.hwProc.cfg && window.hwProc.cfg.qc_tabs) || {});   /* hotfix570: 탭 구성 — 입고 확인 · 보고 완료는 늘 · QC 검수 · 생지 재고는 [관리]에서 켜고 끔 */
       if ((tab === 'qc' && !QT.qc) || (tab === 'stock' && !QT.stock)) tab = 'rcv';
       const cards = tab === 'stock' ? [] : (tab === 'qc' ? I.qc : tab === 'rcv' ? I.rcv : I.rep).filter(hit);
@@ -54767,7 +54969,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
             : `<div class="qm-rbtn">${x.kind === 'first' ? `<button type="button" class="qm-b pri qr-all qb-ok">완료</button><button type="button" class="qm-b qr-part qb-lack">부족</button>` : `<button type="button" class="qm-b pri qr-part qb-add">+입고</button>`}</div>`}</div>`; }).join('');
       else if (tab === 'stock') body = (() => {   /* hotfix570: 생지 재고 — 업체(보관 장소)별 → 품목별 → 로트 */
         let R = []; try { R = window.__hwGs.stockRows(); } catch (_) { R = []; }
-        R = R.filter(r => r.rem > 0 && /현일/.test(r.vn || '') && (!qq || [r.vn, r.item, r.lot, r.wo, r.kind].some(t => hwGmNorm(t).includes(qq))));   /* hotfix571(대표 10/1): 현장은 우리 창고(현일1창고 등 '현일' 이 든 곳) 재고만 — 업체별로 골라 보는 것은 나중 대표 앱에서 */
+        R = R.filter(r => r.rem > 0 && /현일/.test(r.vn || '') && (!qq || [r.vn, r.item, r.lot, r.wo, r.kind].some(t => hwGmNorm(t).includes(qq) || hwTextMatch(t, q))));   /* hotfix598 */   /* hotfix571(대표 10/1): 현장은 우리 창고(현일1창고 등 '현일' 이 든 곳) 재고만 — 업체별로 골라 보는 것은 나중 대표 앱에서 */
         if (!R.length) return '';
         const VS = Array.from(new Set(R.map(r => r.vn))).sort((a, b) => (Number(/현일/.test(b)) - Number(/현일/.test(a))) || a.localeCompare(b, 'ko'));
         const f1 = n => String(Math.round(n * 10) / 10);
@@ -54811,7 +55013,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
       bg.querySelectorAll('[data-v]').forEach(b => b.addEventListener('click', () => { vsel = b.dataset.v; drawer = false; rcvOpen = ''; list(); }));
       { const i = bg.querySelector('.qm-q'); i.addEventListener('input', () => { q = i.value; const p = i.selectionStart; list(); const j = bg.querySelector('.qm-q'); j.focus(); try { j.setSelectionRange(p, p); } catch (_) {} }); }
       const X = el => { const k = el.closest('[data-k]').dataset.k; const all = tab === 'qc' ? I.qc : tab === 'rcv' ? I.rcv : I.rep; const kind = el.closest('[data-k]').dataset.kind; const rno = el.closest('[data-k]').dataset.rno; return all.find(x => x.key === k && (!kind || x.kind === kind) && (!rno || String(x.rno) === rno)); };
-      if (tab === 'qc' || tab === 'rep') bg.querySelectorAll('.qm-card').forEach(b => b.addEventListener('click', () => { const x = X(b); if (x) { cur = { wo: x.wo, i: x.i, rno: x.rno, view: tab === 'rep' }; form(); } }));
+      if (tab === 'qc' || tab === 'rep') bg.querySelectorAll('.qm-card').forEach(b => b.addEventListener('click', () => { const x = X(b); if (x) { cur = { wo: x.wo, i: x.i, rno: x.rno, view: tab === 'rep', nm: String((x.c && x.c.name) || '').trim() }; form(); } }));
       bg.querySelectorAll('.qr-part').forEach(b => b.addEventListener('click', () => { const x = X(b); rcvOpen = x.key + ':' + x.kind; list(); const i = bg.querySelector('.qr-b'); if (i) i.focus(); }));
       bg.querySelectorAll('.qr-x').forEach(b => b.addEventListener('click', () => { rcvOpen = ''; list(); }));
       bg.querySelectorAll('.qr-lack').forEach(b => b.addEventListener('click', async () => { if (busy) return; const x = X(b); if (!x || !window.hwProc || !window.hwProc.sendLack) return;   /* hotfix540 */
@@ -54819,7 +55021,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
         busy = true; try { await window.hwProc.sendLack(x.wo.id + '_' + x.i, x.lackB, x.lackR, { direct: true }); } catch (e) { toast('요청 실패: ' + ((e && e.message) || ''), 'error'); } busy = false; list(); }));
       bg.querySelectorAll('.qr-all').forEach(b => b.addEventListener('click', async () => { if (busy) return; const x = X(b); const ob = num(x.c.body) || 0, or = num(x.c.rib) || 0;
         if (!confirm(`[${x.wo.wo_number || ''}] "${x.c.name}"\n의뢰량 그대로 몸판 ${ob}절 · 리프 ${or}절 들어왔습니까?\n\n확인하면 QC 검수로 넘어갑니다.`)) return;
-        busy = true; try { await setColorQcPending(x.wo.id, x.i); toast(`"${x.c.name}" 입고 — QC 검수로 넘어갑니다`, 'success'); tab = 'qc'; } catch (e) { toast('입고 처리 실패: ' + ((e && e.message) || ''), 'error'); } busy = false; list(); }));
+        busy = true; try { hwQcIdxGuard(x.wo.id, x.i, x.c.name); await setColorQcPending(x.wo.id, x.i); toast(`"${x.c.name}" 입고 — QC 검수로 넘어갑니다`, 'success'); tab = 'qc'; } catch (e) { toast('입고 처리 실패: ' + ((e && e.message) || ''), 'error'); } busy = false; list(); }));
       bg.querySelectorAll('.qr-ok').forEach(b => b.addEventListener('click', async () => { if (busy) return; const x = X(b); const box = b.closest('.qm-card'); const rb = parseFloat(hwQcmNum(box.querySelector('.qr-b').value)) || 0, rr = parseFloat(hwQcmNum(box.querySelector('.qr-r').value)) || 0; const memo = box.querySelector('.qr-m').value.trim();
         if (rb < 0 || rr < 0 || (rb + rr) <= 0) { toast('들어온 절 수를 넣어 주십시오', 'warning'); return; }
         busy = true;
@@ -54827,12 +55029,12 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
           if (x.kind === 'first') { const ob = num(x.c.body) || 0, or = num(x.c.rib) || 0; if (rb > ob || rr > or) { toast(`의뢰량(몸판 ${ob} · 리프 ${or})보다 많습니다`, 'warning'); busy = false; return; }
             const lack = (ob - rb) + (or - rr);
             if (!confirm(`[${x.wo.wo_number || ''}] "${x.c.name}"\n의뢰 ${ob}/${or} → 입고 몸판 ${rb} · 리프 ${rr}\n${lack > 0 ? `부족분 몸판 ${ob - rb} · 리프 ${or - rr}절은 [추가 입고 대기]로 남습니다.\n` : ''}\nQC 검수로 넘깁니다.`)) { busy = false; return; }
-            await setColorShortage(x.wo.id, x.i, Object.assign({ received_body: rb, received_rib: rr, memo: memo || '최초 입고' }, lack > 0 ? { shortage_status: 'pending', shortage_reason: '' } : {}));
+            hwQcIdxGuard(x.wo.id, x.i, x.c.name); await setColorShortage(x.wo.id, x.i, Object.assign({ received_body: rb, received_rib: rr, memo: memo || '최초 입고' }, lack > 0 ? { shortage_status: 'pending', shortage_reason: '' } : {}));
             if (lack > 0 && window.hwProc && window.hwProc.lackInfo) { const li = window.hwProc.lackInfo(x.wo.id + '_' + x.i);   /* hotfix540: 부족이 생기면 그 자리에서 가공소에 알릴지 */
               if (li && li.vn && confirm(`부족 몸판 ${ob - rb}절 · 리프 ${or - rr}절\n\n${li.vn} 앱으로 부족 확인 요청을 보낼까요?\n"입고 예정일 알려주세요" (알림 · 소리 · 진동)`)) { try { await window.hwProc.sendLack(x.wo.id + '_' + x.i, ob - rb, or - rr, { direct: true }); } catch (_) {} } }
           } else { if (rb > x.lackB || rr > x.lackR) { toast(`남은 부족분(몸판 ${x.lackB} · 리프 ${x.lackR})보다 많습니다`, 'warning'); busy = false; return; }
             if (!confirm(`[${x.wo.wo_number || ''}] "${x.c.name}"\n추가 입고 몸판 ${rb} · 리프 ${rr}절\n\nQC 검수로 넘깁니다.`)) { busy = false; return; }
-            await addShortageReceipt(x.wo.id, x.i, { add_body: rb, add_rib: rr, memo: memo || '추가 입고', received_at: new Date().toISOString() }); }
+            hwQcIdxGuard(x.wo.id, x.i, x.c.name); await addShortageReceipt(x.wo.id, x.i, { add_body: rb, add_rib: rr, memo: memo || '추가 입고', received_at: new Date().toISOString() }); }
           toast(`"${x.c.name}" 입고 — QC 검수로 넘어갑니다`, 'success'); rcvOpen = ''; tab = 'qc';
         } catch (e) { toast('입고 처리 실패: ' + ((e && e.message) || ''), 'error'); }
         busy = false; list(); }));
@@ -54841,6 +55043,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
      *   중량 입력 방식 [야드 g/y] [스퀘어 g/㎡] 고르면 다른 쪽은 잠기고 저절로 · 특이사항 칩(다시 누르면 빠짐) + [＋ 추가](모든 사람 · PC QC 창에도) */
     const form = () => {
       const wo = (state.allWorkOrders || []).find(w => w.id === cur.wo.id) || cur.wo; const c0 = (wo.colors || [])[cur.i]; if (!c0) { cur = null; list(); return; }
+      if (cur.nm != null && String(c0.name || '').trim() !== cur.nm) { toast('그 사이 PC 에서 컬러 줄이 바뀌었습니다 — 목록에서 다시 골라 주십시오', 'warning'); cur = null; list(); return; }   /* hotfix596 */
       const c = JSON.parse(JSON.stringify(c0)); try { migrateColorReceipts(c); } catch (_) {}
       const rs = c.receipts || []; const r = rs.find(x => x.receipt_no === cur.rno) || rs[getActiveReceiptIndex(c)] || null; const rno = r ? r.receipt_no : cur.rno;
       let qc = (r && r.qc) ? JSON.parse(JSON.stringify(r.qc)) : {}; if (!Object.keys(qc).length && rno === 1 && c0.qc && Object.keys(c0.qc).length) qc = JSON.parse(JSON.stringify(c0.qc));
@@ -54889,7 +55092,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
           judgment: 'normal', defect_flags: (qc.defect_flags || {}), defect_meta: (qc.defect_meta || {}), defect_memo: qc.defect_memo || '' }; };
       const mark = (id, fail, has) => { const el = $(id + '-ok'); if (!el) return; el.className = 'qm-ok' + (has ? (fail ? ' x' : ' v') : ''); el.textContent = has ? (fail ? '✗' : '✓') : ''; const box = $('f-' + id); if (box) box.classList.toggle('bad', !!(has && fail)); };
       const recalc = (p, from) => { if (ro) return; const w = $(p + 'w'); if (!w) return;
-        { const n = String(w.value).replace(/,/g, '.').match(/\d+(?:\.\d+)?/g); if (n && n.length > 1) { w.value = n[0]; $(p + 'w2').value = n[1]; } }   /* 한 칸에 29/30 을 넣어도 두 칸으로 */
+        { const n = (s => hwCommaRange(s) ? s.replace(',', '/') : s)(hwWide2(String(w.value)).trim()).replace(/,/g, '.').match(/\d+(?:\.\d+)?/g); if (n && n.length > 1 && (from === 'blur' || document.activeElement !== w)) { w.value = n[0]; $(p + 'w2').value = n[1]; } }   /* 한 칸에 29/30 을 넣어도 두 칸으로 — hotfix598: 다 치고 칸을 떠날 때만 나눔 (치는 중 29/3 에서 나눠져 290 · 3 이 되던 것) */
         const aw = calcActualWidth(wStr(p), tubeOn(p)); $(p + 'x2').textContent = tubeOn(p) ? '″×2' : '″';
         $(p + 'aw').textContent = aw == null ? '폭을 먼저 넣으면 중량이 저절로 계산됩니다' : '';
         const gy = $(p + 'gy'), sq = $(p + 'gsm');
@@ -54908,7 +55111,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
         const s = $('sum'); if (s) s.innerHTML = bad.length ? `<div class="bad">✗ 규격 밖 ${bad.length}곳<span class="qm-its">${bad.map(x => `<span class="qm-nw">${escapeHtml(x)}</span>`).join('')}</span><small>[검수 완료]를 누르면 [불량 체크]로 대표에게 보고됩니다 (완료 안 됨)</small></div>`
           : (empty.length ? `<div class="mid">아직 비어 있음: ${escapeHtml(empty.join(' · '))}</div>` : `<div class="ok">✓ 규격 안 <small>[검수 완료]를 누르면 [완료 보고]로 올라갑니다</small></div>`);
         return { d, dev, dr, bad, empty }; };
-      if (!ro) ['', 'r'].forEach(p => { if (!$(p + 'w')) return; $(p + 'w').addEventListener('input', () => { recalc(p); judge(); }); $(p + 'w2').addEventListener('input', () => { recalc(p); judge(); });
+      if (!ro) ['', 'r'].forEach(p => { if (!$(p + 'w')) return; $(p + 'w').addEventListener('input', () => { recalc(p); judge(); }); $(p + 'w').addEventListener('blur', () => { recalc(p, 'blur'); judge(); }); $(p + 'w2').addEventListener('input', () => { recalc(p); judge(); });
         $(p + 'dbl').addEventListener('click', () => { const b = $(p + 'dbl'); b.classList.toggle('on'); b.setAttribute('aria-pressed', b.classList.contains('on')); recalc(p); judge(); });
         $(p + 'gy').addEventListener('input', () => { if (W[p] === 'gy') { recalc(p); judge(); } }); $(p + 'gsm').addEventListener('input', () => { if (W[p] === 'gsm') { recalc(p); judge(); } });
         [p + 'sw', p + 'sl'].forEach(k => $(k).addEventListener('input', judge)); });
@@ -54923,21 +55126,24 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
       bg.querySelector('[data-back]').addEventListener('click', () => { cur = null; list(); });
       lockPaint(); recalc(''); if ($('rw')) recalc('r'); judge();
       if (!ro && !String(($('w') || {}).value || '').trim()) setTimeout(() => { try { $('w').focus(); } catch (_) {} }, 80);
-      { const sv = $('save'); if (sv) sv.addEventListener('click', async () => { if (busy) return; busy = true; try { await saveQcData(wo.id, cur.i, collect(), rno); toast('임시 저장했습니다 (아직 검수 완료 아님)', 'success'); cur = null; } catch (e) { toast('저장 실패: ' + ((e && e.message) || ''), 'error'); } busy = false; if (!cur) list(); }); }
-      { const dn = $('done'); if (dn) dn.addEventListener('click', async () => { if (busy) return; let J = judge(); const d = J.d; const nm = c0.name || '';
+      const split598 = () => ['', 'r'].forEach(p => { try { if ($(p + 'w')) recalc(p, 'blur'); } catch (_) {} });   /* hotfix598: 저장 · 완료 단추를 누를 때도 29/30 나누기 (단추를 눌러도 칸에서 안 빠지는 휴대폰) */
+      { const sv = $('save'); if (sv) sv.addEventListener('click', async () => { if (busy) return; split598(); busy = true; try { hwQcIdxGuard(wo.id, cur.i, cur.nm); await saveQcData(wo.id, cur.i, collect(), rno); toast('임시 저장했습니다 (아직 검수 완료 아님)', 'success'); cur = null; } catch (e) { toast('저장 실패: ' + ((e && e.message) || ''), 'error'); } busy = false; if (!cur) list(); }); }
+      { const dn = $('done'); if (dn) dn.addEventListener('click', async () => { if (busy) return; split598(); let J = judge(); const d = J.d; const nm = c0.name || '';
         const wp = qcWidthPair(d); if (wp.a != null && wp.a < 60 && !d.width_double) {
           if (confirm(`폭이 ${qcWFmt(wp.a, wp.b)}″ 입니다.\n튜브로 잰 것입니까?\n\n[확인] = 튜브를 켜고 다시 계산합니다 (확인 뒤 [검수 완료]를 한 번 더)\n[취소] = 튜브 아님 — 그대로 진행`)) { const b = $('dbl'); b.classList.add('on'); b.setAttribute('aria-pressed', 'true'); recalc(''); judge(); toast('튜브를 켜고 다시 계산했습니다 — 확인 뒤 [검수 완료]', 'info'); return; } }
         if (J.empty.length && !confirm(`비어 있는 칸: ${J.empty.join(', ')}\n\n그대로 검수 완료할까요?`)) return;
         if (J.dev.any || (J.dr && J.dr.any)) {
           if (!confirm(`규격 밖:\n${J.bad.join('\n')}\n\n[${wo.wo_number || ''}] "${nm}" ${rno}차는 완료되지 않고\n[불량 체크]로 대표에게 보고됩니다.`)) return;
           const specDev = J.dev; if (J.dr && J.dr.any) specDev.rib = J.dr;
-          busy = true; try { await setColorShrinkHold(wo.id, cur.i, d, rno, specDev); toast(`"${nm}" 규격 이상 — 대표에게 보고했습니다`, 'warning'); cur = null; tab = 'rep'; } catch (e) { toast('보고 실패: ' + ((e && e.message) || ''), 'error'); } busy = false; if (!cur) list(); return; }
+          busy = true; try { hwQcIdxGuard(wo.id, cur.i, cur.nm); await setColorShrinkHold(wo.id, cur.i, d, rno, specDev); toast(`"${nm}" 규격 이상 — 대표에게 보고했습니다`, 'warning'); cur = null; tab = 'rep'; } catch (e) { toast('보고 실패: ' + ((e && e.message) || ''), 'error'); } busy = false; if (!cur) list(); return; }
         if (!confirm(`[${wo.wo_number || ''}] "${nm}" ${rno}차 검수를 마칠까요?\n\n[완료 보고]로 올라가고, 대표가 확인하면 완료됩니다.`)) return;
-        busy = true; try { await setColorQcDone(wo.id, cur.i, d, rno); toast(`✓ "${nm}" 검수 완료 — 대표 확인 대기`, 'success'); cur = null; tab = 'rep'; } catch (e) { toast('완료 실패: ' + ((e && e.message) || ''), 'error'); } busy = false; if (!cur) list(); }); }
+        busy = true; try { hwQcIdxGuard(wo.id, cur.i, cur.nm); await setColorQcDone(wo.id, cur.i, d, rno); toast(`✓ "${nm}" 검수 완료 — 대표 확인 대기`, 'success'); cur = null; tab = 'rep'; } catch (e) { toast('완료 실패: ' + ((e && e.message) || ''), 'error'); } busy = false; if (!cur) list(); }); }
     };
     list();
     /* 다른 사람이 넣은 것도 보이게 — 목록 화면이면 15초마다 새로 (찾기 · 입고 입력 중에는 안 함) */
-    const iv = setInterval(() => { if (!document.body.contains(bg)) { clearInterval(iv); return; } if (!cur && !busy && !rcvOpen && !drawer && !adjOn && document.activeElement !== bg.querySelector('.qm-q')) list(); }, 15000);
+    const iv = setInterval(() => { if (!document.body.contains(bg)) { clearInterval(iv); return; } if (document.hidden) return;   /* hotfix596: 화면이 꺼져 있거나 다른 앱을 보는 중엔 안 그림 (배터리) */
+      const sg = [state.allWorkOrders, (window.hwProc && window.hwProc.logs || []).length, tab]; const same = bg.__sg && bg.__sg[0] === sg[0] && bg.__sg[1] === sg[1] && bg.__sg[2] === sg[2] && Date.now() - (bg.__sgAt || 0) < 120000;   /* hotfix596: 바뀐 것이 없으면 다시 그리지 않음 (2분에 한 번은 그림 — 경과 일수 표시) */
+      if (!cur && !busy && !rcvOpen && !drawer && !adjOn && document.activeElement !== bg.querySelector('.qm-q') && !same) { list(); bg.__sg = sg; bg.__sgAt = Date.now(); } }, 15000);
   };
   if (typeof window !== 'undefined') {
     window.addEventListener('hashchange', () => { if (location.hash === '#qc' && !document.getElementById('hw-qcm') && state.user) window.hwQcmOpen(); });
@@ -57158,7 +57364,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix593';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
+  const VERSION = 'v2.53 hotfix599';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
@@ -57332,12 +57538,14 @@ window.addEventListener('beforeunload', e => {
   P.url = () => { try { return new URL('p.html', location.href).href.replace(/^file:.*\//, 'https://(본선 주소)/'); } catch (_) { return 'p.html'; } };
 
   /* ---------- hotfix502(대표 확정 9/27): 공정 체크 2판 — 큰 단계 · 출고 예정일 · 신호등 · 확인 요청 · 고치기/취소 ---------- */
-  // 단계: 생지입고 → 계획완료 → 염색완료 → 가공완료 → (후가공완료) → QC완료 → 출고완료
+  // 단계: 생지입고 → 계획완료 → 염색중 → 가공중 → (후가공중) → QC중 → 출고완료 (hotfix597 · 휴대폰 앱과 같은 이름)
   //   d = 앞 단계(첫 단계는 작지 내린 날)부터 이 단계까지 걸리는 표준 일수 — 넘으면 노랑
   const STAGE_DEF = [
-    { c: 'in', n: '생지입고', d: 3 }, { c: 'plan', n: '계획완료', d: 2 }, { c: 'dye', n: '염색완료', d: 3 },
-    { c: 'fin', n: '가공완료', d: 2 }, { c: 'post', n: '후가공완료', d: 2 }, { c: 'qc', n: 'QC완료', d: 1 }, { c: 'ship', n: '출고완료', d: 1 }
-  ];
+    { c: 'in', n: '생지입고', d: 3 }, { c: 'plan', n: '계획완료', d: 2 }, { c: 'dye', n: '염색중', d: 3 },
+    { c: 'fin', n: '가공중', d: 2 }, { c: 'post', n: '후가공중', d: 2 }, { c: 'qc', n: 'QC중', d: 1 }, { c: 'ship', n: '출고완료', d: 1 }
+  ];   /* hotfix597(대표 10/3): 단계 이름을 휴대폰 공정 체크 앱(553)과 같게 — 염색중 · 가공중 · 후가공중 · QC중 (기록 값 dye · fin · post · qc 는 그대로, 글자만) */
+  const ST_RN597 = { '염색완료': '염색중', '가공완료': '가공중', '후가공완료': '후가공중', 'QC완료': 'QC중' };
+  const stRn597 = x => (x && ST_RN597[x.n]) ? Object.assign({}, x, { n: ST_RN597[x.n] }) : x;   /* 예전에 저장된 단계 설정(proc_cfg)의 옛 이름도 바꿔 보여 줌 */
   P.STAGE_DEF = STAGE_DEF;
   P.cfg = { stages: STAGE_DEF.map(s => Object.assign({}, s)) };
   /* hotfix505(대표 9/27): 가공소 화면의 고르기 목록은 우리가 정한다 — settings/proc_cfg.lists → proc_pub(가공소가 읽는 곳)로 같이 보냄 */
@@ -57346,7 +57554,7 @@ window.addEventListener('beforeunload', e => {
     issues: ['지연', '색 편차', '폭/중량', '원단 불량', '기타'], reasons: ['재작업', '기계', '생지 부족', '기타'] };
   P.listsOf = function () { const L = (P.cfg && P.cfg.lists) || {}; const D = P.LISTS_DEF; const arr = (v, d) => Array.isArray(v) ? v.map(x => String(x || '').trim()).filter(Boolean) : d.slice();
     const memo = {}; Object.keys(D.memo).forEach(k => { memo[k] = arr((L.memo || {})[k], D.memo[k]); }); return { memo, issues: arr(L.issues, D.issues), reasons: arr(L.reasons, D.reasons) }; };
-  P.stageCfg = c => (P.cfg.stages || []).find(s => s.c === c) || STAGE_DEF.find(s => s.c === c) || { c, n: c, d: 2 };
+  P.stageCfg = c => stRn597((P.cfg.stages || []).find(s => s.c === c) || STAGE_DEF.find(s => s.c === c) || { c, n: c, d: 2 });
   function vendorParts(wo, vn) {
     const r = {};
     [['dyeing', '염'], ['processing', '가'], ['post', '후']].forEach(([k, s]) => {
@@ -57399,10 +57607,11 @@ window.addEventListener('beforeunload', e => {
     return out;
   };
   function hash(s) { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return (h >>> 0).toString(36) + '.' + s.length; }
-  const sent = {};
+  const sent = {}, sentAt = {};   /* hotfix596: sentAt = 마지막으로 보낸 때 */
   P.publish = async function () {
     const f = FB();
     if (!P.started || P.err || !f || (typeof state === 'undefined') || !state.__woLoaded || window.__hwViewAs) return 0;
+    if (/(?:^|[?&])app=qc(?:&|$)/.test(location.search)) return 0;   /* hotfix596: 현장 QC 휴대폰은 가공소 · 편직공장 화면을 만들지 않음 — 신호가 약한 휴대폰의 옛 자료가 늦게 덮어써 공장 화면이 되돌아가는 것을 막고 배터리 · 데이터도 아낌 (PC 가 함) */
     if (!P.accs.some(a => a.active)) return 0;   // 계정이 하나도 없으면 아무것도 쓰지 않는다
     const out = P.buildPub(); if (!out) return 0;
     let n = 0;
@@ -57412,8 +57621,9 @@ window.addEventListener('beforeunload', e => {
       let stock = []; try { const isK = (P.accs.find(a => a.active && a.vendor === vn && (a.app === 'knit' || a.app === 'proc')) || {}).app; if ((isK === 'knit' || (!isK && knit)) && window.__hwGs && window.__hwGs.stockRows) stock = window.__hwGs.stockRows(vn).map(r => ({ k: r.k, wo: r.wo, date: r.date, kind: r.kind, item: r.item, lot: r.lot, ord: r.ord, out: r.out, rem: r.rem, kg: r.kg, pend: r.pend, pg: r.pg })); } catch (_) { stock = []; }   /* hotfix570: 편직팀 앱 [재고] — 그 공장 것만 */
       let mv = []; try { if (window.hwMvFor) mv = window.hwMvFor(vn); } catch (_) { mv = []; }   /* hotfix586: 편직팀 앱 [이동] — 보내는 곳 · 받는 곳 */
       const lists = P.listsOf(); const sig = hash(JSON.stringify([out[vn], lists, gs, knit, stock, mv, P.accs.filter(a => a.vendor === vn).map(a => a.app || '')]));
-      if ((P.pubs[vn] && P.pubs[vn].sig === sig) || sent[vn] === sig) continue;
-      sent[vn] = sig;
+      { const srv = P.pubs[vn]; if (srv && srv.sig === sig) continue;
+        if (sent[vn] === sig && (srv || Date.now() - (sentAt[vn] || 0) < 60000)) continue;   /* hotfix596: 서버에 남의 판이 있으면 지금처럼 그대로 둠(내 자료가 더 옛것일 수 있음 · 두 PC 가 다투지 않게) — 서버에서 지워졌을 때만(계정 다시 만듦) 1분 뒤 다시 씀 */ }
+      sent[vn] = sig; sentAt[vn] = Date.now();
       try { await f.setDoc(f.doc(f.db, f.C('proc_pub'), vn), { vendor: vn, items: out[vn], lists, n: out[vn].length, stock, gs, gs_n: gs.filter(x => x.pend > 0).length, mv, mv_n: mv.filter(x => x.left > 0).length, mode: (P.accs.find(a => a.active && a.vendor === vn && (a.app === 'knit' || a.app === 'proc')) || {}).app || (knit && !out[vn].length ? 'knit' : (knit ? 'both' : 'proc')), sig, at: f.serverTimestamp(), by: email() }); n++; }
       catch (e) { sent[vn] = ''; console.warn('[공정 체크 게시]', e && e.message); }
     }
@@ -57490,6 +57700,25 @@ window.addEventListener('beforeunload', e => {
   const hhmm = t => { const d = new Date(t), n = new Date(); const p = x => String(x).padStart(2, '0');
     return d.toDateString() === n.toDateString() ? p(d.getHours()) + ':' + p(d.getMinutes()) : (d.getMonth() + 1) + '/' + d.getDate() + ' ' + p(d.getHours()) + ':' + p(d.getMinutes()); };
   P.hhmm = hhmm;
+  /* hotfix599(대표 10/3): [150일 전 기록 불러오기] — 평소엔 최근 150일만 읽고(빠르고 · 읽기량 적게), 누를 때만 그 의뢰서 · 그 업체의 옛 공정 기록을 한 번 읽어 같은 화면에 붙임
+     · 의뢰서: proc_log 의 k(의뢰서id_컬러순번) 로 찾음 — 색인 필요 없음 · 업체: vendor + at 색인(10/3 만듦)
+     · 불러온 기록은 이 PC 화면을 닫을 때까지 남음(새로고침하면 다시 150일) · 서버 자료는 바꾸지 않음 */
+  P.oldDone = P.oldDone || {};
+  P.loadOld = async function (opt) {
+    const f = FB(); if (!f || !opt) return -1; let fm = null; try { fm = await import(G + 'firebase-firestore.js'); } catch (_) {}
+    const where = (fm && fm.where) || f.where; if (typeof where !== 'function') { toast('이전 기록을 불러오지 못했습니다 (연결 확인)', 'error'); return -1; }
+    const cut = Date.now() - 150 * 864e5; const got = [];
+    const take = s => s.forEach(d => { const x = (typeof d.data === 'function') ? d.data({ serverTimestamps: 'estimate' }) : d.data; got.push(Object.assign({ id: d.id }, x)); });
+    try {
+      if (opt.vendor) { take(await f.getDocs(f.query(f.collection(f.db, f.C('proc_log')), where('vendor', '==', opt.vendor), where('at', '<', new Date(cut))))); }
+      else { const ks = Array.from(new Set(opt.keys || [])).filter(Boolean); for (let i = 0; i < ks.length; i += 30) take(await f.getDocs(f.query(f.collection(f.db, f.C('proc_log')), where('k', 'in', ks.slice(i, i + 30))))); }
+    } catch (e) { toast('이전 기록을 불러오지 못했습니다: ' + ((e && (e.code || e.message)) || ''), 'error'); return -1; }
+    const have = new Set((P.logs || []).map(l => l && l.id)); const add = got.filter(x => x && x.id && !have.has(x.id) && tOf(x) < cut).map(x => Object.assign(x, { __old: true }));
+    P.logs = (P.logs || []).concat(add); P.oldDone[opt.vendor ? 'v:' + opt.vendor : 'k:' + (opt.keys || []).join(',')] = Date.now(); P.oldN = (P.oldN || 0) + add.length;
+    try { rerender(); } catch (_) {}
+    return add.length;
+  };
+  P.oldWhen = t => { const d = new Date(t); const p = x => String(x).padStart(2, '0'); return d.getFullYear() + '.' + (d.getMonth() + 1) + '.' + d.getDate() + ' ' + p(d.getHours()) + ':' + p(d.getMinutes()); };
   const md = s => { if (!s) return ''; const d = new Date(s + 'T00:00:00'); return (d.getMonth() + 1) + '/' + d.getDate() + '(' + '일월화수목금토'[d.getDay()] + ')'; };
   P.md = md;
   function woVendors(wo) {
@@ -57572,7 +57801,7 @@ window.addEventListener('beforeunload', e => {
     const KN = { st: '단계', eta: '출고 예정일', ship: '출고', issue: '특이사항', req: '확인 요청', cancel: '취소', note_edit: '메모 고침', step: '(옛 기록)', dev_fail: '새 기기 시도' };
     const line = l => {
       let w = '';
-      if (l.kind === 'st') w = (P.stageCfg(l.stage).n || l.stage) + ' 완료';
+      if (l.kind === 'st') w = (P.stageCfg(l.stage).n || l.stage);   /* hotfix597: '염색완료 완료' 처럼 겹치던 글자 → 단계 이름 그대로 */
       else if (l.kind === 'eta') w = '출고 예정 ' + md(l.date) + (l.part === 'rest' ? ' (잔량)' : '') + (l.reason ? ' · ' + l.reason : '');
       else if (l.kind === 'ship') w = l.mode === 'all' ? '전량 출고' : '부분 출고 · 몸판 ' + (l.body || 0) + ' · 리프 ' + (l.rib || 0);
       else if (l.kind === 'issue') w = '특이사항 · ' + (l.issue || '');
@@ -57595,14 +57824,15 @@ window.addEventListener('beforeunload', e => {
       <div class="hwp-hint">단계 점을 누르면 우리가 대신 넣거나(완료) 되돌립니다(취소). 모든 기록은 지우지 않고 쌓입니다.</div>
       <div class="hwp-sec">특이사항</div>
       <div class="hwp-row"><select id="hwp-issue"><option value="">고르기</option>${P.listsOf().issues.map(x => `<option>${esc(x)}</option>`).join('')}</select><input id="hwp-note" type="text" maxlength="200" placeholder="한 줄 메모" autocomplete="off"><button type="button" class="hwp-btn" data-hwp-issue>남기기</button></div>
-      <div class="hwp-sec">이력</div>
-      <div class="hwp-hist">${L.length ? L.map(l => `<div class="hwp-h${cancelled.has(l.id) ? ' x' : ''}"><span class="t">${hhmm(tOf(l))}</span><span class="w">${esc(line(l))}${l.note && l.kind !== 'req' ? ' — ' + esc(l.note) : ''}${cancelled.has(l.id) ? ' <em>(취소됨)</em>' : ''}</span><span class="b ${l.by === 'vendor' ? 'v' : 'u'}">${l.by === 'vendor' ? esc(l.vendor) : '우리 ' + esc(String(l.email || '').split('@')[0])}</span>${(!cancelled.has(l.id) && ['st', 'eta', 'ship', 'issue', 'req'].includes(l.kind)) ? `<button type="button" class="hwp-lnk red" data-hwp-cancel="${esc(l.id)}">취소</button>` : '<span></span>'}</div>`).join('') : '<div class="hwp-empty">아직 기록이 없습니다.</div>'}</div>
+      <div class="hwp-sec">이력 ${(() => { const keys = (wo.colors || []).map((_, i) => woId + '_' + i); const dn = P.oldDone['k:' + keys.join(',')]; return dn ? `<span class="hwp-dim" style="font-weight:600;font-size:11.5px">· 150일 전 기록까지 불러옴</span>` : `<button type="button" class="hwp-lnk" data-hwp-old style="margin-left:6px;font-size:12px" title="평소에는 최근 150일 기록만 보입니다 — 누르면 이 의뢰서의 그보다 오래된 공정 기록을 한 번 불러옵니다">150일 전 기록 불러오기</button>`; })()}</div>
+      <div class="hwp-hist">${L.length ? L.map(l => `<div class="hwp-h${cancelled.has(l.id) ? ' x' : ''}"><span class="t">${l.__old ? P.oldWhen(tOf(l)) : hhmm(tOf(l))}</span><span class="w">${esc(line(l))}${l.note && l.kind !== 'req' ? ' — ' + esc(l.note) : ''}${cancelled.has(l.id) ? ' <em>(취소됨)</em>' : ''}</span><span class="b ${l.by === 'vendor' ? 'v' : 'u'}">${l.by === 'vendor' ? esc(l.vendor) : '우리 ' + esc(String(l.email || '').split('@')[0])}</span>${(!cancelled.has(l.id) && ['st', 'eta', 'ship', 'issue', 'req'].includes(l.kind)) ? `<button type="button" class="hwp-lnk red" data-hwp-cancel="${esc(l.id)}">취소</button>` : '<span></span>'}</div>`).join('') : '<div class="hwp-empty">아직 기록이 없습니다.</div>'}</div>
     </div>`;
     document.body.appendChild(m);
     const base = { vendor: vn, k, wo: wo.wo_number || '' };
     const reo = () => { P.openModal(woId, ci); setTimeout(() => { const m2 = document.getElementById('hwp-modal'); const ae = document.activeElement; if (m2 && !(ae && m2.contains(ae) && /INPUT|SELECT|TEXTAREA/.test(ae.tagName))) P.openModal(woId, ci); }, 450); };
     m.addEventListener('click', async e => {
       if (e.target === m || e.target.closest('[data-hwp-close]')) { closeModal(); return; }
+      { const ob = e.target.closest('[data-hwp-old]'); if (ob) { ob.disabled = true; ob.textContent = '불러오는 중…'; const n = await P.loadOld({ keys: (wo.colors || []).map((_, i) => woId + '_' + i) }); if (n >= 0) toast(n ? `150일 전 공정 기록 ${n}건을 불러왔습니다` : '150일 전 공정 기록이 없습니다 — 지금 보이는 것이 전부입니다', n ? 'success' : 'info'); P.openModal(woId, ci); return; } }   /* hotfix599 */
       if (e.target.closest('[data-hwp-woview]')) {   // hotfix510: 공정 창은 잠시 감추고 작업지시서를 띄움 — 작업지시서를 닫으면 공정 창이 다시
         const bg = document.getElementById('dash-modal-bg'); const fromDr = !!(bg && bg.classList.contains('show') && /일일 보고/.test((document.getElementById('dash-modal-title') || {}).textContent || '')); const drY = fromDr ? ((document.getElementById('dash-modal-body') || {}).scrollTop || 0) : 0;
         m.style.display = 'none'; if (window.hwWoOpen) window.hwWoOpen(wo.id, 'view');
@@ -57658,8 +57888,10 @@ window.addEventListener('beforeunload', e => {
     const d = Object.assign({ note: '' }, o, { by: 'us', email: email(), at: f.serverTimestamp() });
     const tmp = Object.assign({}, d, { at: null, __local: true, id: 'tmp' + Date.now() });
     P.logs.push(tmp); rerender();
-    try { await f.addDoc(f.collection(f.db, f.C('proc_log')), d); P.logs = P.logs.filter(x => x !== tmp); toast('공정 기록을 남겼습니다', 'success'); return true; }
-    catch (e) { P.logs = P.logs.filter(x => x !== tmp); rerender(); toast('공정 기록 실패 — ' + ((e && e.message) || ''), 'error'); return false; }
+    try { await f.addDoc(f.collection(f.db, f.C('proc_log')), d); P.logs = P.logs.filter(x => x !== tmp); rerender(); toast('공정 기록을 남겼습니다', 'success'); return true; }   /* hotfix596: 임시 줄을 지운 뒤 바로 다시 그림 (같은 줄이 잠깐 두 번 보이던 것) */
+    catch (e) { P.logs = P.logs.filter(x => x !== tmp); rerender();
+      if (e && e.__hiwosWriteTimeout) { toast('신호가 약합니다 — 기록은 보관됐고 연결되면 자동으로 보냅니다 (다시 보내지 마십시오)', 'info'); return true; }   /* hotfix596: 늦게라도 가는 기록을 '실패'라 해서 다시 보내 같은 알림이 두 번 가던 것 */
+      toast('공정 기록 실패 — ' + ((e && e.message) || ''), 'error'); return false; }
   };
   /* hotfix509: 일일 보고 [부족(전송)] — 부족 숫자를 누르면 가공소에 확인 요청(가공소 앱에 빨간 띠 · 소식 알림, 우리 이력에도 남음) */
   /* hotfix540: 부족 요청 글 — 의뢰 · 입고 · 부족을 한 줄로 */
@@ -57722,7 +57954,7 @@ window.addEventListener('beforeunload', e => {
     if (l.part === 'gs' && l.kind === 'issue') return '편직팀 · 재고 수량 다름 — ' + (l.label || l.wo || '') + ' · FABIWOS ' + (l.body || 0) + '절 / 공장 ' + (l.n || 0) + '절' + (l.note ? ' · ' + l.note : '');   /* hotfix572 */
     if (l.part === 'gs' && l.kind === 'cancel') return '편직팀 · 보낸 것 취소 요청' + (l.note ? ' — ' + l.note : '') + ' · 확인 필요';   /* hotfix581 */
     if (l.part === 'gs') return l.kind === 'ship' ? '편직팀 · 생지 출고 보고 ' + (l.body || 0) + '절' + (Number(l.n) ? ' · ' + l.n + 'kg' : '') + (l.ref ? ' · 송장 사진' : '') + ' · 확인 필요' : (l.stage === 'photo' ? '편직팀 · 송장 사진 보냄' : '편직팀');   /* hotfix564 · 581: 우리가 확인해야 확정 */
-    if (l.kind === 'st') return P.stageCfg(l.stage).n + ' 완료' + (l.note ? ' — ' + l.note : '');
+    if (l.kind === 'st') return P.stageCfg(l.stage).n + (l.note ? ' — ' + l.note : '');   /* hotfix597 */
     if (l.kind === 'eta') return '출고 예정일 ' + md(l.date) + (l.reason ? ' · ' + l.reason : '');
     if (l.kind === 'ship') return l.mode === 'all' ? '전량 출고' : '부분 출고 · 몸판 ' + (l.body || 0) + ' · 리프 ' + (l.rib || 0);
     if (l.kind === 'issue') return '특이사항 · ' + (l.issue || '') + (l.note ? ' — ' + l.note : '');
@@ -57908,6 +58140,9 @@ window.addEventListener('beforeunload', e => {
   P.isKnitV = vn => { const a = P.accs.find(x => x.vendor === vn && (x.app === 'knit' || x.app === 'proc')); return a ? a.app === 'knit' : P.isKnitGuess(vn); };
   P.accText = r => { const kn = r.app ? r.app === 'knit' : P.isKnitV(r.vn); return ['━━━━━━━━━━━━', kn ? '■ 현일텍스 편직팀 앱 계정' : '■ 현일텍스 공정 체크 계정', '━━━━━━━━━━━━', `▷ 업체 : ${r.vn}`, `▷ 주소 : ${kn ? P.urlK() : P.url()}`, `▷ 아이디 : ${r.id}`, `▷ 비밀번호 : ${r.pw}`,
     '▷ 주소를 누르면 크롬으로 열립니다 → [앱 설치]를 누르면 바탕화면에 ' + (kn ? '초록색 [편직팀]' : '[공정 체크]') + ' 아이콘이 생깁니다', '▷ 아이디 · 비밀번호만 있으면 어느 휴대폰에서든 들어옵니다', '━━━━━━━━━━━━', '현일텍스 주식회사 드림'].join('\n'); };
+  /* hotfix597(대표 10/3): 업체 이름이 바뀌어 계정 이름이 목록에 없으면 — 그 휴대폰은 빈 화면이 됨 → 계정 화면에 [업체 이름 확인] · [수정]에서 [업체 바꾸기] */
+  const vkMemo = {}; P.vendorKnown = kind => { const m = vkMemo[kind || '']; if (m && Date.now() - m.t < 3000 && m.w === state.allWorkOrders) return m.v; const sv = P.accs; P.accs = []; let v = []; try { v = vendorChoices(kind); } catch (_) { v = []; } finally { P.accs = sv; } vkMemo[kind || ''] = { t: Date.now(), w: state.allWorkOrders, v }; return v; };   /* 3초 기억 (계정 줄마다 다시 세지 않게) */
+  P.vendorOrphan = a => { if (!a || !a.vendor) return false; const k = P.appOfAcc(a); const L = P.vendorKnown(k); if (L.includes(a.vendor)) return false; const nv = norm(a.vendor); return (nv && nv !== a.vendor && L.includes(nv)) ? nv : true; };   /* 목록(사용 중 업체)에 있으면 정상 · 바뀐 이름이 목록에 있을 때만 '→ 새 이름' 제안 */
   function vendorChoices(kind) {   /* hotfix564: kind 'proc' = 염/가공소 · 'knit' = 편직공장 · 없으면 모두 */
     if (kind === 'knit') { const s = new Set();
       try { if (typeof knitFactoryList === 'function') knitFactoryList().forEach(v => v && s.add(norm(v))); } catch (_) {}
@@ -58026,7 +58261,7 @@ window.addEventListener('beforeunload', e => {
     tabAccs.forEach(a => {
       const pw = secOf(a.uid); const lt = lastT(a.vendor); const guess = !(a.app === 'knit' || a.app === 'proc');
       const col6 = !a.active ? '-' : (KN ? (() => { const L = gsPendOf(a.vendor); return L.length ? `<b style="color:#b45309">${L.length}건</b> · ${Math.round(L.reduce((x, y) => x + y.pend, 0) * 10) / 10}절` : '<span class="hwp-dim">없음</span>'; })() : (out[a.vendor] || []).length + '건');
-      h += `<tr class="${a.active ? '' : 'off'}${S.editFor === a.uid ? ' editing' : ''}"><td class="l"><b>${esc(a.vendor)}</b>${guess ? ' <span class="hwp-pill guess" title="예전에 만든 계정 — 앱 종류를 자동으로 판단했습니다. [수정]에서 한 번 정해 주십시오">자동</span>' : ''}</td><td class="mono">${esc(a.login_id)}</td>
+      h += `<tr class="${a.active ? '' : 'off'}${S.editFor === a.uid ? ' editing' : ''}"><td class="l"><b>${esc(a.vendor)}</b>${(() => { const o = P.vendorOrphan(a); return o ? ` <span class="hwp-pill warn" title="${esc(typeof o === 'string' ? '업체 목록에서 이 이름이 \'' + o + '\'(으)로 바뀌었습니다' : '업체 목록 · 진행 중 의뢰서에서 이 이름을 찾지 못했습니다 — 맞는 이름이면 그대로 두셔도 됩니다')} — 그 휴대폰에 의뢰가 안 보일 수 있습니다. [수정] → [업체 바꾸기]">업체 이름 확인${typeof o === 'string' ? ' → ' + esc(o) : ''}</span>` : ''; })()}${Array.isArray(a.vendor_old) && a.vendor_old.length ? ` <span class="hwp-dim" title="예전 이름의 기록도 그 휴대폰에서 같이 보입니다">(전 ${esc(a.vendor_old.join(' · '))})</span>` : ''}${guess ? ' <span class="hwp-pill guess" title="예전에 만든 계정 — 앱 종류를 자동으로 판단했습니다. [수정]에서 한 번 정해 주십시오">자동</span>' : ''}</td><td class="mono">${esc(a.login_id)}</td>
         <td class="mono">${pw ? esc(pw) : '<span class="hwp-dim" title="이 판 전에 만든 계정 — [수정]에서 한 번 정하면 보입니다">모름</span>'}</td>
         <td>${a.active ? '<span class="hwp-pill ok">사용</span>' : '<span class="hwp-pill off">꺼짐</span>'}</td><td>${devTxt(a)}</td>
         <td>${col6}</td><td>${lt ? dtm(lt) : '-'}</td>
@@ -58037,6 +58272,7 @@ window.addEventListener('beforeunload', e => {
         ${pw ? '' : '<label>지금 비밀번호<input id="hwp-ed-cur" type="text" placeholder="이 판 전에 만든 계정만 한 번" autocomplete="off" spellcheck="false"></label>'}
         <span class="btns"><button type="button" class="hwp-btn" data-hwp-act="edsave" data-uid="${esc(a.uid)}">저장</button><button type="button" class="hwp-btn gray" data-hwp-act="edcancel">취소</button></span>
         <div class="hwp-appsw"><b>앱 종류</b><button type="button" class="${P.appOfAcc(a) === 'proc' ? 'on p' : ''}" data-hwp-act="setapp" data-app="proc" data-uid="${esc(a.uid)}">염/가공소 앱</button><button type="button" class="${P.appOfAcc(a) === 'knit' ? 'on k' : ''}" data-hwp-act="setapp" data-app="knit" data-uid="${esc(a.uid)}">편직팀 앱</button>${guess ? '<span class="hwp-dim">지금은 자동 판단 — 눌러서 정해 두십시오</span>' : '<span class="hwp-dim">바꾸면 그 휴대폰이 다음에 열 때 맞는 앱으로 옮겨 갑니다</span>'}</div>
+        ${(() => { const L = P.vendorKnown(P.appOfAcc(a)); const o = P.vendorOrphan(a); const pick = typeof o === 'string' ? o : a.vendor; const opts = Array.from(new Set([a.vendor].concat(L))); return `<div class="hwp-appsw"><b>업체</b><select id="hwp-ed-vn" style="min-width:160px;padding:5px 8px;border:1px solid #cbd5e1;border-radius:8px;font-weight:700">${opts.map(v => `<option value="${esc(v)}"${v === pick ? ' selected' : ''}>${esc(v)}${v === a.vendor ? ' (지금)' : ''}</option>`).join('')}</select><button type="button" data-hwp-act="setvn" data-uid="${esc(a.uid)}">업체 바꾸기</button><span class="hwp-dim">업체 목록에서 이름이 바뀌었을 때 — 예전 이름의 공정 기록도 그 휴대폰에서 계속 보입니다</span></div>`; })()}
         <div class="hwp-hint">아이디나 비밀번호를 바꾸면 그 휴대폰은 한 번 로그아웃되고, 새 아이디 · 비밀번호로 다시 들어오면 됩니다. 아이디 · 비밀번호만 맞으면 어느 휴대폰에서든 들어옵니다.</div></div></td></tr>`;
       if (S.delFor === a.uid) h += `<tr class="hwp-edit-row del"><td colspan="8"><div class="hwp-edit">
         <b class="dt">${esc(a.vendor)} (${esc(a.login_id)}) 계정을 삭제합니다 — 되돌릴 수 없습니다. ${KN ? '출고 보고' : '공정 기록'}은 남습니다.</b>
@@ -58078,7 +58314,7 @@ window.addEventListener('beforeunload', e => {
     const nDone = items.filter(it => procState(P.logs.filter(l => l && l.k === it.k), it).shippedAll).length;
     h += `<section class="hwp-card"><div class="hwp-card-h"><h3>공정 현황 · 가공소 화면</h3><span class="hwp-dim">가공소 휴대폰에 보이는 그대로 · 카드를 누르면 공정 창</span><button type="button" class="hwp-newsbtn" data-hwp-act="news">가공소 소식 <b>${P.newsAll().length}</b></button></div>
       <div class="hwp-vtabs2">${vsT.map(v => `<button type="button" class="${v === pv ? 'on' : ''}" data-hwp-act="pv" data-v="${esc(v)}">${esc(v)} <em>${cntOf(v)}</em>${accOf(v) ? '' : ' <i>계정 없음</i>'}</button>`).join('')}</div>
-      ${items.length ? `<div class="hwp-pvsum">${esc(pv)} · 진행 ${items.length - nDone}건 · 출고 완료 ${nDone}건 · 입력 전 ${items.filter(it => !procState(P.logs.filter(l => l && l.k === it.k), it).any).length}건</div>` : ''}
+      ${items.length ? `<div class="hwp-pvsum">${esc(pv)} · 진행 ${items.length - nDone}건 · 출고 완료 ${nDone}건 · 입력 전 ${items.filter(it => !procState(P.logs.filter(l => l && l.k === it.k), it).any).length}건 ${P.oldDone['v:' + pv] ? '<span class="hwp-dim" style="font-size:11.5px">· 150일 전 기록까지 불러옴</span>' : `<button type="button" class="hwp-lnk" data-hwp-oldv="${esc(pv)}" style="font-size:12px;margin-left:6px" title="평소에는 최근 150일 기록만 보입니다 — 누르면 이 업체의 그보다 오래된 공정 기록을 한 번 불러옵니다">150일 전 기록 불러오기</button>`}</div>` : ''}
       <div class="hwp-pv">${items.length ? items.map(cardOf).join('') : '<div class="hwp-empty">진행 중인 염색/가공 건이 없습니다.</div>'}</div></section>`;
     { const owner = !!(H().isOwner && H().isOwner()); const nOK = ('Notification' in window) ? Notification.permission : 'none';
       const locked = !!P.cfg.saved && !S.stdEdit; const dis = (!owner || locked) ? 'disabled' : '';
@@ -58108,6 +58344,7 @@ window.addEventListener('beforeunload', e => {
     if (np) np.addEventListener('input', () => { S.pw = np.value; });
     box.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.matches('.hwp-lin')) { e.preventDefault(); const b = box.querySelector(`[data-hwp-act="ladd"][data-lk="${e.target.dataset.lk}"]`); if (b) b.click(); return; } if (e.key !== 'Enter' || !e.target.matches('input')) return; const row = e.target.closest('.hwp-new, .hwp-edit'); const b = row && row.querySelector('[data-hwp-act="make"],[data-hwp-act="edsave"],[data-hwp-act="delsave"]'); if (b) { e.preventDefault(); b.click(); } });
     box.addEventListener('click', async e => { const dl = e.target.closest('[data-hwp-del]'); if (dl) { e.stopPropagation(); if (window.hwWoTrash && await window.hwWoTrash(dl.dataset.hwpDel)) rerender(); return; } });   /* hotfix514 */
+    box.addEventListener('click', async e => { const ob = e.target.closest('[data-hwp-oldv]'); if (!ob) return; e.stopPropagation(); ob.disabled = true; ob.textContent = '불러오는 중…'; const n = await P.loadOld({ vendor: ob.dataset.hwpOldv }); if (n >= 0) toast(n ? `${ob.dataset.hwpOldv} — 150일 전 공정 기록 ${n}건을 불러왔습니다` : `${ob.dataset.hwpOldv} — 150일 전 공정 기록이 없습니다`, n ? 'success' : 'info'); else { ob.disabled = false; ob.textContent = '150일 전 기록 불러오기'; } });   /* hotfix599 */
     box.addEventListener('click', e => { const c = e.target.closest('.hwp-pvc[data-hwp-open]'); if (!c || e.target.closest('button')) return; const [w, i] = c.dataset.hwpOpen.split('|'); P.openModal(w, parseInt(i, 10)); });
     box.addEventListener('click', async e => {
       const b = e.target.closest('[data-hwp-act]'); if (!b) return;
@@ -58178,6 +58415,11 @@ window.addEventListener('beforeunload', e => {
         const ref = f.doc(f.db, f.C('proc_acc'), a.uid);
         if (act === 'edit') { S.editFor = S.editFor === a.uid ? '' : a.uid; S.delFor = ''; rerenderNow(); setTimeout(() => { const i = document.getElementById('hwp-ed-pw'); if (i) i.focus(); }, 60); return; }
         if (act === 'del') { S.delFor = S.delFor === a.uid ? '' : a.uid; S.editFor = ''; rerenderNow(); return; }
+        if (act === 'setvn') { const nv = String((document.getElementById('hwp-ed-vn') || {}).value || '').trim(); if (!nv || nv === a.vendor) { toast('바꿀 업체를 고르십시오', 'warning'); return; }   /* hotfix597 */
+          const dup = P.accs.filter(x => x.uid !== a.uid && x.active && x.vendor === nv).length;
+          if (!confirm(`${a.vendor} → ${nv}\n\n${a.login_id} 계정의 업체를 바꿉니다.${dup ? `\n(${nv} 계정이 이미 ${dup}개 있습니다 — 같은 업체 휴대폰이 늘어납니다)` : ''}\n· 그 휴대폰은 다음에 열 때 ${nv} 의뢰가 보입니다\n· 예전 이름(${a.vendor})의 공정 기록도 계속 보입니다\n· 아이디 · 비밀번호는 그대로`)) return;
+          const olds = Array.from(new Set((Array.isArray(a.vendor_old) ? a.vendor_old : []).concat([a.vendor]))).filter(v => v && v !== nv).slice(-5);
+          await f.updateDoc(ref, { vendor: nv, vendor_old: olds, vendor_at: f.serverTimestamp(), vendor_by: email() }); a.vendor = nv; a.vendor_old = olds; toast(`업체를 바꿨습니다 — ${nv} (휴대폰 앱을 한 번 닫았다 여십시오)`, 'success'); try { setTimeout(() => P.publish(), 500); } catch (_) {} rerenderNow(); return; }
         if (act === 'setapp') { const ap = b.dataset.app === 'knit' ? 'knit' : 'proc'; if (a.app === ap) return; if (!confirm(`${a.vendor}(${a.login_id}) 계정을 ${ap === 'knit' ? '[편직팀 앱]' : '[염/가공소 앱]'}으로 정합니다.\n그 휴대폰은 다음에 열 때 맞는 앱으로 옮겨 갑니다.`)) return; await f.updateDoc(ref, { app: ap }); a.app = ap; S.appTab = ap; toast('앱 종류를 정했습니다 — ' + (ap === 'knit' ? '편직팀 앱' : '염/가공소 앱'), 'success'); try { setTimeout(() => P.publish(), 500); } catch (_) {} rerenderNow(); return; }   /* hotfix564 */
         if (act === 'kakao') { const pw = secOf(a.uid) || await readSecret(a.uid); if (!pw) { toast('비밀번호를 모릅니다 — [수정]에서 비밀번호를 한 번 정하십시오', 'error'); return; } const ok = await copyText(P.accText({ vn: a.vendor, id: a.login_id, pw, app: P.appOfAcc(a) })); toast(ok ? `${a.vendor} 카톡 글을 복사했습니다` : '복사가 막혔습니다', ok ? 'success' : 'error'); return; }
         if (act === 'reset') { if (!confirm(`${a.vendor}(${a.login_id}) 등록 휴대폰을 지웁니다.\n다음에 처음 로그인하는 휴대폰이 새로 등록됩니다.`)) return; await f.updateDoc(ref, { dev: null, dev_at: null, dev_ua: '' }); toast('기기를 초기화했습니다', 'success'); }
@@ -58214,13 +58456,13 @@ window.addEventListener('beforeunload', e => {
     try { U.push(f.onSnapshot(f.collection(f.db, f.C('proc_acc')), snap => { P.err = ''; const a = []; snap.forEach(d => a.push(Object.assign({ uid: d.id }, d.data()))); P.accs = a; rerender(); }, onErr)); } catch (e) { onErr(e); }
     try { if (P.can().v) U.push(f.onSnapshot(f.collection(f.db, f.C('proc_secret')), snap => { const o = {}; snap.forEach(d => { o[d.id] = d.data(); }); P.secrets = o; rerender(); }, () => {})); } catch (_) {}   /* hotfix499: 대표만 */
     try { U.push(f.onSnapshot(f.doc(f.db, f.C('settings'), 'proc_cfg'), snap => { const d = snap && snap.exists && snap.exists() ? snap.data() : null;   /* hotfix502: 단계 · 표준 일수 */
-      if (d && Array.isArray(d.stages)) P.cfg.stages = STAGE_DEF.map(x => Object.assign({}, x, d.stages.find(y => y && y.c === x.c) || {}));
+      if (d && Array.isArray(d.stages)) P.cfg.stages = STAGE_DEF.map(x => stRn597(Object.assign({}, x, d.stages.find(y => y && y.c === x.c) || {})));
       if (d && d.cal) P.cfg.cal = d.cal; if (d && d.lists) P.cfg.lists = d.lists; if (d && d.qc_tabs) P.cfg.qc_tabs = d.qc_tabs;   /* hotfix570: 현장 QC 앱 탭 구성 */ P.cfg.saved = !!(d && d.updated_at); rerender(); }, () => {})); } catch (_) {}
     try { U.push(f.onSnapshot(f.collection(f.db, f.C('proc_pub')), snap => { const o = {}; snap.forEach(d => { o[d.id] = d.data(); }); P.pubs = o; }, () => {})); } catch (_) {}
     try {
       let q = f.collection(f.db, f.C('proc_log'));
       try { const fm = await import(G + 'firebase-firestore.js'); if (typeof fm.where === 'function') q = f.query(q, fm.where('at', '>=', new Date(Date.now() - 150 * 864e5))); } catch (_) {}
-      if (P.unsubs !== U) return; U.push(f.onSnapshot(q, snap => { const a = []; snap.forEach(d => { const x = (typeof d.data === 'function') ? d.data({ serverTimestamps: 'estimate' }) : d.data; a.push(Object.assign({ id: d.id }, x)); }); P.logs = a.concat(P.logs.filter(l => l && l.__local)); rerender(); P.notifyScan(); try { if (window.__hwGs && window.__hwGs.applyReports) window.__hwGs.applyReports(P.logs); } catch (_) {} }, () => {}));
+      if (P.unsubs !== U) return; U.push(f.onSnapshot(q, snap => { const a = []; snap.forEach(d => { const x = (typeof d.data === 'function') ? d.data({ serverTimestamps: 'estimate' }) : d.data; a.push(Object.assign({ id: d.id }, x)); }); P.logs = a.concat(P.logs.filter(l => l && (l.__local || (l.__old && !a.some(x => x.id === l.id))))); rerender(); P.notifyScan(); try { if (window.__hwGs && window.__hwGs.applyReports) window.__hwGs.applyReports(P.logs); } catch (_) {} }, () => {}));
     } catch (_) {}
     P.pubIv = setInterval(() => { P.publish(); }, 20000);
     P.pubTo = setTimeout(() => { P.publish(); }, 6000);
@@ -58578,7 +58820,7 @@ body.hw-popdash #dashboard-panel{position:fixed!important;top:3vh;left:3vw;right
 .smg-open-btn.due{background:#eff6ff!important;border-color:#93c5fd!important;color:#1e3a8a!important}.smg-open-btn b{display:inline-block;min-width:18px;padding:0 5px;margin-left:4px;border-radius:9px;background:#1e3a8a;color:#fff;font-size:11px}
 .fs-greige-tag{font-size:10.5px;font-weight:800;color:#0f766e;background:#f0fdfa;border:1px solid #99f6e4;border-radius:9px;padding:0 7px;margin-left:4px}
 .fs-greige-sub{font-size:11px;font-weight:600;color:#0f766e;margin-top:2px}   /* hotfix510: 묶음은 쓰지 않음(대표 9/27) */
-.pick-list{position:fixed;z-index:100300;background:#fff;border:1px solid #cbd5e1;border-radius:10px;box-shadow:0 14px 34px rgba(15,23,42,.18);max-height:300px;overflow:auto;font-size:13px;padding:4px}
+.pick-list{position:fixed;z-index:101000;background:#fff;border:1px solid #cbd5e1;border-radius:10px;box-shadow:0 14px 34px rgba(15,23,42,.18);max-height:300px;overflow:auto;font-size:13px;padding:4px}
 .pick-list .pick-item{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:7px;cursor:pointer;white-space:nowrap;color:#0f172a}
 .pick-list .pick-item:hover,.pick-list .pick-item.kb{background:#eff6ff}.pick-list .pick-item.on{background:#dbeafe;font-weight:800;color:#1e3a8a}
 .pick-list .pick-item.muted{color:#94a3b8}.pick-src{color:#94a3b8}
