@@ -172,6 +172,8 @@ button{font-family:inherit;cursor:pointer}
 .kc-m{display:flex;flex-direction:column;margin:7px 0;max-width:84%}.kc-m.me{margin-left:auto;align-items:flex-end}
 .kc-b{padding:10px 13px;border-radius:15px;font-size:16px;line-height:1.5;white-space:pre-wrap;word-break:break-word}
 .kc-m.us .kc-b{background:#fff;border:1px solid var(--line);border-top-left-radius:5px}.kc-m.me .kc-b{background:#059669;color:#fff;border-top-right-radius:5px}
+.kc-rd{color:#059669}.kc-ur{color:#d97706}
+.kc-re{font-size:12.5px;color:#64748b;margin:0 4px 3px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.kc-rp{border:0;background:none;color:#2563eb;font-size:12px;text-decoration:underline;padding:0;font-family:inherit;font-weight:700}.kc-rbar{font-size:13px;color:#334155;background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:6px 10px;margin-bottom:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.kc-rbar button{border:0;background:none;color:#b91c1c;font-weight:700;text-decoration:underline;font-family:inherit;font-size:12.5px;padding:0;margin-left:4px}
 .kc-meta{font-size:12px;color:#94a3b8;margin-top:3px}.kc-x{border:0;background:none;color:#b91c1c;font-size:12px;text-decoration:underline;padding:0;font-family:inherit}
 .kc-bar{position:fixed;left:0;right:0;bottom:calc(68px + env(safe-area-inset-bottom));z-index:5;background:#fff;border-top:1px solid var(--line);padding:7px 10px 8px;box-shadow:0 -4px 14px rgba(15,23,42,.06)}
 .kc-q{display:flex;gap:6px;overflow-x:auto;padding-bottom:6px}.kc-q button{flex:none;border:1px solid #cbd5e1;background:#fff;border-radius:15px;padding:4px 11px;font-size:13.5px;font-weight:700;color:#334155;font-family:inherit}
@@ -268,7 +270,7 @@ import { initializeFirestore, getFirestore, persistentLocalCache, persistentMult
  *   읽는 것: proc_acc/{내 uid} · proc_pub/{내 업체}.gs (현일텍스가 보낸 생지출고) · proc_log(내 업체 것만)
  *   쓰는 것: proc_log 한 줄 — kind 'ship' part 'gs' (body 절 · n kg · ref 송장 사진) · kind 'st' part 'gs' stage seen | ack_cxl | photo
  *   사진: Storage gs_photos/{업체}/{생지출고}_{시각}.jpg */
-const KVER = 'k51 (hotfix615)';
+const KVER = 'k53 (hotfix617)';
 /* hotfix572(대표 10/1): 거래 원단회사 고르기 — FABIWOS 는 여러 원단회사에 팔 프로그램. 편직공장 한 곳이 여러 원단회사와 거래하므로
  *   계정(proc_acc.companies)에 거래 원단회사 목록 · 위 [→ 원단회사 ▾] 와 삼선 메뉴에서 고름 · 고른 회사의 할 일 · 재고 · 보낸 내역만 보임
  *   지금은 현일텍스 한 곳 (이 서버 = 현일텍스 자료). 다른 원단회사가 FABIWOS 를 쓰면 그 회사 자료 자리(co.src)를 더해 같은 앱에서 바꿔 봄 */
@@ -449,7 +451,7 @@ window.addEventListener('offline', () => { S.live = false; render(); });
 async function onDenied(e) { if (e && /permission/.test(e.code || e.message || '')) { S.acc = null; try { await signOut(auth); } catch (_) {} showLogin('계정이 멈췄거나 권한이 바뀌었습니다. 현일텍스에 문의하십시오.'); } }
 /* hotfix581: 현일텍스가 보낸 글(송장 요청 · 안내 · 반려 · 확인)이 새로 오면 화면을 켜 둔 상태에서도 울림 */
 function kUsNew() {
-  const seen = new Set(lsGet(vKey('us'), [])); const U = S.logs.filter(l => l.by === 'us' && l.id && l.kind !== 'cancel' && Date.now() - tOf(l) < 3 * 864e5);   /* hotfix613: 보내기 취소는 알리지 않음 */
+  const seen = new Set(lsGet(vKey('us'), [])); const U = S.logs.filter(l => l.by === 'us' && l.id && l.kind !== 'cancel' && !(l.kind === 'st' && l.stage === 'chat_seen') && Date.now() - tOf(l) < 3 * 864e5);   /* hotfix613: 보내기 취소는 알리지 않음 */
   if (!S.usBoot) { S.usBoot = true; lsSet(vKey('us'), Array.from(new Set(Array.from(seen).concat(U.map(l => l.id)))).slice(-400)); return; }
   const nw = U.filter(l => !seen.has(l.id)); if (!nw.length) return;
   lsSet(vKey('us'), Array.from(seen).concat(nw.map(l => l.id)).slice(-400));
@@ -727,12 +729,17 @@ function kcUnread() { const s = Number(lsGet(vKey('kcseen'), 0)) || 0; return kc
 function kcSeenSend() { const U = kcMsgs().filter(l => l.by === 'us' && !String(l.id || '').startsWith('tmp')); lsSet(vKey('kcseen'), Date.now()); const last = U[U.length - 1]; if (!last) return;
   if (lsGet(vKey('kcsent'), '') === last.id) return; lsSet(vKey('kcsent'), last.id); put({ k: 'chat', no: '' }, { kind: 'st', part: 'gs', stage: 'chat_seen', ref: last.id }).catch(() => {}); }
 const KC_Q = ['확인했습니다', '오늘 출고합니다', '내일 출고합니다', '전화 부탁드립니다', '원사가 부족합니다'];
+function kcWho(l) { return l.by === 'vendor' ? '나' : (CN() + (l.label ? ' ' + String(l.label) : '')); }   /* hotfix616: 현일텍스 글은 보낸 사람 이름까지 */
+function kcRB() { const el = document.getElementById('kc-rb'); if (!el) return; const r = S.kcReply; el.innerHTML = r ? `<div class="kc-rbar">↩ <b>${esc(r.who)}</b> 글에 답장: ${esc(String(r.note || '').slice(0, 40))} <button type="button" data-kcrpx>취소</button></div>` : ''; }
 function kcThread() {
-  const M = kcMsgs().slice(-150); if (!M.length) return `<div class="empty" style="padding:30px 10px">${esc(CN())}와 주고받은 글이 아직 없습니다.<br>아래에 적어 보내면 ${esc(CN())} 사무실 화면에 바로 뜹니다.</div>`;
+  const M = kcMsgs().slice(-150); const seenUs = S.logs.filter(u => u.by === 'us' && u.kind === 'st' && u.stage === 'chat_seen' && u.k === 'chat' && u.part === 'gs').reduce((m, u) => Math.max(m, tOf(u)), 0); const byId = {}; kcMsgs().forEach(x => { if (x.id) byId[x.id] = x; }); if (!M.length) return `<div class="empty" style="padding:30px 10px">${esc(CN())}와 주고받은 글이 아직 없습니다.<br>아래에 적어 보내면 ${esc(CN())} 사무실 화면에 바로 뜹니다.</div>`;
   let lastDay = '';
   return M.map(l => { const t = tOf(l); const d = new Date(t); const day = (d.getMonth() + 1) + '월 ' + d.getDate() + '일'; const sep = day !== lastDay ? `<div class="kc-day"><span>${esc(day)}</span></div>` : ''; lastDay = day;
     const me = l.by === 'vendor'; const hm = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
-    return sep + `<div class="kc-m ${me ? 'me' : 'us'}"><div class="kc-b">${esc(String(l.note || ''))}</div><div class="kc-meta">${me ? '나' : esc(CN())} · ${hm}${l.__local ? ' · 보내는 중' : ''}${me && !l.__local ? ` · <button type="button" class="kc-x" data-kcmx="${esc(l.id)}">보내기 취소</button>` : ''}</div></div>`; }).join('');
+    /* hotfix616(대표 10/8): 누가 썼는지 짧게 (현일텍스는 보낸 사람 이름) · 답장 */
+    const rid = String(l.chip || '').startsWith('re:') ? String(l.chip).slice(3) : ''; const rt = rid ? (byId[rid] || null) : null;
+    const quote = rid ? `<div class="kc-re">↩ ${rt ? esc(kcWho(rt)) + ': ' + esc(String(rt.note || '').slice(0, 40)) : '답장'}</div>` : '';
+    return sep + `<div class="kc-m ${me ? 'me' : 'us'}">${quote}<div class="kc-b">${esc(String(l.note || ''))}</div><div class="kc-meta">${esc(kcWho(l))} · ${hm}${l.__local ? ' · 보내는 중' : (me ? (seenUs >= t ? ' · <b class="kc-rd">읽음</b>' : ' · <b class="kc-ur">안 읽음</b>') : '')}${!l.__local ? ` · <button type="button" class="kc-rp" data-kcrp="${esc(l.id)}">답장</button>` : ''}${me && !l.__local ? ` · <button type="button" class="kc-x" data-kcmx="${esc(l.id)}">보내기 취소</button>` : ''}</div></div>`; }).join('');
 }
 function kChat() {
   const th = document.getElementById('kc-th'); const bar = document.getElementById('kc-bar');
@@ -740,14 +747,17 @@ function kChat() {
   if (th && bar) { const b = atB(); th.innerHTML = kcThread(); if (b) window.scrollTo(0, document.body.scrollHeight); kcSeenSend(); return; }   /* 적는 중이면 글 칸은 그대로 */
   $('list').innerHTML = `<div class="kc-wrap"><div class="kc-top">${esc(CN())}와 대화<small>보내면 ${esc(CN())} 사무실 화면에 바로 뜹니다 · ${esc(CN())} 글이 오면 휴대폰이 울립니다</small></div><div id="kc-th">${kcThread()}</div></div>`;
   let b2 = document.getElementById('kc-bar'); if (!b2) { b2 = document.createElement('div'); b2.id = 'kc-bar'; b2.className = 'kc-bar'; document.body.appendChild(b2); }
-  b2.innerHTML = `<div class="kc-q">${KC_Q.map(q => `<button type="button" data-kcq>${esc(q)}</button>`).join('')}</div><div class="kc-row"><textarea id="kc-in" rows="1" maxlength="300" placeholder="${esc(CN())}에 보낼 글">${esc(S.kcDraft || '')}</textarea><button type="button" id="kc-send">보내기</button></div>`;
+  b2.innerHTML = `<div class="kc-q">${KC_Q.map(q => `<button type="button" data-kcq>${esc(q)}</button>`).join('')}</div><div id="kc-rb"></div><div class="kc-row"><textarea id="kc-in" rows="1" maxlength="300" placeholder="${esc(CN())}에 보낼 글">${esc(S.kcDraft || '')}</textarea><button type="button" id="kc-send">보내기</button></div>`;
   const i = $('kc-in'); i.addEventListener('input', () => { S.kcDraft = i.value; i.style.height = 'auto'; i.style.height = Math.min(96, i.scrollHeight) + 'px'; });
   b2.querySelectorAll('[data-kcq]').forEach(b => b.addEventListener('click', () => { i.value = (i.value ? i.value.trim() + ' ' : '') + b.textContent; S.kcDraft = i.value; i.focus(); }));
   $('kc-send').addEventListener('click', async () => { const t = String(i.value || '').trim(); if (!t) { i.focus(); return; } const sb = $('kc-send'); sb.disabled = true;
-    const ok = await put({ k: 'chat', no: '' }, { kind: 'issue', part: 'gs', issue: KC_ISSUE, note: t.slice(0, 300) }); sb.disabled = false;
-    if (ok) { S.kcDraft = ''; i.value = ''; i.style.height = 'auto'; const th2 = document.getElementById('kc-th'); if (th2) th2.innerHTML = kcThread(); window.scrollTo(0, document.body.scrollHeight); } });
-  window.scrollTo(0, document.body.scrollHeight); kcSeenSend();
+    const rr = S.kcReply; const ok = await put({ k: 'chat', no: '' }, Object.assign({ kind: 'issue', part: 'gs', issue: KC_ISSUE, note: t.slice(0, 300) }, rr ? { chip: 're:' + rr.id } : {})); sb.disabled = false;
+    if (ok) { S.kcReply = null; kcRB(); S.kcDraft = ''; i.value = ''; i.style.height = 'auto'; const th2 = document.getElementById('kc-th'); if (th2) th2.innerHTML = kcThread(); window.scrollTo(0, document.body.scrollHeight); } });
+  kcRB(); window.scrollTo(0, document.body.scrollHeight); kcSeenSend();
 }
+/* hotfix616: [답장] — 그 글을 글 칸 위에 띄우고 보내면 그 글에 대한 답장으로 */
+document.addEventListener('click', e => { const b = e.target.closest && e.target.closest('[data-kcrp]'); if (b) { const l = kcMsgs().find(x => x.id === b.dataset.kcrp); if (!l) return; S.kcReply = { id: l.id, who: kcWho(l), note: l.note || '' }; kcRB(); const i = document.getElementById('kc-in'); if (i) i.focus(); return; }
+  const c = e.target.closest && e.target.closest('[data-kcrpx]'); if (c) { S.kcReply = null; kcRB(); } });
 document.addEventListener('click', async e => { const b = e.target.closest && e.target.closest('[data-kcmx]'); if (!b) return; const l = kcMsgs().find(x => x.id === b.dataset.kcmx); if (!l) return;
   if (!confirm('이 글을 보내기 취소할까요? ' + CN() + ' 화면에서도 사라집니다.')) return; b.disabled = true; if (await put({ k: 'chat', no: '' }, { kind: 'cancel', part: 'gs', ref: l.id })) { toast('보내기 취소했습니다'); render(); } else b.disabled = false; });
 /* ===== hotfix614(대표 10/7): ① [재고] 줄 [출고] — 의뢰서 없이 공장이 먼저 보냄 (보낸 곳 · 절 · kg · 송장 사진 · 메모) → 현일텍스가 확인하면 재고에서 빠짐
