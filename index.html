@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="FABIWOS">
 <meta name="mobile-web-app-capable" content="yes">
-<title>FABIWOS v2.53 hotfix614</title>
+<title>FABIWOS v2.53 hotfix615</title>
 
 <!-- PWA Manifest (인라인 data URL) -->
 <script>
@@ -6845,6 +6845,12 @@
   html body td.col-act-complete > .dash-color-redye-mark-btn:hover { background: #c2410c !important; color: #fff !important; border-color: #c2410c !important; }
 </style>
 
+<style id="hf615-two">
+  /* hotfix615: 규격 이상 · 불량 + 새 차수 QC 대기 — 두 단추를 위아래로 같은 폭 */
+  html body td.hw615 > .dash-action-btn { display: flex !important; width: 100%; min-width: 0 !important; margin: 3px 0 !important; justify-content: center; }
+  html body td.hw615 > .qc-pending-btn { background: #fff; color: #1f2937; border: 1px solid #cbd5e1; }
+</style>
+
 <style id="hf480-kf">
   /* hotfix480(대표 지적 9/25): [품목(생지) 코드] 표 — 좌우 스크롤 없게. 파생 품목 칸 단추는 두 줄([원래 생지 설정] 위 · [파생 품목 걸기] 아래) */
   html body .kf-table .kf-gbtns { display: flex; flex-direction: column; align-items: center; gap: 3px; margin-top: 3px; }
@@ -8480,7 +8486,10 @@ const __wrappedSetDoc = __withWriteTimeout(setDoc);
 const __wrappedDeleteDoc = __withWriteTimeout(deleteDoc);
 
 // hotfix483: 최고관리자가 [다른 사람 화면으로 보기] 중이면 쓰기를 모두 막는다 (보기 전용)
-const __vaGuard = f => function () { if (window.__hwViewAs) return Promise.reject(new Error('다른 사람 화면으로 보는 중 — 보기 전용이라 저장하지 않습니다')); return f.apply(this, arguments); };
+const __vaGuard0 = f => function () { if (window.__hwViewAs) return Promise.reject(new Error('다른 사람 화면으로 보는 중 — 보기 전용이라 저장하지 않습니다')); return f.apply(this, arguments); };
+/* hotfix615: 쓰기가 성공하면 팝업 가드에 알림 (저장 뒤 "입력하던 내용이 있습니다"가 뜨지 않게) — 실패 · 지연이면 알리지 않음 */
+const __okHook615 = f => function () { const a0 = arguments[0], t0 = Date.now(); const r = f.apply(this, arguments); try { if (r && typeof r.then === 'function') r.then(function () { try { if (typeof window.__hwWriteOk === 'function') window.__hwWriteOk(a0, t0); } catch (_) {} }, function () {}); } catch (_) {} return r; };
+const __vaGuard = f => __okHook615(__vaGuard0(f));
 const __vaBatch = function () { const b = writeBatch.apply(this, arguments); if (b && typeof b.commit === 'function') { const c = b.commit.bind(b); b.commit = __vaGuard(c); } return b; };
 window.firebase = { auth, db, provider, signInWithPopup, signOut, onAuthStateChanged, collection, addDoc: __vaGuard(__wrappedAddDoc), updateDoc: __vaGuard(__wrappedUpdateDoc), deleteDoc: __vaGuard(__wrappedDeleteDoc), doc, getDoc, getDocs, setDoc: __vaGuard(__wrappedSetDoc), deleteField, writeBatch: __vaBatch, query, orderBy, onSnapshot, serverTimestamp, runTransaction: __vaGuard(runTransaction), C };
 window.__hwFbCfg = firebaseConfig;   /* hotfix498: 가공소 계정 만들기(두 번째 앱)용 */
@@ -12212,6 +12221,16 @@ function getActiveReceipt(c) {
   return c.receipts[c.receipts.length - 1];
 }
 
+/* hotfix615(직원 피드백 10/8): 앞 차수가 규격 이상 · 불량이어도, 새로 입고된 차수(검수 전 pending)는 직원 QC 할 일이다.
+   그 차수를 돌려준다 (규격 이상 보류 차수는 빼고 · 가장 최근 것). 없으면 null */
+function qcWaitReceipt(c) {
+  if (!c) return null;
+  migrateColorReceipts(c);
+  if (!Array.isArray(c.receipts)) return null;
+  for (let i = c.receipts.length - 1; i >= 0; i--) { const r = c.receipts[i]; if (r && !r.shrink_hold && (r.qc_status || 'none') === 'pending') return r; }
+  return null;
+}
+
 function getActiveReceiptIndex(c) {
   migrateColorReceipts(c);
   if (!Array.isArray(c.receipts) || c.receipts.length === 0) return -1;
@@ -12298,24 +12317,62 @@ function modalFieldSkip(el) {
   if (el.type === 'search' || el.type === 'button' || el.type === 'submit' || el.type === 'hidden') return true;
   return MODAL_NODIRTY_RE.test(String(el.id || '') + ' ' + String(el.name || '') + ' ' + String(el.className || ''));
 }
+/* hotfix615(직원 피드백 10/8 "저장이 완료됐는데 왜 '입력하던 내용이 있습니다'가 뜨나"):
+   전에는 팝업 안 입력칸 전체를 글자 한 줄로 찍어 비교 → 팝업 안에서 [입고 입력] 같은 저장을 하면 입력 줄이 사라지고 표가 다시 그려져
+   "달라졌다"로 보고 닫을 때마다 물었다. 이제는 칸 하나하나를 기억해 비교한다.
+   · 사람이 고친 칸이 저장 뒤 사라졌으면(저장하고 표를 다시 그림) → 안 물음
+   · 저장이 실패해 그 칸이 그대로 남아 있으면(같은 이름의 칸으로 다시 그려져도) → 꼭 물음
+   · 팝업 안 단추를 누른 뒤 실제 저장(서버 쓰기)이 성공하면 → 지금 값을 새 기준으로 삼음 (저장 뒤에도 같은 칸이 남는 창)
+   · 바꾸자마자 창이 다시 그려지는 칸(구분 거르기 · 차례 · 보기 바꾸기)은 입력이 아니라 보기 단추로 보고 뺀다 */
+function modalFieldVal(el) { return (el.type === 'checkbox' || el.type === 'radio') ? (el.checked ? '1' : '0') : String(el.value == null ? '' : el.value); }
 function modalSnapshot(modal) {
-  if (!modal || !modal.querySelectorAll) return '';
-  const out = [];
-  modal.querySelectorAll('input, select, textarea').forEach(function (el, i) {
+  const S = { list: [], has: new WeakSet() };
+  if (!modal || !modal.querySelectorAll) return S;
+  modal.querySelectorAll('input, select, textarea').forEach(function (el) {
     if (modalFieldSkip(el)) return;
-    const v = (el.type === 'checkbox' || el.type === 'radio') ? (el.checked ? '1' : '0') : String(el.value == null ? '' : el.value);
-    out.push((el.id || el.name || el.type || 'f') + '#' + i + '=' + v);
+    S.list.push({ el: el, id: el.id || '', v: modalFieldVal(el) }); S.has.add(el);
   });
-  return out.join('\u0001');
+  return S;
+}
+function modalSnapAdd(modal, el) {   // 기준을 찍은 뒤 새로 생긴 칸을 사람이 고치면 그 칸도 기준에 넣는다 (고치기 전 값으로)
+  const S = modal && modal.__hiwosSnap; if (!S || !S.has || !el || S.has.has(el) || modalFieldSkip(el)) return;
+  S.list.push({ el: el, id: el.id || '', v: (el.__hwOrig0 !== undefined) ? el.__hwOrig0 : '' }); S.has.add(el);
 }
 function modalIsDirty(modal) {
   if (!modal || !modal.__hiwosDirty) return false;
-  if (modal.__hiwosSnap == null) return true;   // 스냅샷이 없으면 옛 방식(손댔으면 묻기)
-  return modalSnapshot(modal) !== modal.__hiwosSnap;
+  const S = modal.__hiwosSnap;
+  if (S == null || modal.__hwForce) return true;   // 기준이 없거나 프로그램이 "고침"으로 표시한 창 — 옛 방식(손댔으면 묻기)
+  const view = modal.__hwViewIds || {};
+  for (let i = 0; i < S.list.length; i++) {
+    const e = S.list[i];
+    let cur = e.el;
+    if (!cur.isConnected || !modal.contains(cur)) {
+      if (!e.id || view[e.id]) continue;   // 사라진 칸 = 저장 · 취소로 닫힌 입력 줄
+      try { cur = modal.querySelector('#' + (window.CSS && CSS.escape ? CSS.escape(e.id) : e.id)); } catch (_) { cur = null; }
+      if (!cur || S.has.has(cur)) continue;   // 같은 이름 칸이 없음 · 따로 비교하는 칸
+    }
+    if (modalFieldSkip(cur) || view[cur.id]) continue;
+    if (modalFieldVal(cur) !== e.v) return true;
+  }
+  return false;
 }
-function modalMarkClean(modal) { if (modal) { modal.__hiwosDirty = false; modal.__downOnBackdrop = undefined; modal.__hiwosSnap = null; } }
-function modalMarkDirty(modal) { if (modal) { if (!modal.__hiwosDirty && modal.__hiwosSnap == null) modal.__hiwosSnap = ''; modal.__hiwosDirty = true; } }
-function modalTakeSnap(modal) { if (modal && !modal.__hiwosDirty) modal.__hiwosSnap = modalSnapshot(modal); }
+function modalMarkClean(modal) { if (modal) { modal.__hiwosDirty = false; modal.__downOnBackdrop = undefined; modal.__hiwosSnap = null; modal.__hwForce = false; modal.__hwViewIds = {}; } }
+function modalMarkDirty(modal) { if (modal) { if (modal.__hiwosSnap == null) modal.__hwForce = true; modal.__hiwosDirty = true; } }
+function modalTakeSnap(modal) { if (modal && !modal.__hiwosDirty) { modal.__hiwosSnap = modalSnapshot(modal); modal.__hwForce = false; } }
+// 저장이 성공했을 때 — 지금 값을 새 기준으로 (저장 뒤에도 같은 칸이 남는 창에서 다시 묻지 않게)
+function modalRebase(modal) { if (!modal) return; modal.__hiwosSnap = modalSnapshot(modal); modal.__hwForce = false; modal.__hiwosDirty = false; }
+window.__hwModalAct = null;
+// 서버 쓰기 성공 알림 (window.firebase 쓰기 함수가 부름) — 팝업 안 단추를 누르고 8초 안에 시작한 쓰기만 그 팝업의 저장으로 본다
+//   대화 · 가공소 기록(proc_log) · 앱 게시(proc_pub) · 개인 설정은 저장으로 보지 않는다 (다른 칸의 적던 글은 그대로 물음)
+window.__hwWriteOk = function (ref, t0) {
+  try {
+    const a = window.__hwModalAct; if (!a || !a.m || t0 < a.t || t0 - a.t > 8000) return;
+    const p = String((ref && (ref.path || (ref.parent && ref.parent.id) || ref.id)) || '');
+    if (/(proc_pub|proc_log|user_prefs|presence)/.test(p)) return;
+    if (!a.m.isConnected || !(a.m.classList.contains('show') || a.m.classList.contains('hiwos-modal-bg'))) return;
+    modalRebase(a.m);
+  } catch (_) {}
+};
 // hotfix398: 팝업 드래그 이동 — 머리띠를 잡고 끈다 (단추·입력칸 위에서는 안 끌린다)
 const MODAL_DRAG_HEAD_SEL = '.dash-modal-head, .claim-modal-header, .redye-modal-header, .shortage-modal-header, .qc-modal-header-info';
 function modalPanelOf(overlay, el) {
@@ -12341,9 +12398,29 @@ function installModalGuards() {
   ['input', 'change'].forEach(function (evt) {
     document.addEventListener(evt, function (e) {
       if (!e.isTrusted) return;
-      modalMarkDirty(modalOverlayOf(e.target));
+      const m = modalOverlayOf(e.target); if (!m) return;
+      if (m.__hiwosSnap && m.__hiwosSnap.has) modalSnapAdd(m, e.target); else if (m.__hiwosSnap == null) m.__hwForce = true;
+      m.__hiwosDirty = true;
+      // hotfix615: 바꾸자마자 창이 다시 그려진 칸 = 거르기 · 차례 같은 보기 단추 → 비교에서 뺀다
+      const el = e.target;
+      if (el && el.id) setTimeout(function () { if (!el.isConnected) { m.__hwViewIds = m.__hwViewIds || {}; m.__hwViewIds[el.id] = true; } }, 80);
     }, true);
   });
+  // hotfix615: 사람이 칸에 손대기 직전 값을 칸마다 기억 (나중에 생긴 칸의 기준값)
+  ['focusin', 'mousedown', 'keydown'].forEach(function (evt) {
+    document.addEventListener(evt, function (e) {
+      const el = e.target;
+      if (el && el.matches && el.matches('input, select, textarea') && el.__hwOrig0 === undefined) el.__hwOrig0 = modalFieldVal(el);
+    }, true);
+  });
+  // hotfix615: 팝업 안 단추를 누른 때를 기억 (그 뒤 저장 성공이면 기준을 새로 잡음)
+  document.addEventListener('click', function (e) {
+    if (!e.isTrusted) return;
+    const m = modalOverlayOf(e.target); if (!m || e.target === m) return;
+    const b = e.target.closest && e.target.closest('button, [role="button"], .dash-action-btn, a');
+    if (!b || (b.closest && b.closest('.dash-modal-close'))) return;
+    window.__hwModalAct = { m: m, t: Date.now() };
+  }, true);
 
   // 마우스 누름이 백드롭(팝업 바깥 어두운 곳)에서 시작했는지 기록
   document.addEventListener('mousedown', function (e) {
@@ -29004,6 +29081,8 @@ function validateBlendSum(blends, label) {
     if (c.fix_active === true && c.fix_returned === true) return 'worker';
     // 담당자: 수정중(아직 작업장) / 완료보고 대기 / 규격이상·불량
     if (c.fix_active === true) return 'manager';            // 수정중 n/n
+    // hotfix615: 앞 차수가 규격 이상 · 불량 · 확인 대기여도 새 차수 QC 가 남았으면 직원 할 일 (입고 저장 뒤 위로 안 올라가던 것)
+    { const _q = getColorQcStatus(wo, colorIdx); if ((_q === 'shrink' || _q === 'defect' || _q === 'pending' || _q === 'done' || _q === 'accept') && qcWaitReceipt(c)) return 'worker'; }
     if (hasCeoConfirmPending(c)) return 'manager';          // 확인 대기(완료 보고)
     const qs = getColorQcStatus(wo, colorIdx);
     if (qs === 'shrink' || qs === 'defect') return 'manager';
@@ -29747,6 +29826,9 @@ function validateBlendSum(blends, label) {
           else completeCell = isFirstRow ? `<td class="col-action col-act-complete"${rs}>${isAdminUser() ? `<button class="dash-action-btn dash-complete-btn" data-id="${wo.id}">완료</button>` : ''}</td>` : '';
         }
         
+        // hotfix615: 규격 이상 · 불량 컬러에 새 차수 입고가 있으면 [QC 대기 N차]를 맨 앞에 (직원이 바로 검수)
+        if (isFinishWithColor) { const _c615 = wo.colors[colorIdx]; const _q615 = getColorQcStatus(wo, colorIdx); const _wr615 = (_c615 && !(_c615.fix_active === true) && (_q615 === 'shrink' || _q615 === 'defect')) ? qcWaitReceipt(_c615) : null;
+          if (_wr615 && completeCell) completeCell = completeCell.replace(/^(<td[^>]*>)([\s\S]*)(<\/td>)\s*$/, (_m, a1, a2, a3) => a1.replace('class="col-action', 'class="hw615 col-action') + `<button class="dash-action-btn qc-pending-btn" data-id="${wo.id}" data-color-idx="${colorIdx}" data-qc-action="open" data-receipt-no="${_wr615.receipt_no}" title="${_wr615.receipt_no}차 입고분 QC 대기 — 앞 차수의 규격 이상 · 불량은 따로 대표 확인">QC 대기 <span style="font-size:9px;color:#fff;background:#2563eb;padding:1px 5px;border-radius:8px;font-weight:700;">${_wr615.receipt_no}차</span></button>` + (() => { const _hr = (_c615.receipts || []).find(r => r && (r.shrink_hold || r.qc_status === 'defect')); return _hr ? a2.replace(/>\d+차<\/span>/, '>' + _hr.receipt_no + '차</span>') : a2; })() + a3); }
         // 삭제 (의뢰서 단위, rowspan 첫 행에만)
         const deleteCell = isFirstRow ? `<td class="col-action col-act-delete"${rs}><button class="dash-action-btn danger dash-delete-btn" data-id="${wo.id}">삭제</button></td>` : '';
         
@@ -33648,6 +33730,9 @@ function validateBlendSum(blends, label) {
         completeCell = `<td class="col-action"><button class="dash-action-btn dash-complete-btn" data-id="${wo.id}">완료</button></td>`;
       }
       
+      // hotfix615: 규격 이상 · 불량 컬러에 새 차수 입고가 있으면 [QC 대기 N차]를 맨 앞에
+      if (wo.type === '염색가공' && colorIdx >= 0 && wo.colors && wo.colors[colorIdx]) { const _c615 = wo.colors[colorIdx]; const _q615 = getColorQcStatus(wo, colorIdx); const _wr615 = (!(_c615.fix_active === true) && (_q615 === 'shrink' || _q615 === 'defect')) ? qcWaitReceipt(_c615) : null;
+        if (_wr615 && completeCell) completeCell = completeCell.replace(/^(<td[^>]*>)([\s\S]*)(<\/td>)\s*$/, (_m, a1, a2, a3) => a1.replace('class="col-action', 'class="hw615 col-action') + `<button class="dash-action-btn qc-pending-btn" data-id="${wo.id}" data-color-idx="${colorIdx}" data-qc-action="open" data-receipt-no="${_wr615.receipt_no}" title="${_wr615.receipt_no}차 입고분 QC 대기 — 앞 차수의 규격 이상 · 불량은 따로 대표 확인">QC 대기 <span style="font-size:9px;color:#fff;background:#2563eb;padding:1px 5px;border-radius:8px;font-weight:700;">${_wr615.receipt_no}차</span></button>` + (() => { const _hr = (_c615.receipts || []).find(r => r && (r.shrink_hold || r.qc_status === 'defect')); return _hr ? a2.replace(/>\d+차<\/span>/, '>' + _hr.receipt_no + '차</span>') : a2; })() + a3); }
       const deleteCell = isFirstRow 
         ? `<td class="col-action col-act-delete" rowspan="${totalRows}"><button class="dash-action-btn danger dash-delete-btn" data-id="${wo.id}">삭제</button></td>` 
         : '';
@@ -56345,6 +56430,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
   /* hotfix596(대표 10/3 점검): 현장 QC 는 컬러를 '몇 번째'로 기억 — 화면을 열어 둔 사이 PC 에서 컬러 줄이 빠지거나 순서가 바뀌면 엉뚱한 컬러에 적힐 수 있었음 → 저장 직전 이름이 같은지 확인 */
   function hwQcIdxGuard(woId, i, nm) { const w = (state.allWorkOrders || []).find(z => z && z.id === woId); const c = w && Array.isArray(w.colors) ? w.colors[i] : null; if (!c || String(c.name || '').trim() !== String(nm || '').trim()) { const e = new Error('그 사이 PC 에서 컬러 줄이 바뀌었습니다 — 목록을 다시 열어 주십시오 (엉뚱한 컬러에 적지 않도록 멈춤)'); e.__hw596 = true; throw e; } }
   if (typeof window !== 'undefined') window.__hwQcIdxGuard = hwQcIdxGuard;
+  if (typeof window !== 'undefined') window.__hwQcmItems = () => hwQcmItems();   /* hotfix615 검사용 창구 */
   function hwQcmNum(v) { return hwNumNorm(v); }   /* hotfix598: 1,050 g/y 가 1.05 로 저장되던 것 · 전각 숫자 — 공통 숫자 읽기로 */
   function hwQcmItems() {
     const out = { rcv: [], qc: [], rep: [] }; const now = Date.now();
@@ -56358,6 +56444,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
           if (st === 'none' && !c.completed && !c.redye_transferred_to && !rs.length) out.rcv.push(Object.assign({ kind: 'first' }, base));
           if (rs.length && (c.shortage_status === 'pending' || c.shortage_status === 'expected') && hasUnresolvedShortage(c)) out.rcv.push(Object.assign({ kind: 'more', lackB: getUnresolvedShortageBody(c), lackR: getUnresolvedShortageRib(c) }, base));
           if (st === 'pending') { const ai = getActiveReceiptIndex(c); const r = ai >= 0 ? rs[ai] : null; if (r && (r.qc_status || 'none') === 'pending') out.qc.push(Object.assign({ r, rno: r.receipt_no }, base)); }
+          else if ((st === 'shrink' || st === 'defect') && !(c.fix_active === true)) { const r = qcWaitReceipt(c); if (r) out.qc.push(Object.assign({ r, rno: r.receipt_no }, base)); }   /* hotfix615: 앞 차수 규격 이상이어도 새 차수 검수 */
         }
         rs.forEach(r => { if (!r) return; const t = Date.parse(r.qc_done_at || r.shrink_hold_at || r.qc_pending_at || '') || 0;
           if (r.shrink_hold) out.rep.push(Object.assign({ r, rno: r.receipt_no, rep: 'hold', t }, base));
@@ -57794,6 +57881,29 @@ const sv600 = d => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" s
     // 모달 상태: 'list' (출고 내역 보기) | 'add' (새 출고 입력) | 'edit' (기존 출고 수정)
     let viewMode = 'list';
     let editIdx = -1;
+    /* hotfix615: 출고 대기 줄이 들어갔을 법한 직접 적은 출고 줄 (같은 품목 · 살아 있음 · 이동/로스/자동 줄 아님 · 절수가 대기 절 이상) — 날짜가 가까운 차례 */
+    const mgCands = (px) => {
+      if (!px || !gsPend(px)) return [];
+      const pj = parseFloat(px.jul) || 0, pt = Date.parse(px.date || '') || 0;
+      return shipments.map((sh, idx) => ({ sh, idx })).filter(o => mine(o.sh) && shLive(o.sh) && !isIn(o.sh) && o.sh.src !== 'gs' && o.sh.src !== 'loss' && o.sh.src !== 'kdone' && !o.sh.move && (parseFloat(o.sh.jul) || 0) >= pj)
+        .sort((a, b) => Math.abs((Date.parse(a.sh.date || '') || 0) - pt) - Math.abs((Date.parse(b.sh.date || '') || 0) - pt));
+    };
+    // 대기 줄들(pIdxs)을 출고 줄 t 에 들어간 것으로 — arr 를 고쳐 돌려준다 (arr[tIdx] 가 없으면 null)
+    const mgApply = (arr, pIdxs, tIdx) => {
+      const t = arr[tIdx]; if (!t) return null;
+      const at = new Date().toISOString(), by = (state.user && state.user.email) || '';
+      const tj = parseFloat(t.jul) || 0, tk = parseFloat(t.kg) || 0, kpj = tj > 0 && tk > 0 ? tk / tj : avgKgPerJul;
+      let sj = 0, sk = 0; const names = [];
+      pIdxs.forEach(i => { const x = arr[i]; if (!x || !gsPend(x)) return; const j = parseFloat(x.jul) || 0; const k = Math.round(j * kpj * 10) / 10; sj += j; sk += k;
+        names.push((x.gs_number || '생지출고') + ' ' + j + '절');
+        arr[i] = Object.assign({}, x, { kg: k, kg_manual: true, conf: true, conf_at: at, conf_by: by, conf_via: 'merge', ord_jul: x.ord_jul || j, merged_to: ((t.date || '') + ' ' + (t.memo || '')).trim() }); });
+      if (sj > tj + 1e-6) return null;
+      const nj = Math.round((tj - sj) * 10) / 10, nk = Math.max(0, Math.round((tk - sk) * 10) / 10);
+      const note = ' [생지출고 ' + names.join(', ') + ' 포함 → 따로 뺌]';
+      arr[tIdx] = Object.assign({}, t, { jul: nj, kg: nk, memo: String(t.memo || '') + note, merged_gs: (t.merged_gs || []).concat(names), edited_at: at, edited_by: by },
+        nj <= 0 ? { void: true, void_by: by, void_at: at, void_why: '생지출고 줄로 모두 옮김' } : {});
+      return { arr, sj, names };
+    };
     
     const renderModal = () => {
       let body = `<div style="padding:20px;font-family:var(--font-gothic);">
@@ -57896,7 +58006,7 @@ const sv600 = d => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" s
                     + (app && !pend ? `<button class="dash-action-btn" data-gs-inv="${escapeHtml(g.id)}" style="${bs}color:#b45309;border-color:#fcd34d;" title="편직공장 앱에 송장 사진을 (다시) 보내 달라고">${ph ? '송장 다시 요청' : '송장 요청'}</button> ` : '')
                     + (app ? `<button class="dash-action-btn" data-gs-msg="${escapeHtml(g.id)}" style="${bs}" title="편직공장 앱에 글 보내기 (휴대폰이 울림)">메시지</button> ` : '')
                     + '<br>'; })()}
-                ${viewMode === 'list' && pend ? `<button class="dash-action-btn" data-conf-start="${idx}" style="background:#059669;color:#fff;border-color:#047857;font-weight:800;" title="편직공장이 보낸 절 · 송장 kg 을 넣습니다 (팩스 · 카톡 송장을 보고)">출고 확인</button>${sh.gs_rest ? ` <button class="dash-action-btn danger" data-rest-cxl="${idx}" title="남은 절을 더 안 받습니다 — 재고로 돌아옵니다">남은 것 취소</button>` : ''}` : ''}
+                ${viewMode === 'list' && pend ? `<button class="dash-action-btn" data-conf-start="${idx}" style="background:#059669;color:#fff;border-color:#047857;font-weight:800;" title="편직공장이 보낸 절 · 송장 kg 을 넣습니다 (팩스 · 카톡 송장을 보고)">출고 확인</button>${mgCands(sh).length ? ` <button class="dash-action-btn" data-mg-start="${idx}" style="background:#fff;color:#1e40af;border-color:#93c5fd;font-weight:800;" title="편직공장이 이 절수를 따로 안 보내고 다른 출고(직접 적은 일괄 출고)에 함께 보냈을 때 — 그 줄에서 이만큼 빼고 이 줄을 출고 확인으로 (두 번 빠진 재고가 바로잡힘)">일괄 출고에 들어감</button>` : ''}${sh.gs_rest ? ` <button class="dash-action-btn danger" data-rest-cxl="${idx}" title="남은 절을 더 안 받습니다 — 재고로 돌아옵니다">남은 것 취소</button>` : ''}` : ''}
                 ${viewMode === 'list' && !dead && !(pend && sh.gs_rest) ? `
                   ${stamped || pend ? '' : `<button class="dash-action-btn" data-start-edit="${idx}">수정</button>`}
                   ${auto ? `<button class="dash-action-btn danger" data-void-ship="${idx}" title="자동 출고 줄은 지우지 않고 취소됨으로 남깁니다 (재고는 돌아옴)">취소</button>` : stamped ? (isOwnerUser() ? `<button class="dash-action-btn danger" data-void-ship="${idx}" title="지우지 않고 취소됨으로 남깁니다 (양쪽 재고가 원래대로)">되돌리기</button>` : '<span style="font-size:10.5px;color:#9ca3af;">최고관리자</span>') : `<button class="dash-action-btn danger" data-del-ship="${idx}">삭제</button>`}
@@ -57910,6 +58020,20 @@ const sv600 = d => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" s
       body += `</tbody></table>`;
       
       // hotfix416: 다른 공장으로 이동 (공장간이동 기획서 v2 길 ③ — 출고 줄에 받는 곳 + move 표시, 양쪽 미리 보기)
+      /* hotfix615(직원 피드백 10/8 노블와플): 생지출고의뢰서의 출고 대기 줄이, 편직공장이 한꺼번에 보낸 출고(직접 적은 줄)에 이미 들어 있을 때
+         → [일괄 출고에 들어감] : 대기 줄은 출고 확인(그 일괄 줄의 kg/절로 kg 계산) · 일괄 줄은 그만큼 뺌 → 두 번 빠지던 재고가 바로잡힘 */
+      if (viewMode === 'merge' && shipments[editIdx]) {
+        const px = shipments[editIdx]; const pj = parseFloat(px.jul) || 0; const C2 = mgCands(px);
+        body += `<div style="background:#eff6ff;padding:14px;border-radius:4px;border:2px solid #1e40af;">
+          <div style="font-size:13px;font-weight:800;margin-bottom:6px;color:#1e40af;">출고 대기 ${pj}절 (${escapeHtml(px.gs_number || '생지출고')}) — 어느 출고에 함께 나갔습니까?</div>
+          <div style="font-size:12px;color:#334155;line-height:1.6;margin-bottom:10px;">고른 출고 줄에서 ${pj}절을 빼고, 이 줄은 <b>출고 확인</b>이 됩니다. 나간 절수 합계는 그대로이고, 두 번 빠져 있던 ${pj}절이 재고로 돌아옵니다 (예상 재고 ${remainJul}절 → <b>${remainJul + pj}절</b>).</div>
+          ${C2.map((o, n) => `<label style="display:flex;gap:10px;align-items:center;padding:7px 10px;border:1px solid #bfdbfe;border-radius:6px;margin-bottom:6px;background:#fff;cursor:pointer;font-size:12.5px;"><input type="radio" name="mg-pick" value="${o.idx}"${n === 0 ? ' checked' : ''}><b>${o.sh.date ? new Date(o.sh.date).toLocaleDateString('ko-KR') : '-'}</b> 출고 <b>${o.sh.jul}절</b> · ${(parseFloat(o.sh.kg) || 0).toFixed(1)}kg · ${escapeHtml(o.sh.memo || '-')} <span style="color:#1e40af;font-weight:800;">→ ${Math.round(((parseFloat(o.sh.jul) || 0) - pj) * 10) / 10}절</span></label>`).join('')}
+          <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px;">
+            <button class="dash-action-btn" id="ship-cancel-btn" style="padding:8px 16px;">취소</button>
+            <button class="dash-action-btn" id="mg-submit-btn" style="padding:8px 18px;font-size:13px;background:#1e40af;color:#fff;font-weight:700;">일괄 출고에 넣기</button>
+          </div>
+        </div>`;
+      }
       if (viewMode === 'move') {
         const facs = knitFactoryList().filter(v => vendorKey(v) !== vendorKey(wo.recipient) && (window.__hwGs ? window.__hwGs.normV(v) !== window.__hwGs.normV(wo.recipient) : true));   /* hotfix587 */
         body += `<div style="background:#eff6ff;padding:14px;border-radius:4px;border:2px solid #1e40af;">
@@ -57949,6 +58073,11 @@ const sv600 = d => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" s
             <button class="dash-action-btn" id="ship-submit-btn" style="padding:8px 18px;font-size:13px;background:${accent};color:#fff;font-weight:700;">✓ ${isAddIn ? '입고' : '출고'} 입력</button>
           </div>
           <div style="font-size:11px;color:#888;margin-top:10px;">※ 절수만 입력하면 평균 kg/절(${avgKgPerJul.toFixed(1)})로 자동 계산됩니다.</div>
+          ${(() => { if (isAddIn) return ''; const P0 = shipments.map((sh, idx) => ({ sh, idx })).filter(o => mine(o.sh) && gsPend(o.sh)); if (!P0.length) return '';   /* hotfix615 */
+            return `<div style="margin-top:10px;padding:10px 12px;background:#fff7ed;border:1px solid #fdba74;border-radius:6px;font-size:12px;line-height:1.6;color:#7c2d12;">
+              <b>출고 대기 줄이 있습니다.</b> 이번 출고에 함께 나간 것이면 체크하십시오 — 그 줄은 <b>출고 확인</b>이 되고, 위에 적은 절수에서 그만큼 뺀 나머지만 이 줄로 적습니다 (두 번 빠지지 않게).<br>
+              ${P0.map(o => `<label style="display:inline-flex;gap:6px;align-items:center;margin:4px 14px 0 0;cursor:pointer;font-weight:700;"><input type="checkbox" class="ns-mg" data-nodirty value="${o.idx}"> ${o.sh.date ? new Date(o.sh.date).toLocaleDateString('ko-KR') : ''} ${escapeHtml(o.sh.gs_number || '생지출고')} <span style="color:#c2410c;">${o.sh.jul}절</span></label>`).join('')}
+            </div>`; })()}
         </div>`;
       }
       
@@ -58012,14 +58141,18 @@ const sv600 = d => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" s
           if (!date) { toast('날짜를 입력하세요', 'error'); return; }
           if (!jul) { toast('절수를 입력하세요', 'error'); return; }
           if (!kg) kg = jul * avgKgPerJul;
-          const newShipments = [...shipments, { date, dir: addDir, jul, kg, memo, item_idx: _ii, recorded_at: new Date().toISOString(), recorded_by: state.user?.email || '' }];
+          let newShipments = [...shipments, { date, dir: addDir, jul, kg, memo, item_idx: _ii, recorded_at: new Date().toISOString(), recorded_by: state.user?.email || '' }];
+          /* hotfix615: 체크한 출고 대기 줄은 이 출고에 함께 나간 것 — 출고 확인 + 이 줄에서 뺌 */
+          const _mg = addDir === 'out' ? [...document.querySelectorAll('.ns-mg:checked')].map(x => parseInt(x.value)) : [];
+          let _mgR = null;
+          if (_mg.length) { _mgR = mgApply(newShipments, _mg, newShipments.length - 1); if (!_mgR) { toast('적은 절수가 체크한 출고 대기 절수 합계보다 적습니다', 'error'); return; } newShipments = _mgR.arr; }
           try {
             await updateDoc(doc(db, C('workorders'), woId), {
               greige_shipments: newShipments,
               updated_at: serverTimestamp(),
               updated_by: state.user.email
             });
-            toast(`✓ ${addDir === 'in' ? '입고' : '출고'} ${jul}절 / ${kg.toFixed(1)}kg 입력됨`, 'success');
+            toast(_mgR ? `✓ 출고 ${jul}절 — 출고 대기 ${_mgR.sj}절은 출고 확인, 이 줄은 ${Math.round((jul - _mgR.sj) * 10) / 10}절로 적었습니다` : `✓ ${addDir === 'in' ? '입고' : '출고'} ${jul}절 / ${kg.toFixed(1)}kg 입력됨`, 'success');
             // 모달 새로고침 (state.allWorkOrders가 onSnapshot으로 자동 업데이트되니 잠깐 기다림)
             setTimeout(() => openShipmentModal(woId, _ii), 200);
           } catch (e) { toast('실패: ' + e.message, 'error'); }
@@ -58063,6 +58196,22 @@ const sv600 = d => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" s
         });
       });
       
+      // hotfix615: [일괄 출고에 들어감]
+      document.querySelectorAll('[data-mg-start]').forEach(b => b.addEventListener('click', () => { editIdx = parseInt(b.dataset.mgStart); viewMode = 'merge'; renderModal(); setTimeout(() => { const x = document.getElementById('mg-submit-btn'); if (x && x.scrollIntoView) x.scrollIntoView({ block: 'nearest' }); }, 60); }));
+      document.getElementById('mg-submit-btn')?.addEventListener('click', async () => {
+        const b = document.getElementById('mg-submit-btn'); const pick = document.querySelector('input[name="mg-pick"]:checked');
+        if (!pick) { toast('함께 나간 출고 줄을 고르십시오', 'error'); return; }
+        b.disabled = true; const px = shipments[editIdx] || {};
+        const r = mgApply(shipments.slice(), [editIdx], parseInt(pick.value));
+        if (!r) { toast('고른 출고 줄의 절수가 대기 절수보다 적습니다', 'error'); b.disabled = false; return; }
+        try {
+          await updateDoc(doc(db, C('workorders'), woId), { greige_shipments: r.arr, updated_at: serverTimestamp(), updated_by: state.user.email });
+          wo.greige_shipments = r.arr; try { await knitUseRefresh(wo); } catch (_) {}
+          toast(`출고 대기 ${r.sj}절을 일괄 출고에 넣었습니다 — 출고 확인 · 재고 ${r.sj}절 돌아옴`, 'success');
+          try { const g = state.allWorkOrders.find(w => w && w.id === px.gs_id); if (g && gsHasApp(g)) await gsTellVendor(g, `${g.wo_number || ''} ${r.sj}절 — 함께 보내신 출고에 들어 있는 것으로 확인했습니다 (현일텍스)`, 'note'); } catch (_) {}
+          setTimeout(() => openShipmentModal(woId, _ii), 200);
+        } catch (e) { toast('실패: ' + e.message, 'error'); b.disabled = false; }
+      });
       // hotfix562: [출고 확인] · [남은 것 취소]
       document.querySelectorAll('[data-conf-start]').forEach(b => b.addEventListener('click', () => { editIdx = parseInt(b.dataset.confStart); viewMode = 'conf'; renderModal(); setTimeout(() => { const k = document.getElementById('conf-kg-' + editIdx); if (k) k.focus(); }, 50); }));
       document.querySelectorAll('[data-conf-save]').forEach(b => b.addEventListener('click', async () => {
@@ -58955,7 +59104,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix614';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
+  const VERSION = 'v2.53 hotfix615';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
