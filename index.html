@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="FABIWOS">
 <meta name="mobile-web-app-capable" content="yes">
-<title>FABIWOS v2.53 hotfix617</title>
+<title>FABIWOS v2.53 hotfix618</title>
 
 <!-- PWA Manifest (인라인 data URL) -->
 <script>
@@ -19374,6 +19374,13 @@ function specGreigeColors(fid) {
     }
     return out;
   }
+  /* hotfix618: 빈 생지 — 편직 값 · 사종 비율이 없고, 어느 의뢰서 · 파생 품목에도 안 쓰인 것 */
+  function specIsBlank(fid) { try { const f = String(fid || '').trim(); if (!f) return false; const s = itemByFid(f); if (!s) return false;
+    const KF = (state.knitFee && typeof state.knitFee === 'object') ? state.knitFee[f] : null; if (KF && Object.keys(KF).some(v => v && KF[v] && Object.keys(KF[v]).some(k => KF[v][k] !== '' && KF[v][k] != null))) return false;
+    if (state.knitBlend && state.knitBlend[f]) return false; if (s.width || s.gy || s.blend) return false;
+    const nm = String(s.name || '').trim(); if ((state.allWorkOrders || []).some(w => w && !w.deleted && ((w.items || []).some(it => it && (it.item_fid === f || String(it.item || '').trim() === nm)) || [w.body, w.rib].some(p => p && (p.item_fid === f || String(p.item || '').trim() === nm))))) return false;
+    if (getFabricSpecs().some(x => x && specFid(x) !== f && (specPrimaryGreige(specFid(x)) === f || String(x.pair_rib || '').trim() === nm))) return false;
+    return true; } catch (_) { return false; } }
   function knitFeeOf(fid) {
     const key0 = String(fid || '').trim(); if (!key0) return {};
     { const gs511 = specGreigeFids(itemByFid(key0)); if (gs511.length > 1) { const o = {}; gs511.forEach(g => { const m0 = (state.knitFee && typeof state.knitFee === 'object') ? state.knitFee[g] : null; const src0 = (m0 && typeof m0 === 'object') ? m0 : knitFeeFromCost(getFabricCost(g)); Object.keys(src0 || {}).forEach(v => { if (!(v in o)) o[v] = JSON.parse(JSON.stringify(src0[v])); }); }); return o; } }   /* hotfix511: 판매 품목(생지 여러 공장) — 공장마다 그 공장 생지의 편직 값 */
@@ -29399,6 +29406,7 @@ function validateBlendSum(blends, label) {
         ${(n => `<button class="dash-action-btn hw-gsw-open" style="${n ? 'background:#fff7ed;border-color:#fdba74;color:#c2410c;' : ''}font-weight:800;padding:5px 12px;" title="생지출고의뢰서를 보냈지만 편직공장이 아직 보낸 절 · kg 을 안 알린 것 — 팩스 · 카톡 송장을 보고 [출고 확인]">출고 확인 대기 ${n}</button>`)(window.hwGsWaitCount ? window.hwGsWaitCount() : 0)}
         ${(n => `<button class="dash-action-btn hw-si-open" style="${n ? 'background:#fef2f2;border-color:#fca5a5;color:#b91c1c;' : ''}font-weight:800;padding:5px 12px;" title="편직공장이 [편직팀] 앱에서 보낸 수량이 달라요 · 편직 완료 — [조정] · [반려]">재고 확인 요청 <b>${n}</b></button>`)(window.hwStockIssueCount ? window.hwStockIssueCount() : 0)}
         ${(n => n ? `<button class="dash-action-btn hw-yin-open" style="background:#eff6ff;border-color:#93c5fd;color:#1d4ed8;font-weight:800;padding:5px 12px;" title="편직공장이 [원사 받았어요]로 보낸 송장 kg · 사진 — [보고대로 입고]">원사 입고 보고 <b>${n}</b></button>` : '')(window.hwYarnRepCount ? window.hwYarnRepCount() : 0)}
+        ${(n => n ? `<button class="dash-action-btn hw-yi-open" style="background:#fef2f2;border-color:#fecaca;color:#b91c1c;font-weight:800;padding:5px 12px;" title="편직팀 앱 [재고 › 원사]에서 보낸 수량 다름 · 보냄 · 지우기 요청">원사 재고 요청 <b>${n}</b></button>` : '')(window.hwYarnIssueCount ? window.hwYarnIssueCount() : 0)}
         ${(n => `<button class="dash-action-btn hw-kc-open" style="${n ? 'background:#ecfdf5;border-color:#6ee7b7;color:#047857;' : ''}font-weight:800;padding:5px 12px;" title="편직공장 [편직팀] 앱과 주고받는 글">편직팀 대화${n ? ` <b style="background:#dc2626;color:#fff;border-radius:9px;padding:0 6px;">${n}</b>` : ''}</button>`)(window.hwKcUnread ? window.hwKcUnread() : 0)}
         ${(typeof window.hwNeedCount === 'function') ? (n => `<button class="dash-action-btn hw-need-open" style="${n ? 'background:#fef2f2;border-color:#fca5a5;color:#b91c1c;' : ''}font-weight:800;padding:5px 12px;" title="원래 생산하던 생지 중 재고가 0절 이하인 것 — 내역 · 0절/-절 진행 중 건 정리">생산 필요 <b>${n}</b></button>`)(window.hwNeedCount()) : ''}
         <button class="dash-action-btn hw-goview" data-go="gs" style="margin-left:auto;font-weight:800;padding:5px 12px;" title="생지출고조회 화면으로">생지출고조회 →</button>
@@ -30190,6 +30198,34 @@ function validateBlendSum(blends, label) {
     return (parseFloat(it.jul) || 0) + inJ;
   }
   // 지금까지 출고한 절 (기획 중 사용량 계산용 — 414 에서 쓴다)
+  /* hotfix618(대표 10/8 "생지재고가 설정이 되면 생지재고에 들어간 원사 소요량 만큼 원사 재고는 없어지게 · 로스 3% 공제해서 보여줄지 설정"):
+   *   settings/yarn_use = { basis: 'ship'(생지를 출고한 만큼 · 지금까지) | 'knit'(편직한 생지 전체 = 의뢰 절 + 입고 · 조정 줄), loss_view: 로스 뺀 재고를 크게 보기, loss_pct: 3 }
+   *   로스는 원장을 바꾸지 않고 보기만 (재고 − 사용 × 로스%) */
+  function yarnUseCfg() { const c = (state.yarnUseCfg && typeof state.yarnUseCfg === 'object') ? state.yarnUseCfg : {}; return { basis: c.basis === 'knit' ? 'knit' : 'ship', loss_view: !!c.loss_view, loss_pct: isFinite(parseFloat(c.loss_pct)) ? Math.max(0, Math.min(20, parseFloat(c.loss_pct))) : 3 }; }
+  window.hwYarnUseCfg = yarnUseCfg;
+  function knitMadeJul(wo, idx) { const it = ((wo && wo.items) || [])[idx] || {}; let j = parseFloat(it.jul) || 0;
+    (Array.isArray(wo.greige_shipments) ? wo.greige_shipments : []).filter(x => shLive(x) && ((x.item_idx != null ? x.item_idx : 0) === idx) && x.dir === 'in').forEach(x => { j += parseFloat(x.jul) || 0; });
+    return Math.max(j, knitOutJul(wo, idx)); }
+  async function yarnUseCfgLoad() { try { const f = window.firebase; const sn = await f.getDoc(f.doc(f.db, f.C('settings'), 'yarn_use')); state.yarnUseCfg = sn.exists() ? (sn.data() || {}) : {}; } catch (_) { state.yarnUseCfg = state.yarnUseCfg || {}; } }
+  window.hwYarnUseCfgLoad = yarnUseCfgLoad;
+  { let tries = 0; const iv = setInterval(() => { tries++; if (tries > 120) { clearInterval(iv); return; } if (typeof state === 'undefined' || !state.user || !window.firebase || !state.__woLoaded) return; clearInterval(iv); yarnUseCfgLoad().then(() => { try { if (state.dashView === 'yarnStock' || document.querySelector('.ys2-kpi')) renderDashboard(); } catch (_) {} }); }, 1000); }
+  /* 바꾸면 진행 중 편직 의뢰서의 원사 사용 줄을 다시 셈 — 먼저 원장을 내 PC 로 내려받아 둠(백업) · 편직완료 · 생지구매는 그대로 */
+  async function yarnUseCfgSave(next) {
+    if (!isOwnerUser()) { toast('원사 사용 계산 방식은 최고관리자만 바꿉니다', 'error'); return false; }
+    const cur = yarnUseCfg(); const cfg = Object.assign({}, cur, next);
+    const reCalc = cfg.basis !== cur.basis;
+    if (reCalc) {
+      if (!confirm(`원사 사용량 계산을 바꿉니다:\n${cur.basis === 'knit' ? '편직한 생지 전체' : '생지를 출고한 만큼'} → ${cfg.basis === 'knit' ? '편직한 생지 전체 (생지 재고에 들어가면 바로 원사에서 빠짐)' : '생지를 출고한 만큼'}\n\n진행 중 편직 의뢰서의 원사 사용 줄을 다시 셉니다 (편직완료 · 생지구매 의뢰서는 그대로).\n먼저 지금 원사 원장을 이 PC 에 파일로 내려받습니다(백업).\n\n바꿀까요?`)) return false;
+      try { const blob = new Blob([JSON.stringify({ at: new Date().toISOString(), by: state.user.email, items: yarnLedger() }, null, 1)], { type: 'application/json' }); const a = document.createElement('a'); const d = new Date(); a.href = URL.createObjectURL(blob); a.download = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}_원사원장_백업.json`; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 2000); } catch (_) {}
+    }
+    try { const f = window.firebase; await f.setDoc(f.doc(f.db, f.C('settings'), 'yarn_use'), Object.assign({}, cfg, { updated_at: f.serverTimestamp(), updated_by: state.user.email }), { merge: true }); state.yarnUseCfg = cfg; }
+    catch (e) { toast('설정을 저장하지 못했습니다: ' + e.message, 'error'); return false; }
+    if (reCalc) { let n = 0; for (const w of (state.allWorkOrders || []).filter(w => w && !w.deleted && w.type === '편직' && !w.completed && !w.knit_done)) { try { if (await knitUseRefresh(w)) n++; } catch (_) {} } toast(`원사 사용량을 다시 셌습니다 — 편직 의뢰서 ${n}건 바뀜`, 'success'); }
+    else toast('보기 설정을 바꿨습니다', 'success');
+    try { renderDashboard(); } catch (_) {}
+    return true;
+  }
+  window.hwYarnUseCfgSave = yarnUseCfgSave;
   function knitOutJul(wo, idx) {
     const sh = (Array.isArray(wo.greige_shipments) ? wo.greige_shipments : []).filter(x => shLive(x) && ((x.item_idx != null ? x.item_idx : 0) === idx));
     return sh.reduce((a, x) => a + (x.dir === 'in' ? 0 : (parseFloat(x.jul) || 0)), 0);
@@ -30205,7 +30241,7 @@ function validateBlendSum(blends, label) {
       const kb = fid ? knitBlendOf(fid, vendor) : null;
       const yarns = (kb && Array.isArray(kb.yarns)) ? kb.yarns.filter(y => y && y.name && y.pct > 0) : [];
       if (!yarns.length) { missing.push(String(it.item || '')); return; }
-      const jul = (finalJuls && finalJuls[idx] != null) ? (parseFloat(finalJuls[idx]) || 0) : knitOutJul(wo, idx);
+      const jul = (finalJuls && finalJuls[idx] != null) ? (parseFloat(finalJuls[idx]) || 0) : (yarnUseCfg().basis === 'knit' ? knitMadeJul(wo, idx) : knitOutJul(wo, idx));   /* hotfix618: 설정 '편직한 생지 전체'면 생지 재고에 들어간 만큼 */
       const kpj = parseFloat(it.kg_per_jul) || 21;
       yarns.forEach(y => {
         const kg = Math.round(jul * kpj * (y.pct / 100) * 10) / 10;
@@ -30833,7 +30869,7 @@ function validateBlendSum(blends, label) {
     if (!full && th && bg.querySelector('#kc-side') && bg.__m === m) { bg.querySelector('#kc-tabs').innerHTML = tabs; bg.querySelector('#kc-side').innerHTML = side; const atB = th.scrollHeight - th.scrollTop - th.clientHeight < 60; th.innerHTML = kcThreadHtml(vn, m); if (atB) th.scrollTop = th.scrollHeight; kcBind(bg); return; }
     bg.__m = m;
     const sub = m === 'qc' ? '현장 알림과 같은 글입니다 — 보내면 현장 QC 휴대폰에 큰 창 + 소리 · 진동 · 보면 [확인]으로 남습니다' : `보내면 ${vn ? escapeHtml(vn) + ' ' : ''}${m === 'gs' ? '편직팀' : '염/가공소'} 앱에 뜨고 휴대폰이 울립니다`;
-    bg.innerHTML = `<div class="kc-box"><div class="kc-h"><b>대화</b><div class="kc-tabs" id="kc-tabs">${tabs}</div><span>${sub}</span>${isOwnerUser() ? '<button type="button" class="kc-nmb" data-kcnames title="대화에 보일 사람 이름 (계정 이름)">이름 정하기</button>' : ''}<button type="button" class="kc-close" data-kcclose aria-label="닫기">✕</button></div>
+    bg.innerHTML = `<div class="kc-box"><div class="kc-h"><b>대화</b><div class="kc-tabs" id="kc-tabs">${tabs}</div><span>${sub}</span>${!window.__hfPushOn && !/(?:^|[?&])app=qc(?:&|$)/.test(location.search) ? '<button type="button" class="kc-nmb" data-kcpush title="FABIWOS 를 닫아 두어도 업체 글 · 요청이 오면 이 PC 오른쪽 아래에 알림 (크롬이 켜져 있으면)" style="border-color:#93c5fd;color:#1d4ed8;">이 PC 알림 켜기</button>' : ''}${isOwnerUser() ? '<button type="button" class="kc-nmb" data-kcnames title="대화에 보일 사람 이름 (계정 이름)">이름 정하기</button>' : ''}<button type="button" class="kc-close" data-kcclose aria-label="닫기">✕</button></div>
       <div class="kc-body"><div class="kc-side" id="kc-side">${side}</div>
       <div class="kc-main"><div class="kc-mh">${vn ? `<b>${escapeHtml(m === 'qc' ? '현장 QC' : vn)}</b> <span>${m === 'qc' ? '사내 직원' : (kcHasApp(vn, m) ? '앱 사용 중' : '앱 계정 없음 — 보내도 업체가 못 봅니다')}</span>` : ''}</div>
         <div class="kc-th" id="kc-th">${vn ? kcThreadHtml(vn, m) : ''}</div>
@@ -30855,6 +30891,7 @@ function validateBlendSum(blends, label) {
       if (!r) return; const i0 = bg.querySelector('#kc-in'); if (i0) KC.draft = i0.value; KC.reply = r; kcPaint(true); });
     { const x = bg.querySelector('[data-kcrpx]'); if (x) x.onclick = () => { KC.reply = null; kcPaint(true); }; }
     { const nb = bg.querySelector('[data-kcnames]'); if (nb) nb.onclick = () => kcNames(bg); }
+    { const pb = bg.querySelector('[data-kcpush]'); if (pb) pb.onclick = async () => { pb.disabled = true; const ok = window.hwFieldPushReg ? await window.hwFieldPushReg(true) : false; toast(ok ? '이 PC 알림을 켰습니다 — FABIWOS 를 닫아 두어도 업체 글 · 요청이 오면 오른쪽 아래에 뜹니다' : '알림을 켜지 못했습니다' + (window.__hfPushErr ? ' — ' + window.__hfPushErr : '') + ' (주소창 왼쪽 자물쇠 → 알림 허용)', ok ? 'success' : 'error'); kcPaint(true); }; }   /* hotfix618 */
     bg.querySelectorAll('[data-kcx]').forEach(b => b.onclick = async () => { const l = kcMsgs(KC.vn, KC.m).find(x => x.id === b.dataset.kcx); if (!l || !confirm('이 글을 보내기 취소합니다 — 업체 앱에서도 사라집니다.\n\n' + String(l.note || '').slice(0, 80))) return; b.disabled = true; const ok = await window.hwProc.addLog(Object.assign({ vendor: l.vendor, k: 'chat', wo: '', kind: 'cancel', ref: l.id, note: '' }, KC.m === 'gs' ? { part: 'gs' } : {})); if (!ok) b.disabled = false; else setTimeout(() => kcPaint(), 300); });
     bg.querySelectorAll('[data-kcdel]').forEach(b => b.onclick = async () => { if (!isOwnerUser()) { toast('현장 알림 삭제는 최고관리자만 할 수 있습니다', 'error'); return; } if (!confirm('이 현장 알림을 지웁니다 (모든 휴대폰 · PC 에서 사라짐).')) return; b.disabled = true; const ok = window.__hfChat && await window.__hfChat.del(b.dataset.kcdel); if (!ok) b.disabled = false; else setTimeout(() => kcPaint(), 300); });
     const cl = bg.querySelector('[data-kcclose]'); if (cl) cl.onclick = () => bg.remove();
@@ -30953,20 +30990,27 @@ function validateBlendSum(blends, label) {
       const st = c ? (ca ? 'cxdone' : (line && !line.void ? 'cxreq' : 'cxpre')) : (line && !line.void ? 'ok' : (a && (a.rej || /^현일텍스 반려/.test(String(a.note || ''))) ? 'rej' : 'wait'));
       return { l, wo, ii, line, c, st, ph: gsPhotoFor(l) }; }).filter(o => all || o.st === 'wait' || o.st === 'cxreq' || o.st === 'cxpre').sort((a, b) => gsT(b.l) - gsT(a.l));
   }
+  const gsLineKey = x => [x.gs_id || '', x.gs_number || '', x.date || '', x.jul, x.gs_rest ? 'r' : '', x.recorded_at || x.at || ''].join('|');   /* hotfix618: 생지출고 줄에는 id 가 없음 — 이것으로 같은 줄을 찾음 */
   async function gsSelfConfirm(o) {
     const l = o.l; const by = (state.user && state.user.email) || ''; const j = Math.round((parseFloat(l.body) || 0) * 10) / 10; const kg = Math.round((parseFloat(l.n) || 0) * 10) / 10; if (!o.wo || !(j > 0)) return 'bad';
     let res = 'err';
     try { res = await runTransaction(db, async tx => { const ref = doc(db, C('workorders'), o.wo.id); const sn = await tx.get(ref); if (!sn.exists()) return 'gone'; const w = sn.data(); if (w.deleted) return 'gone';
       const sh = Array.isArray(w.greige_shipments) ? w.greige_shipments.slice() : []; if (sh.some(x => x && x.conf_log === l.id && !x.void)) return 'dup';
       const it = (w.items || [])[o.ii] || {}; const kpj = parseFloat(it.kg_per_jul) || 21; const d = new Date(gsT(l)); const ymd = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
-      sh.push(Object.assign({ dir: 'out', item_idx: o.ii, jul: j, kg: kg > 0 ? kg : Math.round(j * kpj * 10) / 10, kg_manual: kg > 0, date: ymd, dest: String(l.chip || '').slice(0, 60), memo: '편직공장 앱 출고 보고' + (l.chip ? ' → ' + l.chip : '') + (l.note ? ' · ' + String(l.note).slice(0, 80) : ''), src: 'app', conf: true, conf_log: l.id, by, at: new Date().toISOString(), void: false, id: stockLineId('gapp') }, o.ph ? { photo: o.ph } : {}));
+      /* hotfix618: 이 출고에 함께 나간 생지출고 대기 줄(o.mg = 줄 id) — 그 줄은 출고 확인 · 이 줄은 그만큼 뺌 (두 번 빠지지 않게) */
+      const tk = kg > 0 ? kg : Math.round(j * kpj * 10) / 10, kpjT = j > 0 ? tk / j : kpj; let mj = 0, mk = 0; const mgN = [];
+      (o.mg || []).forEach(mid => { const ix = sh.findIndex(x => x && gsLineKey(x) === mid); const x = ix >= 0 ? sh[ix] : null; if (!x || x.void || x.src !== 'gs' || x.conf === true || x.dir === 'in') return; const xj = parseFloat(x.jul) || 0; const xk = Math.round(xj * kpjT * 10) / 10; mj += xj; mk += xk; mgN.push((x.gs_number || '생지출고') + ' ' + xj + '절');
+        sh[ix] = Object.assign({}, x, { kg: xk, kg_manual: true, conf: true, conf_at: new Date().toISOString(), conf_by: by, conf_via: 'merge', ord_jul: x.ord_jul || xj, mg_log: l.id }); });
+      if (mj > j + 1e-6) return 'over';
+      const nj = Math.round((j - mj) * 10) / 10, nk = Math.max(0, Math.round((tk - mk) * 10) / 10);
+      sh.push(Object.assign({ dir: 'out', item_idx: o.ii, jul: nj, kg: nk, kg_manual: kg > 0, date: ymd, dest: String(l.chip || '').slice(0, 60), memo: '편직공장 앱 출고 보고' + (l.chip ? ' → ' + l.chip : '') + (l.note ? ' · ' + String(l.note).slice(0, 80) : '') + (mgN.length ? ' [생지출고 ' + mgN.join(', ') + ' 포함 → 따로 뺌]' : ''), src: 'app', conf: true, conf_log: l.id, by, at: new Date().toISOString(), void: false, id: stockLineId('gapp') }, o.ph ? { photo: o.ph } : {}));
       tx.update(ref, { greige_shipments: sh, updated_at: serverTimestamp(), updated_by: by }); return 'ok'; }); } catch (e) { console.warn('[공장 출고 확인]', e && e.message); return 'err'; }
     if (res === 'ok') { try { await window.hwProc.addLog({ vendor: l.vendor, k: l.k, wo: l.wo || '', kind: 'note', part: 'gs', ref: l.id, note: '현일텍스 확인 — ' + j + '절' + (kg ? ' · ' + kg + 'kg' : '') + ' 출고를 재고에 넣었습니다' }); } catch (_) {} }
     return res;
   }
   async function gsSelfCancelOk(o) {   /* 공장 [보낸 것 취소] — 확인했던 것이면 그 출고 줄 void */
     const by = (state.user && state.user.email) || '';
-    if (o.line && !o.line.void && o.wo) { try { await runTransaction(db, async tx => { const ref = doc(db, C('workorders'), o.wo.id); const sn = await tx.get(ref); if (!sn.exists()) return; const w = sn.data(); const sh = (w.greige_shipments || []).map(x => (x && x.conf_log === o.l.id && !x.void) ? Object.assign({}, x, { void: true, void_at: new Date().toISOString(), void_by: by, void_why: '공장 앱 보낸 것 취소' }) : x); tx.update(ref, { greige_shipments: sh, updated_at: serverTimestamp(), updated_by: by }); }); } catch (e) { toast('취소를 적지 못했습니다: ' + ((e && e.message) || ''), 'error'); return false; } }
+    if (o.line && !o.line.void && o.wo) { try { await runTransaction(db, async tx => { const ref = doc(db, C('workorders'), o.wo.id); const sn = await tx.get(ref); if (!sn.exists()) return; const w = sn.data(); const sh = (w.greige_shipments || []).map(x => (x && x.conf_log === o.l.id && !x.void) ? Object.assign({}, x, { void: true, void_at: new Date().toISOString(), void_by: by, void_why: '공장 앱 보낸 것 취소' }) : ((x && x.mg_log === o.l.id && x.conf === true) ? (() => { const y = Object.assign({}, x, { conf: false, kg_manual: false }); delete y.conf_at; delete y.conf_by; delete y.conf_via; delete y.mg_log; return y; })() : x)); tx.update(ref, { greige_shipments: sh, updated_at: serverTimestamp(), updated_by: by }); }); } catch (e) { toast('취소를 적지 못했습니다: ' + ((e && e.message) || ''), 'error'); return false; } }
     return window.hwProc.addLog({ vendor: o.l.vendor, k: o.l.k, wo: o.l.wo || '', kind: 'note', part: 'gs', ref: o.c.id, note: '현일텍스 취소 확인 — ' + (parseFloat(o.l.body) || 0) + '절 출고를 없던 것으로 했습니다' });
   }
   function gsYinFor(vn) {   /* 편직팀 앱 [원사 받을 것] — 이 공장으로 오는(출고처) 아직 입고 안 된 원사 의뢰서 */
@@ -31012,11 +31056,60 @@ function validateBlendSum(blends, label) {
       b.disabled = true; const ok = await window.hwProc.addLog({ vendor: o.l.vendor, k: o.l.k, wo: o.l.wo || '', kind: 'note', part: 'gs', ref: o.l.id, rej: true, note: '현일텍스 반려 — ' + String(why || '다시 확인해 주십시오') }); if (ok) { toast('반려를 보냈습니다', 'success'); setTimeout(gsYinOpen, 400); } else b.disabled = false; }));
   }
   window.hwYinOpen = gsYinOpen;
+  /* ===== hotfix618(대표 10/8 "원사 재고와 생지 재고를 구분해서 입력/출력/수정 · 삭제는 메인 허락 · 조정도"): 편직팀 앱 [재고 › 원사]
+   *   앱 → { kind:'issue', part:'gs', k:'yk:'+원장 열쇠, issue: '원사 수량 다름'(body FABIWOS kg · n 공장 kg) | '원사 보냄'(n kg · chip 보낸 곳) | '원사 지우기 요청'(body kg), label 사종 · 컬러, note }
+   *   PC → 수량 다름: [공장 숫자로 확인] = 원장 조정 줄 · 보냄: [보고대로 이동] = 원장 이동 두 줄(보낸 곳 − · 받는 곳 +) · 지우기: [허락 — 0 으로] = 조정 줄 · [반려]. 원장 줄은 지우지 않음 ===== */
+  const YI = { diff: '원사 수량 다름', ship: '원사 보냄', del: '원사 지우기 요청' };
+  function gsYarnPubFor(vn) { try { return yarnStockRows().filter(r => gsNormV(r.vendor) === vn && Math.abs(r.stock_kg) >= 0.05).map(r => ({ k: 'yk:' + r.key, yarn: yarnNameShow(r.yarn) || String(r.yarn || ''), color: yarnColorIsLW(r.color) ? '' : String(r.color || ''), kg: Math.round(r.stock_kg * 10) / 10, in: Math.round(r.in_kg * 10) / 10, use: Math.round(r.use_kg * 10) / 10 })).slice(0, 150); } catch (_) { return []; } }
+  function gsYarnIssues(all) { const L = gsLogs(); const ans = gsIssueAns(L); const cx = {}; L.forEach(c => { if (c && c.by === 'vendor' && c.kind === 'cancel' && c.part === 'gs' && c.ref) cx[c.ref] = c; });
+    return L.filter(l => l && l.by === 'vendor' && l.part === 'gs' && l.kind === 'issue' && Object.values(YI).includes(l.issue) && String(l.k || '').startsWith('yk:') && l.id && !String(l.id).startsWith('tmp') && !cx[l.id])
+      .map(l => ({ l, done: ans.get(l.id) || null, row: yarnStockRows().find(r => r.key === String(l.k).slice(3)) || null })).filter(o => all || !o.done).sort((a, b) => gsT(b.l) - gsT(a.l)); }
+  window.hwYarnIssueCount = () => { try { return gsYarnIssues(false).length; } catch (_) { return 0; } };
+  async function gsYarnShipMove(row, to, kg, memo, logId) {   /* 공장이 이미 보낸 것 — 알림 없이 원장 두 줄 (같은 보고는 한 번만) */
+    if (yarnLedger().some(r => r && r.app_log === logId && !r.void)) return true;
+    const at = new Date().toISOString(), by = state.user.email || '', mid = stockLineId('mv');
+    const base = { kind: 'move', move_id: mid, yarn: row.yarn, yid: row.yid || '', color: row.color || '', memo: '편직팀 앱 보냄 보고' + (memo ? ' · ' + memo : ''), date: todayYMD(), by, at, void: false, app_log: logId };
+    const a = Object.assign({ id: mid + '_out', vendor: row.vendor, vendor_vid: row.vendor_vid || vendorVidOf(row.vendor) || '', kg: -kg, dest: to, dest_vid: vendorVidOf(to) || '' }, base);
+    const b = Object.assign({ id: mid + '_in', vendor: to, vendor_vid: vendorVidOf(to) || '', kg, from: row.vendor, from_vid: row.vendor_vid || vendorVidOf(row.vendor) || '' }, base);
+    return yarnLedgerSave(yarnLedger().concat([a, b]));
+  }
+  function gsYarnIssueOpen() {
+    const bg = document.getElementById('dash-modal-bg'); if (!bg) return;
+    document.getElementById('dash-modal-title').textContent = '편직공장 원사 재고 요청 — 수량 다름 · 보냄 · 지우기 요청';
+    ['dash-modal-image', 'dash-modal-copy', 'dash-modal-print', 'dash-modal-kakao'].forEach(id => { const b = document.getElementById(id); if (b) b.style.display = 'none'; });
+    const ab = document.getElementById('dash-modal-actions'); if (ab) ab.style.display = 'none';
+    const box = bg.querySelector('.dash-modal'); if (box) box.classList.add('dash-modal--wide');
+    const L = gsYarnIssues(true).slice(0, 80); const td = 'padding:7px 8px;border-bottom:1px solid #eef2f7;font-size:12.5px;vertical-align:middle;';
+    const md2 = l => { const d = new Date(gsT(l)); return (d.getMonth() + 1) + '/' + d.getDate() + ' ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); };
+    const kindT = l => l.issue === YI.diff ? ['수량 다름', '#b91c1c', '#fef2f2'] : l.issue === YI.ship ? ['보냄', '#6d28d9', '#f5f3ff'] : ['지우기 요청', '#b45309', '#fff7ed'];
+    let h = `<div style="padding:14px 16px;font-family:var(--font-gothic);"><div style="font-size:12.5px;color:#475569;margin-bottom:10px;line-height:1.7;">편직공장이 [편직팀] 앱 › [재고] › [원사]에서 보낸 것입니다. 원사 재고는 우리가 확인해야 바뀝니다 · 원장 줄은 지우지 않고 조정 · 이동 줄로 남습니다.</div>`;
+    if (!L.length) h += '<div style="padding:30px;text-align:center;color:#94a3b8;font-size:13px;">받은 요청이 없습니다.</div>';
+    else { h += `<div class="dash-table-wrap"><table class="dash-table" style="width:100%;"><thead><tr><th>받은 때</th><th>종류</th><th>편직공장</th><th style="text-align:left;">사종 · 컬러</th><th>FABIWOS</th><th>공장이 보낸 것</th><th style="text-align:left;">메모</th><th>처리</th></tr></thead><tbody>`;
+      L.forEach(o => { const l = o.l, k = kindT(l), now = o.row ? Math.round(o.row.stock_kg * 10) / 10 : null; const d = o.done; const rej = d && (d.rej || /^현일텍스 반려/.test(String(d.note || '')));
+        const what = l.issue === YI.diff ? `${Number(l.n) || 0}kg` : l.issue === YI.ship ? `${Number(l.n) || 0}kg → ${escapeHtml(l.chip || '')}` : '이 줄을 0 으로';
+        const act = d ? `<span style="font-weight:800;color:${rej ? '#b91c1c' : '#047857'};">${rej ? '반려' : '처리함'}</span><div style="font-size:11px;color:#64748b;max-width:240px;white-space:normal;">${escapeHtml(String(d.note || '').replace(/^현일텍스 \S+ —?\s*/, ''))}</div>`
+          : (!o.row ? '<span style="color:#94a3b8">원장에 그 줄 없음</span> ' : `<button class="dash-action-btn hw-yi-ok" data-id="${escapeHtml(l.id)}" style="background:#059669;color:#fff;border-color:#047857;font-weight:800;">${l.issue === YI.diff ? '공장 숫자로 확인' : l.issue === YI.ship ? '보고대로 이동' : '허락 — 0 으로'}</button> `) + `<button class="dash-action-btn hw-yi-no" data-id="${escapeHtml(l.id)}" style="color:#b91c1c;border-color:#fecaca;">반려</button>`;
+        h += `<tr style="${d ? 'opacity:.62;' : ''}"><td style="${td}text-align:center;white-space:nowrap;">${escapeHtml(md2(l))}</td><td style="${td}text-align:center;"><span style="font-size:11.5px;font-weight:800;padding:2px 8px;border-radius:999px;background:${k[2]};color:${k[1]};">${k[0]}</span></td><td style="${td}text-align:center;font-weight:700;">${escapeHtml(l.vendor || '')}</td><td style="${td}">${escapeHtml(l.label || '')}</td><td style="${td}text-align:center;">${now == null ? '-' : now + 'kg'}</td><td style="${td}text-align:center;font-weight:800;">${what}</td><td style="${td}">${escapeHtml(l.note || '')}</td><td style="${td}text-align:center;white-space:nowrap;">${act}</td></tr>`; });
+      h += '</tbody></table></div>'; }
+    document.getElementById('dash-modal-body').innerHTML = h + '</div>'; bg.classList.add('show');
+    const body = document.getElementById('dash-modal-body'); const find = id => L.find(o => o.l.id === id);
+    const tell = (l, note, extra) => window.hwProc.addLog(Object.assign({ vendor: l.vendor, k: l.k, wo: '', kind: 'note', part: 'gs', ref: l.id, note: String(note).slice(0, 200) }, extra || {}));
+    body.querySelectorAll('.hw-yi-ok').forEach(b => b.addEventListener('click', async () => { const o = find(b.dataset.id); if (!o || !o.row) return; if (!canStockAdjust()) { toast('재고조정 권한이 없습니다', 'error'); return; } const l = o.l, now = Math.round(o.row.stock_kg * 10) / 10;
+      let ok = false, msg = '';
+      if (l.issue === YI.diff) { const n = Math.round((Number(l.n) || 0) * 10) / 10; if (!confirm(`${l.vendor} · ${l.label || ''}\n원사 재고 ${now}kg → ${n}kg 로 맞춥니다 (조정 줄).`)) return; b.disabled = true; ok = Math.abs(n - now) < 0.05 ? true : await yarnAdjustAdd(o.row, { measured: n, memo: '편직공장 앱 수량 확인 — ' + (l.note || '') }); msg = '현일텍스 확인 완료 — 원사 ' + n + 'kg 로 맞췄습니다'; }
+      else if (l.issue === YI.ship) { const kg = Math.round((Number(l.n) || 0) * 10) / 10; const to = String(l.chip || '').trim(); if (!(kg > 0) || !to) { toast('kg · 보낸 곳이 없습니다', 'error'); return; } if (!confirm(`${l.vendor} → ${to} · ${l.label || ''} ${kg}kg\n원사 재고에서 옮깁니다 (이동 줄 두 개).`)) return; b.disabled = true; ok = await gsYarnShipMove(o.row, to, kg, l.note || '', l.id); msg = '현일텍스 확인 완료 — ' + to + '(으)로 ' + kg + 'kg 옮겼습니다'; }
+      else { if (!confirm(`${l.vendor} · ${l.label || ''}\n원사 재고 ${now}kg 을 0 으로 맞춥니다 (지우지 않고 조정 줄로 남김).`)) return; b.disabled = true; ok = Math.abs(now) < 0.05 ? true : await yarnAdjustAdd(o.row, { measured: 0, memo: '편직공장 앱 지우기 요청 허락 — ' + (l.note || '') }); msg = '현일텍스 확인 완료 — 이 원사 줄을 0 으로 맞췄습니다'; }
+      if (ok) { await tell(l, msg); toast('처리했습니다', 'success'); setTimeout(gsYarnIssueOpen, 400); } else b.disabled = false; }));
+    body.querySelectorAll('.hw-yi-no').forEach(b => b.addEventListener('click', async () => { const o = find(b.dataset.id); if (!o) return; const why = prompt(`${o.l.vendor} · ${o.l.label || ''}\n받지 않습니다 (원사 재고 그대로).\n\n공장 앱에 보낼 까닭`, '다시 확인해 주십시오'); if (why === null) return;
+      b.disabled = true; const ok = await tell(o.l, '현일텍스 반려 — ' + String(why || '다시 확인해 주십시오'), { rej: true }); if (ok) { toast('반려를 보냈습니다', 'success'); setTimeout(gsYarnIssueOpen, 400); } else b.disabled = false; }));
+  }
+  window.hwYarnIssueOpen = gsYarnIssueOpen;
+  document.addEventListener('click', e => { const b = e.target && e.target.closest && e.target.closest('.hw-yi-open'); if (!b) return; e.preventDefault(); gsYarnIssueOpen(); });
   document.addEventListener('click', e => { const b = e.target && e.target.closest && e.target.closest('.hw-yin-open'); if (!b) return; e.preventDefault(); gsYinOpen(); });
   window.hwStockIssueCount = () => { try { return gsStockIssues(false).length; } catch (_) { return 0; } };
   async function gsPing(g) { const st = gsStateOf(g); return gsTellVendor(g, `${g.wo_number || ''} ${itemShow(g.gs_item, g.gs_item_fid, '')} ${greigeNoClean(g.gs_greige_no) || ''} — 남은 ${st.pend}절 출고하셨으면 앱에서 [출고했어요]를 눌러 주십시오`, 'req'); }   /* hotfix564: 관리 화면 [편직팀 앱]에서도 씀 */
   const gsAll = () => (state.allWorkOrders || []).filter(w => w && w.type === '생지출고' && !w.deleted);
-  window.__hwGs = { unapplied: () => gsSiUnapplied(), selfShips: a => gsSelfShips(a), yarnReps: a => gsYarnReps(a), yinFor: v => gsYinFor(v), reportsOf: g => gsReportsOf(g), stockIssues: gsStockIssues, stockIssueOpen: gsStockIssueOpen, stockRows: gsStockRows, ping: gsPing, all: gsAll, normV: gsNormV, openWait: () => hwGsWaitOpen(), itemOf: g => itemShow(g.gs_item, g.gs_item_fid, ''), lotOf: g => (Array.isArray(g.gs_mix) && g.gs_mix.length > 1) ? g.gs_mix.map(m => greigeNoClean(m.no)).join(' + ') : (greigeNoClean(g.gs_greige_no) || '-'), gsStateOf, gsLinesOf, gsWaitList, gsLineConfirm, gsRestCancel, gsPend, pubFor: gsPubFor, applyReports: gsApplyReports, tell: gsTellVendor, askInv: gsAskInvoice, hasApp: gsHasApp, seenAt: gsSeenAt, photoOpen: gsPhotoOpen, photoSheet: gsPhotoSheet };
+  window.__hwGs = { yarnPubFor: v => gsYarnPubFor(v), yarnIssues: a => gsYarnIssues(a), unapplied: () => gsSiUnapplied(), selfShips: a => gsSelfShips(a), yarnReps: a => gsYarnReps(a), yinFor: v => gsYinFor(v), reportsOf: g => gsReportsOf(g), stockIssues: gsStockIssues, stockIssueOpen: gsStockIssueOpen, stockRows: gsStockRows, ping: gsPing, all: gsAll, normV: gsNormV, openWait: () => hwGsWaitOpen(), itemOf: g => itemShow(g.gs_item, g.gs_item_fid, ''), lotOf: g => (Array.isArray(g.gs_mix) && g.gs_mix.length > 1) ? g.gs_mix.map(m => greigeNoClean(m.no)).join(' + ') : (greigeNoClean(g.gs_greige_no) || '-'), gsStateOf, gsLinesOf, gsWaitList, gsLineConfirm, gsRestCancel, gsPend, pubFor: gsPubFor, applyReports: gsApplyReports, tell: gsTellVendor, askInv: gsAskInvoice, hasApp: gsHasApp, seenAt: gsSeenAt, photoOpen: gsPhotoOpen, photoSheet: gsPhotoSheet };
   // hotfix562: [출고 확인 대기] 목록 — 생지생산 및 재고 윗줄 단추
   function hwGsWaitOpen() {   /* hotfix581: 공장 보고 → 우리가 [보고대로 확인] · [반려] · 공장 취소 요청 [확인] */
     const bg = document.getElementById('dash-modal-bg'); if (!bg) return;
@@ -31069,7 +31162,14 @@ function validateBlendSum(blends, label) {
     document.getElementById('dash-modal-body').innerHTML = h;
     { const body = document.getElementById('dash-modal-body');   /* hotfix614: 의뢰서 없이 보낸 출고 처리 */
       body.querySelectorAll('.hw-ss-ph').forEach(b => b.addEventListener('click', async () => { const w = window.open('', '_blank'); const u = await gsPhotoUrl(b.dataset.p); if (u && w) w.location.href = u; else if (w) w.close(); }));
-      body.querySelectorAll('.hw-ss-ok').forEach(b => b.addEventListener('click', async () => { const o = SS[+b.dataset.i]; if (!o) return; if (!o.wo) { toast('편직 의뢰서를 찾지 못했습니다', 'error'); return; } b.disabled = true; const r = await gsSelfConfirm(o);
+      body.querySelectorAll('.hw-ss-ok').forEach(b => b.addEventListener('click', async () => { const o = SS[+b.dataset.i]; if (!o) return; if (!o.wo) { toast('편직 의뢰서를 찾지 못했습니다', 'error'); return; }
+        /* hotfix618: 그 편직 줄에 생지출고 대기가 있으면 — 이 출고에 함께 나간 것을 고름 */
+        const PD = (o.wo.greige_shipments || []).filter(x => x && (x.item_idx != null ? x.item_idx : 0) === o.ii && gsPend(x));
+        if (PD.length && !b.dataset.mgAsk) { const cell = b.closest('td'); b.dataset.mgAsk = '1';
+          cell.insertAdjacentHTML('beforeend', `<div class="hw-ss-mg" style="margin-top:6px;text-align:left;font-size:11.5px;line-height:1.6;background:#fff7ed;border:1px solid #fdba74;border-radius:6px;padding:6px 8px;white-space:normal;max-width:300px;"><b>이 줄에 출고 대기가 있습니다.</b> 이 출고에 함께 나간 것을 체크하십시오 (그 줄은 출고 확인 · 이 출고에서 그만큼 뺌).<br>${PD.map(x => `<label style="display:block;cursor:pointer;"><input type="checkbox" value="${escapeHtml(gsLineKey(x))}"> ${escapeHtml(x.gs_number || '생지출고')} <b>${x.jul}절</b> → ${escapeHtml(x.dest || x.gs_dest || '')}</label>`).join('')}<button class="dash-action-btn" style="margin-top:4px;background:#059669;color:#fff;border-color:#047857;font-weight:800;">이대로 확인</button></div>`);
+          cell.querySelector('.hw-ss-mg button').addEventListener('click', async ev => { o.mg = [...cell.querySelectorAll('.hw-ss-mg input:checked')].map(x => x.value); ev.target.disabled = true; b.click(); });
+          return; }
+        b.disabled = true; const r = await gsSelfConfirm(o); if (r === 'over') { toast('체크한 출고 대기 절수가 공장이 보낸 절수보다 많습니다', 'error'); b.disabled = false; return; }
         if (r === 'ok' || r === 'dup') { toast(`${o.l.vendor} 출고 ${parseFloat(o.l.body) || 0}절을 재고에 넣었습니다`, 'success'); setTimeout(hwGsWaitOpen, 400); } else { toast('넣지 못했습니다 — ' + r, 'error'); b.disabled = false; } }));
       body.querySelectorAll('.hw-ss-no').forEach(b => b.addEventListener('click', async () => { const o = SS[+b.dataset.i]; if (!o) return; const why = prompt(`${o.l.vendor} · ${o.l.label || ''} 출고 ${parseFloat(o.l.body) || 0}절\n받지 않습니다 (재고 그대로).\n\n공장 앱에 보낼 까닭`, '수량 · 보낸 곳을 다시 확인해 주십시오'); if (why === null) return;
         b.disabled = true; const ok = await window.hwProc.addLog({ vendor: o.l.vendor, k: o.l.k, wo: o.l.wo || '', kind: 'note', part: 'gs', ref: o.l.id, rej: true, note: '현일텍스 반려 — ' + String(why || '다시 확인해 주십시오') }); if (ok) { toast('반려를 보냈습니다', 'success'); setTimeout(hwGsWaitOpen, 400); } else b.disabled = false; }));
@@ -31221,6 +31321,36 @@ function validateBlendSum(blends, label) {
     t.disabled = true; await gsAskInvoice(g);
   });
   // 생지출고의뢰서를 휴지통에 보낼 때 — 자동 출고 줄은 지우지 않고 취소됨(void)
+  /* hotfix618(대표 10/8 "삭제할 때 연동된 모든 것들을 삭제시킬 것인지"): 의뢰서 삭제 창 — 연결된 의뢰서 · 재고 영향을 보여 주고 고름. 돌려줌: null(취소) | { also:[함께 휴지통 id], keepGs:[남길 생지출고 id] } */
+  function hwDelAsk(wo) {
+    if (window.__hwDelAuto) return Promise.resolve(window.__hwDelAuto === true ? { also: [], keepGs: [] } : window.__hwDelAuto);   /* 시험용 */
+    return new Promise(res => {
+      const A = state.allWorkOrders || []; const rows = [], info = [];
+      const gsT = g => `${g.wo_number || ''} · ${itemShow(g.gs_item, g.gs_item_fid, '')} ${greigeNoClean(g.gs_greige_no) || ''} · ${g.recipient || ''}`;
+      if (wo.type === '염색가공') { A.filter(g => g && g.type === '생지출고' && !g.deleted && g.source_fn_id === wo.id).forEach(g => rows.push({ id: g.id, t: '생지출고의뢰서 ' + gsT(g), on: true, keep: true }));
+        if (rows.length) info.push('생지출고의뢰서를 같이 지우면 편직공장 출고 대기가 취소되고 생지 재고가 돌아옵니다. 남기면 생지출고는 그대로 둡니다.'); }
+      if (wo.type === '생지출고') { const f = A.find(x => x && x.id === wo.source_fn_id && !x.deleted); if (f) rows.push({ id: f.id, t: '이 생지출고를 만든 염/가공 의뢰서 ' + (f.wo_number || ''), on: false });
+        const L = gsLinesOf(wo.id); const pj = L.filter(o => gsPend(o.x)).reduce((a, o) => a + (parseFloat(o.x.jul) || 0), 0), dj = L.filter(o => !gsPend(o.x) && shLive(o.x)).reduce((a, o) => a + (parseFloat(o.x.jul) || 0), 0);
+        if (L.length) info.push(`편직 재고에 걸린 출고: 대기 ${pj}절 · 확인된 출고 ${dj}절 — 지우면 이 출고가 없던 것이 되어 생지 재고가 그만큼 돌아옵니다.`); }
+      if (wo.type === '편직') { const gids = new Set(); (wo.greige_shipments || []).forEach(x => { if (x && x.src === 'gs' && x.gs_id && !x.void) gids.add(x.gs_id); });
+        A.filter(g => g && gids.has(g.id) && !g.deleted).forEach(g => rows.push({ id: g.id, t: '이 생지를 쓰는 생지출고의뢰서 ' + gsT(g), on: false }));
+        const n = (wo.greige_shipments || []).filter(shLive).length; info.push(`이 편직 의뢰서의 생지 재고와 입·출고 ${n}줄이 재고 목록에서 빠지고, 편직팀 앱 [재고]에서도 사라집니다. 쓴 원사도 원사 재고로 돌아옵니다.`); }
+      const bg = document.createElement('div'); bg.className = 'hiwos-modal-bg'; bg.id = 'hw-delask'; bg.style.cssText = 'position:fixed;inset:0;z-index:10120;background:rgba(15,23,42,.45);display:flex;align-items:center;justify-content:center;';
+      bg.innerHTML = `<div style="background:#fff;border-radius:12px;width:min(560px,94vw);max-height:86vh;overflow:auto;box-shadow:0 24px 60px rgba(0,0,0,.3);font-family:var(--font-gothic,inherit);">
+        <div style="padding:14px 18px;border-bottom:2px solid #dc2626;font-size:15px;font-weight:800;color:#991b1b;">의뢰서 삭제 — ${escapeHtml(wo.wo_number || '')}</div>
+        <div style="padding:14px 18px;font-size:13px;line-height:1.7;color:#334155;">휴지통으로 이동하며, [삭제됨 포함]에서 되살릴 수 있습니다.
+          ${info.map(t => `<div style="margin-top:8px;padding:8px 10px;background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;font-size:12.5px;">${escapeHtml(t)}</div>`).join('')}
+          ${rows.length ? `<div style="margin-top:12px;font-weight:800;">연결된 의뢰서 — 체크한 것은 함께 휴지통으로</div>${rows.map((r, i) => `<label style="display:flex;gap:8px;align-items:flex-start;padding:7px 4px;border-bottom:1px solid #f1f5f9;cursor:pointer;"><input type="checkbox" data-dr="${i}"${r.on ? ' checked' : ''}><span>${escapeHtml(r.t)}</span></label>`).join('')}` : '<div style="margin-top:10px;color:#64748b;">연결된 다른 의뢰서는 없습니다.</div>'}
+        </div>
+        <div style="display:flex;justify-content:flex-end;gap:8px;padding:12px 18px;border-top:1px solid #e2e8f0;"><button type="button" class="dash-action-btn" data-dx>취소</button><button type="button" class="dash-action-btn danger" data-dok style="background:#dc2626;color:#fff;border-color:#b91c1c;font-weight:800;">삭제</button></div></div>`;
+      document.body.appendChild(bg);
+      const done = v => { bg.remove(); res(v); };
+      bg.querySelector('[data-dx]').onclick = () => done(null);
+      bg.addEventListener('mousedown', e => { if (e.target === bg) done(null); });
+      bg.querySelector('[data-dok]').onclick = () => { const also = [], keepGs = []; rows.forEach((r, i) => { const on = bg.querySelector(`[data-dr="${i}"]`).checked; if (r.keep) { if (!on) keepGs.push(r.id); } else if (on) also.push(r.id); }); done({ also, keepGs }); };
+    });
+  }
+  window.hwDelAsk = hwDelAsk;
   async function gsVoidShipment(gsId) {
     const by = state.user.email || '', at = new Date().toISOString();
     for (const wo of state.allWorkOrders) {
@@ -32960,13 +33090,21 @@ function validateBlendSum(blends, label) {
       ${canAdj ? `<button type="button" class="ys2-btn" id="ys-base" title="원장에 없는 사종 · 업체의 기초 재고를 넣습니다 (재고조정과 같은 창, 사유 = 기초 재고)">＋ 기초 재고</button>` : ''}
     </div>
     <div class="ys2-kpi">
-      <div class="main"><span>재고 합계${vk ? ' · ' + escapeHtml(S.vendor) : ''}</span><b class="${tot.st < 0 ? 'neg' : ''}">${f1(tot.st)}<small>kg</small></b></div>
+      ${(() => { const U = window.hwYarnUseCfg ? window.hwYarnUseCfg() : { loss_view: false, loss_pct: 3 }; const v = U.loss_view ? tot.st - tot.use * U.loss_pct / 100 : tot.st; return `<div class="main"><span>재고 합계${vk ? ' · ' + escapeHtml(S.vendor) : ''}${U.loss_view ? ' (로스 ' + U.loss_pct + '% 뺌)' : ''}</span><b class="${v < 0 ? 'neg' : ''}">${f1(v)}<small>kg</small></b></div>`; })()}
       <div><span>입고</span><b>${f1(tot.in)}<small>kg</small></b></div>
       <div><span>편직 사용</span><b>${tot.use ? '−' + f1(tot.use) : '0.0'}<small>kg</small></b></div>
       <div><span>조정 · 이동 · 반품</span><b>${sg(tot.adj + tot.mv + tot.ret)}<small>kg</small></b></div>
       <div class="${ymMv.length ? 'warn' : ''}"><span>이동 중 (받는 곳 확인 전)</span><b>${f1(ymKg)}<small>kg · ${ymMv.length}건</small></b></div>
       <div class="${PIN0 ? 'red' : ''}"><span>입고 기록 없는 원사 의뢰서</span><b>${PIN0}<small>건</small></b></div>
     </div>
+    ${(() => { const U = window.hwYarnUseCfg ? window.hwYarnUseCfg() : { basis: 'ship', loss_view: false, loss_pct: 3 }; const own = isOwnerUser(); const lossKg = tot.use * U.loss_pct / 100;
+      return `<div class="ys2-use" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:8px 0;padding:8px 12px;border:1px solid #e2e8f0;border-radius:8px;background:#f8fafc;font-size:12.5px;color:#334155;">
+        <b>원사 사용량 계산</b>
+        <span class="ys2-seg"><button type="button" class="ys2-btn${U.basis === 'ship' ? ' ok' : ''}" data-yuc="basis:ship"${own ? '' : ' disabled'} title="생지를 출고(가공처로 보냄)한 만큼만 원사에서 뺍니다">생지 출고한 만큼</button><button type="button" class="ys2-btn${U.basis === 'knit' ? ' ok' : ''}" data-yuc="basis:knit"${own ? '' : ' disabled'} title="편직한 생지(생지 재고에 들어간 것) 전체만큼 원사에서 뺍니다">편직한 생지 전체</button></span>
+        <span style="color:#cbd5e1">|</span>
+        <label style="display:inline-flex;gap:5px;align-items:center;cursor:${own ? 'pointer' : 'default'};"><input type="checkbox" data-yuc="loss_view"${U.loss_view ? ' checked' : ''}${own ? '' : ' disabled'}> 로스 <input type="number" min="0" max="20" step="0.5" data-yuc="loss_pct" value="${U.loss_pct}" style="width:52px;padding:2px 4px;border:1px solid #cbd5e1;border-radius:5px;"${own ? '' : ' disabled'}>% 뺀 재고로 보기</label>
+        <span style="color:#64748b;">${U.loss_view ? `지금 재고는 로스 ${U.loss_pct}% (편직 사용 ${f1(tot.use)}kg × ${U.loss_pct}% = ${f1(lossKg)}kg)를 뺀 숫자입니다 · 원장은 그대로` : `로스를 빼지 않은 남은 수량입니다 (로스 ${U.loss_pct}%를 빼면 ${f1(tot.st - lossKg)}kg)`}${own ? '' : ' · 바꾸기는 최고관리자'}</span></div>`; })()}
+    ${(n => n ? `<div class="ys2-inbar" style="background:#fef2f2;border:1px solid #fecaca;color:#7f1d1d;border-radius:8px;padding:8px 12px;margin:8px 0;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">편직공장이 [편직팀] 앱 › [재고] › [원사]에서 수량 다름 · 보냄 · 지우기 요청을 보냈습니다 — 우리가 확인해야 원사 재고가 바뀝니다 <button type="button" class="ys2-btn ok hw-yi-open">원사 재고 요청 ${n}건 보기</button></div>` : '')(window.hwYarnIssueCount ? window.hwYarnIssueCount() : 0)}
     ${(() => { const O = window.hwYrOrphans ? window.hwYrOrphans() : []; if (!O.length) return '';   /* hotfix601: 601 전에 휴지통으로 보낸 원사 구매의뢰서 — 입고가 재고에 남아 있음 (데이터는 대표가 눌러야 바뀜) */
       return `<div class="ys-in" style="border-color:#fecaca;background:#fef2f2;"><div style="padding:10px 12px;font-size:12.5px;color:#7f1d1d;line-height:1.7;"><b>휴지통에 있는 원사 구매의뢰서 ${O.length}건의 입고가 아직 원사 재고에 남아 있습니다</b> — 반품(완전 반품)으로 처리하면 재고에서 빠지고 기록이 남습니다.<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;">${O.map(w => `<button class="dash-action-btn ys-orph" data-id="${escapeHtml(w.id)}" style="font-size:11.5px;padding:3px 10px;">${escapeHtml(w.wo_number || '')} · ${escapeHtml(w.supplier || '')} → 반품 처리</button>`).join('')}</div></div></div>`; })()}
     ${(() => { if (!PIN0) return '';
@@ -32993,7 +33131,7 @@ function validateBlendSum(blends, label) {
       h += `<tr class="ys-row${open ? ' open' : ''}" data-key="${escapeHtml(r.key)}">
         <td class="l" title="${escapeHtml(r.yarn || '')}"><div class="nm"><i>▶</i><b>${escapeHtml(yarnNameShow(r.yarn))}</b><span class="ys2-cl">${escapeHtml(r.color || YARN_LW)}</span></div></td><td class="l vd">${escapeHtml(r.vendor || '(업체 없음)')}</td>
         <td>${nz(r.in_kg)}</td><td>${r.use_kg ? '<span class="u">−' + f1(r.use_kg) + '</span>' : '<span class="z">-</span>'}</td><td>${nz(r.adjust_kg)}</td><td>${nz(r.move_kg)}</td><td>${nz(r.ret_kg, 'rt')}</td>
-        <td><span class="ys2-st${r.stock_kg < 0 ? ' neg' : Math.abs(r.stock_kg) < 0.05 ? ' zero' : ''}">${f1(r.stock_kg)}</span>${t ? `<span class="ys2-wait" title="원사이동 의뢰서로 오는 중">입고 대기 +${f1(t)}</span>` : ''}</td>
+        <td>${(() => { const U = window.hwYarnUseCfg ? window.hwYarnUseCfg() : { loss_view: false, loss_pct: 3 }; const v = U.loss_view ? r.stock_kg - r.use_kg * U.loss_pct / 100 : r.stock_kg; return `<span class="ys2-st${v < 0 ? ' neg' : Math.abs(v) < 0.05 ? ' zero' : ''}" title="${U.loss_view ? '로스 ' + U.loss_pct + '% 뺀 값 · 빼기 전 ' + f1(r.stock_kg) + 'kg' : ''}">${f1(v)}</span>`; })()}${t ? `<span class="ys2-wait" title="원사이동 의뢰서로 오는 중">입고 대기 +${f1(t)}</span>` : ''}</td>
         <td class="c" style="white-space:nowrap;">${canAdj ? `<span class="ys2-acts"><button type="button" class="ys-adjust" data-key="${escapeHtml(r.key)}" title="시스템 재고 vs 실측(청구서) kg — 차이를 조정 줄로">재고조정</button><button type="button" class="ys-move" data-key="${escapeHtml(r.key)}" title="원사이동 의뢰서 — 다른 편직공장 · 창고로">이동</button><button type="button" class="ys-ret" data-key="${escapeHtml(r.key)}" title="원사 구매처로 반품 (구매의뢰서에 연결)">반품</button></span>` : '<span style="font-size:11px;color:#9ca3af;">허용자만</span>'}</td></tr>`;
       if (open) {
         const ls = yarnStockLines(r.key);
@@ -33071,6 +33209,10 @@ function validateBlendSum(blends, label) {
     document.querySelectorAll('#dash-body .ys-ret').forEach(b => b.addEventListener('click', e => { e.stopPropagation(); const r = rowOf(b.dataset.key); if (r && window.hwYrForm) window.hwYrForm(r); }));
     document.getElementById('ys-ym')?.addEventListener('click', () => { if (window.hwYmList) window.hwYmList(); });
     document.getElementById('ys-sum')?.addEventListener('click', () => yarnSumPopup());   /* hotfix603 */
+    document.querySelectorAll('[data-yuc]').forEach(el => { const k = el.dataset.yuc; const go = v => { if (window.hwYarnUseCfgSave) window.hwYarnUseCfgSave(v); };   /* hotfix618 */
+      if (k.startsWith('basis:')) el.addEventListener('click', () => { const b = k.slice(6); if ((window.hwYarnUseCfg().basis) !== b) go({ basis: b }); });
+      else if (k === 'loss_view') el.addEventListener('change', () => go({ loss_view: el.checked }));
+      else if (k === 'loss_pct') el.addEventListener('change', () => { const v = parseFloat(el.value); if (isFinite(v) && v >= 0 && v <= 20) go({ loss_pct: v }); }); });
     document.querySelectorAll('#dash-body #ys-lk [data-lk]').forEach(b => b.addEventListener('click', () => { S.logKind = b.dataset.lk; renderDashboard(); }));
     document.querySelectorAll('#dash-body .ys-woed').forEach(b => b.addEventListener('click', e => { e.stopPropagation(); if (window.hwWoOpen) window.hwWoOpen(b.dataset.id, 'edit'); }));
     document.getElementById('ys-ymnew')?.addEventListener('click', () => { if (window.hwYmForm) window.hwYmForm(null); });   /* hotfix602: 원사부터 고르는 새 작성 창 */
@@ -40993,7 +41135,9 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
       if (!name) { toast('품목명을 넣어 주십시오', 'error'); nmEl.focus(); return; }
       const list = getFabricSpecs().map(x => Object.assign({}, x));
       const same = list.find(x => String(x.name || '').trim() === name);
-      if (same) { toast('이미 [' + name + '] 이(가) 있습니다' + (specFid(same) ? ' — ' + specFid(same) : ''), 'error'); nmEl.focus(); return; }
+      /* hotfix618(대표 10/8 "입력 취소했는데 상품명이 남아 같은 이름으로 제작이 안 됨"): 전에 [생지 만들기]만 하고 편직 설정을 안 하고 닫은 빈 생지면 — 그것을 이어서 설정 */
+      if (same && specFid(same) && specIsBlank(specFid(same))) { const fid0 = specFid(same); if (confirm('[' + name + '] (' + fid0 + ') 은(는) 전에 만들고 편직 설정을 하지 않은 빈 생지입니다.\n\n그 생지에 이어서 편직 설정을 할까요?')) { m.remove(); openKnitFeePopup(fid0, m.querySelector('#kn-fac').value || '', null, () => { if (state.uiMode === 'dashboard') renderDashboard(); }, { fromNew: true }); } return; }
+      if (same) { const fid1 = specFid(same); if (fid1 && confirm('이미 [' + name + '] (' + fid1 + ') 이(가) 있습니다' + (same.active === false ? ' — 작업종료로 가려져 있습니다' : '') + '.\n\n그 생지의 편직 설정을 열까요?')) { m.remove(); openKnitFeePopup(fid1, m.querySelector('#kn-fac').value || '', null, () => { if (state.uiMode === 'dashboard') renderDashboard(); }, {}); } else nmEl.focus(); return; }
       if (typeof nameSimilarList === 'function') {   /* hotfix465: 비슷한 이름은 여기서 한 번만 묻는다 */
         const hits = nameSimilarList(name, list.map(x => x.name), []);
         if (hits.length && !confirm('비슷한 품목 이름이 이미 있습니다:\n\n' + hits.map(h => '· ' + h).join('\n') + '\n\n그래도 [' + name + '] 을(를) 새로 만들까요?')) return;
@@ -41459,6 +41603,7 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
       const rowVal = (row, cls, id) => String(((row.querySelector('.' + cls) || row.querySelector('#' + id)) || {}).value || '').trim();
       // 줄에 사종을 정한다 — 빈 줄이면 새 줄이 되고(다음 빈 줄 생김), 있던 줄이면 루프장 · 직접 % · 합사를 새 사종이 이어 받는다(옛 사종 줄은 빠짐). 카드 [원사]는 [저장] 때 renames 로 이어 받는다
       /* hotfix433: 자리 값 도우미 — stash() 뒤(K[V] 가 화면과 같을 때) 쓴다 */
+      const kfJustAdded = {};   /* hotfix618 */
       const partsOf = nm => { const a = K[V] && K[V].loop_parts && K[V].loop_parts[nm]; return (Array.isArray(a) && a.length >= 2) ? a.slice() : [{ loop: (K[V].loops || {})[nm], pct: (K[V].pcts || {})[nm], ply: (K[V].plys || {})[nm] }]; };
       const setParts = (nm, arr) => {
         if (!K[V].loop_parts) K[V].loop_parts = {}; if (!K[V].pcts) K[V].pcts = {}; if (!K[V].plys) K[V].plys = {};
@@ -41475,6 +41620,9 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
         if (me && !yarns.includes(me)) return false;
         const lp = rowVal(row, 'kf-loop', 'kf-newyarn-loop'), pc = rowVal(row, 'kf-pct', 'kf-newyarn-pct'), py = rowVal(row, 'kf-ply', 'kf-newyarn-ply');
         if (yarns.includes(real)) {
+          /* hotfix618(대표 10/8 "루프장이 1개만 들어가면 되는데 왜 여러 개"): 사종 칸 · 컬러 칸이 같은 고르기를 두 번 알려 자리가 저절로 하나 더 생기던 것 — 방금 넣은 원사면 무시 · 일부러 한 자리 더 쓸 때만 물어서 */
+          if (Date.now() - (kfJustAdded[real] || 0) < 3000) { paint(); return false; }
+          if (!confirm(`"${real}" 은(는) 이미 위에 있습니다.\n\n같은 원사를 한 자리 더 쓸까요? (자리마다 루프장이 다를 때만 — 보통은 [취소])`)) { paint(); return false; }
           // hotfix422i → hotfix433: 같은 원사를 여러 자리에 쓰는 경우(대표 확정 9/17) — 합치지 않고 그 원사 아래에 자리를 하나 더 만든다. 자리마다 루프장 · 직접 % · 합사가 따로이고, 저장되는 합(loops · pcts)은 자리 값을 더한 것
           stash(); touched = true;
           const mine = me ? partsOf(me) : [{ loop: lp, pct: pc, ply: py }];
@@ -41486,7 +41634,7 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
           const f2 = [...wrap.querySelectorAll(want2)].filter(e => e.dataset.y === real).pop(); if (f2) { try { f2.focus(); } catch (_) {} }
           return true;
         }
-        stash(); touched = true;
+        stash(); touched = true; kfJustAdded[real] = Date.now();
         if (!K[V].plys) K[V].plys = {};
         const meParts = (me && K[V].loop_parts && Array.isArray(K[V].loop_parts[me]) && K[V].loop_parts[me].length >= 2) ? K[V].loop_parts[me] : null;   /* hotfix433: 사종을 바꾸면 자리 값도 새 사종이 이어 받는다 */
         if (meParts) delete K[V].loop_parts[me];
@@ -41560,7 +41708,10 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
       ['#kf-newyarn', '#kf-newyarn-loop', '#kf-newyarn-pct', '#kf-newyarn-ply'].forEach(q => wrap.querySelector(q)?.addEventListener('keydown', ev => { if (ev.key === 'Enter') { ev.preventDefault(); addNewYarn(); } }));
       paintBlend();
       const askLeave = () => !dirty() || confirm('고친 값이 아직 저장되지 않았습니다.\n[저장]을 누르지 않고 옮기면 사라집니다.\n\n그래도 옮길까요?');
-      wrap.querySelector('#kf-close').addEventListener('click', () => { if (!askLeave()) return; if (kfH) kfH.flush(); wrap.remove(); if (typeof onClose === 'function') { try { onClose(); } catch (e) {} } });
+      wrap.querySelector('#kf-close').addEventListener('click', async () => { if (!askLeave()) return; if (kfH) kfH.flush(); wrap.remove();
+        /* hotfix618: [생지 추가]로 막 만든 생지를 편직 설정 없이 닫으면 — 지울지 물음 (지우면 같은 이름으로 다시 만들 수 있음) */
+        if (fromNew && specIsBlank(fid)) { const s0 = itemByFid(fid); if (s0 && confirm('[' + (s0.name || fid) + '] 편직 설정을 하지 않았습니다.\n\n방금 만든 이 생지(' + fid + ')를 지울까요?\n(지우지 않으면 빈 생지로 남고, 같은 이름으로 다시 [생지 추가]하면 이어서 설정할 수 있습니다)')) { const ok = await saveFabricSpecs(getFabricSpecs().filter(x => specFid(x) !== fid).map(x => ({ ...x }))); if (ok) toast('[' + (s0.name || fid) + '] 을(를) 지웠습니다', 'success'); } }
+        if (typeof onClose === 'function') { try { onClose(); } catch (e) {} } });
       wrap.querySelector('#kf-cancel')?.addEventListener('click', () => wrap.querySelector('#kf-close').click());
       // hotfix419: 침수 · 편직료는 1,234 로 보인다 (저장은 숫자)
       wrap.querySelectorAll('.kf-comma').forEach(el => el.addEventListener('blur', () => { const x = kfNum(el.value); el.value = x == null ? '' : x.toLocaleString('ko-KR'); }));
@@ -54639,8 +54790,10 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
         if (!wo) return;
         if (!canDeleteWo(wo)) { toast('이 화면에서 삭제할 권한이 없습니다', 'info'); return; }
         let __yr601 = null; if (wo.type === '원사' && window.hwYarnDelGate) { __yr601 = await window.hwYarnDelGate(wo); if (__yr601 === false) return; }   /* hotfix601: 원사 완전 반품 */
-        if (!__yr601 && !confirm(`이 의뢰서를 삭제하시겠습니까?\n\n[${wo.wo_number || ''}]\n\n(휴지통으로 이동되며, "삭제됨 포함" 체크 시 복구할 수 있습니다)`)) return;
+        /* hotfix618(대표 10/8): 지울 때 연결된 의뢰서 · 재고를 보여 주고 함께 지울지 고름 */
+        let __rel = null; if (!__yr601) { __rel = window.hwDelAsk ? await window.hwDelAsk(wo) : (confirm(`이 의뢰서를 삭제하시겠습니까?\n\n[${wo.wo_number || ''}]`) ? { also: [], keepGs: [] } : null); if (!__rel) return; }
         try {
+          if (__rel && __rel.keepGs && __rel.keepGs.length) { for (const gid of __rel.keepGs) { try { await updateDoc(doc(db, C('workorders'), gid), { gs_keep: true, updated_at: serverTimestamp(), updated_by: state.user.email }); } catch (_) {} } }
           await updateDoc(doc(db, C('workorders'), id), {
             deleted: true,
             deleted_at: serverTimestamp(),
@@ -54649,6 +54802,8 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
             updated_by: state.user.email
           });
           toast('삭제 완료 (휴지통 이동)', 'success');
+          if (__rel && __rel.also && __rel.also.length) { let n2 = 0; for (const aid of __rel.also) { try { await updateDoc(doc(db, C('workorders'), aid), { deleted: true, deleted_at: serverTimestamp(), deleted_by: state.user.email, del_with: id, updated_at: serverTimestamp(), updated_by: state.user.email }); n2++; } catch (_) {} } if (n2) toast(`연결된 의뢰서 ${n2}건도 휴지통으로 보냈습니다`, 'info'); }
+          try { if (window.hwGsFnCascade) setTimeout(() => window.hwGsFnCascade(), 800); } catch (_) {}
           if (__yr601 && window.hwYarnFullReturn) { try { await window.hwYarnFullReturn(wo, __yr601); } catch (e2) { console.warn('[완전 반품]', e2 && e2.message); } }
         } catch (e) { toast('삭제 실패: ' + e.message, 'error'); }
       });
@@ -59193,7 +59348,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix617';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
+  const VERSION = 'v2.53 hotfix618';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
@@ -59450,11 +59605,12 @@ window.addEventListener('beforeunload', e => {
       let stock = []; try { const isK = (P.accs.find(a => a.active && a.vendor === vn && (a.app === 'knit' || a.app === 'proc')) || {}).app; if ((isK === 'knit' || (!isK && knit)) && window.__hwGs && window.__hwGs.stockRows) stock = window.__hwGs.stockRows(vn).map(r => Object.assign({ k: r.k, wo: r.wo, date: r.date, kind: r.kind, item: r.item, lot: r.lot, ord: r.ord, out: r.out, rem: r.rem, kg: r.kg, pend: r.pend, pg: r.pg }, r.kd != null ? { kd: r.kd } : {}));   /* hotfix610: kd = 편직 완료 절 */ } catch (_) { stock = []; }   /* hotfix570: 편직팀 앱 [재고] — 그 공장 것만 */
       let mv = []; try { if (window.hwMvFor) mv = window.hwMvFor(vn); } catch (_) { mv = []; }
       let yin = []; try { if (window.__hwGs && window.__hwGs.yinFor && (stock.length || knit)) yin = window.__hwGs.yinFor(vn).slice(0, 60); } catch (_) { yin = []; }   /* hotfix614: 편직팀 앱 [원사 받을 것] */   /* hotfix586: 편직팀 앱 [이동] — 보내는 곳 · 받는 곳 */
-      const lists = P.listsOf(); const sig = hash(JSON.stringify([out[vn], lists, gs, knit, stock, mv, yin, P.accs.filter(a => a.vendor === vn).map(a => a.app || '')]));
+      let ystock = []; try { if (window.__hwGs && window.__hwGs.yarnPubFor && (stock.length || knit)) ystock = window.__hwGs.yarnPubFor(vn); } catch (_) { ystock = []; }   /* hotfix618: 편직팀 앱 [재고 › 원사] */
+      const lists = P.listsOf(); const sig = hash(JSON.stringify([out[vn], lists, gs, knit, stock, mv, yin, ystock, P.accs.filter(a => a.vendor === vn).map(a => a.app || '')]));
       { const srv = P.pubs[vn]; if (srv && srv.sig === sig) continue;
         if (sent[vn] === sig && (srv || Date.now() - (sentAt[vn] || 0) < 60000)) continue;   /* hotfix596: 서버에 남의 판이 있으면 지금처럼 그대로 둠(내 자료가 더 옛것일 수 있음 · 두 PC 가 다투지 않게) — 서버에서 지워졌을 때만(계정 다시 만듦) 1분 뒤 다시 씀 */ }
       sent[vn] = sig; sentAt[vn] = Date.now();
-      try { await f.setDoc(f.doc(f.db, f.C('proc_pub'), vn), { vendor: vn, items: out[vn], lists, n: out[vn].length, stock, gs, gs_n: gs.filter(x => x.pend > 0).length, mv, mv_n: mv.filter(x => x.left > 0).length, yin, mode: (P.accs.find(a => a.active && a.vendor === vn && (a.app === 'knit' || a.app === 'proc')) || {}).app || (knit && !out[vn].length ? 'knit' : (knit ? 'both' : 'proc')), sig, at: f.serverTimestamp(), by: email() }); n++; }
+      try { await f.setDoc(f.doc(f.db, f.C('proc_pub'), vn), { vendor: vn, items: out[vn], lists, n: out[vn].length, stock, gs, gs_n: gs.filter(x => x.pend > 0).length, mv, mv_n: mv.filter(x => x.left > 0).length, yin, ystock, mode: (P.accs.find(a => a.active && a.vendor === vn && (a.app === 'knit' || a.app === 'proc')) || {}).app || (knit && !out[vn].length ? 'knit' : (knit ? 'both' : 'proc')), sig, at: f.serverTimestamp(), by: email() }); n++; }
       catch (e) { sent[vn] = ''; console.warn('[공정 체크 게시]', e && e.message); }
     }
     return n;
@@ -59785,6 +59941,7 @@ window.addEventListener('beforeunload', e => {
     if (l.part === 'gs' && l.kind === 'st' && l.stage === 'yarn_in') return '편직팀 · 원사 받았어요 — ' + (l.label || l.wo || '') + ' · 송장 ' + (parseFloat(l.body) || 0) + 'kg' + (l.note ? ' · ' + l.note : '') + ' · 확인 필요';   /* hotfix614 */
     if (l.part === 'gs' && l.kind === 'ship' && l.reason === 'self') return '편직팀 · 의뢰서 없이 출고 ' + (l.body || 0) + '절' + (Number(l.n) ? ' · ' + l.n + 'kg' : '') + (l.chip ? ' → ' + l.chip : '') + ' · ' + (l.label || '') + ' · 확인 필요';   /* hotfix614 */
     if (l.k === 'chat') { const w = l.part === 'gs' ? '편직팀' : '가공소'; return l.kind === 'cancel' ? w + ' · 보낸 글 취소' : (l.kind === 'st' ? '' : w + ' · 메시지 — ' + String(l.note || '')); }   /* hotfix612 · 613: 대화 */
+    if (l.part === 'gs' && l.kind === 'issue' && /^원사 /.test(String(l.issue || ''))) return '편직팀 · ' + l.issue + ' — ' + (l.label || '') + (l.issue === '원사 수량 다름' ? ' · FABIWOS ' + (l.body || 0) + 'kg / 공장 ' + (l.n || 0) + 'kg' : l.issue === '원사 보냄' ? ' · ' + (l.n || 0) + 'kg → ' + (l.chip || '') : '') + (l.note ? ' · ' + l.note : '');   /* hotfix618 */
     if (l.part === 'gs' && l.kind === 'issue' && l.issue === '편직 완료') return '편직팀 · 편직 완료 — ' + (l.label || l.wo || '') + ' · 의뢰 ' + (l.body || 0) + '절 / 짠 것 ' + (l.n || 0) + '절' + (l.note ? ' · ' + l.note : '');   /* hotfix610 */
     if (l.part === 'gs' && l.kind === 'issue') return '편직팀 · 재고 수량 다름 — ' + (l.label || l.wo || '') + ' · FABIWOS ' + (l.body || 0) + '절 / 공장 ' + (l.n || 0) + '절' + (l.note ? ' · ' + l.note : '');   /* hotfix572 */
     if (l.part === 'gs' && l.kind === 'cancel') return '편직팀 · 보낸 것 취소 요청' + (l.note ? ' — ' + l.note : '') + ' · 확인 필요';   /* hotfix581 */
@@ -59842,12 +59999,13 @@ window.addEventListener('beforeunload', e => {
         if (e.target.closest('[data-hwn-deldone]')) { const ids = P.newsAll().filter(l => P.newsDone(l)).map(l => l.id); if (!ids.length) return; if (!confirm('완료된 건의 소식 ' + ids.length + '개를 목록에서 삭제할까요?\n(출고 완료 · 완료 · 삭제된 의뢰서 — 공정 기록 · 이력은 그대로 남습니다)')) return; newsHide(ids); const s0 = dismissed(); ids.forEach(i => s0.add(i)); saveDismiss(s0); P.notifyScan(); try { rerender(); } catch (_) {} return; }
         if (x || all) { const s = dismissed(); (all ? Array.from(box.querySelectorAll('[data-hwn-id]')).map(n => n.dataset.hwnId) : [x.dataset.hwnX]).forEach(id => s.add(id)); saveDismiss(s); P.notifyScan(); return; }
         if (go && String(go.dataset.hwnGo || '').startsWith('chat:')) { const pp = go.dataset.hwnGo.split(':'); try { window.hwKcOpen(pp.slice(2).join(':'), pp[1]); } catch (_) {} return; }   /* hotfix612 · 613 */
-        if (go && go.dataset.hwnGo === 'gs:yin') { try { window.hwYinOpen(); } catch (_) {} return; }   /* hotfix614 */
+        if (go && go.dataset.hwnGo === 'gs:yin') { try { window.hwYinOpen(); } catch (_) {} return; }
+        if (go && go.dataset.hwnGo === 'gs:yi') { try { window.hwYarnIssueOpen(); } catch (_) {} return; }   /* hotfix618 */   /* hotfix614 */
         if (go) { const gv = go.dataset.hwnGo; if (gv === 'gs:issue' || gv === 'gs:wait') { try { const G = window.__hwGs; if (gv === 'gs:issue' && G.stockIssueOpen) G.stockIssueOpen(); else if (G.openWait) G.openWait(); } catch (_) {} return; }   /* hotfix579: 편직팀 기록은 [재고 수량 확인] · [출고 확인 대기]로 */
           const [w, c] = gv.split('|'); P.openModal(w, parseInt(c, 10)); }
       }); }
     const show = L.slice(0, P.newsOpen ? 40 : 4);
-    const itemName = l => { if (l.k === 'chat') return '';   /* hotfix616: 대화 글에 "앱 0절 → 공장 0절"이 붙던 것 */
+    const itemName = l => { if (l.k === 'chat' || String(l.k || '').startsWith('yk:')) return '';   /* hotfix616: 대화 글에 "앱 0절 → 공장 0절"이 붙던 것 */
       if (l.part === 'gs') return `<b>${esc(l.label || l.wo || '')}</b>${l.kind === 'issue' ? `<span class="hwn-q"><em>앱 ${Number(l.body) || 0}절 → 공장 ${Number(l.n) || 0}절</em></span>` : (l.kind === 'ship' && Number(l.body) ? `<span class="hwn-q"><em>${Number(l.body)}절${Number(l.n) ? ' · ' + Number(l.n) + 'kg' : ''}</em></span>` : '')}`;   /* hotfix579: 편직팀 기록은 생지 이름 · 수량으로 */
       const w = woById(String(l.k || '').replace(/_\d+$/, '')); const ci = parseInt(String(l.k || '').split('_').pop(), 10); if (!w) return ''; const c = (w.colors || [])[ci] || {}; const bt = String(c.bt_no || '').trim();
       return `<b>${esc((w.body || {}).item || (w.rib || {}).item || '')}</b> · ${esc(c.name || '')}${bt && !String(c.name || '').includes(bt) ? ' <span class="hwn-bt">#' + esc(bt) + '</span>' : ''}<span class="hwn-q"><em>몸판 ${Number(c.body) || 0}절</em>${Number(c.rib) ? `<em class="rib">리프 ${Number(c.rib)}절</em>` : ''}</span>`; };
@@ -59859,7 +60017,7 @@ window.addEventListener('beforeunload', e => {
       const tone = l.kind === 'issue' ? 'warn' : (l.kind === 'ship' ? 'ok' : (l.kind === 'eta' ? 'eta' : 'st'));
       const seen = dis.has(l.id);
       return `<div class="hwn-card ${tone}${seen && P.newsOpen ? ' seen' : ''}" data-hwn-id="${esc(l.id)}"><div class="hwn-top"><span class="hwn-v">${esc(l.vendor || '')}</span><span class="hwn-t">${hhmm(tOf(l))}</span>${seen && P.newsOpen ? '<span class="hwn-seen">읽음</span>' : ''}${P.newsOpen ? `<button type="button" class="hwn-del" data-hwn-del="${esc(l.id)}" title="이 소식을 목록에서 삭제(공정 기록은 그대로)">삭제</button>` : `<button type="button" class="hwn-x" data-hwn-x="${esc(l.id)}" aria-label="닫기">✕</button>`}</div>
-        <div class="hwn-msg">${esc(notifText(l))}</div><div class="hwn-it">${itemName(l)}</div><button type="button" class="hwn-go" data-hwn-go="${l.k === 'chat' ? 'chat:' + (l.part === 'gs' ? 'gs' : 'pc') + ':' + esc(l.vendor || '') : l.part === 'gs' ? (l.kind === 'issue' ? 'gs:issue' : (l.stage === 'yarn_in' ? 'gs:yin' : 'gs:wait')) : esc(woId) + '|' + esc(ci)}">${l.k === 'chat' ? '답장' : '보기'}</button></div>`;
+        <div class="hwn-msg">${esc(notifText(l))}</div><div class="hwn-it">${itemName(l)}</div><button type="button" class="hwn-go" data-hwn-go="${l.k === 'chat' ? 'chat:' + (l.part === 'gs' ? 'gs' : 'pc') + ':' + esc(l.vendor || '') : l.part === 'gs' ? (l.kind === 'issue' ? (String(l.k || '').startsWith('yk:') ? 'gs:yi' : 'gs:issue') : (l.stage === 'yarn_in' ? 'gs:yin' : 'gs:wait')) : esc(woId) + '|' + esc(ci)}">${l.k === 'chat' ? '답장' : '보기'}</button></div>`;
     }).join('') + '</div>' + (L.length > show.length ? `<div class="hwn-more">외 ${L.length - show.length}건${P.newsOpen ? '' : ' · [공정 현황]의 [가공소 소식]에서 모두 봄'}</div>` : '');
   }
 

@@ -173,6 +173,7 @@ button{font-family:inherit;cursor:pointer}
 .kc-b{padding:10px 13px;border-radius:15px;font-size:16px;line-height:1.5;white-space:pre-wrap;word-break:break-word}
 .kc-m.us .kc-b{background:#fff;border:1px solid var(--line);border-top-left-radius:5px}.kc-m.me .kc-b{background:#059669;color:#fff;border-top-right-radius:5px}
 .kc-rd{color:#059669}.kc-ur{color:#d97706}
+.st-seg{display:flex;gap:6px;margin:0 0 10px;background:#e2e8f0;border-radius:12px;padding:4px}.st-seg button{flex:1;border:0;background:none;border-radius:9px;padding:10px 6px;font-size:16px;font-weight:800;color:#475569;font-family:inherit}.st-seg button.on{background:#fff;color:#047857;box-shadow:0 1px 3px rgba(0,0,0,.12)}
 .kc-re{font-size:12.5px;color:#64748b;margin:0 4px 3px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.kc-rp{border:0;background:none;color:#2563eb;font-size:12px;text-decoration:underline;padding:0;font-family:inherit;font-weight:700}.kc-rbar{font-size:13px;color:#334155;background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:6px 10px;margin-bottom:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.kc-rbar button{border:0;background:none;color:#b91c1c;font-weight:700;text-decoration:underline;font-family:inherit;font-size:12.5px;padding:0;margin-left:4px}
 .kc-meta{font-size:12px;color:#94a3b8;margin-top:3px}.kc-x{border:0;background:none;color:#b91c1c;font-size:12px;text-decoration:underline;padding:0;font-family:inherit}
 .kc-bar{position:fixed;left:0;right:0;bottom:calc(68px + env(safe-area-inset-bottom));z-index:5;background:#fff;border-top:1px solid var(--line);padding:7px 10px 8px;box-shadow:0 -4px 14px rgba(15,23,42,.06)}
@@ -270,7 +271,7 @@ import { initializeFirestore, getFirestore, persistentLocalCache, persistentMult
  *   읽는 것: proc_acc/{내 uid} · proc_pub/{내 업체}.gs (현일텍스가 보낸 생지출고) · proc_log(내 업체 것만)
  *   쓰는 것: proc_log 한 줄 — kind 'ship' part 'gs' (body 절 · n kg · ref 송장 사진) · kind 'st' part 'gs' stage seen | ack_cxl | photo
  *   사진: Storage gs_photos/{업체}/{생지출고}_{시각}.jpg */
-const KVER = 'k53 (hotfix617)';
+const KVER = 'k54 (hotfix618)';
 /* hotfix572(대표 10/1): 거래 원단회사 고르기 — FABIWOS 는 여러 원단회사에 팔 프로그램. 편직공장 한 곳이 여러 원단회사와 거래하므로
  *   계정(proc_acc.companies)에 거래 원단회사 목록 · 위 [→ 원단회사 ▾] 와 삼선 메뉴에서 고름 · 고른 회사의 할 일 · 재고 · 보낸 내역만 보임
  *   지금은 현일텍스 한 곳 (이 서버 = 현일텍스 자료). 다른 원단회사가 FABIWOS 를 쓰면 그 회사 자료 자리(co.src)를 더해 같은 앱에서 바꿔 봄 */
@@ -432,6 +433,7 @@ function subscribe() {
   S.unsub.push(onSnapshot(doc(db, 'proc_pub', acc.vendor), sn => { S.live = true; const d = sn.exists() ? sn.data() : {};
     S.gs = Array.isArray(d.gs) ? d.gs : []; S.stock = Array.isArray(d.stock) ? d.stock : [];   // hotfix570: 이 공장 생지 재고
     S.yin = Array.isArray(d.yin) ? d.yin : [];   /* hotfix614: 원사 받을 것 */
+    S.ystock = Array.isArray(d.ystock) ? d.ystock : [];   /* hotfix618: 이 공장에 있는 원사 */
     S.mv = Array.isArray(d.mv) ? d.mv : [];   /* hotfix586: 공장 간 이동 (보내는 곳 · 받는 곳) */
     { const mk = S.mv.filter(x => x.st !== 'cancel').map(x => x.k); if (S.mvKnown) { const nw = S.mv.filter(x => x.st !== 'cancel' && !S.mvKnown.includes(x.k)); if (nw.length) { ring(); toast('새 공장 간 이동 ' + nw.length + '건 — [이동]을 보십시오'); } } S.mvKnown = mk; }
     if (!acc.app && d.mode === 'proc' && !S.gs.length) { S.acc = null; signOut(auth).catch(() => {}); showLogin('이 아이디는 [염/가공소 앱] 전용입니다. 편직팀 앱은 편직공장 아이디로 들어오십시오.'); return; }   // hotfix566: 예전 계정(앱 종류 없음)도 옮겨 가지 않음
@@ -655,10 +657,52 @@ function kStockRes() {
   return IT.map(it => { const RI = R.filter(r => r.item === it).sort((a, b) => String(a.lot).localeCompare(String(b.lot)) || String(b.date).localeCompare(String(a.date))); const tj = RI.reduce((a, r) => a + r.rem, 0), tk = RI.reduce((a, r) => a + r.kg, 0), tp = RI.reduce((a, r) => a + (r.pend || 0), 0);
     return `<div class="st-g"><div class="st-h"><b>${esc(it)}</b><span><b>${kQ(tj)}</b>절 · ${tk.toFixed(1)}kg</span></div>${tp ? `<div class="st-hp">출고 대기 ${kQ(tp)}절을 빼면 <b>${kQ(tj)}절</b> (공장에 실제 ${kQ(tj + tp)}절)</div>` : ''}${RI.map(kStockRow).join('')}</div>`; }).join('');
 }
+/* hotfix618(대표 10/8): [재고] 안에 [생지] · [원사] — 원사도 수량 다름 · 다른 곳으로 보냄 · 지우기 요청 (숫자는 현일텍스가 확인해야 바뀜 · 지우기는 현일텍스 허락) */
+const YI = { diff: '원사 수량 다름', ship: '원사 보냄', del: '원사 지우기 요청' };
+function kYIssues(r) { return S.logs.filter(l => l.by === 'vendor' && l.kind === 'issue' && l.k === r.k && Object.values(YI).includes(l.issue)).sort((a, b) => tOf(b) - tOf(a)).slice(0, 3).map(i => ({ i, d: S.logs.filter(u => u.by === 'us' && u.kind === 'note' && u.ref === i.id).reduce((p, u) => (!p || tOf(u) >= tOf(p)) ? u : p, null) })); }
+function kYRow(r) {
+  const L = kYIssues(r);
+  return `<div class="st-r2"><div style="display:flex;align-items:baseline;gap:10px;padding:2px 0 6px"><span style="flex:1;min-width:0;font-size:17px;font-weight:800;color:#0f172a;word-break:keep-all">${esc(r.yarn)}${r.color ? ' <small style="color:#64748b;font-weight:700">' + esc(r.color) + '</small>' : ''}</span><span style="white-space:nowrap;font-size:15px;color:#475569"><b style="font-size:20px;color:#065f46">${Number(r.kg || 0).toFixed(1)}</b>kg</span></div>
+    ${L.map(o => { const w = o.i.issue === YI.diff ? '수량이 다르다고 보냄 (' + o.i.n + 'kg)' : o.i.issue === YI.ship ? (o.i.chip || '') + '(으)로 ' + o.i.n + 'kg 보냄' : '지우기 요청'; if (!o.d) return `<div class="st-is">${esc(w)} · ${esc(CN())} 확인 중</div>`; const a = kAns(o.d); return `<div class="st-is ${a.rej ? 'rj' : 'ok'}">${esc(w)} — ${esc(CN())} ${a.rej ? '반려 · ' + esc(a.body) : '확인 완료'}</div>`; }).join('')}
+    <div class="st-btns"><button type="button" class="st-ship" data-yship="${esc(r.k)}">다른 곳으로 보냄</button><button type="button" class="st-diff" data-ydf="${esc(r.k)}">수량이 달라요</button><button type="button" class="st-diff" data-ydel="${esc(r.k)}" style="color:#b45309;border-color:#fdba74">지우기 요청</button></div></div>`;
+}
+function kYStock() {
+  const q = kNorm(S.sq || ''); const R = (S.ystock || []).filter(r => !q || [r.yarn, r.color].some(t => kNorm(t).includes(q)));
+  const tk = (S.ystock || []).reduce((a, r) => a + Math.max(0, r.kg || 0), 0);
+  return `<div class="k-sum"><div style="font-size:15px;font-weight:800;color:#065f46">${esc(S.acc.vendor)}에 있는 ${esc(CN())} 원사</div><b>${tk.toFixed(1)}kg</b><div style="font-size:14.5px;color:#475569">사종 ${(S.ystock || []).length}줄</div></div>
+    <div class="st-find"><input id="st-q" type="search" placeholder="사종 · 컬러 찾기" value="${esc(S.sq || '')}" autocomplete="off"></div>
+    <div id="st-res">${R.length ? `<div class="st-g">${R.map(kYRow).join('')}</div>` : `<div class="empty">${S.gotPub ? '이 공장에 있는 ' + esc(CN()) + ' 원사가 없습니다.' : '불러오는 중 …'}</div>`}</div>
+    <div class="empty" style="padding:14px 10px;font-size:12.5px">원사 재고 = ${esc(CN())}가 맡긴 원사 − 편직에 쓴 것 ± 이동<br>숫자가 다르면 [수량이 달라요] · 다른 공장으로 보냈으면 [다른 곳으로 보냄] · 없는 원사면 [지우기 요청] — ${esc(CN())}가 확인하고 고칩니다</div>`;
+}
+function kYSheet(r, mode) {
+  const st = { kg: mode === 'diff' ? r.kg : '', to: '', n: '', busy: false };
+  const T = { diff: '수량이 달라요', ship: '다른 곳으로 보냄', del: '지우기 요청' }[mode];
+  const draw = () => {
+    st.tok = sheet(`<h3>${T} — ${esc(r.yarn)}${r.color ? ' ' + esc(r.color) : ''}</h3><div class="sub">앱에 보이는 원사 <b>${Number(r.kg || 0).toFixed(1)}kg</b><br>${mode === 'del' ? '없는 원사이거나 잘못 잡힌 줄이면 보냅니다. ' + esc(CN()) + '가 허락하면 0 이 됩니다.' : '숫자는 ' + esc(CN()) + '가 확인하고 고칩니다.'}</div>
+      ${mode === 'ship' ? `<div class="k-lab">보낸 곳</div><div class="k-num"><input id="y-to" type="text" list="y-dl" placeholder="예: 대철섬유" style="font-size:17px;font-weight:700;text-align:left;padding:0 12px" value="${esc(st.to)}"></div><datalist id="y-dl">${(kDests ? kDests() : []).map(d => `<option value="${esc(d)}">`).join('')}</datalist>` : ''}
+      ${mode !== 'del' ? `<div class="k-lab">${mode === 'diff' ? '지금 공장에 실제로 몇 kg 있어요?' : '보낸 kg'}</div><div class="k-num"><input id="y-kg" type="number" inputmode="decimal" value="${esc(String(st.kg))}" style="font-size:22px"></div>` : ''}
+      <div class="k-lab">${mode === 'del' ? '까닭' : '메모 (안 적어도 됩니다)'}</div><div class="k-num"><input id="y-n" type="text" placeholder="${mode === 'del' ? '예: 이 원사는 받은 적 없음' : '예: 박스 2개 남음'}" style="font-size:17px;font-weight:600;text-align:left;padding:0 12px" value="${esc(st.n)}"></div>
+      <div class="row2"><button type="button" class="no" data-x>닫기</button><button type="button" class="ok" id="y-send"${st.busy ? ' disabled' : ''}>${st.busy ? '보내는 중…' : esc(CN()) + '에 보내기'}</button></div>`);
+    $('sheet').querySelector('[data-x]').addEventListener('click', () => { closeSheet(); render(); });
+    const K = $('y-kg'), N = $('y-n'), TO = $('y-to'); if (K) K.addEventListener('input', () => { st.kg = K.value; }); N.addEventListener('input', () => { st.n = N.value; }); if (TO) TO.addEventListener('input', () => { st.to = TO.value; });
+    $('y-send').addEventListener('click', async () => { const kg = K ? Math.round(parseFloat(K.value) * 10) / 10 : 0; const to = TO ? String(TO.value || '').trim() : '';
+      if (mode !== 'del' && !(kg >= 0 && isFinite(kg))) { toast('kg 를 넣어 주세요', true); return; } if (mode === 'ship' && !(kg > 0)) { toast('보낸 kg 를 넣어 주세요', true); return; } if (mode === 'ship' && !to) { toast('보낸 곳을 넣어 주세요', true); return; } if (mode === 'del' && !String(N.value || '').trim()) { toast('까닭을 적어 주세요', true); return; }
+      st.busy = true; st.kg = K ? K.value : ''; st.n = N.value; st.to = to; draw();
+      const o = { kind: 'issue', part: 'gs', issue: YI[mode], body: Number(r.kg) || 0, label: (r.yarn + (r.color ? ' ' + r.color : '')).slice(0, 80), note: String(N.value || '').trim().slice(0, 200) }; if (mode !== 'del') o.n = kg; if (mode === 'ship') o.chip = to.slice(0, 60);
+      const ok = await put({ k: r.k, no: '' }, o);
+      st.busy = false; const mine = sheetIs(st.tok); if (ok) { if (mine) closeSheet(); ring(); toast(CN() + '에 보냈습니다 — 확인하면 알려 드립니다'); render(); } else if (mine) draw(); });
+  };
+  draw();
+}
+document.addEventListener('click', e => { const b = e.target.closest && e.target.closest('[data-yship],[data-ydf],[data-ydel],[data-stv]'); if (!b) return;
+  if (b.dataset.stv) { S.stv = b.dataset.stv; S.sq = ''; render(); return; }
+  const k = b.dataset.yship || b.dataset.ydf || b.dataset.ydel; const r = (S.ystock || []).find(x => x.k === k); if (!r) return; kYSheet(r, b.dataset.yship ? 'ship' : b.dataset.ydf ? 'diff' : 'del'); });
 function kStock() {
-  { const ae = document.activeElement; if (ae && ae.id === 'st-q' && $('st-res')) { $('st-res').innerHTML = kStockRes(); return; } }   /* hotfix579: 찾는 글을 치는 중이면 목록만 — 자판이 닫히지 않게 */
+  { const ae = document.activeElement; if (ae && ae.id === 'st-q' && $('st-res')) { $('st-res').innerHTML = S.stv === 'y' ? (S.ystock || []).filter(r => !kNorm(S.sq || '') || [r.yarn, r.color].some(t => kNorm(t).includes(kNorm(S.sq || '')))).map(kYRow).join('') : kStockRes(); return; } }
+  const segH = `<div class="st-seg"><button type="button" data-stv="g" class="${S.stv !== 'y' ? 'on' : ''}">생지 ${kQ(kStockSum().j)}절</button><button type="button" data-stv="y" class="${S.stv === 'y' ? 'on' : ''}">원사 ${(S.ystock || []).reduce((a, r) => a + Math.max(0, r.kg || 0), 0).toFixed(1)}kg</button></div>`;
+  if (S.stv === 'y') { $('list').innerHTML = segH + kYStock(); const i0 = $('st-q'); if (i0) i0.addEventListener('input', () => { S.sq = i0.value; $('st-res').innerHTML = (S.ystock || []).filter(r => !kNorm(S.sq) || [r.yarn, r.color].some(t => kNorm(t).includes(kNorm(S.sq)))).map(kYRow).join(''); }); return; }   /* hotfix579: 찾는 글을 치는 중이면 목록만 — 자판이 닫히지 않게 */
   const SS = kStockSum(); const R = SS.R; const tj = SS.j, tk = SS.kg, tp = SS.p; const ni = new Set(R.map(r => r.item)).size;
-  $('list').innerHTML = `<div class="k-sum"><div style="font-size:15px;font-weight:800;color:#065f46">${esc(S.acc.vendor)}에 있는 ${esc(CN())} 생지</div><b>${kQ(tj)}절</b><div style="font-size:14.5px;color:#475569">${tk.toFixed(1)}kg · 품목 ${ni}개 · 로트 ${R.length}줄</div>
+  $('list').innerHTML = segH + `<div class="k-sum"><div style="font-size:15px;font-weight:800;color:#065f46">${esc(S.acc.vendor)}에 있는 ${esc(CN())} 생지</div><b>${kQ(tj)}절</b><div style="font-size:14.5px;color:#475569">${tk.toFixed(1)}kg · 품목 ${ni}개 · 로트 ${R.length}줄</div>
     ${tp ? `<div class="st-sp">출고 대기 <b>${kQ(tp)}절</b>을 빼면 <b>${kQ(tj)}절</b> — 공장에 실제로는 ${kQ(tj + tp)}절<br><small>출고 대기를 누르면 [출고했어요]로 보낸 절 · kg 을 알립니다</small></div>` : ''}</div>
     <div class="st-find"><input id="st-q" type="search" placeholder="품목 · 로트 찾기" value="${esc(S.sq || '')}" autocomplete="off"></div><div id="st-res">${kStockRes()}</div>
     <div class="empty" style="padding:14px 10px;font-size:12.5px">재고절 = ${esc(CN())}가 맡긴 생지 − 보낸 것 − 출고 대기<br>숫자가 실제와 다르면 [수량이 달라요] — ${esc(CN())}가 확인하고 고칩니다</div>`;
