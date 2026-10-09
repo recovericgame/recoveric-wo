@@ -1,0 +1,479 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<title>이음 — 현일텍스 대화</title>
+<meta name="theme-color" content="#0f3d3a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="이음">
+<link rel="manifest" href="c-manifest.json">
+<link rel="icon" href="c-192.png">
+<link rel="apple-touch-icon" href="c-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;800&display=swap" rel="stylesheet">
+<!--
+  이음 (c.html) — 현일텍스 본사 대화 앱 · hotfix619 (2026-10-09)
+  본사(직원 구글 계정)가 편직팀 · 염/가공소 · 현장 QC 모든 대화를 한 곳에서 보고, 업체마다 대화한다. 휴대폰(앱 설치) · PC 같은 주소.
+  자료는 FABIWOS 와 같은 곳(proc_log)을 쓴다 — 새 상자 없음. FABIWOS [대화] 창 · 업체 앱 · 현장 QC 앱과 같은 글을 보고 쓴다.
+    편직팀  : 업체 { by:'vendor', kind:'issue', issue:'메시지', k:'chat', part:'gs' } · 우리 { by:'us', kind:'note', k:'chat', part:'gs', label:보낸 사람 }
+    염/가공 : 같은 모양 · part 없음
+    현장 QC : { vendor:'__field', kind:'field' | 'field_reply'(ref) | 'field_ack'(ref) | 'field_del'(ref · 최고관리자) , k:'dev:기기' }
+    답장 chip 're:글 id' · 보내기 취소 { kind:'cancel', ref } · 읽음 { kind:'st', stage:'chat_seen', ref }
+    첨부 att = { p: Storage 경로 chat/{업체 | __field}/YYYYMM/파일, n: 이름, t: 형식, s: 크기, w, h } — 사진은 줄여서(긴 쪽 1920) 올림 · 지우기 없음
+-->
+<style>
+:root{--ink:#0f172a;--sub:#64748b;--line:#e2e8f0;--bg:#f4f6f8;--card:#fff;--brand:#0f3d3a;--brand2:#0f766e;--accent:#f59e0b;--gs:#047857;--gsb:#ecfdf5;--pc:#6d28d9;--pcb:#f5f3ff;--qc:#1e3a8a;--qcb:#eff6ff;--red:#dc2626;--me:#0f766e;--meText:#fff;--safeB:env(safe-area-inset-bottom)}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font-family:'Noto Sans KR','Pretendard','Apple SD Gothic Neo','Malgun Gothic',sans-serif;font-size:15px;-webkit-text-size-adjust:100%}
+button,input,textarea,select{font-family:inherit;font-size:inherit;color:inherit}
+button{cursor:pointer}
+.hide{display:none!important}
+/* 로그인 */
+#login{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:linear-gradient(160deg,#0f3d3a 0%,#134e4a 55%,#0f766e 100%);color:#fff;padding:24px;z-index:50}
+#login .lg-in{width:min(380px,100%);text-align:center}
+#login img{width:96px;height:96px;border-radius:24px;box-shadow:0 16px 40px rgba(0,0,0,.35)}
+#login h1{font-size:34px;margin:18px 0 4px;letter-spacing:2px;font-weight:800}
+#login p{margin:0 0 26px;color:#ccfbf1;font-size:14.5px;line-height:1.6}
+#login button{width:100%;height:54px;border:0;border-radius:14px;background:#fff;color:#0f3d3a;font-size:17px;font-weight:800;display:flex;align-items:center;justify-content:center;gap:10px}
+#login .lg-err{margin-top:14px;color:#fde68a;font-size:13.5px;min-height:18px}
+/* 틀 */
+#app{position:fixed;inset:0;display:grid;grid-template-columns:360px 1fr;background:var(--bg)}
+#side{display:flex;flex-direction:column;min-height:0;background:var(--card);border-right:1px solid var(--line)}
+#main{display:flex;flex-direction:column;min-height:0;min-width:0}
+.top{display:flex;align-items:center;gap:10px;padding:12px 14px calc(12px);background:var(--brand);color:#fff;padding-top:calc(12px + env(safe-area-inset-top))}
+.top .logo{width:34px;height:34px;border-radius:10px;flex:none}
+.top b{font-size:19px;letter-spacing:1px}
+.top small{display:block;font-size:11.5px;color:#99f6e4;font-weight:500;letter-spacing:0}
+.top .sp{flex:1}
+.icb{width:38px;height:38px;border-radius:11px;border:0;background:rgba(255,255,255,.12);color:#fff;display:flex;align-items:center;justify-content:center;flex:none}
+.icb svg{width:20px;height:20px}
+.filt{display:flex;gap:6px;padding:10px 12px 6px;overflow-x:auto;scrollbar-width:none}
+.filt::-webkit-scrollbar{display:none}
+.chip{flex:none;border:1px solid var(--line);background:#fff;border-radius:999px;padding:6px 12px;font-size:13.5px;font-weight:700;color:#334155;display:flex;align-items:center;gap:5px}
+.chip.on{background:var(--brand);border-color:var(--brand);color:#fff}
+.chip em{font-style:normal;background:var(--red);color:#fff;border-radius:9px;padding:0 6px;font-size:11px;min-width:18px;text-align:center}
+.find{padding:4px 12px 8px}
+.find input{width:100%;height:40px;border:1px solid var(--line);border-radius:11px;padding:0 12px;background:#f8fafc;outline:none}
+.find input:focus{border-color:var(--brand2);background:#fff}
+#rooms{flex:1;overflow:auto;padding:0 6px 10px}
+.room{display:flex;gap:11px;align-items:center;width:100%;border:0;background:none;text-align:left;padding:10px 8px;border-radius:13px;position:relative}
+.room:hover{background:#f8fafc}
+.room.on{background:#ecfdf5}
+.av{width:46px;height:46px;border-radius:15px;flex:none;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:17px;color:#fff}
+.av.gs{background:linear-gradient(135deg,#059669,#047857)}.av.pc{background:linear-gradient(135deg,#8b5cf6,#6d28d9)}.av.qc{background:linear-gradient(135deg,#2563eb,#1e3a8a)}
+.room .rb{flex:1;min-width:0}
+.room .r1{display:flex;align-items:center;gap:6px}
+.room .r1 b{font-size:15.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tag{flex:none;font-size:10.5px;font-weight:800;border-radius:6px;padding:1px 6px}
+.tag.gs{background:var(--gsb);color:var(--gs)}.tag.pc{background:var(--pcb);color:var(--pc)}.tag.qc{background:var(--qcb);color:var(--qc)}
+.room .tm{margin-left:auto;flex:none;font-size:11.5px;color:var(--sub)}
+.room .r2{display:flex;align-items:center;gap:6px;margin-top:3px}
+.room .pv{flex:1;min-width:0;font-size:13px;color:var(--sub);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.room .na{font-size:11px;color:#b45309}
+.badge{flex:none;background:var(--red);color:#fff;font-size:11.5px;font-weight:800;border-radius:10px;padding:1px 7px;min-width:20px;text-align:center}
+.empty{color:var(--sub);text-align:center;padding:40px 16px;font-size:14px;line-height:1.7}
+/* 대화 */
+.th-h{display:flex;align-items:center;gap:10px;padding:10px 14px;background:#fff;border-bottom:1px solid var(--line);padding-top:calc(10px + env(safe-area-inset-top))}
+.th-h .back{display:none;border:0;background:none;width:36px;height:36px;border-radius:10px;align-items:center;justify-content:center}
+.th-h .back svg{width:22px;height:22px}
+.th-h .av{width:38px;height:38px;border-radius:12px;font-size:14px}
+.th-h b{font-size:16px}
+.th-h small{display:block;color:var(--sub);font-size:12px}
+.th-h .sp{flex:1}
+#thread{flex:1;overflow:auto;padding:12px 14px 6px;background:var(--bg);overscroll-behavior:contain}
+.day{text-align:center;margin:12px 0 8px}.day span{background:#e2e8f0;color:#475569;font-size:11.5px;font-weight:700;border-radius:10px;padding:2px 11px}
+.m{display:flex;flex-direction:column;align-items:flex-start;margin:7px 0;max-width:78%}
+.m.out{margin-left:auto;align-items:flex-end}
+.m .who{font-size:12px;color:var(--sub);font-weight:700;margin:0 4px 3px}
+.m .re{font-size:12px;color:var(--sub);margin:0 4px 3px;max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-left:3px solid #cbd5e1;padding-left:7px}
+.bub{padding:9px 13px;border-radius:16px;font-size:15px;line-height:1.55;white-space:pre-wrap;word-break:break-word;background:#fff;border:1px solid var(--line);border-top-left-radius:5px;max-width:100%}
+.m.out .bub{background:var(--me);border-color:var(--me);color:var(--meText);border-top-left-radius:16px;border-top-right-radius:5px}
+.m .meta{font-size:11.5px;color:#94a3b8;margin:3px 4px 0;display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.meta .rd{color:#059669;font-weight:700}.meta .ur{color:#d97706;font-weight:700}
+.meta button{border:0;background:none;padding:0;font-size:11.5px;color:#2563eb;font-weight:700;text-decoration:underline}
+.meta button.x{color:#b91c1c}
+.m.local .bub{opacity:.75}
+.att-img{display:block;max-width:min(260px,100%);max-height:320px;border-radius:13px;border:1px solid var(--line);background:#e2e8f0;object-fit:cover;min-width:120px;min-height:90px;margin-bottom:3px;cursor:zoom-in}
+.att-f{display:flex;align-items:center;gap:10px;background:#fff;border:1px solid var(--line);border-radius:13px;padding:10px 12px;min-width:220px;max-width:280px;text-align:left;margin-bottom:3px;color:var(--ink)}
+.att-f .fi{width:38px;height:38px;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;color:#fff;flex:none;background:#64748b}
+.att-f .fi.pdf{background:#dc2626}.att-f .fi.xls{background:#16a34a}.att-f .fi.doc{background:#2563eb}.att-f .fi.ppt{background:#ea580c}.att-f .fi.hwp{background:#0891b2}
+.att-f .fn{flex:1;min-width:0}.att-f .fn b{display:block;font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.att-f .fn small{color:var(--sub);font-size:12px}
+.up{font-size:11.5px;color:#0f766e;font-weight:700}
+/* 쓰기 */
+.cmp{background:#fff;border-top:1px solid var(--line);padding:8px 10px calc(8px + var(--safeB))}
+.rbar{display:flex;align-items:center;gap:8px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:11px;padding:6px 10px;margin-bottom:7px;font-size:13px}
+.rbar span{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rbar button,.tray button.rm{border:0;background:none;color:#b91c1c;font-weight:800}
+.tray{display:flex;gap:8px;overflow-x:auto;margin-bottom:7px;padding-bottom:2px}
+.tray .ti{position:relative;flex:none;width:72px;height:72px;border-radius:12px;border:1px solid var(--line);background:#f8fafc;display:flex;align-items:center;justify-content:center;overflow:hidden;font-size:11px;text-align:center;padding:4px;word-break:break-all;color:#334155}
+.tray .ti img{width:100%;height:100%;object-fit:cover;position:absolute;inset:0}
+.tray .ti .rm{position:absolute;top:2px;right:2px;width:22px;height:22px;border-radius:11px;background:rgba(15,23,42,.65);color:#fff;font-size:13px;line-height:22px;z-index:2}
+.qk{display:flex;gap:6px;overflow-x:auto;margin-bottom:7px;scrollbar-width:none}.qk::-webkit-scrollbar{display:none}
+.qk button{flex:none;border:1px solid #cbd5e1;background:#fff;border-radius:15px;padding:4px 11px;font-size:13px;font-weight:700;color:#334155}
+.row{display:flex;gap:8px;align-items:flex-end}
+.plus{width:44px;height:44px;border-radius:14px;border:1px solid var(--line);background:#f8fafc;display:flex;align-items:center;justify-content:center;flex:none;color:#334155}
+.plus svg{width:22px;height:22px}
+#tx{flex:1;min-height:44px;max-height:140px;resize:none;border:1.5px solid #cbd5e1;border-radius:14px;padding:10px 12px;outline:none;line-height:1.45;background:#fff}
+#tx:focus{border-color:var(--brand2)}
+.send{height:44px;padding:0 18px;border-radius:14px;border:0;background:var(--brand2);color:#fff;font-weight:800;flex:none}
+.send:disabled{opacity:.5}
+.att-menu{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:8px}
+.att-menu label{display:flex;flex-direction:column;align-items:center;gap:6px;border:1px solid var(--line);border-radius:14px;padding:12px 6px;background:#f8fafc;font-size:13px;font-weight:700;cursor:pointer}
+.att-menu label svg{width:26px;height:26px}
+.att-menu input{display:none}
+.noroom{flex:1;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:12px;color:var(--sub);text-align:center;padding:30px}
+.noroom img{width:84px;height:84px;border-radius:22px;opacity:.9}
+#drop{position:absolute;inset:0;background:rgba(15,118,110,.12);border:3px dashed var(--brand2);border-radius:16px;display:none;align-items:center;justify-content:center;font-weight:800;color:var(--brand2);font-size:18px;z-index:5;pointer-events:none}
+#main.dragging #drop{display:flex}
+#main{position:relative}
+/* 보기 · 시트 */
+#viewer{position:fixed;inset:0;background:rgba(2,6,23,.92);z-index:80;display:flex;flex-direction:column}
+#viewer .vh{display:flex;gap:10px;align-items:center;justify-content:flex-end;padding:12px;padding-top:calc(12px + env(safe-area-inset-top))}
+#viewer .vh a,#viewer .vh button{color:#fff;background:rgba(255,255,255,.14);border:0;border-radius:10px;padding:8px 14px;font-weight:700;text-decoration:none;font-size:14px}
+#viewer .vb{flex:1;display:flex;align-items:center;justify-content:center;overflow:auto;padding:10px}
+#viewer img{max-width:100%;max-height:100%;object-fit:contain}
+#sheet{position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:70;display:flex;align-items:flex-end;justify-content:center}
+#sheet .sh{background:#fff;border-radius:20px 20px 0 0;width:min(560px,100%);max-height:86vh;overflow:auto;padding:16px 16px calc(16px + var(--safeB))}
+#sheet h3{margin:2px 0 10px;font-size:17px}
+#sheet .sb{display:block;width:100%;text-align:left;border:0;background:#f8fafc;border-radius:12px;padding:13px 14px;margin-bottom:7px;font-weight:700}
+#sheet .sb small{display:block;font-weight:500;color:var(--sub);font-size:12.5px;margin-top:2px}
+#sheet .sb.red{color:#b91c1c}
+#toast{position:fixed;left:50%;bottom:calc(90px + var(--safeB));transform:translateX(-50%) translateY(20px);background:#0f172a;color:#fff;padding:10px 16px;border-radius:12px;font-size:14px;opacity:0;transition:.2s;z-index:90;max-width:90vw;text-align:center;pointer-events:none}
+#toast.on{opacity:1;transform:translateX(-50%) translateY(0)}#toast.err{background:#b91c1c}
+@media (max-width:820px){
+  #app{grid-template-columns:1fr}
+  #main{display:none}
+  #app.inroom #side{display:none}
+  #app.inroom #main{display:flex}
+  .th-h .back{display:flex}
+  .m{max-width:86%}
+}
+@media (min-width:821px){ .cmp .hint{display:block} }
+.cmp .hint{display:none;font-size:11px;color:#94a3b8;margin-top:4px}
+</style>
+</head>
+<body>
+<div id="login"><div class="lg-in"><img src="c-192.png" alt=""><h1>이음</h1><p>현일텍스 본사 대화<br>편직팀 · 염/가공소 · 현장 QC를 한 곳에서</p><button type="button" id="lg-btn"><svg width="20" height="20" viewBox="0 0 48 48"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.4-.4-3.5z"/><path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-7.9l-6.5 5C9.5 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 38.2 44 33 44 24c0-1.3-.1-2.4-.4-3.5z"/></svg>회사 구글 계정으로 들어가기</button><div class="lg-err" id="lg-err"></div></div></div>
+<div id="app" class="hide">
+  <section id="side">
+    <div class="top"><img class="logo" src="c-192.png" alt=""><div><b>이음</b><small id="me-nm">현일텍스 본사 대화</small></div><span class="sp"></span>
+      <button type="button" class="icb" id="b-set" aria-label="설정"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button></div>
+    <div class="filt" id="filt"></div>
+    <div class="find"><input id="q" type="search" placeholder="업체 · 글 찾기" autocomplete="off"></div>
+    <div id="rooms"></div>
+  </section>
+  <section id="main"><div id="drop">여기에 놓으면 첨부됩니다</div><div id="mainIn" style="display:flex;flex-direction:column;min-height:0;flex:1"></div></section>
+</div>
+<div id="toast"></div>
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import { getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult, onAuthStateChanged, signOut, setPersistence, browserLocalPersistence } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+import { initializeFirestore, getFirestore, persistentLocalCache, persistentMultipleTabManager, doc, getDoc, setDoc, collection, query, where, onSnapshot, addDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+const CVER = 'c1 (hotfix619)';
+const cfg = { apiKey: "AIzaSyAIaNFZozda5sp4Qjs7LEn-aXYLX1JZi10", authDomain: "recoveric-wo.firebaseapp.com", projectId: "recoveric-wo", storageBucket: "recoveric-wo.firebasestorage.app", messagingSenderId: "267946532287", appId: "1:267946532287:web:fcc1b597c9bf53c9d8950a" };
+const OWNER = 'recoveric.parkyg@gmail.com';
+const app = initializeApp(cfg);   /* FABIWOS 와 같은 기본 앱 — 같은 크롬에서 FABIWOS 에 들어가 있으면 바로 들어감 */
+const auth = getAuth(app);
+try { await setPersistence(auth, browserLocalPersistence); } catch (_) {}
+let db; try { db = initializeFirestore(app, { experimentalForceLongPolling: true, useFetchStreams: false, localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }) }); } catch (_) { db = getFirestore(app); }
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+let tT = null;
+function toast(m, err) { const t = $('toast'); t.textContent = m; t.className = 'on' + (err ? ' err' : ''); clearTimeout(tT); tT = setTimeout(() => { t.className = ''; }, 2800); }
+const ls = { get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch (_) { return d; } }, set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (_) {} }, raw(k) { try { return localStorage.getItem(k) || ''; } catch (_) { return ''; } }, rawSet(k, v) { try { localStorage.setItem(k, v); } catch (_) {} } };
+const DEV = (() => { let d = ls.raw('hw_dev_id'); if (!d) { d = Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4); ls.rawSet('hw_dev_id', d); } return d; })();   /* FABIWOS 와 같은 기기 번호 (현장 QC 글의 "보낸 기기") */
+const tOf = l => { const a = l && l.at; if (!a) return Date.now(); if (typeof a.toMillis === 'function') return a.toMillis(); if (a.seconds) return a.seconds * 1000; const t = Date.parse(a); return isNaN(t) ? Date.now() : t; };
+const FIELD = '__field', ISSUE = '메시지', DEL_CUT = Date.parse('2026-10-02T00:00:00+09:00');
+const S = { user: null, me: '', users: [], accs: [], chat: [], field: [], local: [], room: '', filt: ls.get('hwc.filt', 'all'), q: '', reply: null, tray: [], draft: {}, menu: false, gotChat: false, gotField: false, sending: false };
+
+/* ---------- 로그인 ---------- */
+const provider = new GoogleAuthProvider();
+try { provider.setCustomParameters({ prompt: 'select_account' }); } catch (_) {}
+$('lg-btn').addEventListener('click', async () => { $('lg-err').textContent = '';
+  try { await signInWithPopup(auth, provider); } catch (e) { const c = (e && e.code) || ''; if (/popup-blocked|operation-not-supported|popup-closed-by-user/.test(c) && !/closed-by-user/.test(c)) { try { await signInWithRedirect(auth, provider); } catch (e2) { $('lg-err').textContent = '로그인하지 못했습니다 — ' + ((e2 && e2.code) || ''); } } else if (!/closed-by-user|cancelled/.test(c)) $('lg-err').textContent = '로그인하지 못했습니다 — ' + c; } });
+try { getRedirectResult(auth).catch(() => {}); } catch (_) {}
+let unsubs = [];
+onAuthStateChanged(auth, async u => {
+  unsubs.forEach(f => { try { f(); } catch (_) {} }); unsubs = [];
+  if (!u) { S.user = null; $('app').classList.add('hide'); $('login').classList.remove('hide'); return; }
+  S.user = u; S.me = String(u.email || '').toLowerCase();
+  let ok = S.me === OWNER;
+  try { const sn = await getDoc(doc(db, 'settings', 'users')); if (sn.exists()) { const d = sn.data() || {}; S.users = Array.isArray(d.items) ? d.items : []; if ((d.emails || []).map(x => String(x).toLowerCase()).includes(S.me)) ok = true; } } catch (e) { if (S.me !== OWNER) ok = false; }
+  if (!ok) { $('lg-err').textContent = (u.email || '') + ' 은(는) 등록된 직원 계정이 아닙니다 — FABIWOS [관리 › 계정]에 있는 구글 계정으로 들어가십시오'; try { await signOut(auth); } catch (_) {} return; }
+  $('login').classList.add('hide'); $('app').classList.remove('hide');
+  $('me-nm').textContent = nameOf(S.me) + ' · 현일텍스 본사';
+  start();
+});
+function nameOf(em) { const e = String(em || '').toLowerCase(); const u = S.users.find(x => String(x.email || '').toLowerCase() === e); return (u && String(u.name || '').trim()) || e.split('@')[0] || '현일텍스'; }
+
+/* ---------- 받기 (FABIWOS 와 같은 자리) ---------- */
+function start() {
+  unsubs.push(onSnapshot(collection(db, 'proc_acc'), sn => { const a = []; sn.forEach(d => a.push(Object.assign({ uid: d.id }, d.data()))); S.accs = a; paint(); }, e => console.warn('[이음] 계정', e && e.code)));
+  unsubs.push(onSnapshot(doc(db, 'settings', 'users'), sn => { if (sn.exists()) { S.users = Array.isArray(sn.data().items) ? sn.data().items : []; $('me-nm').textContent = nameOf(S.me) + ' · 현일텍스 본사'; paint(); } }, () => {}));
+  const take = sn => { const a = []; sn.forEach(d => { const x = (typeof d.data === 'function') ? d.data({ serverTimestamps: 'estimate' }) : d.data; a.push(Object.assign({ id: d.id }, x)); }); return a; };
+  unsubs.push(onSnapshot(query(collection(db, 'proc_log'), where('k', '==', 'chat')), sn => { const prev = S.gotChat ? new Set(S.chat.map(l => l.id)) : null; S.chat = take(sn).filter(l => l.k === 'chat' && l.vendor !== FIELD); S.gotChat = true; dropLocal(); arrive(prev, S.chat); paint(); }, e => { console.warn('[이음] 대화', e && e.code); toast('대화를 읽지 못했습니다 — ' + ((e && e.code) || ''), true); }));
+  unsubs.push(onSnapshot(query(collection(db, 'proc_log'), where('vendor', '==', FIELD)), sn => { const prev = S.gotField ? new Set(S.field.map(l => l.id)) : null; S.field = take(sn).filter(l => l.vendor === FIELD); S.gotField = true; dropLocal(); arrive(prev, S.field); paint(); }, e => console.warn('[이음] 현장', e && e.code)));
+  pushAuto();
+  const r0 = (location.hash || '').replace(/^#/, ''); if (r0) { try { openRoom(decodeURIComponent(r0)); } catch (_) {} }
+}
+function dropLocal() { const ids = new Set(S.chat.concat(S.field).map(l => l.id)); S.local = S.local.filter(l => !l.__done || !ids.has(l.__realId)); }
+/* 새 글 — 소리 · 알림 (내가 보는 방이 아니면) */
+let ac = null;
+function ring() { try { if (!ac) ac = new (window.AudioContext || window.webkitAudioContext)(); const o = ac.createOscillator(), g = ac.createGain(); o.type = 'sine'; o.frequency.value = 880; g.gain.value = .08; o.connect(g); g.connect(ac.destination); o.start(); o.frequency.setValueAtTime(660, ac.currentTime + .12); o.stop(ac.currentTime + .26); } catch (_) {} try { if (navigator.vibrate) navigator.vibrate([120, 60, 120]); } catch (_) {} }
+document.addEventListener('pointerdown', () => { try { if (ac && ac.state === 'suspended') ac.resume(); } catch (_) {} }, { passive: true });
+function arrive(prev, list) {
+  if (!prev) return; const nw = list.filter(l => !prev.has(l.id) && isIncoming(l) && Date.now() - tOf(l) < 10 * 60e3); if (!nw.length) return;
+  const l = nw[nw.length - 1]; const rk = roomOf(l); if (rk === S.room && !document.hidden) return;
+  ring(); toast(roomName(rk) + ': ' + (String(l.note || '') || attWord(l.att)).slice(0, 60));
+}
+function isIncoming(l) { if (l.vendor === FIELD) return (l.kind === 'field' || l.kind === 'field_reply') && !mineQc(l); return l.by === 'vendor' && l.kind === 'issue' && l.issue === ISSUE; }
+
+/* ---------- 방 ---------- */
+const accApp = a => (a && (a.app === 'knit' || a.app === 'gs')) ? 'gs' : 'pc';
+const roomOf = l => l.vendor === FIELD ? 'qc' : ((l.part === 'gs' ? 'gs' : 'pc') + '|' + l.vendor);
+const roomName = rk => rk === 'qc' ? '현장 QC' : rk.split('|').slice(1).join('|');
+const roomType = rk => rk === 'qc' ? 'qc' : rk.split('|')[0];
+const TYPE_N = { gs: '편직팀', pc: '염/가공', qc: '현장 QC' };
+function chatMsgs(rk) { const [m, ...vv] = rk.split('|'); const v = vv.join('|'); const L = S.chat.filter(l => l.vendor === v && (m === 'gs' ? l.part === 'gs' : l.part !== 'gs')); const cx = new Set(L.filter(l => l.kind === 'cancel' && l.ref).map(l => l.ref));
+  return L.filter(l => ((l.by === 'vendor' && l.kind === 'issue' && l.issue === ISSUE) || (l.by === 'us' && l.kind === 'note')) && !cx.has(l.id)).concat(S.local.filter(l => l.__room === rk && !l.__done)).sort((a, b) => tOf(a) - tOf(b)); }
+const mineQc = l => { const k = String((l && l.k) || ''); return k.indexOf('dev:') === 0 ? k === 'dev:' + DEV : String((l && l.email) || '').toLowerCase() === S.me; };
+const qcDelOk = l => String(l.email || '').toLowerCase() === OWNER || tOf(l) < DEL_CUT;
+function qcMsgs() { const L = S.field; const del = new Set(L.filter(l => l.kind === 'field_del' && l.ref && qcDelOk(l)).map(l => l.ref)); const top = L.filter(l => l.kind === 'field' && !del.has(l.id)); const ids = new Set(top.map(l => l.id));
+  return top.concat(L.filter(l => l.kind === 'field_reply' && ids.has(l.ref))).concat(S.local.filter(l => l.__room === 'qc' && !l.__done)).sort((a, b) => tOf(a) - tOf(b)); }
+const msgsOf = rk => rk === 'qc' ? qcMsgs() : chatMsgs(rk);
+const acksOf = id => S.field.filter(l => l.kind === 'field_ack' && l.ref === id);
+const seenKey = rk => rk === 'qc' ? '' : (rk.startsWith('pc|') ? 'pc|' : '') + roomName(rk);   /* FABIWOS [대화] 창과 같은 열쇠 — 한 크롬에서 같이 맞음 */
+function unread(rk) {
+  if (rk === 'qc') return qcMsgs().filter(l => !l.__room && !mineQc(l) && Date.now() - tOf(l) < 7 * 864e5 && !acksOf(l.id).some(a => String(a.email || '').toLowerCase() === S.me)).length;
+  const s = Number((ls.get('hwkc.seen', {}) || {})[seenKey(rk)]) || 0; const cut = Date.now() - 30 * 864e5;
+  return chatMsgs(rk).filter(l => l.by === 'vendor' && tOf(l) > Math.max(cut, s)).length;
+}
+function rooms() {
+  const R = new Map();
+  S.accs.filter(a => a && a.active && a.vendor).forEach(a => { const rk = accApp(a) + '|' + a.vendor; if (!R.has(rk)) R.set(rk, { rk, app: true }); else R.get(rk).app = true; });
+  S.chat.forEach(l => { if (!l.vendor) return; const rk = roomOf(l); if (!R.has(rk)) R.set(rk, { rk, app: false }); });
+  R.set('qc', { rk: 'qc', app: true });
+  return Array.from(R.values()).map(r => { const M = msgsOf(r.rk); const last = M[M.length - 1] || null; return Object.assign(r, { last, t: last ? tOf(last) : 0, n: unread(r.rk), type: roomType(r.rk), name: roomName(r.rk) }); })
+    .sort((a, b) => (b.n > 0) - (a.n > 0) || b.t - a.t || a.name.localeCompare(b.name, 'ko'));
+}
+const attWord = a => !a ? '' : (/^image\//.test(a.t || '') ? '[사진]' : '[파일] ' + (a.n || ''));
+function whoOf(l) { if (l.vendor === FIELD) return mineQc(l) ? '나' : nameOf(l.email); if (l.by === 'us') return String(l.email || '').toLowerCase() === S.me ? '나' : nameOf(l.email); return l.vendor || ''; }
+const hm = t => { const d = new Date(t); return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); };
+const shortT = t => { const d = new Date(t), n = new Date(); if (d.toDateString() === n.toDateString()) return hm(t); const y = new Date(n); y.setDate(n.getDate() - 1); if (d.toDateString() === y.toDateString()) return '어제'; return (d.getMonth() + 1) + '/' + d.getDate(); };
+const dayT = t => new Date(t).toLocaleDateString('ko-KR', { month: 'long', day: 'numeric', weekday: 'short' });
+const avTxt = n => { const s = String(n || '').replace(/\s|\(.*?\)/g, ''); return s.slice(0, 2) || '?'; };
+
+/* ---------- 그리기 ---------- */
+function paint() { paintSide(); if (S.room) paintThread(); else paintEmpty(); paintBadge(); }
+function paintBadge() { const n = rooms().reduce((a, r) => a + r.n, 0); document.title = (n ? '(' + n + ') ' : '') + '이음 — 현일텍스 대화'; try { if ('setAppBadge' in navigator) { if (n) navigator.setAppBadge(n); else navigator.clearAppBadge(); } } catch (_) {} }
+function paintSide() {
+  const R = rooms(); const cnt = t => R.filter(r => t === 'all' || r.type === t).reduce((a, r) => a + r.n, 0);
+  $('filt').innerHTML = [['all', '전체'], ['gs', '편직팀'], ['pc', '염/가공'], ['qc', '현장 QC']].map(([k, nm]) => { const n = cnt(k); return `<button type="button" class="chip${S.filt === k ? ' on' : ''}" data-f="${k}">${nm}${n ? `<em>${n}</em>` : ''}</button>`; }).join('');
+  const q = S.q.trim().toLowerCase();
+  const L = R.filter(r => (S.filt === 'all' || r.type === S.filt) && (!q || r.name.toLowerCase().includes(q) || msgsOf(r.rk).some(l => String(l.note || '').toLowerCase().includes(q))));
+  $('rooms').innerHTML = L.length ? L.map(r => { const l = r.last; const pv = l ? ((l.vendor === FIELD ? mineQc(l) : l.by === 'us') ? '나: ' : '') + (String(l.note || '') || attWord(l.att)) : (r.app ? '아직 주고받은 글이 없습니다' : '');
+    return `<button type="button" class="room${S.room === r.rk ? ' on' : ''}" data-rk="${esc(r.rk)}"><span class="av ${r.type}">${r.type === 'qc' ? 'QC' : esc(avTxt(r.name))}</span><span class="rb"><span class="r1"><b>${esc(r.name)}</b><span class="tag ${r.type}">${TYPE_N[r.type]}</span><span class="tm">${r.t ? shortT(r.t) : ''}</span></span><span class="r2"><span class="pv">${esc(pv)}</span>${!r.app && r.type !== 'qc' ? '<span class="na">앱 없음</span>' : ''}${r.n ? `<span class="badge">${r.n}</span>` : ''}</span></span></button>`; }).join('')
+    : `<div class="empty">${S.gotChat ? (q ? '찾는 업체 · 글이 없습니다' : '대화할 업체가 없습니다') : '불러오는 중 …'}</div>`;
+}
+function paintEmpty() { $('mainIn').innerHTML = `<div class="noroom"><img src="c-192.png" alt=""><b style="color:#0f172a;font-size:18px">이음</b><div>왼쪽에서 업체를 고르십시오<br>편직팀 · 염/가공소 · 현장 QC 대화를 한 곳에서 보고 씁니다</div></div>`; }
+const SIC = { cam: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>', img: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>', file: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>', plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>', back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>' };
+const QUICK = { gs: ['확인했습니다', '오늘 출고 부탁드립니다', '수량 다시 확인 부탁드립니다', '전화 부탁드립니다'], pc: ['확인했습니다', '출고 예정일 알려 주십시오', '오늘 출고 부탁드립니다', '전화 부탁드립니다'], qc: ['확인했습니다', '지금 갑니다', '입고됐습니다', '사진 부탁드립니다'] };
+function paintThread() {
+  const rk = S.room, type = roomType(rk), name = roomName(rk); const r = rooms().find(x => x.rk === rk) || { app: type === 'qc' };
+  let th = $('thread'), keep = null;
+  if (th && $('mainIn').dataset.rk === rk) { keep = { atB: th.scrollHeight - th.scrollTop - th.clientHeight < 80, top: th.scrollTop }; th.innerHTML = threadHtml(rk); bindThread(); if (keep.atB) th.scrollTop = th.scrollHeight; resolveAtt(th); markRead(rk); paintCmpTop(); return; }
+  $('mainIn').dataset.rk = rk;
+  $('mainIn').innerHTML = `<div class="th-h"><button type="button" class="back" id="b-back" aria-label="목록">${SIC.back}</button><span class="av ${type}">${type === 'qc' ? 'QC' : esc(avTxt(name))}</span><div><b>${esc(name)}</b><small>${type === 'qc' ? '현장 알림과 같은 글 — 보내면 현장 QC 휴대폰에 큰 창 · 소리' : (r.app ? TYPE_N[type] + ' 앱으로 바로 갑니다' : '앱 계정 없음 — 보내도 업체가 못 봅니다')}</small></div><span class="sp"></span></div>
+    <div id="thread">${threadHtml(rk)}</div>
+    <div class="cmp"><div id="cmp-top"></div><div class="qk">${QUICK[type].map(t => `<button type="button" data-qk>${esc(t)}</button>`).join('')}</div>
+      <div class="row"><button type="button" class="plus" id="b-plus" aria-label="첨부">${SIC.plus}</button><textarea id="tx" rows="1" maxlength="300" placeholder="${esc(name)}에 보낼 글"></textarea><button type="button" class="send" id="b-send">보내기</button></div>
+      <div class="hint">Enter 보내기 · Shift+Enter 줄바꿈 · 사진 · 파일은 끌어다 놓거나 붙여넣기(Ctrl+V)도 됩니다</div></div>`;
+  const tx = $('tx'); tx.value = S.draft[rk] || ''; autoH(tx);
+  tx.addEventListener('input', () => { S.draft[rk] = tx.value; autoH(tx); });
+  tx.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && matchMedia('(min-width:821px)').matches) { e.preventDefault(); send(); } });
+  tx.addEventListener('paste', e => { const fs = Array.from((e.clipboardData && e.clipboardData.files) || []); if (fs.length) { e.preventDefault(); addFiles(fs); } });
+  $('b-send').addEventListener('click', send); $('b-plus').addEventListener('click', () => { S.menu = !S.menu; paintCmpTop(); });
+  $('b-back').addEventListener('click', () => { S.room = ''; $('app').classList.remove('inroom'); history.replaceState(null, '', location.pathname + location.search); paint(); });
+  document.querySelectorAll('[data-qk]').forEach(b => b.addEventListener('click', () => { tx.value = (tx.value ? tx.value.trim() + ' ' : '') + b.textContent; S.draft[rk] = tx.value; autoH(tx); tx.focus(); }));
+  bindThread(); paintCmpTop(); th = $('thread'); th.scrollTop = th.scrollHeight; resolveAtt(th); markRead(rk);
+  if (matchMedia('(min-width:821px)').matches) setTimeout(() => tx.focus(), 30);
+}
+function autoH(t) { t.style.height = 'auto'; t.style.height = Math.min(140, t.scrollHeight) + 'px'; }
+function threadHtml(rk) {
+  const M = msgsOf(rk), type = roomType(rk); if (!M.length) return `<div class="empty">${esc(roomName(rk))}와 주고받은 글이 아직 없습니다.<br>아래에 적어 보내십시오.</div>`;
+  const byId = {}; M.forEach(l => { byId[l.id] = l; });
+  const seenV = type === 'qc' ? 0 : S.chat.filter(l => l.by === 'vendor' && l.vendor === roomName(rk) && l.kind === 'st' && l.stage === 'chat_seen' && ((type === 'gs') === (l.part === 'gs'))).reduce((a, l) => Math.max(a, tOf(l)), 0);
+  let lastDay = '', html = '';
+  M.forEach(l => { const t = tOf(l); const day = dayT(t); if (day !== lastDay) { html += `<div class="day"><span>${esc(day)}</span></div>`; lastDay = day; }
+    const out = type === 'qc' ? mineQc(l) : l.by === 'us'; const who = whoOf(l);
+    let reT = null, reId = '';
+    if (type === 'qc') { if (l.kind === 'field_reply') { reId = l.ref; reT = byId[l.ref] || S.field.find(x => x.id === l.ref); } }
+    else if (String(l.chip || '').startsWith('re:')) { reId = String(l.chip).slice(3); reT = byId[reId] || null; }
+    const re = reId ? `<div class="re">↩ ${reT ? esc(whoOf(reT)) + ': ' + esc(String(reT.note || '') || attWord(reT.att)).slice(0, 60) : '답장'}</div>` : '';
+    let st = '';
+    if (l.__room) st = `<span class="up">${esc(l.__state || '보내는 중')}</span>`;
+    else if (type === 'qc') { const ao = Array.from(new Set(acksOf(l.id).filter(a => String(a.email || '').toLowerCase() !== String(l.email || '').toLowerCase()).map(a => nameOf(a.email)))); st = ao.length ? `<span class="rd" title="${esc('확인: ' + ao.join(', '))}">확인 ${ao.length}명</span>` : (out ? '<span class="ur">확인 안 됨</span>' : ''); }
+    else if (out) st = seenV >= t ? '<span class="rd">읽음</span>' : '<span class="ur">안 읽음</span>';
+    const canX = !l.__room && (type === 'qc' ? (S.me === OWNER && l.kind === 'field') : (out && (S.me === OWNER || String(l.email || '').toLowerCase() === S.me)));
+    html += `<div class="m ${out ? 'out' : 'in'}${l.__room ? ' local' : ''}" data-id="${esc(l.id || '')}">${!out ? `<div class="who">${esc(who)}</div>` : ''}${re}${l.att ? attHtml(l.att, l.__blob) : ''}${String(l.note || '').trim() ? `<div class="bub">${linkify(esc(l.note))}</div>` : ''}<div class="meta"><span>${out ? '' : ''}${hm(t)}</span>${st}${!l.__room ? `<button type="button" data-rp="${esc(l.id)}">답장</button>` : ''}${canX ? `<button type="button" class="x" data-x="${esc(l.id)}">${type === 'qc' ? '지우기' : '보내기 취소'}</button>` : ''}</div></div>`; });
+  return html;
+}
+const linkify = s => s.replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline">$1</a>');
+function bindThread() {
+  document.querySelectorAll('#thread [data-rp]').forEach(b => b.onclick = () => { const l = msgsOf(S.room).find(x => x.id === b.dataset.rp); if (!l) return; S.reply = { id: S.room === 'qc' ? (l.kind === 'field_reply' ? l.ref : l.id) : l.id, who: whoOf(l), note: String(l.note || '') || attWord(l.att) }; paintCmpTop(); const t = $('tx'); if (t) t.focus(); });
+  document.querySelectorAll('#thread [data-x]').forEach(b => b.onclick = () => cancelMsg(b.dataset.x));
+  document.querySelectorAll('#thread [data-att]').forEach(el => el.onclick = () => openAtt(JSON.parse(el.dataset.att)));
+}
+function paintCmpTop() {
+  const el = $('cmp-top'); if (!el) return; let h = '';
+  if (S.menu) h += `<div class="att-menu"><label>${SIC.cam}카메라<input type="file" accept="image/*" capture="environment" data-pick></label><label>${SIC.img}사진 고르기<input type="file" accept="image/*" multiple data-pick></label><label>${SIC.file}파일<input type="file" accept=".pdf,.xls,.xlsx,.csv,.doc,.docx,.ppt,.pptx,.hwp,.hwpx,.txt,.zip,image/*" multiple data-pick></label></div>`;
+  if (S.reply) h += `<div class="rbar"><span>↩ <b>${esc(S.reply.who)}</b> 글에 답장: ${esc(String(S.reply.note).slice(0, 50))}</span><button type="button" data-rpx>취소</button></div>`;
+  if (S.tray.length) h += `<div class="tray">${S.tray.map((f, i) => `<div class="ti">${f.url ? `<img src="${f.url}" alt="">` : esc(f.file.name)}<button type="button" class="rm" data-trm="${i}">×</button></div>`).join('')}</div>`;
+  el.innerHTML = h;
+  el.querySelectorAll('[data-pick]').forEach(inp => inp.addEventListener('change', () => { addFiles(Array.from(inp.files || [])); inp.value = ''; S.menu = false; paintCmpTop(); }));
+  const rx = el.querySelector('[data-rpx]'); if (rx) rx.onclick = () => { S.reply = null; paintCmpTop(); };
+  el.querySelectorAll('[data-trm]').forEach(b => b.onclick = () => { const f = S.tray.splice(+b.dataset.trm, 1)[0]; if (f && f.url) URL.revokeObjectURL(f.url); paintCmpTop(); });
+}
+/* 끌어다 놓기 */
+{ const M = $('main'); let n = 0;
+  M.addEventListener('dragenter', e => { if (!S.room || !e.dataTransfer || !Array.from(e.dataTransfer.types || []).includes('Files')) return; e.preventDefault(); n++; M.classList.add('dragging'); });
+  M.addEventListener('dragover', e => { if (S.room) e.preventDefault(); });
+  M.addEventListener('dragleave', () => { n = Math.max(0, n - 1); if (!n) M.classList.remove('dragging'); });
+  M.addEventListener('drop', e => { e.preventDefault(); n = 0; M.classList.remove('dragging'); if (S.room && e.dataTransfer) addFiles(Array.from(e.dataTransfer.files || [])); }); }
+
+/* ---------- 첨부 ---------- */
+const MAXF = 20 * 1024 * 1024;
+const BAD = /\.(html?|js|mjs|svg|exe|bat|cmd|ps1|sh)$/i;
+function addFiles(fs) { let bad = 0; fs.forEach(f => { if (!f || BAD.test(f.name || '') || f.size > MAXF) { bad++; return; } S.tray.push({ file: f, url: /^image\//.test(f.type) ? URL.createObjectURL(f) : '' }); }); if (bad) toast('보낼 수 없는 파일은 뺐습니다 (20MB 넘음 · 실행 파일)', true); S.tray = S.tray.slice(0, 10); paintCmpTop(); }
+async function shrink(file) {   /* 사진은 긴 쪽 1920 · JPEG 로 줄임 (휴대폰 사진 5~10MB → 0.5MB 안팎) */
+  if (!/^image\/(jpe?g|png|webp|heic|heif)$/i.test(file.type) || file.size < 400 * 1024) { const d = await imgDim(file).catch(() => null); return { blob: file, w: d && d.w, h: d && d.h, t: file.type || 'image/jpeg' }; }
+  const url = URL.createObjectURL(file);
+  try { const img = await new Promise((ok, no) => { const i = new Image(); i.onload = () => ok(i); i.onerror = no; i.src = url; });
+    const k = Math.min(1, 1920 / Math.max(img.naturalWidth, img.naturalHeight)); const w = Math.round(img.naturalWidth * k), h = Math.round(img.naturalHeight * k);
+    const c = document.createElement('canvas'); c.width = w; c.height = h; c.getContext('2d').drawImage(img, 0, 0, w, h);
+    const blob = await new Promise(ok => c.toBlob(ok, 'image/jpeg', .82)); return blob && blob.size < file.size ? { blob, w, h, t: 'image/jpeg' } : { blob: file, w: img.naturalWidth, h: img.naturalHeight, t: file.type };
+  } catch (_) { return { blob: file, t: file.type || 'image/jpeg' }; } finally { URL.revokeObjectURL(url); } }
+function imgDim(file) { return new Promise((ok, no) => { if (!/^image\//.test(file.type)) return no(); const u = URL.createObjectURL(file); const i = new Image(); i.onload = () => { ok({ w: i.naturalWidth, h: i.naturalHeight }); URL.revokeObjectURL(u); }; i.onerror = () => { URL.revokeObjectURL(u); no(); }; i.src = u; }); }
+let stMod = null; const storage = () => stMod || (stMod = import('https://www.gstatic.com/firebasejs/10.12.0/firebase-storage.js').catch(e => { stMod = null; throw e; }));
+const extOf = (n, t) => { const m = String(n || '').match(/\.([a-z0-9]{1,6})$/i); if (m) return m[1].toLowerCase(); return /jpe?g/.test(t) ? 'jpg' : /png/.test(t) ? 'png' : /pdf/.test(t) ? 'pdf' : 'bin'; };
+async function upload(folder, file) {
+  const isImg = /^image\//.test(file.type); const sh = isImg ? await shrink(file) : { blob: file, t: file.type || 'application/octet-stream' };
+  const d = new Date(); const ym = d.getFullYear() + String(d.getMonth() + 1).padStart(2, '0');
+  const nm = isImg && sh.t === 'image/jpeg' && !/\.jpe?g$/i.test(file.name || '') ? String(file.name || '사진').replace(/\.[^.]+$/, '') + '.jpg' : String(file.name || '파일');
+  const path = `chat/${folder}/${ym}/${Date.now()}_${Math.random().toString(36).slice(2, 8)}.${extOf(nm, sh.t)}`;
+  const m = await storage();
+  await Promise.race([m.uploadBytes(m.ref(m.getStorage(app), path), sh.blob, { contentType: sh.t, customMetadata: { name: nm.slice(0, 120), by: S.me } }), new Promise((_, no) => setTimeout(() => no(new Error('올리기 시간이 너무 깁니다 — 신호를 확인하십시오')), 120000))]);
+  const att = { p: path, n: nm.slice(0, 80), t: sh.t, s: sh.blob.size }; if (sh.w) { att.w = sh.w; att.h = sh.h; } return att;
+}
+const urlCache = new Map();
+async function attUrl(p) { if (urlCache.has(p)) return urlCache.get(p); const m = await storage(); const u = await m.getDownloadURL(m.ref(m.getStorage(app), p)); urlCache.set(p, u); return u; }
+const fSize = s => !s ? '' : s < 1024 * 1024 ? Math.max(1, Math.round(s / 1024)) + 'KB' : (s / 1024 / 1024).toFixed(1) + 'MB';
+function fiCls(n) { const e = extOf(n, ''); return /pdf/.test(e) ? 'pdf' : /xls|csv/.test(e) ? 'xls' : /doc/.test(e) ? 'doc' : /ppt/.test(e) ? 'ppt' : /hwp/.test(e) ? 'hwp' : ''; }
+function attHtml(a, blobUrl) {
+  const j = esc(JSON.stringify(a));
+  if (/^image\//.test(a.t || '')) { const ar = a.w && a.h ? `aspect-ratio:${a.w}/${a.h};` : ''; return `<img class="att-img" alt="사진" style="${ar}" ${blobUrl ? `src="${blobUrl}"` : `data-p="${esc(a.p)}"`} data-att="${j}">`; }
+  return `<button type="button" class="att-f" data-att="${j}"><span class="fi ${fiCls(a.n)}">${esc(extOf(a.n, a.t).toUpperCase().slice(0, 4))}</span><span class="fn"><b>${esc(a.n || '파일')}</b><small>${fSize(a.s)} · 눌러서 열기</small></span></button>`;
+}
+function resolveAtt(root) { root.querySelectorAll('img[data-p]:not([src])').forEach(async img => { try { img.src = await attUrl(img.dataset.p); } catch (_) { img.alt = '사진을 열 수 없습니다'; } }); }
+async function openAtt(a) {
+  if (!a || !a.p) return; let u = ''; try { u = await attUrl(a.p); } catch (e) { toast('열 수 없습니다 — ' + ((e && e.code) || ''), true); return; }
+  if (/^image\//.test(a.t || '')) { const v = document.createElement('div'); v.id = 'viewer'; v.innerHTML = `<div class="vh"><a href="${esc(u)}" target="_blank" rel="noopener" download="${esc(a.n || '사진.jpg')}">원본 열기 · 저장</a><button type="button">닫기</button></div><div class="vb"><img src="${esc(u)}" alt=""></div>`; document.body.appendChild(v); const close = () => v.remove(); v.querySelector('button').onclick = close; v.querySelector('.vb').onclick = e => { if (e.target === e.currentTarget) close(); }; history.pushState({ v: 1 }, ''); const pop = () => { close(); removeEventListener('popstate', pop); }; addEventListener('popstate', pop); return; }
+  window.open(u, '_blank', 'noopener');
+}
+
+/* ---------- 보내기 ---------- */
+async function send() {
+  if (S.sending) return; const rk = S.room; if (!rk) return; const tx = $('tx'); const text = String((tx && tx.value) || '').trim(); const files = S.tray.slice();
+  if (!text && !files.length) { if (tx) tx.focus(); return; }
+  S.sending = true; $('b-send').disabled = true;
+  const reply = S.reply; S.reply = null; S.tray = []; S.draft[rk] = ''; if (tx) { tx.value = ''; autoH(tx); } paintCmpTop();
+  const jobs = files.length ? files.map((f, i) => ({ f, note: i === 0 ? text : '' })) : [{ f: null, note: text }];
+  let okN = 0;
+  for (const j of jobs) {
+    const loc = { id: 'tmp' + Date.now() + Math.random().toString(36).slice(2, 6), __room: rk, note: j.note, by: 'us', email: S.me, at: null, k: rk === 'qc' ? 'dev:' + DEV : 'chat', vendor: rk === 'qc' ? FIELD : roomName(rk), kind: rk === 'qc' ? 'field' : 'note', att: j.f ? { p: '', n: j.f.file.name, t: j.f.file.type, s: j.f.file.size } : null, __blob: j.f && j.f.url, __state: j.f ? '올리는 중 …' : '보내는 중' };
+    if (rk !== 'qc' && roomType(rk) === 'gs') loc.part = 'gs';
+    S.local.push(loc); paintThread(); const th = $('thread'); if (th) th.scrollTop = th.scrollHeight;
+    try {
+      let att = null; if (j.f) { att = await upload(rk === 'qc' ? FIELD : roomName(rk), j.f.file); loc.__state = '보내는 중'; paintThread(); }
+      const d = { note: String(j.note || '').slice(0, 300), by: 'us', email: S.me, at: serverTimestamp() };
+      if (att) d.att = att;
+      if (rk === 'qc') Object.assign(d, { vendor: FIELD, k: 'dev:' + DEV, wo: '' }, reply ? { kind: 'field_reply', ref: reply.id } : { kind: 'field' });
+      else Object.assign(d, { vendor: roomName(rk), k: 'chat', wo: '', kind: 'note', label: nameOf(S.me) }, roomType(rk) === 'gs' ? { part: 'gs' } : {}, reply ? { chip: 're:' + reply.id } : {});
+      const ref = await addDoc(collection(db, 'proc_log'), d); loc.__done = true; loc.__realId = ref.id; okN++;
+      if (j.f && j.f.url) setTimeout(() => URL.revokeObjectURL(j.f.url), 60000);
+    } catch (e) { loc.__state = '못 보냄 — ' + ((e && (e.code || e.message)) || ''); toast('보내지 못했습니다 — ' + ((e && (e.code || e.message)) || ''), true); }
+    paintThread();
+  }
+  S.sending = false; const b = $('b-send'); if (b) b.disabled = false; dropLocal(); paint();
+}
+async function cancelMsg(id) {
+  const rk = S.room; const l = msgsOf(rk).find(x => x.id === id); if (!l) return;
+  if (rk === 'qc') { if (S.me !== OWNER) { toast('현장 알림 지우기는 최고관리자만 합니다', true); return; } if (!confirm('이 현장 알림을 지웁니다 (모든 휴대폰 · PC 에서 사라짐).')) return;
+    try { await addDoc(collection(db, 'proc_log'), { vendor: FIELD, k: 'dev:' + DEV, wo: '', kind: 'field_del', ref: id, note: '', by: 'us', email: S.me, at: serverTimestamp() }); toast('지웠습니다'); } catch (e) { toast('지우지 못했습니다 — ' + ((e && e.code) || ''), true); } return; }
+  if (!confirm('이 글을 보내기 취소합니다 — 업체 앱에서도 사라집니다.\n\n' + (String(l.note || '') || attWord(l.att)).slice(0, 80))) return;
+  try { await addDoc(collection(db, 'proc_log'), Object.assign({ vendor: roomName(rk), k: 'chat', wo: '', kind: 'cancel', ref: id, note: '', by: 'us', email: S.me, at: serverTimestamp() }, roomType(rk) === 'gs' ? { part: 'gs' } : {})); toast('보내기 취소했습니다'); } catch (e) { toast('취소하지 못했습니다 — ' + ((e && e.code) || ''), true); }
+}
+/* 읽음 — 편직 · 가공: 이 기기 기록 + 업체 앱에 "읽음"(마지막 업체 글을 처음 볼 때 한 번) · 현장 QC: [확인] */
+let acking = false; const ackedNow = new Set();   /* 같은 글에 [확인]을 두 번 적지 않게 */
+function markRead(rk) {
+  if (document.hidden || !rk) return;
+  if (rk === 'qc') { if (acking) return; const U = qcMsgs().filter(l => !l.__room && !mineQc(l) && Date.now() - tOf(l) < 7 * 864e5 && !ackedNow.has(l.id) && !acksOf(l.id).some(a => String(a.email || '').toLowerCase() === S.me)).slice(0, 30); if (!U.length) return; acking = true; U.forEach(l => ackedNow.add(l.id));
+    (async () => { for (const l of U) { try { await addDoc(collection(db, 'proc_log'), { vendor: FIELD, k: 'dev:' + DEV, wo: '', kind: 'field_ack', ref: l.id, note: '', by: 'us', email: S.me, at: serverTimestamp() }); } catch (_) { ackedNow.delete(l.id); } } acking = false; })(); return; }
+  const o = ls.get('hwkc.seen', {}) || {}; o[seenKey(rk)] = Date.now(); ls.set('hwkc.seen', o); paintSide(); paintBadge();
+  const lastV = chatMsgs(rk).filter(l => l.by === 'vendor' && !String(l.id || '').startsWith('tmp')).slice(-1)[0]; if (!lastV) return;
+  const sk = 'hwkc.sent|' + roomType(rk) + '|' + roomName(rk); if (ls.raw(sk) === lastV.id) return; ls.rawSet(sk, lastV.id);
+  addDoc(collection(db, 'proc_log'), Object.assign({ vendor: roomName(rk), k: 'chat', wo: '', kind: 'st', stage: 'chat_seen', ref: lastV.id, note: '', by: 'us', email: S.me, at: serverTimestamp() }, roomType(rk) === 'gs' ? { part: 'gs' } : {})).catch(() => {});
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden && S.room) { markRead(S.room); paint(); } });
+function openRoom(rk) { S.room = rk; S.reply = null; S.menu = false; S.tray = []; $('app').classList.add('inroom'); history.replaceState(null, '', '#' + encodeURIComponent(rk)); $('mainIn').dataset.rk = ''; paint(); }
+
+/* ---------- 왼쪽 ---------- */
+$('filt').addEventListener('click', e => { const b = e.target.closest('[data-f]'); if (!b) return; S.filt = b.dataset.f; ls.set('hwc.filt', S.filt); paintSide(); });
+$('rooms').addEventListener('click', e => { const b = e.target.closest('[data-rk]'); if (!b) return; openRoom(b.dataset.rk); });
+$('q').addEventListener('input', e => { S.q = e.target.value; paintSide(); });
+addEventListener('popstate', () => { if (matchMedia('(max-width:820px)').matches && S.room && !document.getElementById('viewer')) { S.room = ''; $('app').classList.remove('inroom'); paint(); } });
+
+/* ---------- 설정 · 알림 ---------- */
+function sheet(html) { let s = $('sheet'); if (!s) { s = document.createElement('div'); s.id = 'sheet'; document.body.appendChild(s); s.addEventListener('click', e => { if (e.target === s) s.remove(); }); } s.innerHTML = `<div class="sh">${html}</div>`; return s; }
+$('b-set').addEventListener('click', () => {
+  const on = !!ls.raw('hwc.push'); const perm = typeof Notification !== 'undefined' ? Notification.permission : 'denied';
+  const s = sheet(`<h3>이음 설정</h3>
+    <button type="button" class="sb" data-a="push">${on && perm === 'granted' ? '이 기기 알림 켜져 있음 — 다시 등록' : '이 기기 알림 켜기'}<small>앱을 닫아 두어도 업체 글 · 현장 알림이 오면 이 기기에 알림 (확인 안 한 글은 5분마다 다시)</small></button>
+    <button type="button" class="sb" data-a="install">휴대폰 · PC 에 앱으로 설치<small>크롬 메뉴 ⋮ → [앱 설치] 또는 [홈 화면에 추가] — 바탕화면 · 홈 화면에 [이음] 아이콘이 생깁니다</small></button>
+    <button type="button" class="sb" data-a="fab">FABIWOS 열기<small>의뢰서 · 재고 · 공정 — 같은 계정으로 들어갑니다</small></button>
+    <button type="button" class="sb red" data-a="out">로그아웃<small>${esc(S.me)}</small></button>
+    <div style="text-align:center;color:#94a3b8;font-size:12px;margin-top:8px">이음 ${CVER} · 대화는 FABIWOS [대화] 창 · 업체 앱과 같은 글입니다</div>`);
+  s.querySelector('[data-a="push"]').onclick = async () => { s.remove(); const ok = await pushReg(true); toast(ok ? '이 기기 알림을 켰습니다' : '알림을 켜지 못했습니다 — ' + (S.pushErr || '주소창 왼쪽 자물쇠 → 알림 허용'), !ok); };
+  s.querySelector('[data-a="install"]').onclick = async () => { if (S.bip) { S.bip.prompt(); S.bip = null; } else toast('크롬 메뉴 ⋮ → [앱 설치] 또는 [홈 화면에 추가]를 누르십시오'); s.remove(); };
+  s.querySelector('[data-a="fab"]').onclick = () => { s.remove(); window.open('index.html', '_blank'); };
+  s.querySelector('[data-a="out"]').onclick = async () => { s.remove(); if (!confirm('로그아웃할까요?')) return; try { await signOut(auth); } catch (_) {} };
+});
+addEventListener('beforeinstallprompt', e => { e.preventDefault(); S.bip = e; });
+if ('serviceWorker' in navigator && location.protocol === 'https:') { navigator.serviceWorker.register('c-sw.js', { scope: './c' }).catch(() => {}); navigator.serviceWorker.addEventListener('message', ev => { if (ev.data && ev.data.hwcpush) ring(); }); }
+async function sha(t) { try { const b = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(t)); return Array.from(new Uint8Array(b)).map(x => x.toString(16).padStart(2, '0')).join('').slice(0, 40); } catch (_) { let h = 0; for (let i = 0; i < t.length; i++) h = (h * 31 + t.charCodeAt(i)) | 0; return 'h' + (h >>> 0).toString(16) + t.length; } }
+async function pushReg(ask) {
+  S.pushErr = '';
+  try {
+    if (location.protocol !== 'https:' || !('serviceWorker' in navigator) || typeof Notification === 'undefined') { S.pushErr = '이 브라우저는 알림을 못 받습니다'; return false; }
+    if (Notification.permission !== 'granted') { if (!ask) return false; if (await Notification.requestPermission() !== 'granted') { S.pushErr = '알림을 허용하지 않았습니다'; return false; } }
+    const M = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-messaging.js'); if (!(await M.isSupported())) { S.pushErr = '이 브라우저는 지원하지 않음'; return false; }
+    const reg = await navigator.serviceWorker.register('c-sw.js', { scope: './c' });
+    if (!reg.active) await new Promise(r => { const w = reg.installing || reg.waiting; if (!w) return r(); w.addEventListener('statechange', () => { if (w.state === 'activated') r(); }); setTimeout(r, 6000); });
+    const token = await M.getToken(M.getMessaging(app), { serviceWorkerRegistration: reg }); if (!token) { S.pushErr = '열쇠를 못 받음'; return false; }
+    const id = await sha(token); const last = ls.get('hwc.push', null);
+    if (!last || last.id !== id || last.em !== S.me || Date.now() - (last.t || 0) > 7 * 864e5) {
+      await setDoc(doc(db, 'push_tok', id), { token, role: 'staff', email: S.me, uid: String(S.user.uid || ''), dev: DEV, url: location.origin + location.pathname, ua: navigator.userAgent.slice(0, 160), at: serverTimestamp() });
+      ls.set('hwc.push', { id, em: S.me, t: Date.now() });
+    }
+    return true;
+  } catch (e) { S.pushErr = (e && (e.code || e.message)) || '오류'; console.warn('[이음 알림]', S.pushErr); return false; }
+}
+function pushAuto() { setTimeout(() => { if (ls.raw('hwc.push') && typeof Notification !== 'undefined' && Notification.permission === 'granted') pushReg(false); }, 3000); }
+setInterval(() => { if (S.user) paintSide(); }, 60000);   /* 시간 글자 ("어제" 등) */
+window.__hwc = { S, paint, openRoom, send, rooms, msgsOf, addFiles, upload };   /* 시험용 */
+</script>
+</body>
+</html>
