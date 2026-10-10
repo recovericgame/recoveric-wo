@@ -820,7 +820,7 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/fireba
 import { getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult, onAuthStateChanged, signOut, setPersistence, browserLocalPersistence } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 import { initializeFirestore, getFirestore, persistentLocalCache, persistentMultipleTabManager, doc, getDoc, setDoc, deleteDoc, collection, query, where, onSnapshot as fsOnSnapshot, addDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
-const CVER = 'c12 (hotfix630)';
+const CVER = 'c13 (hotfix631)';
 const EMBED = /[?&]embed=1(?:&|$)/.test(location.search);   /* FABIWOS [대화] 창 안 */
 if (EMBED) document.documentElement.classList.add('embed');
 const cfg = { apiKey: "AIzaSyAIaNFZozda5sp4Qjs7LEn-aXYLX1JZi10", authDomain: "recoveric-wo.firebaseapp.com", projectId: "recoveric-wo", storageBucket: "recoveric-wo.firebasestorage.app", messagingSenderId: "267946532287", appId: "1:267946532287:web:fcc1b597c9bf53c9d8950a" };
@@ -855,7 +855,7 @@ const ls = { get(k, d) { try { const v = localStorage.getItem(k); return v == nu
 const DEV = (() => { let d = ls.raw('hw_dev_id'); if (!d) { d = Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4); ls.rawSet('hw_dev_id', d); } return d; })();
 const tOf = l => { const a = l && l.at; if (!a) return Date.now(); if (typeof a.toMillis === 'function') return a.toMillis(); if (a.seconds) return a.seconds * 1000; const t = Date.parse(a); return isNaN(t) ? Date.now() : t; };
 const FIELD = '__field', ISSUE = '메시지', DEL_CUT = Date.parse('2026-10-02T00:00:00+09:00');
-const S = { user: null, me: '', em: '', users: [], accs: [], pub: {}, chat: [], field: [], room: '', filt: ls.get('hwc.filt', 'all'), q: '', draft: {}, gotChat: false, gotField: false, kit: null, drawer: false, vtypes: {}, gone: new Set() };
+const S = { user: null, me: '', em: '', users: [], accs: [], pub: {}, chat: [], field: [], room: '', filt: ls.get('hwc.filt', 'all'), q: '', draft: {}, gotChat: false, gotField: false, kit: null, drawer: false, vtypes: {}, vids: {}, gone: new Set() };
 const W = () => matchMedia('(min-width:900px)').matches;
 
 /* ---------- 카카오톡 · 앱 안 브라우저 → 크롬으로 ---------- */
@@ -946,7 +946,7 @@ function start() {
   live('acc', (ok, er) => onSnapshot(collection(db, 'proc_acc'), sn => { ok(); const a = []; sn.forEach(d => a.push(Object.assign({ uid: d.id }, d.data()))); S.accs = a; paint(); }, er));
   live('pub', (ok, er) => onSnapshot(collection(db, 'proc_pub'), sn => { ok(); const o = {}; sn.forEach(d => { const x = d.data() || {}; o[d.id] = { mode: x.mode || '', gs: Array.isArray(x.gs) && x.gs.length > 0, items: Array.isArray(x.items) && x.items.length > 0 }; }); S.pub = o; paint(); }, er));   /* hotfix621: 업체 종류 (FABIWOS 와 같게) */
   live('users', (ok, er) => onSnapshot(doc(db, 'settings', 'users'), sn => { ok(); if (sn.exists()) { S.users = Array.isArray(sn.data().items) ? sn.data().items : []; $('me-nm').textContent = nameOf(S.me) + ' · 현일텍스 본사'; paint(); } }, er));
-  live('vendors', (ok, er) => onSnapshot(doc(db, 'settings', 'vendors'), sn => { ok(); const o = {}; if (sn.exists()) (sn.data().items || []).forEach(v => { if (v && v.name) o[String(v.name).trim()] = (Array.isArray(v.types) ? v.types : (v.type ? [v.type] : [])).map(String); }); S.vtypes = o; paint(); }, er));   /* hotfix624: 업체코드 종류 → 대화방 순서(원사 · 편직 · 염/가공 · 후가공 · 나염) */
+  live('vendors', (ok, er) => onSnapshot(doc(db, 'settings', 'vendors'), sn => { ok(); const o = {}; if (sn.exists()) (sn.data().items || []).forEach(v => { if (v && v.name) o[String(v.name).trim()] = (Array.isArray(v.types) ? v.types : (v.type ? [v.type] : [])).map(String); }); S.vtypes = o; S.vids = vidMap(sn.exists() ? sn.data().items : []); paint(); }, er));   /* hotfix624: 업체코드 종류 → 대화방 순서(원사 · 편직 · 염/가공 · 후가공 · 나염) */
   const take = sn => { const a = []; sn.forEach(d => { const x = (typeof d.data === 'function') ? d.data({ serverTimestamps: 'estimate' }) : d.data; a.push(Object.assign({ id: d.id }, x)); }); return a; };
   live('chat', (ok, er) => onSnapshot(query(collection(db, 'proc_log'), where('k', '==', 'chat')), sn => { ok(); const prev = S.gotChat ? new Set(S.chat.map(l => l.id)) : null; S.chat = take(sn).filter(l => l.k === 'chat' && l.vendor !== FIELD); S.gotChat = true; arrive(prev, S.chat); paint(); }, er));
   live('field', (ok, er) => onSnapshot(query(collection(db, 'proc_log'), where('vendor', '==', FIELD)), sn => { ok(); const prev = S.gotField ? new Set(S.field.map(l => l.id)) : null; S.field = take(sn).filter(l => l.vendor === FIELD); S.gotField = true; arrive(prev, S.field); paint(); }, er));
@@ -991,10 +991,16 @@ function qcMsgs() { const L = S.field; const del = qcDel(); const top = L.filter
   return top.concat(L.filter(l => l.kind === 'field_reply' && ids.has(l.ref) && !del.has(l.id) && !S.gone.has(l.id))).sort((a, b) => tOf(a) - tOf(b)); }
 const msgsOf = rk => rk === 'qc' ? qcMsgs() : chatMsgs(rk);
 const acksOf = id => S.field.filter(l => l.kind === 'field_ack' && l.ref === id);
-const seenKey = rk => rk === 'qc' ? '' : (rk.startsWith('pc|') ? 'pc|' : '') + roomName(rk);   /* FABIWOS [대화] 창과 같은 열쇠 */
+/* hotfix631: 읽은 때 열쇠 = 업체 번호(vid · 업체코드 이름/다른 표기가 하나로 맞을 때) — 없으면 지금 이름. 옛 이름 열쇠(이름 · 바꾸기 전 이름)도 읽어 큰 값을 씀 (FABIWOS kcSK · kcSeenAt 과 같게) */
+const vk = s => String(s || '').replace(/\s+/g, '').toLowerCase();
+function vidMap(items) { const m = {}; (items || []).forEach(v => { if (!v || !v.vid) return; [v.name].concat(Array.isArray(v.aliases) ? v.aliases : []).forEach(n => { const k = vk(n); if (!k) return; (m[k] = m[k] || new Set()).add(String(v.vid)); }); }); const o = {}; Object.keys(m).forEach(k => { if (m[k].size === 1) o[k] = Array.from(m[k])[0]; }); return o; }
+const seenPre = rk => rk.startsWith('pc|') ? 'pc|' : '';
+const seenKey = rk => { if (rk === 'qc') return ''; const n = roomName(rk); const id = (S.vids || {})[vk(n)]; return seenPre(rk) + (id ? 'v:' + id : n); };
+function seenAt(rk) { const o = ls.get('hwkc.seen', {}) || {}; const n = roomName(rk); const a = S.accs.find(x => x && x.vendor === n); const names = [n].concat(a && Array.isArray(a.vendor_old) ? a.vendor_old : []);
+  return Math.max(Number(o[seenKey(rk)]) || 0, ...names.map(x => Number(o[seenPre(rk) + x]) || 0)); }
 function unread(rk) {
   if (rk === 'qc') return qcMsgs().filter(l => !mineQc(l) && Date.now() - tOf(l) < 7 * 864e5 && !acksOf(l.id).some(a => String(a.email || '').toLowerCase() === S.me)).length;
-  const s = Number((ls.get('hwkc.seen', {}) || {})[seenKey(rk)]) || 0; const cut = Date.now() - 30 * 864e5;
+  const s = seenAt(rk); const cut = Date.now() - 30 * 864e5;
   return chatMsgs(rk).filter(l => l.by === 'vendor' && tOf(l) > Math.max(cut, s)).length;   /* 들어온 글만 — 내가 · 다른 직원이 보낸 글은 세지 않음 */
 }
 /* 공지 — 글에 notice:1 (새 공지) 또는 { kind:'notice_on', ref } (있던 글을 공지로) · 내리기 { kind:'notice_off', ref } */
