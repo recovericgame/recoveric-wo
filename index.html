@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="FABIWOS">
 <meta name="mobile-web-app-capable" content="yes">
-<title>FABIWOS v2.53 hotfix629</title>
+<title>FABIWOS v2.53 hotfix630</title>
 <script>
 /* ===== HWChat 대화 화면 공용 (hotfix620 · 대표 10/9 "카톡처럼 쉽고 멋있게") — 이음 · 편직팀 앱 · 염/가공소 앱 · 현장 QC 앱이 같은 모양
  *   말풍선(내 글 노랑 · 받은 글 흰색) · 같은 사람 1분 안 글은 묶음(이름 · 사진은 첫 글, 시간은 끝 글) · 안 읽음 1
@@ -310,7 +310,15 @@
     ta.value = o.draft ? (o.draft.get() || '') : ''; autoH();
     ta.addEventListener('input', () => { autoH(); if (o.draft) o.draft.set(ta.value); });
     ta.addEventListener('focus', () => { if (I.panel) setPanel(false); });
-    ta.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && wide()) { e.preventDefault(); sendText(); } });
+    /* hotfix630(대표 10/10): PC(마우스 기기)는 Enter = 보내기 · Shift+Enter / Ctrl+Enter = 줄바꿈 — 좁은 대화 칸(c.html?embed=1)에서도. 휴대폰(터치)은 Enter = 줄바꿈 그대로.
+       한글 조합 중 Enter(isComposing · 229)는 그 자리에서 보내지 않고, 조합이 끝난 뒤(0.5초 안) 한 번만 보냄 — 마지막 글자 빠짐 · 두 번 보내기 막음 */
+    const enterSends = () => { try { return matchMedia('(hover:hover) and (pointer:fine)').matches; } catch (_) { return false; } }; let enterPend = 0;
+    ta.addEventListener('keydown', e => { if (e.key !== 'Enter' || e.altKey) return;
+      if (e.isComposing || e.keyCode === 229) { enterPend = (!e.shiftKey && !e.ctrlKey && !e.metaKey && enterSends()) ? Date.now() : 0; return; }
+      if (e.shiftKey) return;
+      if (e.ctrlKey || e.metaKey) { if (!enterSends()) return; e.preventDefault(); e.stopPropagation(); const a = ta.selectionStart, b = ta.selectionEnd; ta.setRangeText('\n', a, b, 'end'); autoH(); if (o.draft) o.draft.set(ta.value); return; }
+      if (!enterSends()) return; e.preventDefault(); enterPend = 0; sendText(); });
+    ta.addEventListener('compositionend', () => { const t = enterPend; enterPend = 0; if (!t || Date.now() - t > 500) return; setTimeout(() => { if (ta.isConnected && document.activeElement === ta) sendText(); }, 40); });
     ta.addEventListener('paste', e => { const fs = Array.from((e.clipboardData && e.clipboardData.files) || []); if (fs.length) { e.preventDefault(); askFiles(fs); } });
     sb.addEventListener('click', () => { if (ta.value.trim()) sendText(); else ta.focus(); });
     const setPanel = on => { I.panel = on; pn.classList.toggle('on', on); pl.classList.toggle('on', on); if (on) { try { ta.blur(); } catch (_) {} } if (o.onLayout) o.onLayout(); };
@@ -41028,13 +41036,11 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
     if (q) {
       const all = getFabricSpecs(); const kidsOf = {}; const heads = new Set();
       const tm = (t, k) => { t = String(t || ''); return t.toLowerCase().indexOf(k) >= 0 || (typeof hwTextMatch === 'function' && hwTextMatch(t, k)); };   /* hotfix515: 초성 · 띄어쓰기 무시 */
-      const hit = sp => tm(sp.name, q) || tm(kfShowName(sp.name), q) || String(specFid(sp) || '').toLowerCase().indexOf(q) >= 0 || (Array.isArray(sp.aliases) && sp.aliases.some(a => tm(a, q)));
-      all.forEach(s0 => { const f = specFid(s0); const g = f ? specPrimaryGreige(f) : ''; if (g) (kidsOf[g] = kidsOf[g] || []).push(f); });
+      /* hotfix630(대표 지시 10/10 "품목(생지)명을 검색해야지"): 그 줄의 품목명(보이는 이름 포함) · 코드에 맞는 줄만. 원래 생지 · 파생을 끌어오지 않는다. 다른 이름 표기(aliases)는 찾기에서 뺌(자료는 그대로) */
+      const hit = sp => tm(sp.name, q) || tm(kfShowName(sp.name), q) || String(specFid(sp) || '').toLowerCase().indexOf(q) >= 0;
       const gv = kfView() === 'greige';
-      all.forEach(s0 => { const f = specFid(s0); if (!f || s0.trashed || !hit(s0)) return; qSet.add(f); if (!gv) return;
-        const g = specPrimaryGreige(f);
-        if (g) { qSet.add(g); heads.add(g); }   // 파생을 찾음 → 그 생지 아래 그 파생만
-        else if (kidsOf[f]) { heads.add(f); kidsOf[f].forEach(k => qSet.add(k)); } });   // 생지를 찾음 → 파생 전부
+      all.forEach(s0 => { const f = specFid(s0); if (!f || s0.trashed || !hit(s0)) return; qSet.add(f); });
+      if (gv) qSet.forEach(f => { const g = specPrimaryGreige(f); if (g && qSet.has(g)) heads.add(g); });   // 생지와 파생이 둘 다 맞으면 생지 아래에 펼쳐 보임
       if (state.__kfQOpened !== q) { state.__kfQOpened = q; if (!state.kfOpen || typeof state.kfOpen !== 'object') state.kfOpen = {}; heads.forEach(h => { state.kfOpen[h] = true; }); }
     } else state.__kfQOpened = '';
     getFabricSpecs().slice().sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'ko', { numeric: true })).forEach(sp => {
@@ -41043,8 +41049,9 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
       if (!/\(복사\)$/.test(String(sp.name || '')) && !hwStPass('knitSetup', sp.active !== false)) return;   // hotfix515: 작업중만(기본) · 종료까지 · 종료만 (복사본은 늘 보임)
       // hotfix417: 샘플(구분 샘플 · 이름이 "(샘플)"로 시작)은 [샘플도 보기]를 켜야 보인다 · 구분 걸러 보기
       const isSample = String(sp.gubun || '') === GUBUN_SAMPLE || /^\(샘플\)/.test(String(sp.name || '').trim());
-      if (!state.kfSample && isSample && !/\(복사\)$/.test(String(sp.name || ''))) return;
-      if (state.kfGubun && String(sp.gubun || GUBUN_BODY) !== state.kfGubun) return;
+      /* hotfix630: [샘플도 보기] 체크는 감춤 — 샘플은 [구분]에서 "샘플"을 골랐을 때만 (구분 전체 = 샘플 빼고) */
+      if (isSample && !/\(복사\)$/.test(String(sp.name || ''))) { if (state.kfGubun !== GUBUN_SAMPLE) return; }
+      else if (state.kfGubun && String(sp.gubun || GUBUN_BODY) !== state.kfGubun) return;
       if (state.kfCat && String(sp.cat || '') !== state.kfCat) return;   /* hotfix451: 조직으로 거르기 */
       if (state.kfGreige) { const gg = specPrimaryGreige(fid); if (state.kfGreige === '__none' ? !!gg : (gg !== state.kfGreige && fid !== state.kfGreige)) return; }   /* hotfix515: 고른 생지 자신도 보임 */   /* 원래 생지로 거르기(최고관리자 화면에만 보이는 칸) */
       if (q && !qSet.has(fid)) return;   /* hotfix486 */
@@ -41065,7 +41072,7 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
       else fs2.forEach(v => mine.push({ sp, fid, factory: v, k: K[v], yarns: kfYarnNamesFor(fid, v), fromCard: !knitFeeHas(fid), others: mine.__others || [] }));   /* hotfix462: 공장 줄마다 제 원사만 */
       if (!mine.length) return;
       const gg = specPrimaryGreige(fid);   /* hotfix461: [생지] 보기에서는 파생 줄을 제 생지 아래에 접어 둔다 */
-      if (kfView() === 'greige' && gg) { mine.forEach(x => { const g2 = specPrimaryGreige(fid, x.factory) || gg; (kids[g2] = kids[g2] || []).push(Object.assign({}, x, { child: true })); }); return; }   /* hotfix516: 공장 생지 아래로 */
+      if (kfView() === 'greige' && gg) { mine.forEach(x => { const g2 = specPrimaryGreige(fid, x.factory) || gg; if (q && !qSet.has(g2)) { out.push(Object.assign({}, x, { child: true })); return; } (kids[g2] = kids[g2] || []).push(Object.assign({}, x, { child: true })); }); return; }   /* hotfix630: 찾기 중 원래 생지가 안 맞으면 파생 줄만 따로 보임 */   /* hotfix516: 공장 생지 아래로 */
       if (kfView() === 'derived' && !gg) return;
       out.push.apply(out, mine);
     });
@@ -41129,8 +41136,7 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
       <input type="text" lang="ko" id="kf-q" value="${escapeHtml(q)}" placeholder="품목 찾기 (이름 일부 · 코드)" style="${iS}min-width:230px;">
       <input type="text" lang="ko" autocomplete="off" id="kf-factory" class="kf-combo" data-nodirty="1" value="${escapeHtml(kfFacLabel(state.kfFactory))}" placeholder="편직공장 전체 (글자로 찾기)" title="편직공장 — 누르면 목록 · 글자를 치면 거름(초성 가능)" style="${iS}min-width:170px;${state.kfFactory ? 'border-color:#60a5fa;background:#eff6ff;' : ''}">
       <select id="kf-gubun" style="${iS}" title="구분(몸판 · 리프 · 샘플 …)으로 걸러 봅니다"><option value="">구분 전체</option>${Array.from(new Set(getFabricGubuns().concat([GUBUN_SAMPLE]))).map(g => `<option value="${escapeHtml(g)}"${g === state.kfGubun ? ' selected' : ''}>${escapeHtml(g)}</option>`).join('')}</select>
-      ${hwStFilterHTML('knitSetup', getFabricSpecs().filter(x => x && !x.trashed && x.active === false).length)}
-      <label style="display:flex;align-items:center;gap:5px;font-size:12.5px;color:#475569;cursor:pointer;"><input type="checkbox" id="kf-sample"${state.kfSample ? ' checked' : ''} style="width:15px;height:15px;">샘플도 보기</label>
+      ${(() => { const m = hwStMode('knitSetup'); return `<select id="kf-stmode" style="${iS}${m !== 'on' ? 'border-color:#fdba74;background:#fff7ed;color:#9a3412;font-weight:700;' : ''}" title="작업 상태로 걸러 봅니다 — 기본은 작업중만">${[['on', '작업중'], ['all', '전체'], ['off', '작업종료만']].map(([v, t]) => `<option value="${v}"${m === v ? ' selected' : ''}>작업 상태: ${t}</option>`).join('')}</select>`; })()}<!-- hotfix630: 작업 상태 체크 두 개 → 고르개 하나 · [샘플도 보기] 감춤(샘플은 [구분]에서) -->
       <span style="font-size:11.5px;color:#94a3b8;">${rows.length}줄</span>
       <span style="flex:1;"></span>
       ${isOwnerUser() ? (() => { const n = (typeof window.hwGmCount === 'function') ? window.hwGmCount() : 0; return `<button class="dash-action-btn hw-gm-open" style="${n ? 'background:#fff7ed;border-color:#fdba74;color:#c2410c;' : ''}font-weight:800;padding:6px 12px;" title="편직 줄을 생지 품목별로 묶고 공장별 생지 코드에 맞춥니다 — 맞춘 것도 다시 고칠 수 있음">품목 일원화 <b>${n || '✓'}</b></button>`; })() : ''}
@@ -41205,18 +41211,24 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
     h += `</tbody></table></div>`;
     // 품목을 찾았을 때만 이력
     if (q) {
-      const fids = Array.from(new Set(rows.map(r => r.fid)));
+      /* hotfix630: 이름이 맞는 품목의 이력만(접힌 파생 줄 포함) · 기본 줄임(제목 줄만) · [펼치기 · 줄이기] */
+      const hRows = []; rows.forEach(r => { hRows.push(r); if (!r.child) kfKidsOf(r.fid).forEach(x => hRows.push(x)); });
+      const fids = Array.from(new Set(hRows.map(r => r.fid)));
+      const HO = (state.kfHistOpen && typeof state.kfHistOpen === 'object') ? state.kfHistOpen : {};
+      if (fids.length) h += `<div style="margin-top:16px;display:flex;align-items:center;gap:8px;font-size:12.5px;color:#475569;font-weight:700;">찾은 품목 수정 이력 ${fids.length}개 <button class="dash-action-btn kf-hist-tg" data-fid="*" style="font-size:11.5px;padding:3px 10px;">모두 펼치기</button></div>`;
       fids.forEach(fid => {
         const hist = kfHistoryOf(fid);
-        const sp = rows.find(r => r.fid === fid).sp;
-        h += `<div style="margin-top:16px;border:1px solid #e2e8f0;border-radius:9px;padding:11px 14px;background:#fff;">
-          <div style="font-size:13px;font-weight:800;color:#1e3a8a;margin-bottom:7px;">${escapeHtml(sp.name || '')} 수정 이력 ${hist.length}건 <span style="font-size:11.5px;font-weight:400;color:#94a3b8;">— 달라진 칸만 적힙니다. 최근 것이 위</span></div>`;
+        const sp = hRows.find(r => r.fid === fid).sp;
+        const op = !!HO[fid];
+        h += `<div class="kf-hist-card" data-fid="${escapeHtml(fid)}" style="margin-top:8px;border:1px solid #e2e8f0;border-radius:9px;padding:9px 14px;background:#fff;">
+          <div style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:800;color:#1e3a8a;"><span>${escapeHtml(sp.name || '')} 수정 이력 ${hist.length}건 <span style="font-size:11.5px;font-weight:400;color:#94a3b8;">— 달라진 칸만 적힙니다. 최근 것이 위</span></span><span style="flex:1;"></span><button class="dash-action-btn kf-hist-tg" data-fid="${escapeHtml(fid)}" style="font-size:11.5px;padding:3px 10px;">${op ? '줄이기' : '펼치기'}</button></div>
+          <div class="kf-hist-body" style="margin-top:7px;${op ? '' : 'display:none;'}">`;
         if (!hist.length) h += `<div style="font-size:12px;color:#9ca3af;">아직 남은 이력이 없습니다.</div>`;
         else h += `<div class="dash-table-wrap"><table class="dash-table"><thead><tr><th style="min-width:118px;">날짜</th><th style="min-width:70px;">이름</th><th style="min-width:100px;">편직공장</th><th style="text-align:left;">달라진 것</th><th style="min-width:90px;">출처</th></tr></thead><tbody>`
           + hist.map(e => `<tr><td style="text-align:center;white-space:nowrap;font-size:12px;">${escapeHtml(e.at || '')}</td><td style="text-align:center;">${escapeHtml(e.by || '')}</td><td style="text-align:center;font-weight:700;">${escapeHtml(e.factory || '')}</td>
             <td style="text-align:left;font-size:12px;line-height:1.7;">${(e.changes || []).map(c => `<span style="display:inline-block;margin:1px 8px 1px 0;padding:1px 7px;border-radius:9px;background:#eef2ff;color:#3730a3;font-weight:700;">${escapeHtml(c)}</span>`).join('')}</td>
             <td style="text-align:center;font-size:11.5px;color:#64748b;">${escapeHtml(e.tag || '')}</td></tr>`).join('') + `</tbody></table></div>`;
-        h += `</div>`;
+        h += `</div></div>`;   /* hotfix630: kf-hist-body + 카드 */
       });
     }
     return h;
@@ -42840,6 +42852,14 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
     // hotfix417: 구분 · 샘플도 보기 · [+ 생지 추가]
     document.getElementById('kf-gubun')?.addEventListener('change', ev => { state.kfGubun = ev.target.value || ''; renderDashboard(); });
     document.getElementById('kf-sample')?.addEventListener('change', ev => { state.kfSample = !!ev.target.checked; renderDashboard(); });
+    document.getElementById('kf-stmode')?.addEventListener('change', ev => { state.hwSt = state.hwSt || {}; state.hwSt.knitSetup = ev.target.value || 'on'; renderDashboard(); });   /* hotfix630 */
+    document.querySelectorAll('#dash-body .kf-hist-tg').forEach(b => b.addEventListener('click', () => {   /* hotfix630: 수정 이력 펼치기 · 줄이기 (다시 그리지 않고 바로) */
+      if (!state.kfHistOpen || typeof state.kfHistOpen !== 'object') state.kfHistOpen = {};
+      const cards = b.dataset.fid === '*' ? Array.from(document.querySelectorAll('#dash-body .kf-hist-card')) : [b.closest('.kf-hist-card')];
+      const open = b.dataset.fid === '*' ? b.dataset.open !== '1' : !(state.kfHistOpen[b.dataset.fid]);
+      cards.forEach(c => { if (!c) return; state.kfHistOpen[c.dataset.fid] = open; const bd = c.querySelector('.kf-hist-body'); if (bd) bd.style.display = open ? '' : 'none'; const t = c.querySelector('.kf-hist-tg'); if (t) t.textContent = open ? '줄이기' : '펼치기'; });
+      const all = document.querySelector('#dash-body .kf-hist-tg[data-fid="*"]'); if (all && b.dataset.fid === '*') { all.dataset.open = open ? '1' : ''; all.textContent = open ? '모두 줄이기' : '모두 펼치기'; }
+    }));
     document.getElementById('kf-add-item')?.addEventListener('click', () => openKnitNewItemModal());
     document.getElementById('kf-gm-btn')?.addEventListener('click', () => openGreigeMapModal(''));   /* hotfix438 */
     document.querySelectorAll('#dash-body .kf-delitem').forEach(b => b.addEventListener('click', async () => {
@@ -51552,12 +51572,18 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
     if (ycKB._c && ycKB._kf === KF && ycKB._kb === KB && ycKB._fc === FC && ycKB._fs === FS && ycKB._k === key) return ycKB._c;   /* hotfix629: 원사 이름 목록(yarnNameList)은 부를 때마다 새 배열이라 같음 비교로는 기억이 늘 깨짐 → 개수(key)로만 봄 · 628 에서 품목마다 찾기를 더하자 계산기를 열면 화면이 멈춤 */
     const out = Object.assign({}, KB); const ok = m => m && Object.keys(m).some(f => m[f] && Array.isArray(m[f].yarns) && m[f].yarns.length);
     Object.keys(KF).forEach(fid => { if (ok(out[fid])) return; const c = window.__kbCopyOf(fid); if (ok(c)) out[fid] = c; });
-    try { (FS || []).forEach(s => { const fid = s && s.fid; if (!fid || ok(out[fid])) return; const c = window.__kbCopyOf(fid); if (ok(c)) out[fid] = c; }); } catch (_) {}   /* hotfix628(대표 10/10 "안 된다니까"): 운영에서 편직 설정 열쇠가 품목 번호(F…)가 아니어서 목록이 0개 — 품목 번호마다 바로 찾아 넣음 (운영 화면에서 __kbCopyOf(F…) 110개 확인) */
+    try { (FS || []).forEach(s => { const fid = s && s.fid; if (!fid || ok(out[fid]) || s.trashed || s.active === false || specPrimaryGreige(fid)) return;   /* hotfix630: 계산기 목록 기준(휴지통 · 작업종료 · 파생 뺌)에 드는 품목만 */ const c = window.__kbCopyOf(fid); if (ok(c)) out[fid] = c; }); } catch (_) {}   /* hotfix628(대표 10/10 "안 된다니까"): 운영에서 편직 설정 열쇠가 품목 번호(F…)가 아니어서 목록이 0개 — 품목 번호마다 바로 찾아 넣음 (운영 화면에서 __kbCopyOf(F…) 110개 확인) */
     ycKB._c = out; ycKB._kf = KF; ycKB._kb = KB; ycKB._yn = YN; ycKB._fc = FC; ycKB._fs = FS; ycKB._k = key; return out;
   }
+  /* hotfix630(대표 지시 10/10): 품목(생지) 코드와 같은 기준 — 휴지통 · 작업종료 빼기 · 파생 품목 빼기(편직은 원래 생지로) · 샘플은 [구분] "샘플"에서만 · 이름은 공장 꼬리 뗌(같은 이름이 둘이면 원래 이름) */
+  function ycIsSample(s) { return String(s.gubun || '') === GUBUN_SAMPLE || /^\(샘플\)/.test(String(s.__full || s.name || '').trim()); }
+  function ycGubOf(s) { return ycIsSample(s) ? GUBUN_SAMPLE : String(s.gubun || '').trim(); }
   function ycItems() {
     const KB = ycKB();
-    return getFabricSpecs().filter(s => s && s.fid && !s.trashed && KB[s.fid] && Object.keys(KB[s.fid]).some(f => { const b = KB[s.fid][f]; return b && Array.isArray(b.yarns) && b.yarns.length; }))
+    const L = getFabricSpecs().filter(s => s && s.fid && !s.trashed && s.active !== false && !specPrimaryGreige(s.fid) && KB[s.fid] && Object.keys(KB[s.fid]).some(f => { const b = KB[s.fid][f]; return b && Array.isArray(b.yarns) && b.yarns.length; }));
+    const show = s => { try { return typeof kfShowName === 'function' ? kfShowName(s.name) : String(s.name || ''); } catch (_) { return String(s.name || ''); } };
+    const cnt = {}; L.forEach(s => { const n = show(s); cnt[n] = (cnt[n] || 0) + 1; });
+    return L.map(s => { const n = show(s); return Object.assign({}, s, { name: cnt[n] > 1 ? String(s.name || '') : n, __full: s.name }); })
       .sort((a, b) => String(a.name).localeCompare(String(b.name), 'ko'));
   }
   function ycFactories(fid) { const m = ycKB()[fid] || {}; return Object.keys(m).filter(f => m[f] && Array.isArray(m[f].yarns) && m[f].yarns.length); }
@@ -51649,8 +51675,8 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
   // 화면
   function ycHTML(S, inModal) {
     const itemsAll = ycItems(); const C = ycCompute(S);
-    const gubs = Array.from(new Set(itemsAll.map(s => String(s.gubun || '').trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'ko'));
-    const items = S.gub ? itemsAll.filter(s => String(s.gubun || '').trim() === S.gub) : itemsAll;
+    const gubs = Array.from(new Set(itemsAll.map(s => ycGubOf(s)).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'ko'));
+    const items = S.gub ? itemsAll.filter(s => ycGubOf(s) === S.gub) : itemsAll.filter(s => !ycIsSample(s));   /* hotfix630: 구분 전체 = 샘플 빼고 */
     const curName = ((itemsAll.find(s => s.fid === S.fid) || {}).name) || '';
     const red = v => !(ycNum(v) > 0) ? 'border-color:#dc2626;background:#fef2f2;box-shadow:0 0 0 2px rgba(220,38,38,.12);' : '';
     const facs = S.fid ? ycFactories(S.fid) : [];
@@ -51659,7 +51685,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:12px;">
         <label>구분<br><select class="yc-gub" style="${inp}width:100%;"><option value="">전체</option>${gubs.map(g => `<option value="${escapeHtml(g)}"${g === S.gub ? ' selected' : ''}>${escapeHtml(g)}</option>`).join('')}</select></label>
         <label>품목<br><input type="text" class="yc-srch" data-for="fid" list="yc-dl-item" value="${escapeHtml(curName)}" placeholder="품목 이름 (일부만 적어도 됨)" autocomplete="off" spellcheck="false" style="${inp}width:100%;${S.fid ? '' : 'border-color:#93c5fd;'}"><datalist id="yc-dl-item">${items.map(s => `<option value="${escapeHtml(s.name)}"></option>`).join('')}</datalist>
-          <select class="yc-in" data-k="fid" style="display:none;"><option value=""></option>${itemsAll.map(s => `<option value="${escapeHtml(s.fid)}"${s.fid === S.fid ? ' selected' : ''}>${escapeHtml(s.name)}</option>`).join('')}</select></label>
+          <select class="yc-in" data-k="fid" style="display:none;"><option value=""></option>${items.map(s => `<option value="${escapeHtml(s.fid)}"${s.fid === S.fid ? ' selected' : ''}>${escapeHtml(s.name)}</option>`).join('')}</select></label>
         <label>편직공장<br><input type="text" class="yc-srch" data-for="fac" list="yc-dl-fac" value="${escapeHtml(S.fac || '')}" placeholder="${S.fid ? '편직공장 이름' : '(품목 먼저)'}" autocomplete="off" spellcheck="false" style="${inp}width:100%;"${S.fid ? '' : ' disabled'}><datalist id="yc-dl-fac">${facs.map(f => `<option value="${escapeHtml(f)}"></option>`).join('')}</datalist>
           <select class="yc-in" data-k="fac" style="display:none;">${facs.map(f => `<option value="${escapeHtml(f)}"${f === S.fac ? ' selected' : ''}>${escapeHtml(f)}</option>`).join('') || '<option value=""></option>'}</select></label>
         <label>체크한 날짜<br><input type="date" class="yc-in" data-k="date" value="${escapeHtml(S.date)}" style="${inp}width:100%;"></label>
@@ -51757,13 +51783,13 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
       }));
       const stale = () => { const w = host.querySelector('.yc-wrap'); if (w) w.classList.add('yc-is-stale'); };
       /* hotfix504: 구분 콤보 · 품목 / 편직공장 글자 검색(일부만 적어도 하나로 좁혀지면 고름) */
-      host.querySelector('.yc-gub')?.addEventListener('change', e => { S.gub = e.target.value; const ok = !S.fid || ycItems().some(s => s.fid === S.fid && (!S.gub || String(s.gubun || '').trim() === S.gub)); if (!ok) { S.fid = ''; S.fac = ''; S.rows = {}; } draw(); });
+      host.querySelector('.yc-gub')?.addEventListener('change', e => { S.gub = e.target.value; const ok = !S.fid || ycItems().some(s => s.fid === S.fid && (S.gub ? ycGubOf(s) === S.gub : !ycIsSample(s))); if (!ok) { S.fid = ''; S.fac = ''; S.rows = {}; } draw(); });
       host.querySelectorAll('.yc-srch').forEach(el => el.addEventListener('change', () => {
         if (host.__ycDrawing || !el.isConnected) return;   /* hotfix558 */
         const q = String(el.value || '').trim(); const sel = host.querySelector(`.yc-in[data-k="${el.dataset.for}"]`); if (!sel) return;
         const opts = Array.from(sel.options).filter(o => o.value);
         let hit = opts.find(o => o.textContent.trim() === q);
-        if (!hit && q) { const L = opts.filter(o => hwTextMatch(o.textContent, q.toLowerCase()) && (el.dataset.for !== 'fid' || !S.gub || ycItems().some(s => s.fid === o.value && String(s.gubun || '').trim() === S.gub))); if (L.length === 1) hit = L[0]; else if (L.length > 1) { toast(`"${q}" 이 들어간 것이 ${L.length}개 — 목록에서 하나를 고르십시오`, 'info'); return; } }
+        if (!hit && q) { const L = opts.filter(o => hwTextMatch(o.textContent, q.toLowerCase()) && (el.dataset.for !== 'fid' || !S.gub || ycItems().some(s => s.fid === o.value && ycGubOf(s) === S.gub))); if (L.length === 1) hit = L[0]; else if (L.length > 1) { toast(`"${q}" 이 들어간 것이 ${L.length}개 — 목록에서 하나를 고르십시오`, 'info'); return; } }
         if (!hit) { if (q) toast(`"${q}" 에 맞는 ${el.dataset.for === 'fid' ? '품목' : '편직공장'}이 없습니다`, 'error'); el.value = el.dataset.for === 'fid' ? (((ycItems().find(s => s.fid === S.fid) || {}).name) || '') : (S.fac || ''); return; }
         sel.value = hit.value; sel.dispatchEvent(new Event('change'));
       }));
@@ -60154,7 +60180,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix629';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
+  const VERSION = 'v2.53 hotfix630';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.

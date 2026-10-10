@@ -642,7 +642,15 @@ body.fs-s .hwk-th{font-size:13.5px}body.fs-l .hwk-th{font-size:17px}body.fs-xl .
     ta.value = o.draft ? (o.draft.get() || '') : ''; autoH();
     ta.addEventListener('input', () => { autoH(); if (o.draft) o.draft.set(ta.value); });
     ta.addEventListener('focus', () => { if (I.panel) setPanel(false); });
-    ta.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && wide()) { e.preventDefault(); sendText(); } });
+    /* hotfix630(대표 10/10): PC(마우스 기기)는 Enter = 보내기 · Shift+Enter / Ctrl+Enter = 줄바꿈 — 좁은 대화 칸(c.html?embed=1)에서도. 휴대폰(터치)은 Enter = 줄바꿈 그대로.
+       한글 조합 중 Enter(isComposing · 229)는 그 자리에서 보내지 않고, 조합이 끝난 뒤(0.5초 안) 한 번만 보냄 — 마지막 글자 빠짐 · 두 번 보내기 막음 */
+    const enterSends = () => { try { return matchMedia('(hover:hover) and (pointer:fine)').matches; } catch (_) { return false; } }; let enterPend = 0;
+    ta.addEventListener('keydown', e => { if (e.key !== 'Enter' || e.altKey) return;
+      if (e.isComposing || e.keyCode === 229) { enterPend = (!e.shiftKey && !e.ctrlKey && !e.metaKey && enterSends()) ? Date.now() : 0; return; }
+      if (e.shiftKey) return;
+      if (e.ctrlKey || e.metaKey) { if (!enterSends()) return; e.preventDefault(); e.stopPropagation(); const a = ta.selectionStart, b = ta.selectionEnd; ta.setRangeText('\n', a, b, 'end'); autoH(); if (o.draft) o.draft.set(ta.value); return; }
+      if (!enterSends()) return; e.preventDefault(); enterPend = 0; sendText(); });
+    ta.addEventListener('compositionend', () => { const t = enterPend; enterPend = 0; if (!t || Date.now() - t > 500) return; setTimeout(() => { if (ta.isConnected && document.activeElement === ta) sendText(); }, 40); });
     ta.addEventListener('paste', e => { const fs = Array.from((e.clipboardData && e.clipboardData.files) || []); if (fs.length) { e.preventDefault(); askFiles(fs); } });
     sb.addEventListener('click', () => { if (ta.value.trim()) sendText(); else ta.focus(); });
     const setPanel = on => { I.panel = on; pn.classList.toggle('on', on); pl.classList.toggle('on', on); if (on) { try { ta.blur(); } catch (_) {} } if (o.onLayout) o.onLayout(); };
@@ -812,7 +820,7 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/fireba
 import { getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult, onAuthStateChanged, signOut, setPersistence, browserLocalPersistence } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 import { initializeFirestore, getFirestore, persistentLocalCache, persistentMultipleTabManager, doc, getDoc, setDoc, deleteDoc, collection, query, where, onSnapshot as fsOnSnapshot, addDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
-const CVER = 'c11 (hotfix629)';
+const CVER = 'c12 (hotfix630)';
 const EMBED = /[?&]embed=1(?:&|$)/.test(location.search);   /* FABIWOS [대화] 창 안 */
 if (EMBED) document.documentElement.classList.add('embed');
 const cfg = { apiKey: "AIzaSyAIaNFZozda5sp4Qjs7LEn-aXYLX1JZi10", authDomain: "recoveric-wo.firebaseapp.com", projectId: "recoveric-wo", storageBucket: "recoveric-wo.firebasestorage.app", messagingSenderId: "267946532287", appId: "1:267946532287:web:fcc1b597c9bf53c9d8950a" };

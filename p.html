@@ -778,7 +778,15 @@ body.pc .bar{position:sticky;bottom:0;margin:0 -14px;border-radius:0}
     ta.value = o.draft ? (o.draft.get() || '') : ''; autoH();
     ta.addEventListener('input', () => { autoH(); if (o.draft) o.draft.set(ta.value); });
     ta.addEventListener('focus', () => { if (I.panel) setPanel(false); });
-    ta.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && wide()) { e.preventDefault(); sendText(); } });
+    /* hotfix630(대표 10/10): PC(마우스 기기)는 Enter = 보내기 · Shift+Enter / Ctrl+Enter = 줄바꿈 — 좁은 대화 칸(c.html?embed=1)에서도. 휴대폰(터치)은 Enter = 줄바꿈 그대로.
+       한글 조합 중 Enter(isComposing · 229)는 그 자리에서 보내지 않고, 조합이 끝난 뒤(0.5초 안) 한 번만 보냄 — 마지막 글자 빠짐 · 두 번 보내기 막음 */
+    const enterSends = () => { try { return matchMedia('(hover:hover) and (pointer:fine)').matches; } catch (_) { return false; } }; let enterPend = 0;
+    ta.addEventListener('keydown', e => { if (e.key !== 'Enter' || e.altKey) return;
+      if (e.isComposing || e.keyCode === 229) { enterPend = (!e.shiftKey && !e.ctrlKey && !e.metaKey && enterSends()) ? Date.now() : 0; return; }
+      if (e.shiftKey) return;
+      if (e.ctrlKey || e.metaKey) { if (!enterSends()) return; e.preventDefault(); e.stopPropagation(); const a = ta.selectionStart, b = ta.selectionEnd; ta.setRangeText('\n', a, b, 'end'); autoH(); if (o.draft) o.draft.set(ta.value); return; }
+      if (!enterSends()) return; e.preventDefault(); enterPend = 0; sendText(); });
+    ta.addEventListener('compositionend', () => { const t = enterPend; enterPend = 0; if (!t || Date.now() - t > 500) return; setTimeout(() => { if (ta.isConnected && document.activeElement === ta) sendText(); }, 40); });
     ta.addEventListener('paste', e => { const fs = Array.from((e.clipboardData && e.clipboardData.files) || []); if (fs.length) { e.preventDefault(); askFiles(fs); } });
     sb.addEventListener('click', () => { if (ta.value.trim()) sendText(); else ta.focus(); });
     const setPanel = on => { I.panel = on; pn.classList.toggle('on', on); pl.classList.toggle('on', on); if (on) { try { ta.blur(); } catch (_) {} } if (o.onLayout) o.onLayout(); };
@@ -952,7 +960,7 @@ import { initializeFirestore, getFirestore, persistentLocalCache, persistentMult
  *   읽는 것: proc_acc/{내 uid} · proc_pub/{내 업체} · proc_log(내 업체 것만)
  *   쓰는 것: proc_log 한 줄 추가(고치기 · 지우기 없음) · 처음 로그인 때 내 기기 등록 한 번
  */
-const PVER = 'p79 (hotfix629)';
+const PVER = 'p80 (hotfix630)';
 /* hotfix574(대표 10/1): 거래 원단회사 고르기 (판매 대비) — 가공소 한 곳이 여러 원단회사와 거래. 앱을 열면 먼저 [거래 원단회사] 화면 — 회사마다 진행 중 · 확인 요청 · 입력 전 건수
  *   계정(proc_acc.companies [{id, name, src}])에 회사 목록 · 없으면 현일텍스 · 고른 회사는 휴대폰이 기억(hwp.co) · 위 [› 회사 이름]을 누르면 다시 고름
  *   지금 서버 = 현일텍스 자료. 다른 원단회사가 FABIWOS 를 쓰면 그 회사 자료 자리(src)를 더함 */
