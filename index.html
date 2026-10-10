@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="FABIWOS">
 <meta name="mobile-web-app-capable" content="yes">
-<title>FABIWOS v2.53 hotfix632</title>
+<title>FABIWOS v2.53 hotfix633</title>
 <script>
 /* ===== HWChat 대화 화면 공용 (hotfix620 · 대표 10/9 "카톡처럼 쉽고 멋있게") — 이음 · 편직팀 앱 · 염/가공소 앱 · 현장 QC 앱이 같은 모양
  *   말풍선(내 글 노랑 · 받은 글 흰색) · 같은 사람 1분 안 글은 묶음(이름 · 사진은 첫 글, 시간은 끝 글) · 안 읽음 1
@@ -59049,11 +59049,14 @@ const sv600 = d => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" s
     let viewMode = 'list';
     let editIdx = -1;
     let __rc = [];   /* hotfix631: 맨 위 카드의 건 (그릴 때마다 새로) */
-    /* hotfix615: 출고 대기 줄이 들어갔을 법한 직접 적은 출고 줄 (같은 품목 · 살아 있음 · 이동/로스/자동 줄 아님 · 절수가 대기 절 이상) — 날짜가 가까운 차례 */
+    /* hotfix615: 출고 대기 줄이 들어갔을 법한 직접 적은 출고 줄 (같은 품목 · 살아 있음 · 이동/로스/자동 줄 아님 · 절수가 대기 절 이상) — 날짜가 가까운 차례
+       hotfix633(R3): 날짜가 대기 줄 앞뒤 14일 안인 줄만 (대기 줄에 날짜가 없으면 예전처럼 날짜 제한 없음). 출고처는 이 창이 이미 한 편직공장 · 한 품목이라 따로 거르지 않음 */
+    const MG_DAYS = 14;
     const mgCands = (px) => {
       if (!px || !gsPend(px)) return [];
       const pj = parseFloat(px.jul) || 0, pt = Date.parse(px.date || '') || 0;
-      return shipments.map((sh, idx) => ({ sh, idx })).filter(o => mine(o.sh) && shLive(o.sh) && !isIn(o.sh) && o.sh.src !== 'gs' && o.sh.src !== 'loss' && o.sh.src !== 'kdone' && !o.sh.move && (parseFloat(o.sh.jul) || 0) >= pj)
+      const near = (sh) => { if (!pt) return true; const t = Date.parse(sh.date || '') || 0; return !!t && Math.abs(t - pt) <= MG_DAYS * 86400000; };
+      return shipments.map((sh, idx) => ({ sh, idx })).filter(o => mine(o.sh) && shLive(o.sh) && !isIn(o.sh) && o.sh.src !== 'gs' && o.sh.src !== 'loss' && o.sh.src !== 'kdone' && !o.sh.move && (parseFloat(o.sh.jul) || 0) >= pj && near(o.sh))
         .sort((a, b) => Math.abs((Date.parse(a.sh.date || '') || 0) - pt) - Math.abs((Date.parse(b.sh.date || '') || 0) - pt));
     };
     // 대기 줄들(pIdxs)을 출고 줄 t 에 들어간 것으로 — arr 를 고쳐 돌려준다 (arr[tIdx] 가 없으면 null)
@@ -59172,16 +59175,19 @@ const sv600 = d => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" s
               <td style="text-align:center;line-height:2;">
                 ${(() => { if (viewMode !== 'list' || dead || !auto || repUp) return ''; const g = state.allWorkOrders.find(w => w && w.id === sh.gs_id); if (!g) return ''; const app = gsHasApp(g); const ph = sh.photo || (g.gs_photo && g.gs_photo.path) || ''; const rp = pend ? gsReportsOf(g) : []; const bs = 'font-size:11px;padding:2px 8px;';
                   return (rp.length ? `<button class="dash-action-btn hw-gsw-open" style="${bs}background:#6d28d9;color:#fff;border-color:#5b21b6;font-weight:800;" title="편직공장이 보냈다고 알림 — 확인해야 재고에 확정">공장 보고 ${rp.reduce((a, l) => a + (parseFloat(l.body) || 0), 0)}절 · 확인</button> ` : '')
-                    + (ph ? `<button class="dash-action-btn gs-photo-pop" data-path="${escapeHtml(ph)}" data-t="${escapeHtml(g.wo_number || '')}" style="${bs}color:#1e40af;border-color:#bfdbfe;font-weight:800;">송장 보기</button> ` : '')
                     + (app && pend ? `<button class="dash-action-btn" data-gs-ask="${escapeHtml(g.id)}" data-j="${sh.jul || 0}" style="${bs}color:#9a3412;border-color:#fdba74;font-weight:800;" title="편직공장 앱에 알림 — 보냈으면 [출고했어요]를 눌러 달라고">앱에 출고 확인 요청</button> ` : '')
-                    + (app && !pend ? `<button class="dash-action-btn" data-gs-inv="${escapeHtml(g.id)}" style="${bs}color:#b45309;border-color:#fcd34d;" title="편직공장 앱에 송장 사진을 (다시) 보내 달라고">${ph ? '송장 다시 요청' : '송장 요청'}</button> ` : '')
+                    /* hotfix633(R2): 단추 차례 고정 [송장 요청][송장 확인][메시지] → 아래 [수정][취소]. 이름은 사진이 있어도 늘 "송장 요청" */
+                    + (app && !pend ? `<button class="dash-action-btn" data-gs-inv="${escapeHtml(g.id)}" style="${bs}color:#b45309;border-color:#fcd34d;" title="편직공장 앱에 송장 사진을 (다시) 보내 달라고">송장 요청</button> ` : '')
+                    /* hotfix633(R2): [송장 확인] — 사진이 있으면 크게 보기(계산 kg 줄이면 그 창에서 [송장 kg 넣기] → [수정]과 같은 저장) · 없으면 흐리게(누르면 안내만). 출고 대기 줄은 사진이 있을 때만 */
+                    + (!pend || ph ? `<button class="dash-action-btn" data-gs-see="${idx}" data-path="${escapeHtml(ph)}" data-t="${escapeHtml(g.wo_number || '')}" data-kg="${calcKg && !pend ? 1 : 0}" data-app="${app ? 1 : 0}"${ph ? '' : ' aria-disabled="true"'} style="${bs}color:#1e40af;border-color:#bfdbfe;font-weight:800;${ph ? '' : 'opacity:.45;'}" title="${ph ? '송장 사진을 크게 봅니다' : '아직 송장 사진이 없습니다'}">송장 확인</button> ` : '')
                     + (app ? `<button class="dash-action-btn" data-gs-msg="${escapeHtml(g.id)}" style="${bs}" title="편직공장 앱에 글 보내기 (휴대폰이 울림)">메시지</button> ` : '')
                     + '<br>'; })()}
-                ${viewMode === 'list' && pend && !repUp ? `<button class="dash-action-btn" data-conf-start="${idx}" style="background:#059669;color:#fff;border-color:#047857;font-weight:800;" title="편직공장이 보낸 절 · 송장 kg 을 넣습니다 (팩스 · 카톡 송장을 보고)">출고 확인</button>${mgCands(sh).length ? ` <button class="dash-action-btn" data-mg-start="${idx}" style="background:#fff;color:#1e40af;border-color:#93c5fd;font-weight:800;" title="편직공장이 이 절수를 따로 안 보내고 다른 출고(직접 적은 일괄 출고)에 함께 보냈을 때 — 그 줄에서 이만큼 빼고 이 줄을 출고 확인으로 (두 번 빠진 재고가 바로잡힘)">일괄 출고에 들어감</button>` : ''}${sh.gs_rest ? ` <button class="dash-action-btn danger" data-rest-cxl="${idx}" title="남은 절을 더 안 받습니다 — 재고로 돌아옵니다">남은 것 취소</button>` : ''}` : ''}
+                ${viewMode === 'list' && pend && !repUp ? `<button class="dash-action-btn" data-conf-start="${idx}" style="background:#059669;color:#fff;border-color:#047857;font-weight:800;" title="편직공장이 보낸 절 · 송장 kg 을 넣습니다 (팩스 · 카톡 송장을 보고)">출고 확인</button>${sh.gs_rest ? ` <button class="dash-action-btn danger" data-rest-cxl="${idx}" title="남은 절을 더 안 받습니다 — 재고로 돌아옵니다">남은 것 취소</button>` : ''}` : ''}
                 ${viewMode === 'list' && !dead && !(pend && sh.gs_rest) && !repUp ? `
                   ${stamped || pend ? '' : `<button class="dash-action-btn" data-start-edit="${idx}">수정</button>`}
                   ${auto ? `<button class="dash-action-btn danger" data-void-ship="${idx}" title="자동 출고 줄은 지우지 않고 취소됨으로 남깁니다 (재고는 돌아옴)">취소</button>` : stamped ? (isOwnerUser() ? `<button class="dash-action-btn danger" data-void-ship="${idx}" title="지우지 않고 취소됨으로 남깁니다 (양쪽 재고가 원래대로)">되돌리기</button>` : '<span style="font-size:10.5px;color:#9ca3af;">최고관리자</span>') : `<button class="dash-action-btn danger" data-del-ship="${idx}">삭제</button>`}
                 ` : ''}
+                ${viewMode === 'list' && pend && !repUp && mgCands(sh).length ? `<div style="margin-top:2px;"><button class="dash-action-btn" data-mg-start="${idx}" style="font-size:10.5px;padding:1px 7px;background:#fff;color:#1e40af;border-color:#bfdbfe;" title="이 출고 대기 절수가 따로 나가지 않고, 직접 적어 둔 다른 출고(앞뒤 14일 안 · 절수가 이만큼 이상)에 같이 실려 나갔을 때 누릅니다.&#10;그 출고 줄에서 이만큼 빼고 이 줄은 출고 확인이 됩니다 — 두 번 빠진 재고가 돌아옵니다.">다른 출고에 같이 실림</button></div>` : ''}
               </td>
             </tr>`;
           }
@@ -59201,7 +59207,7 @@ const sv600 = d => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" s
           ${C2.map((o, n) => `<label style="display:flex;gap:10px;align-items:center;padding:7px 10px;border:1px solid #bfdbfe;border-radius:6px;margin-bottom:6px;background:#fff;cursor:pointer;font-size:12.5px;"><input type="radio" name="mg-pick" value="${o.idx}"${n === 0 ? ' checked' : ''}><b>${o.sh.date ? new Date(o.sh.date).toLocaleDateString('ko-KR') : '-'}</b> 출고 <b>${o.sh.jul}절</b> · ${(parseFloat(o.sh.kg) || 0).toFixed(1)}kg · ${escapeHtml(o.sh.memo || '-')} <span style="color:#1e40af;font-weight:800;">→ ${Math.round(((parseFloat(o.sh.jul) || 0) - pj) * 10) / 10}절</span></label>`).join('')}
           <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px;">
             <button class="dash-action-btn" id="ship-cancel-btn" style="padding:8px 16px;">취소</button>
-            <button class="dash-action-btn" id="mg-submit-btn" style="padding:8px 18px;font-size:13px;background:#1e40af;color:#fff;font-weight:700;">일괄 출고에 넣기</button>
+            <button class="dash-action-btn" id="mg-submit-btn" style="padding:8px 18px;font-size:13px;background:#1e40af;color:#fff;font-weight:700;">고른 출고에 같이 실림</button>
           </div>
         </div>`;
       }
@@ -59368,7 +59374,7 @@ const sv600 = d => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" s
         });
       });
       
-      // hotfix615: [일괄 출고에 들어감]
+      // hotfix615: [일괄 출고에 들어감] (hotfix633: 이름 [다른 출고에 같이 실림] · 줄 끝 작은 단추)
       document.querySelectorAll('[data-mg-start]').forEach(b => b.addEventListener('click', () => { editIdx = parseInt(b.dataset.mgStart); viewMode = 'merge'; renderModal(); setTimeout(() => { const x = document.getElementById('mg-submit-btn'); if (x && x.scrollIntoView) x.scrollIntoView({ block: 'nearest' }); }, 60); }));
       document.getElementById('mg-submit-btn')?.addEventListener('click', async () => {
         const b = document.getElementById('mg-submit-btn'); const pick = document.querySelector('input[name="mg-pick"]:checked');
@@ -59379,7 +59385,7 @@ const sv600 = d => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" s
         try {
           await updateDoc(doc(db, C('workorders'), woId), { greige_shipments: r.arr, updated_at: serverTimestamp(), updated_by: state.user.email });
           wo.greige_shipments = r.arr; try { await knitUseRefresh(wo); } catch (_) {}
-          toast(`출고 대기 ${r.sj}절을 일괄 출고에 넣었습니다 — 출고 확인 · 재고 ${r.sj}절 돌아옴`, 'success');
+          toast(`출고 대기 ${r.sj}절을 고른 출고에 같이 실린 것으로 했습니다 — 출고 확인 · 재고 ${r.sj}절 돌아옴`, 'success');
           try { const g = state.allWorkOrders.find(w => w && w.id === px.gs_id); if (g && gsHasApp(g)) await gsTellVendor(g, `${g.wo_number || ''} ${r.sj}절 — 함께 보내신 출고에 들어 있는 것으로 확인했습니다 (현일텍스)`, 'note'); } catch (_) {}
           setTimeout(() => openShipmentModal(woId, _ii), 200);
         } catch (e) { toast('실패: ' + e.message, 'error'); b.disabled = false; }
@@ -59400,6 +59406,20 @@ const sv600 = d => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" s
       document.querySelectorAll('[data-gs-inv]').forEach(b => b.addEventListener('click', async () => { const g = _gOf(b.dataset.gsInv); if (!g) return; if (!confirm(`${g.recipient || ''} 앱에 송장 사진을 보내 달라고 알립니다.\n\n보낼까요?`)) return; b.disabled = true; await gsAskInvoice(g); }));
       document.querySelectorAll('[data-gs-msg]').forEach(b => b.addEventListener('click', async () => { const g = _gOf(b.dataset.gsMsg); if (!g) return; const t = prompt(`${g.recipient || ''} 편직팀 앱에 보낼 글 (휴대폰이 울립니다)`, ''); if (!t || !String(t).trim()) return; b.disabled = true;
         const ok = await gsTellVendor(g, `${itemShow(g.gs_item, g.gs_item_fid, '')} ${greigeNoClean(g.gs_greige_no) || ''} — ${String(t).trim()}`, 'note'); toast(ok ? '보냈습니다' : '보내지 못했습니다', ok ? 'success' : 'error'); b.disabled = false; }));
+      /* hotfix633(R2): [송장 확인] — 사진 크게 보기 (자료는 쓰지 않음). 계산 kg 줄이면 사진 창 위에 [송장 kg 넣기] → 이 줄 [수정] 창으로 (저장은 [수정]과 같은 길) */
+      document.querySelectorAll('[data-gs-see]').forEach(b => b.addEventListener('click', () => {
+        const i = parseInt(b.dataset.gsSee), p = b.dataset.path || '';
+        if (!p) { toast(b.dataset.app === '1' ? '아직 송장이 없습니다 — [송장 요청]을 누르면 편직공장 앱에 알립니다' : '아직 송장이 없습니다 — 편직공장에서 송장을 받아 주십시오', 'warning'); return; }
+        if (typeof window.hwGsPhotoPop !== 'function') return;
+        window.hwGsPhotoPop(p, b.dataset.t || '');   // 사진 창은 부르는 즉시 붙는다 (사진 주소만 뒤에 채움)
+        const x = document.querySelector('#gs-photo-pop #gs-pp-x');
+        if (b.dataset.kg === '1' && x) {
+          const k = document.createElement('button'); k.type = 'button'; k.className = 'dash-action-btn'; k.id = 'gs-pp-kg'; k.textContent = '송장 kg 넣기';
+          k.title = '지금 kg 는 절 × kg/절 계산값입니다 — 송장의 kg 를 넣습니다'; k.style.cssText = 'font-weight:800;color:#b45309;border-color:#fcd34d;';
+          k.addEventListener('click', () => { const ov = document.getElementById('gs-photo-pop'); if (ov) ov.remove(); editIdx = i; viewMode = 'edit'; renderModal(); });
+          x.parentNode.insertBefore(k, x);
+        }
+      }));
       document.querySelectorAll('[data-rest-cxl]').forEach(b => b.addEventListener('click', async () => {
         const idx = parseInt(b.dataset.restCxl); const x = shipments[idx] || {};
         if (!confirm(`남은 ${x.jul || 0}절을 취소합니다.\n\n편직공장에서 더 받지 않고, 이 절수는 재고로 돌아옵니다. 줄은 줄 그어 남습니다.\n\n취소할까요?`)) return;
@@ -60276,7 +60296,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix632';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
+  const VERSION = 'v2.53 hotfix633';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
