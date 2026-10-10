@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="FABIWOS">
 <meta name="mobile-web-app-capable" content="yes">
-<title>FABIWOS v2.53 hotfix631</title>
+<title>FABIWOS v2.53 hotfix632</title>
 <script>
 /* ===== HWChat 대화 화면 공용 (hotfix620 · 대표 10/9 "카톡처럼 쉽고 멋있게") — 이음 · 편직팀 앱 · 염/가공소 앱 · 현장 QC 앱이 같은 모양
  *   말풍선(내 글 노랑 · 받은 글 흰색) · 같은 사람 1분 안 글은 묶음(이름 · 사진은 첫 글, 시간은 끝 글) · 안 읽음 1
@@ -17141,7 +17141,7 @@ window.addEventListener('firebase-ready', () => {
     try {
       const commonRef = doc(db, C('settings'), 'stamps_common');
       const commonSnap = await getDoc(commonRef);
-      if (!commonSnap.exists()) {
+      if (!commonSnap.exists() && !(commonSnap.metadata && commonSnap.metadata.fromCache)) {   /* hotfix632: 캐시의 "없음"이면 시드하지 않음 */
         await setDoc(commonRef, {
           items: SEED_STAMPS_COMMON,
           updated_at: serverTimestamp(),
@@ -17151,7 +17151,7 @@ window.addEventListener('firebase-ready', () => {
       }
       const btRef = doc(db, C('settings'), 'stamps_bt');
       const btSnap = await getDoc(btRef);
-      if (!btSnap.exists()) {
+      if (!btSnap.exists() && !(btSnap.metadata && btSnap.metadata.fromCache)) {
         await setDoc(btRef, {
           items: SEED_STAMPS_BT,
           updated_at: serverTimestamp(),
@@ -17356,6 +17356,7 @@ window.addEventListener('firebase-ready', () => {
     }, err => { console.warn('[yarnMv sub]', err.message); state.yarnMv = []; state.yarnMvLoaded = true; });
     // hotfix413: 생지 원장 구독 — stock/greige (편직완료 · 뒤에 이동·조정)
     onSnapshot(doc(db, C('stock'), 'greige'), snap => {
+      if (snap.metadata && snap.metadata.fromCache && !snap.exists()) return;   /* hotfix632: 캐시의 "없음"으로 빈 원장을 잡지 않음(저장이 통째 쓰기) */
       const d = snap.exists() ? snap.data() : null;
       state.greigeLedger = (d && Array.isArray(d.items)) ? d.items : [];
       state.greigeLedgerLoaded = true;
@@ -17363,6 +17364,7 @@ window.addEventListener('firebase-ready', () => {
     }, err => console.warn('[greigeLedger sub]', err.message));
     // hotfix413: 편직 사종 비율 사본 구독 — settings/knit_blend (루프장 없음, 직원도 읽음)
     onSnapshot(doc(db, C('settings'), 'knit_blend'), snap => {
+      if (snap.metadata && snap.metadata.fromCache && !snap.exists()) return;   /* hotfix632: 캐시의 "없음"은 믿지 않음 */
       const d = snap.exists() ? snap.data() : null;
       state.knitBlend = (d && d.items && typeof d.items === 'object') ? d.items : {};
       state.knitBlendLoaded = true; state.knitBlendDocExists = !!snap.exists();
@@ -17435,6 +17437,7 @@ window.addEventListener('firebase-ready', () => {
       }, err => console.warn('[fabricCost sub]', err.message));
       // hotfix386: 편직료 마스터 구독 — 카드는 이 값을 읽기만 한다
       onSnapshot(doc(db, C('cost_data'), 'knit_fee'), snap => {
+        if (snap.metadata && snap.metadata.fromCache && !snap.exists()) return;   /* hotfix632: 캐시의 "없음"은 믿지 않고 서버 응답을 기다림 */
         const d = snap.exists() ? snap.data() : null;
         state.knitFee = (d && d.items && typeof d.items === 'object') ? d.items : {};
         state.knitFeeLoaded = true;
@@ -19939,6 +19942,7 @@ function specGreigeColors(fid) {
   function knitFeeHas(fid) { const m = (state.knitFee || {})[specPrimaryGreige(fid) || String(fid || '').trim()]; return !!(m && typeof m === 'object'); }
   // 처음 한 번 — 마스터 문서가 아예 없을 때만 카드 값을 옮겨 담는다. 옛 칸은 손대지 않는다
   async function knitFeeMigrate() {
+    return;   /* hotfix632: 자동 옮기기 멈춤 — 캐시 스냅샷의 exists=false 로 편직 값 전체를 빈 값으로 덮은 사고(10/9). 옮기기는 이미 끝남 */
     if (!isOwnerUser() || !state.fabricCostLoaded || !state.knitFeeLoaded || state.knitFeeDocExists || state._kfMigrating) return;
     state._kfMigrating = true;
     try {
@@ -41447,6 +41451,9 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
           const KB = (kbS.exists() && kbS.data().items && typeof kbS.data().items === 'object') ? kbS.data().items : {};
           const p = knitBlendDiffOf(KF, KB);
           if (!p.n) return p;
+          const kbN = Object.keys(KB).length;   /* hotfix632: 지우기 안전장치 — 편직 설정이 비었거나 많이 지우려 하면 지우지 않음(추가 · 고침은 그대로) */
+          if (p.del.length && (!Object.keys(KF).length || p.del.length > 5 || p.del.length > kbN * 0.2)) { console.warn('[knit_blend] 지우기 막음 — 지울 ' + p.del.length + ' / 사본 ' + kbN + ' / 편직 설정 ' + Object.keys(KF).length); p.del = []; }
+          if (!p.set.length && !p.del.length) return p;
           if (kbS.exists()) {
             const upd = { updated_at: serverTimestamp(), updated_by: who };
             p.set.forEach(fid => { upd['items.' + fid] = p.copies[fid]; });
@@ -60269,7 +60276,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix631';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
+  const VERSION = 'v2.53 hotfix632';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
