@@ -820,7 +820,7 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/fireba
 import { getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult, onAuthStateChanged, signOut, setPersistence, browserLocalPersistence } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 import { initializeFirestore, getFirestore, persistentLocalCache, persistentMultipleTabManager, doc, getDoc, setDoc, deleteDoc, collection, query, where, onSnapshot as fsOnSnapshot, addDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
-const CVER = 'c19 (hotfix637)';
+const CVER = 'c20 (hotfix638)';
 const EMBED = /[?&]embed=1(?:&|$)/.test(location.search);   /* FABIWOS [대화] 창 안 */
 if (EMBED) document.documentElement.classList.add('embed');
 const cfg = { apiKey: "AIzaSyAIaNFZozda5sp4Qjs7LEn-aXYLX1JZi10", authDomain: "recoveric-wo.firebaseapp.com", projectId: "recoveric-wo", storageBucket: "recoveric-wo.firebasestorage.app", messagingSenderId: "267946532287", appId: "1:267946532287:web:fcc1b597c9bf53c9d8950a" };
@@ -997,7 +997,16 @@ function vidMap(items) { const m = {}; (items || []).forEach(v => { if (!v || !v
 const seenPre = rk => rk.startsWith('pc|') ? 'pc|' : '';
 const seenKey = rk => { if (rk === 'qc') return ''; const n = roomName(rk); const id = (S.vids || {})[vk(n)]; return seenPre(rk) + (id ? 'v:' + id : n); };
 function seenAt(rk) { const o = ls.get('hwkc.seen', {}) || {}; const n = roomName(rk); const a = S.accs.find(x => x && x.vendor === n); const names = [n].concat(a && Array.isArray(a.vendor_old) ? a.vendor_old : []);
-  return Math.max(Number(o[seenKey(rk)]) || 0, ...names.map(x => Number(o[seenPre(rk) + x]) || 0)); }
+  return Math.max(Number(o[seenKey(rk)]) || 0, ...names.map(x => Number(o[seenPre(rk) + x]) || 0), srvSeen(rk)); }
+/* hotfix638: 사람별 읽음 — 이 방 서버 기록 중 내 메일(소문자)로 남긴 chat_seen 마다 그 글(ref · 취소된 글 포함)의 시각, 글이 없으면 chat_seen 시각 → 가장 큰 값.
+   다른 기기 · FABIWOS 에서 같은 계정으로 읽어도 숫자가 맞춰짐 (FABIWOS kcSrvSeen 과 같은 셈) · S.chat · S.accs · S.me 가 바뀔 때만 다시 셈 */
+let srvMemo = { c: null, a: null, me: '', o: {} };
+function srvSeen(rk) { if (!rk || rk === 'qc' || !S.me) return 0;
+  if (srvMemo.c !== S.chat || srvMemo.a !== S.accs || srvMemo.me !== S.me) srvMemo = { c: S.chat, a: S.accs, me: S.me, o: {} };
+  if (rk in srvMemo.o) return srvMemo.o[rk];
+  const L = roomLogs(rk); const byId = {}; L.forEach(l => { if (l.id) byId[l.id] = l; }); let t = 0;
+  L.forEach(l => { if (l.by === 'us' && l.kind === 'st' && l.stage === 'chat_seen' && l.at && String(l.email || '').toLowerCase() === S.me) { const r = l.ref && byId[l.ref]; t = Math.max(t, tOf(r && r.at ? r : l)); } });
+  return (srvMemo.o[rk] = t); }
 function unread(rk) {
   if (rk === 'qc') return qcMsgs().filter(l => !mineQc(l) && Date.now() - tOf(l) < 7 * 864e5 && !acksOf(l.id).some(a => String(a.email || '').toLowerCase() === S.me)).length;
   const s = seenAt(rk); const cut = Date.now() - 30 * 864e5;
@@ -1136,6 +1145,7 @@ function markRead(rk) {
     (async () => { for (const l of U) { try { await writeLog({ vendor: FIELD, k: 'dev:' + DEV, wo: '', kind: 'field_ack', ref: l.id, note: '' }); } catch (_) { ackedNow.delete(l.id); } } acking = false; })(); return; }
   const o = ls.get('hwkc.seen', {}) || {}; o[seenKey(rk)] = Date.now(); ls.set('hwkc.seen', o); paintSide(); paintBadge();
   const lastV = chatMsgs(rk).filter(l => l.by === 'vendor').slice(-1)[0]; if (!lastV) return;
+  if (srvSeen(rk) >= tOf(lastV)) return;   /* hotfix638: 내 계정이 이미 이 글까지 읽음을 남겼으면(다른 기기 포함) 다시 쓰지 않음 */
   const sk = 'hwkc.sent|' + roomType(rk) + '|' + roomName(rk); if (ls.raw(sk) === lastV.id) return; ls.rawSet(sk, lastV.id);
   writeLog(Object.assign(roomBase(rk), { kind: 'st', stage: 'chat_seen', ref: lastV.id, note: '' })).catch(() => {});
 }
