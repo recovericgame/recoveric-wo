@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="FABIWOS">
 <meta name="mobile-web-app-capable" content="yes">
-<title>FABIWOS v2.53 hotfix650</title>
+<title>FABIWOS v2.53 hotfix651</title>
 <script>
 /* ===== HWChat 대화 화면 공용 (hotfix620 · 대표 10/9 "카톡처럼 쉽고 멋있게") — 이음 · 편직팀 앱 · 염/가공소 앱 · 현장 QC 앱이 같은 모양
  *   말풍선(내 글 노랑 · 받은 글 흰색) · 같은 사람 1분 안 글은 묶음(이름 · 사진은 첫 글, 시간은 끝 글) · 안 읽음 1
@@ -32149,7 +32149,7 @@ function validateBlendSum(blends, label) {
     /* hotfix640(S3): 성격 재고 — 생산 완료 없이 [재고]. 생산 완료 기록이 이미 있으면 아래 그대로([다시 넣기]) */
     if ((wo.kind || inferKnitKind(wo)) === 'stock' && !kd && !wo.knit_done) return `<div class="hw-kd-head" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px dashed #d1d5db;font-size:12.5px;"><span class="hw-bs ref">재고 성격 — 생산 완료 없이 [재고]</span></div>`;
     const txt = kd ? `<b style="color:#0f172a;">${escapeHtml(kdSumText(kd))}</b> ${kdBadgeHtml(kd)}` : (wo.knit_done ? `<b style="color:#0f172a;">${knitDoneStamp(wo)}</b> <span class="hw-bs est" title="PC [편직완료] (636 전) — 무게를 몰라 kg/절로 셈">추정</span>` : '<span style="color:var(--hw-sub);font-weight:700;">생산 완료 전 — 편직 중</span>');
-    const btn = !can ? '' : (kd || wo.knit_done) ? `<button type="button" class="dash-action-btn" data-kdo="re" style="height:36px;padding:0 14px;" title="실제 절 · kg 를 다시 넣습니다 (예전 값은 취소 줄로 남음)">다시 넣기</button>`
+    const btn = !can ? '' : (kd || wo.knit_done) ? `<button type="button" class="dash-action-btn" data-kdx="1" style="height:36px;padding:0 14px;background:#fff;color:#b45309;border-color:#fdba74;font-weight:800;" title="아직 짜는 중이면 생산 완료를 되돌려 편직 중으로 (기록은 취소 표시로 남음 · 이미 보낸 절은 그대로)">편직 중으로</button><button type="button" class="dash-action-btn" data-kdo="re" style="height:36px;padding:0 14px;" title="실제 절 · kg 를 다시 넣습니다 (예전 값은 취소 줄로 남음)">다시 넣기</button>`   /* hotfix651: [편직 중으로] */
       : (app ? `<button type="button" class="dash-action-btn" data-kdo="app" style="height:36px;padding:0 14px;background:#fff;color:#475569;border-color:#cbd5e1;font-weight:700;" title="앱을 쓰는 공장 — 공장이 보내기 전에 사무실이 대신 넣습니다">생산 완료 대신 넣기</button>`
         : `<button type="button" class="dash-action-btn" data-kdo="office" style="height:36px;padding:0 16px;background:#1e3a8a;color:#fff;border-color:#1e3a8a;font-weight:800;" title="실제로 짠 절 · 무게(송장 · 작업일지)를 넣습니다">생산 완료</button>`);
     return `<div class="hw-kd-head" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px dashed #d1d5db;font-size:12.5px;">${txt}<span style="flex:1"></span>${btn}</div>`;
@@ -32208,7 +32208,20 @@ function validateBlendSum(blends, label) {
     ov.addEventListener('click', e => { if (e.target === ov || e.target.closest('[data-x]')) close(); });
     ov.querySelector('[data-go]').addEventListener('click', go);
   }
-  window.__hwKdOffice = { open: gsKdOfficeOpen, head: gsKdHeadHtml };   /* 시험용 */
+  /* hotfix651(대표 10/11): 사무실 [편직 중으로] — 확인 창(이름 · 절 · 이미 보낸 절 안내) · 까닭 → 품목 생산 완료 되돌리기(재고조정 권한) · 옛 PC [편직완료]만 있으면 [편직완료 되돌리기](최고관리자) */
+  async function gsKdUndoOpen(wo, ii, done) {
+    if (!canStockAdjust()) { toast('재고조정 권한이 없습니다 — [권한 설정]에서 허용받은 사람만 됩니다', 'error'); return; }
+    const it = (wo.items || [])[ii]; if (!it) return; const kd = it.knit_done;
+    const nm = (itemShow(it.item, it.item_fid, it.greige_no) || it.item || '').trim(); const n = kd ? (parseFloat(kd.n) || 0) : knitFinalJul(wo, ii); let outJ = 0; try { outJ = knitOutJul(wo, ii) || 0; } catch (_) {}
+    const why = prompt(`${nm} ${n}절을 편직 중으로 되돌립니다.${outJ > 0 ? `\n이미 보낸 ${outJ}절은 보낸 것으로 그대로 남습니다.` : ''}\n생산 완료 기록은 지우지 않고 취소 표시로 남깁니다.\n\n까닭`, '아직 편직 중'); if (why === null) return;
+    let r;
+    if (kd) r = await gsKdUndoItem(wo, ii, '사무실 — ' + (String(why || '').trim() || '아직 편직 중'));
+    else if (wo.knit_done) r = (await knitDoneUndo(wo)) ? 'ok' : 'err';
+    else { toast('이미 편직 중입니다', 'info'); return; }
+    if (r === 'ok' || r === 'dup') toast(`${nm} — 편직 중으로 되돌렸습니다`, 'success'); else toast('되돌리지 못했습니다', 'error');
+    if (done) done();
+  }
+  window.__hwKdOffice = { open: gsKdOfficeOpen, head: gsKdHeadHtml, undo: gsKdUndoOpen };   /* 시험용 */
   /* 우리가 감춘 것 — R4 [삭제](공장 보고) · 반영 안 된 사무실 기록 [지우기]: proc_log { kind 'cancel', ref, hide: true } (공장 앱 · 알림 서버는 우리 'cancel' 을 알리지 않음) */
   function gsHideSet() { const s = new Set(); gsLogs().forEach(l => { if (l && l.by === 'us' && l.hide && l.ref) s.add(l.ref); }); return s; }
   /* 반영 안 된 사무실 기록 — 2분이 지나도 어느 줄의 conf_log 도 아니고, 가리키는 줄이 아직 출고 대기인 것 (그 줄이 다른 길로 확정됐으면 겹친 것이라 빼고 · 의뢰서 없이 나간 출고는 의뢰서가 있으면) */
@@ -32448,6 +32461,7 @@ function validateBlendSum(blends, label) {
    *   itemKpj(it) — 품목 줄 kg/절: 실측 생산 완료(v 2 · 추정 아님)면 실측 kg/절 · 아니면 의뢰서 kg/절(없으면 21)
    *   kdKpjAvg(vn, fid) — 그 편직공장 · 같은 생지의 실측 kg/절 평균 (최근 180일 · 1건 이상) → { kpj, n } | null — 무게를 모를 때 추정에 씀 */
   const KD_ISSUES = [KD_ISSUE, '생산 완료'];
+  const KX_ISSUE = '생산 완료 취소';   /* hotfix651: 편직팀 앱 [편직 중으로] */
   function kdKgOf(l) {
     if (!l) return null;
     const ok = v => (typeof v === 'number' && isFinite(v) && v > 0 && v <= 99999) ? Math.round(v * 10) / 10 : null;
@@ -32520,8 +32534,9 @@ function validateBlendSum(blends, label) {
           const ii = q.ii; const it = items[ii]; if (!it || !String(it.item || '').trim()) return 'gone';
           if (log && !o.undo && it.knit_done && it.knit_done.log === log) return 'dup';
           if (log && o.undo && !(it.knit_done && it.knit_done.log === log)) return 'dup';
-          sh = sh.map(x => (x && x.src === 'kdone' && idxOf(x) === ii && !x.void) ? Object.assign({}, x, { void: true, void_at: at, void_by: by }) : x);
-          if (o.undo) { done.push({ ii, n: it.knit_done ? parseFloat(it.knit_done.n) || 0 : 0 }); delete it.knit_done; items[ii] = it; continue; }
+          sh = sh.map(x => (x && x.src === 'kdone' && idxOf(x) === ii && !x.void) ? Object.assign({}, x, { void: true, void_at: at, void_by: by }, o.undo && o.why ? { void_why: String(o.why).slice(0, 200) } : {}) : x);
+          /* hotfix651: 되돌릴 때 품목 생산 완료 기록은 지우지 않고 knit_done_void(최근 10개)에 취소 표시(누가 · 언제 · 사유)로 남김 — 되살릴 때 볼 수 있게 */
+          if (o.undo) { done.push({ ii, n: it.knit_done ? parseFloat(it.knit_done.n) || 0 : 0 }); if (it.knit_done) it.knit_done_void = (Array.isArray(it.knit_done_void) ? it.knit_done_void.slice(-9) : []).concat([Object.assign({}, it.knit_done, { void_at: at, void_by: by, void_why: String(o.why || '').slice(0, 200) })]); delete it.knit_done; items[ii] = it; continue; }
           const ord = parseFloat(it.jul) || 0, kpj0 = parseFloat(it.kg_per_jul) || 21;
           let inJ = 0, inK = 0; sh.forEach(x => { if (shLive(x) && x.dir === 'in' && idxOf(x) === ii) { inJ += parseFloat(x.jul) || 0; inK += parseFloat(x.kg) || 0; } });
           const n = R1(q.n), d = R1(n - ord - inJ), real = q.kg != null;
@@ -32540,7 +32555,7 @@ function validateBlendSum(blends, label) {
         let yOut = null, gOut = null, full = false, missing = [], undoFull = false;
         if (o.undo) {
           if (v2) {   // v 2 전체 완료를 되돌림 — 성격 · 코드 머리 · 원장 두 곳 그 의뢰서 줄 (옛 완료는 원장 그대로)
-            undoFull = true; upd.knit_done = null; upd.knit_done_date = '';
+            undoFull = true; upd.knit_done = null; upd.knit_done_date = ''; upd.knit_done_void = Object.assign({}, w.knit_done, { void_at: at, void_by: by, void_why: String(o.why || '').slice(0, 200) });   /* hotfix651: 의뢰서 전체 완료도 취소 표시로 남김 */
             const kf = w.knit_done.kind_from, cur = w.kind || inferKnitKind(Object.assign({}, w, { items }));
             if (kf && kf !== cur) { upd.kind = kf; const ni = syncItemsCodePrefix({ items }, kf); if (ni) upd.items = ni; }
             if (yFresh.some(r => mine(r, 'use'))) yOut = yFresh.filter(r => !mine(r, 'use'));
@@ -32576,7 +32591,7 @@ function validateBlendSum(blends, label) {
     if (res === 'ok' && out) {
       knitDoneApply.last = { full: out.full, missing: out.missing, undoFull: out.undoFull };
       const wl = (state.allWorkOrders || []).find(x => x && x.id === wid);   // 이 PC 화면을 바로 (서버 소식은 뒤따라 옴)
-      if (wl) { ['items', 'greige_shipments', 'knit_done', 'knit_done_date', 'kind', 'is_sample'].forEach(k => { if (k in out.upd) wl[k] = out.upd[k]; }); }
+      if (wl) { ['items', 'greige_shipments', 'knit_done', 'knit_done_date', 'knit_done_void', 'kind', 'is_sample'].forEach(k => { if (k in out.upd) wl[k] = out.upd[k]; }); }
       if (out.yOut) state.yarnLedger = out.yOut; if (out.gOut) state.greigeLedger = out.gOut;
       if (wl && !wl.knit_done) { try { await knitUseRefresh(wl); } catch (_) {} }   // 전체 완료 전 · 되돌린 뒤 — 지금까지 나간(편직한) 만큼 원사 사용량
       if (out.missing.length) toast('편직 설정에 사종 비율이 없어 원사 사용량은 아직 못 뺐습니다 — [편직 설정] (' + out.missing.join(' · ') + ')', 'warning');
@@ -32605,7 +32620,34 @@ function validateBlendSum(blends, label) {
     for (const l of logs.filter(l => l && l.by === 'vendor' && l.part === 'gs' && l.kind === 'issue' && KD_ISSUES.includes(l.issue) && l.id && !String(l.id).startsWith('tmp') && !ans.has(l.id) && !gsKdBusy.has(l.id))) {   /* hotfix636: 공장이 보낸 것(by 'vendor')만 · 사무실 대행 기록은 저장할 때 바로 반영 */
       gsKdBusy.add(l.id); const r = await gsKdApply(l); if (r === 'ok') { const kg = kdKgOf(l); toast(`${l.vendor || '편직공장'} 생산 완료 — ${String(l.label || l.wo || '').slice(0, 40)} ${parseFloat(l.n) || 0}절${kg != null ? ' · ' + kg + 'kg' : ''} · 재고에 반영했습니다`, 'success'); } else if (r !== 'dup') gsKdBusy.delete(l.id);
     }
+    /* hotfix651: 편직팀 앱 [편직 중으로](issue '생산 완료 취소') — 같은 PC 에서 저절로 되돌림 (생산 완료 보고와 같은 조건) */
+    for (const l of logs.filter(l => l && l.by === 'vendor' && l.part === 'gs' && l.kind === 'issue' && l.issue === KX_ISSUE && l.id && !String(l.id).startsWith('tmp') && !ans.has(l.id) && !gsKdBusy.has(l.id))) {
+      gsKdBusy.add(l.id); const r = await gsKxApply(l); if (r === 'ok') toast(`${l.vendor || '편직공장'} — ${String(l.label || l.wo || '').slice(0, 40)} 생산 완료를 되돌려 편직 중으로 옮겼습니다`, 'success'); else if (r === 'err') gsKdBusy.delete(l.id);
+    }
   }
+  /* hotfix651(대표 10/11): 생산 완료 되돌리기 한 줄 — 공장 앱 요청(l) · 사무실 [편직 중으로](l 없음) 같은 길
+   *   품목 생산 완료(v 2) → knitDoneApply 되돌리기(기록은 knit_done_void 로 남김 · kdone 줄 void · 의뢰서 전체 완료면 성격 · 원사 사용 · 생지 knit 줄도 되돌림 · 이미 보낸 절은 그대로)
+   *   옛 PC [편직완료](품목 기록 없음)는 사무실 [편직완료 되돌리기](최고관리자)로 — 공장 요청은 반려로 알림 · 돌려줌 'ok' | 'rej' | 'err' */
+  async function gsKdUndoItem(wo, ii, why) {
+    const it = ((wo && wo.items) || [])[ii]; const kd = it && it.knit_done; if (!kd) return 'none';
+    return knitDoneApply({ wid: wo.id, items: [{ ii }], via: (kd.via === 'office' || kd.via === 'pc') ? kd.via : 'app', log: kd.log || null, vendor: gsNormV(wo.recipient) || wo.recipient || '', k: wo.id + '_' + ii, woNo: wo.wo_number || '' }, { undo: true, why });
+  }
+  async function gsKxApply(l) {
+    const tell = (note, rej) => window.hwProc.addLog(Object.assign({ vendor: l.vendor || '', k: l.k || '', wo: l.wo || '', kind: 'note', part: 'gs', ref: l.id, note: String(note).slice(0, 200) }, rej ? { rej: true } : {}));
+    const { wid, ii } = gsKdSplit(l); const w = (state.allWorkOrders || []).find(x => x && x.id === wid); const it = w && (w.items || [])[ii];
+    try {
+      if (!w || w.deleted || !it) { await tell('현일텍스 반려 — 편직 의뢰서를 찾지 못했습니다', true); return 'rej'; }
+      if (!it.knit_done) { if (w.knit_done) { await tell('현일텍스 반려 — 사무실 PC [편직완료]로 끝낸 의뢰서입니다 · 사무실에서 되돌립니다', true); return 'rej'; }
+        await tell((w.kind || inferKnitKind(w)) === 'buy' ? '현일텍스 반려 — 생지구매 줄은 편직 중으로 옮기지 않습니다' : '현일텍스 확인 완료 — 이미 편직 중입니다', (w.kind || inferKnitKind(w)) === 'buy'); return 'ok'; }
+      const r = await gsKdUndoItem(w, ii, '공장 요청 — 편직 중으로' + (l.note ? ' · ' + String(l.note).slice(0, 80) : ''));
+      if (r === 'ok') { const wl = (state.allWorkOrders || []).find(x => x && x.id === wid) || w; const stk = (wl.kind || inferKnitKind(wl)) === 'stock';
+        await tell('현일텍스 반영 — 편직 중으로 되돌렸습니다' + (stk ? ' (재고 성격 의뢰라 [재고]에 남습니다)' : '')); return 'ok'; }
+      if (r === 'dup') { await tell('현일텍스 반려 — 그 사이 생산 완료 기록이 바뀌었습니다 · 다시 확인해 주세요', true); return 'rej'; }
+      if (r === 'gone') { await tell('현일텍스 반려 — 편직 의뢰서를 찾지 못했습니다', true); return 'rej'; }
+      return 'err';
+    } catch (e) { console.warn('[생산 완료 되돌리기]', e && e.message); return 'err'; }
+  }
+  window.__hwGsKx = { apply: gsKxApply, undoItem: gsKdUndoItem };   /* 시험용 */
   /* hotfix621(대표 10/9 "내가 확인했는데 왜 재고에 반영이 안 돼?"): 617 전에 [확인 완료]만 누르고 재고는 그대로였던 것 — 화면 오른쪽 아래에 바로 알리고 [지금 반영] 한 번이면 공장 숫자로 맞춤
    *   재고를 고칠 수 있는 사람의 PC 에서만 · 현장 QC 휴대폰 빼고 · 맞춘 기록은 조정 줄(되돌릴 수 있음) + 공장 앱에 "확인 완료 — 공장이 센 N절로 맞췄습니다" · 617 부터 [공장 숫자로 확인]은 처음부터 바로 반영 */
   async function gsSiApplyOne(l) { const { wid, ii } = gsKdSplit(l); const t = gsSiTarget(l); if (!t) return null;
@@ -62027,6 +62069,7 @@ const sv600 = d => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" s
       }));
       /* hotfix634(R13): [송장 붙이기] — 사무실 대행 공장의 사진 없는 확인 줄에 사무실이 송장 사진을 붙임 (그 줄 photo · 트랜잭션 · 사진이 이미 있으면 바꾸지 않음) */
       document.querySelectorAll('[data-kdo]').forEach(b => b.addEventListener('click', () => gsKdOfficeOpen(wo, _ii, () => setTimeout(() => openShipmentModal(woId, _ii), 200))));   /* hotfix636: 생산 완료 (사무실 대행 · 대신 넣기 · 다시 넣기) */
+      document.querySelectorAll('[data-kdx]').forEach(b => b.addEventListener('click', () => gsKdUndoOpen(wo, _ii, () => setTimeout(() => openShipmentModal(woId, _ii), 200))));   /* hotfix651: [편직 중으로] */
       document.querySelectorAll('[data-gs-attach]').forEach(b => b.addEventListener('click', () => gsAttachOpen(wo, parseInt(b.dataset.gsAttach), () => setTimeout(() => openShipmentModal(woId, _ii), 200))));
       /* hotfix584: 편직팀 앱에 요청 · 메시지 */
       const _gOf = id => state.allWorkOrders.find(w => w && w.id === id);
@@ -62929,7 +62972,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix650';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
+  const VERSION = 'v2.53 hotfix651';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
@@ -63207,6 +63250,7 @@ window.addEventListener('beforeunload', e => {
     ov.addEventListener('click', e => { if (e.target === ov || e.target.closest('[data-x]')) { ov.remove(); return; } if (e.target.closest('[data-auto]')) { auto.forEach(n => pick.add(n)); draw(); return; }
       if (e.target.closest('[data-unset]')) { save(null); return; } if (e.target.closest('[data-save]')) save(Array.from(pick).sort((a, b) => a.localeCompare(b, 'ko'))); });
   };
+  const PUB_V = 651;   /* hotfix651: 공개본(proc_pub) 모양 판 — 이 판보다 옛 PC 가 쓴 공개본은 새 판 PC 가 다시 씀 · 공개본 칸(stock 의 sec 등)을 바꾸면 올림 */
   P.publish = async function () {
     const f = FB();
     if (!P.started || P.err || !f || (typeof state === 'undefined') || !state.__woLoaded || window.__hwViewAs) return 0;
@@ -63224,10 +63268,10 @@ window.addEventListener('beforeunload', e => {
       let ystock = []; try { if (window.__hwGs && window.__hwGs.yarnPubFor && (stock.length || knit)) ystock = window.__hwGs.yarnPubFor(vn); } catch (_) { ystock = []; }   /* hotfix618: 편직팀 앱 [재고 › 원사] */
       let ds = { set: false, list: [] }; try { if (knit || stock.length) ds = P.destsFor(vn); } catch (_) {}   /* hotfix622: 편직공장별 보낼 곳 */
       const lists = P.listsOf(); const lowJ = P.lowJul(); const sig = hash(JSON.stringify([out[vn], lists, gs, knit, stock, mv, yin, ystock, P.accs.filter(a => a.vendor === vn).map(a => a.app || ''), ds].concat(lowJ !== 20 ? [lowJ] : [], P.cfg.kd_kg_field ? ['kdkg'] : [])));   /* hotfix627: 생지 재고 주의 절수 (기본 20 이면 옛 판과 같은 sig) · hotfix636: B안 스위치는 켰을 때만 */
-      { const srv = P.pubs[vn]; if (srv && srv.sig === sig) continue;
-        if (sent[vn] === sig && (srv || Date.now() - (sentAt[vn] || 0) < 60000)) continue;   /* hotfix596: 서버에 남의 판이 있으면 지금처럼 그대로 둠(내 자료가 더 옛것일 수 있음 · 두 PC 가 다투지 않게) — 서버에서 지워졌을 때만(계정 다시 만듦) 1분 뒤 다시 씀 */ }
+      { const srv = P.pubs[vn]; const srvOld = !!(srv && !((Number(srv.pv) || 0) >= PUB_V)); if (srv && srv.sig === sig && !srvOld) continue;
+        if (sent[vn] === sig && ((srv && !srvOld) || Date.now() - (sentAt[vn] || 0) < (srvOld ? 15000 : 60000))) continue;   /* hotfix651: 서버 공개본이 옛 판(pv 없음 · 낮음) PC 가 쓴 것이면 다시 씀 — 640 전 판이 쓴 공개본에서 재고 성격이 [편직 중]으로 보이던 것 (15초에 한 번까지 · 옛 판 PC 는 자기 내용이 바뀔 때만 쓰므로 서로 다투지 않음) */   /* hotfix596: 서버에 남의 판이 있으면 지금처럼 그대로 둠(내 자료가 더 옛것일 수 있음 · 두 PC 가 다투지 않게) — 서버에서 지워졌을 때만(계정 다시 만듦) 1분 뒤 다시 씀 */ }
       sent[vn] = sig; sentAt[vn] = Date.now();
-      try { await f.setDoc(f.doc(f.db, f.C('proc_pub'), vn), { vendor: vn, dests: ds.list, dests_set: ds.set, low_jul: lowJ, items: out[vn], lists, n: out[vn].length, stock, gs, gs_n: gs.filter(x => x.pend > 0).length, mv, mv_n: mv.filter(x => x.left > 0).length, yin, ystock, mode: (P.accs.find(a => a.active && a.vendor === vn && (a.app === 'knit' || a.app === 'proc')) || {}).app || (knit && !out[vn].length ? 'knit' : (knit ? 'both' : 'proc')), ...(P.cfg.kd_kg_field ? { kd_kg_field: true } : {}), sig, at: f.serverTimestamp(), by: email() }); n++; }
+      try { await f.setDoc(f.doc(f.db, f.C('proc_pub'), vn), { vendor: vn, dests: ds.list, dests_set: ds.set, low_jul: lowJ, items: out[vn], lists, n: out[vn].length, stock, gs, gs_n: gs.filter(x => x.pend > 0).length, mv, mv_n: mv.filter(x => x.left > 0).length, yin, ystock, mode: (P.accs.find(a => a.active && a.vendor === vn && (a.app === 'knit' || a.app === 'proc')) || {}).app || (knit && !out[vn].length ? 'knit' : (knit ? 'both' : 'proc')), ...(P.cfg.kd_kg_field ? { kd_kg_field: true } : {}), sig, pv: PUB_V, at: f.serverTimestamp(), by: email() }); n++; }
       catch (e) { sent[vn] = ''; console.warn('[공정 체크 게시]', e && e.message); }
     }
     return n;
