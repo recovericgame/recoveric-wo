@@ -256,7 +256,12 @@ body.fxb #toast{top:72px;bottom:auto}   /* 고정 단추 띠([저장] · [다음
 .kp-k button{min-height:52px;font-size:26px;font-weight:800;border-radius:14px;border-color:var(--gray-200);color:var(--ink);box-shadow:0 1px 2px rgba(15,23,42,.06)}
 .kp-k button:active{background:var(--brand-100)}
 .kp-k button[data-k="지움"]{font-size:18px;color:var(--gray-600)}
-.kp-rec{font-size:14px;color:var(--gray-600)}
+.kp-rec{font-size:14px;color:var(--gray-600);background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:0 12px}
+.kp-rec summary{min-height:44px;display:flex;align-items:center;font-weight:800;color:var(--gray-700);cursor:pointer}
+.kp-rec[open]{padding-bottom:8px}
+.hg-flt{margin-bottom:8px}
+.hg-more{width:100%;margin-top:10px;border-style:dashed;color:var(--gray-600)}
+body.pc .hg-flt button,body.pc .hg-more{min-height:30px;height:30px;font-size:13px;padding:0 12px}
 .kp-rec div{display:flex;gap:10px;padding:4px 0;border-bottom:1px solid var(--line)}
 .kp-rec div b{font-family:ui-monospace,Consolas,monospace;color:var(--ink)}
 
@@ -1023,7 +1028,15 @@ function scrNext() {
 function hogiToday(code, date) { const rs = rollsOf(date).filter(r => r.hogi === code); return { n: rs.length, kg: rs.reduce((a, r) => a + (+r.kg || 0), 0), rs }; }
 const liveHogis = () => Object.values(S.d.hogi).filter(h => h.active !== false).sort((a, b) => a.no - b.no);
 /* 호기 카드 (휴대폰 첫 화면 · PC 오늘 · PC 호기 판이 같이 씀) — 누르면 중량 · 길게 누르면 품목 바꾸기 */
+/* 검수 10/12 (2): 기본은 품목이 걸린(돌리는) 호기만 · 품목 없는 호기는 접힌 한 줄 "펼치기" — [모두] 칩 · 이 기기에 기억(fx.hgAll) */
 function hogiCards(hs, date) {
+  const on = hs.filter(x => S.d.item[x.item]), off = hs.filter(x => !S.d.item[x.item]);
+  if (!on.length || !off.length) return hogiGrid(hs, date);
+  let all = false; try { all = localStorage.getItem('fx.hgAll') === '1'; } catch (_) {}
+  return '<div class="hg-flt seg"><button type="button" data-act="hgmode" data-v="on" class="' + (all ? '' : 'on') + '">돌리는 호기만 ' + on.length + '</button><button type="button" data-act="hgmode" data-v="all" class="' + (all ? 'on' : '') + '">모두 ' + hs.length + '</button></div>' +
+    (all ? hogiGrid(hs, date) : hogiGrid(on, date) + '<button type="button" class="hg-more" data-act="hgmode" data-v="all">품목 없는 호기 ' + off.length + '대 — 펼치기</button><div class="hgs-off" hidden>' + hogiGrid(off, date) + '</div>');
+}
+function hogiGrid(hs, date) {
   return '<div class="hgs">' + hs.map(x => {
     const sp = S.d.mspec[x.specCode], it = S.d.item[x.item], t = hogiToday(x.code, date);
     return '<div class="hg' + (x.st && x.st !== '가동' ? ' stop' : '') + (it ? '' : ' noit') + '" role="button" tabindex="0" data-hogi="' + esc(x.code) + '" style="--tc:' + esc(tcolor(x.typeCode)) + '">' +
@@ -1057,7 +1070,6 @@ PCS.board = () => {
   const dayN = all.filter(r => r.shift === '주간').length, run = hs.filter(x => all.some(r => r.hogi === x.code)).length;
   const stop = hs.filter(x => x.st && x.st !== '가동').length, noIt = hs.filter(x => !S.d.item[x.item]).length, wait = all.filter(r => !r.insp).length;
   const kpi = (l, v, u, s, cls) => '<div class="kpi ' + (cls || '') + '"><span class="k-l">' + esc(l) + '</span><span class="k-v">' + v + (u ? '<small>' + esc(u) + '</small>' : '') + '</span><span class="k-s">' + s + '</span></div>';
-  const nx = (l, st) => '<div class="kpi nx"><span class="k-l">' + esc(l) + '</span><span class="k-v">준비 중</span><span class="k-s">' + st + '단계에서 엽니다</span></div>';
   const from = w.date.slice(0, 8) + '01', mon = new Map();
   Object.values(S.d.roll).filter(r => isRollLive(r) && r.date >= from).forEach(r => { const k = r.itemName || '(품목 없음)', o = mon.get(k) || { n: 0, kg: 0 }; o.n++; o.kg += +r.kg || 0; mon.set(k, o); });
   const todo = [];
@@ -1067,10 +1079,10 @@ PCS.board = () => {
   if (noIt && hs.length) todo.push(['wn', '품목 없는 호기 ' + noIt + '대 — 호기 카드를 길게 눌러 품목을 거십시오', '']);
   if (wait) todo.push(['wn', '검사 전 ' + wait + '절', '<button type="button" data-go="daily">일지 보기</button>']);
   return '<div class="pcv"><div class="pg-h"><h2>오늘</h2><span class="pg-s">' + esc(ymdWd(w.date)) + ' · ' + w.shift + ' 근무 · ' + esc(S.facDoc.name || S.fac) + '</span><span class="sp"></span>' +
-    '<button type="button" data-go="daily">일지 보기</button>' + (canEdit() ? '<button type="button" class="btn-p" data-go="wz">기계 등록</button>' : '') + '</div><div class="pg-b sc">' +
+    '</div><div class="pg-b sc">' +
     '<div class="kpis">' + kpi('오늘 생산', all.length, '절', '주간 ' + dayN + ' · 야간 ' + (all.length - dayN), 'mn1') + kpi('오늘 생산 중량', kgS(tot), 'kg', all.length ? '1절 평균 ' + kgS(tot / all.length) + 'kg' : '아직 적은 절이 없습니다', 'mn1') +
     kpi('돌린 호기', run, '/ ' + hs.length + '대', (stop ? '멈춤 · 고장 ' + stop + '대 · ' : '') + '품목 없음 ' + noIt + '대') + kpi('검사 전', wait, '절', wait ? '일지 보기에서 검사' : '모두 검사했습니다', wait ? 'wn' : '') +
-    nx('출고 대기', 2) + nx('이번 달 판매', 3) + nx('미수금', 3) + '</div>' +
+    '</div><div class="pc-note">출고 대기 · 판매 · 미수금은 다음 단계에서 엽니다</div>' +
     '<div class="dash"><section class="pnl"><div class="pnl-h"><b>호기별 가동</b><span>' + hs.length + '대 · 누르면 중량 넣기 · 길게 누르면 품목 바꾸기</span></div>' + (hs.length ? hogiCards(hs, w.date) : noHogi()) + '</section>' +
     '<div style="display:flex;flex-direction:column;gap:12px"><section class="pnl"><div class="pnl-h"><b>할 일</b></div><div class="todo">' + (todo.length ? todo.map(([c, t, b]) => '<div class="' + c + '"><span>' + esc(t) + '</span>' + b + '</div>').join('') : '<div><span>할 일이 없습니다</span></div>') + '</div></section>' +
     '<section class="pnl"><div class="pnl-h"><b>이번 달 생산</b><span>품목별</span></div>' + (mon.size ? '<table class="mt"><thead><tr><th>품목</th><th class="num">절</th><th class="num">kg</th></tr></thead><tbody>' +
@@ -1113,7 +1125,7 @@ SCR.kp = () => {
     '<div class="kp-hb"><button type="button" data-go="board">호기 판</button><button type="button" id="kp-item">' + (it ? '품목 바꾸기' : '품목 걸기') + '</button></div></div>' +
     '<div class="kp-v" aria-live="polite"><span id="kp-v">' + esc(S.kp.v || '0') + '</span><small>kg</small></div><div id="kp-msg" class="msg"></div>' +
     '<div class="kp-k">' + ['1', '2', '3', '4', '5', '6', '7', '8', '9', '.', '0', '지움'].map(k => '<button type="button" data-k="' + k + '">' + k + '</button>').join('') + '</div>' +
-    (rec ? '<div class="kp-rec">오늘 이 호기<br>' + rec + '</div>' : '') + '</div>';
+    (rec ? '<details class="kp-rec"><summary>오늘 이 호기 ' + t.n + '절 보기</summary>' + rec + '</details>' : '') + '</div>';
 };
 SCR.kp.after = () => {
   $('fixbar').innerHTML = '<div class="kpw"><button type="button" id="kp-save" class="btn-p btn-xl">저장</button></div>'; const b = $('kp-item'); if (b) b.onclick = () => itemPicker(S.kp.hogi); const s = $('kp-save'); if (s) s.onclick = kpSave; };
@@ -1283,7 +1295,7 @@ function machSpecBody(specs) {
 function pcMachSpec() {
   const specs = machSpecs();
   return '<div class="pcv"><div class="pg-h"><h2>기계 코드</h2><span class="pg-s">종류마다 색 띠 · 사양(인치 · 피더 · 스판)별 호기와 가마</span><span class="sp"></span>' + (canEdit() ? '<button class="btn-p" data-go="wz" type="button">+ 기계 등록</button>' : '') + '</div>' +
-    '<div class="pg-b sc"><div class="pc-f">' + machSeg('spec') + '<button type="button" data-act="showoff" class="ck' + (S.prm.off ? ' on' : '') + '" aria-pressed="' + !!S.prm.off + '">사용 안 함도 보기</button></div>' + (specs.length ? machSpecBody(specs) : machEmpty()) + '</div></div>';
+    '<div class="pg-b sc"><div class="pc-f">' + machSeg('spec') + '<button type="button" data-act="showoff" class="ck' + (S.prm.off ? ' on' : '') + '" aria-pressed="' + !!S.prm.off + '">사용 안 함도 보기</button><span class="pc-note">호기 단추를 누르면 그 호기의 기계명 · 상태 · 끼운 가마 · 품목을 고칩니다</span></div>' + (specs.length ? machSpecBody(specs) : machEmpty()) + '</div></div>';
 }
 const specCountOps = (codes, hogiPatch) => [...new Set(codes)].filter(Boolean).map(code => {
   const n = Object.values(Object.assign({}, S.d.hogi, hogiPatch)).filter(x => x.specCode === code && x.active !== false).length;
@@ -2232,6 +2244,7 @@ document.addEventListener('click', async e => {
   const a = t.dataset.act; if (!a) return;
   const c = t.dataset.c, id = t.dataset.id;
   if (a === 'prodpick') return prodPicker();
+  if (a === 'hgmode') { try { localStorage.setItem('fx.hgAll', t.dataset.v === 'all' ? '1' : '0'); } catch (_) {} return render(true); }
   if (a === 'qaopen') { qaStash(); if (S.qaOpen.has(c)) { S.qaOpen.delete(c); S.qaShut.add(c); } else { S.qaOpen.add(c); S.qaShut.delete(c); } render(true); if (S.qaOpen.has(c)) qaFocus(QA[c]()[0].k); return; }
   if (a === 'pwgama' || a === 'pwgdel' || a === 'pwadd' || a === 'pwmdel') {
     const W = S.wz; if (!W) return; const m = W.ms[+t.dataset.mi];
