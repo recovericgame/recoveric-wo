@@ -877,7 +877,7 @@ import { initializeFirestore, getFirestore, persistentLocalCache, persistentMult
  *   읽는 것: proc_acc/{내 uid} · proc_pub/{내 업체}.gs (현일텍스가 보낸 생지출고) · proc_log(내 업체 것만)
  *   쓰는 것: proc_log 한 줄 — kind 'ship' part 'gs' (body 절 · n kg · ref 송장 사진) · kind 'st' part 'gs' stage seen | ack_cxl | photo
  *   사진: Storage gs_photos/{업체}/{생지출고}_{시각}.jpg */
-const KVER = 'k95 (hotfix660)';
+const KVER = 'k96 (hotfix661)';
 try { if (matchMedia('(min-width:700px)').matches) document.body.classList.add('k620pc'); } catch (_) {}   /* hotfix620: PC 에서는 휴대폰 화면 너비로 가운데 */
 /* hotfix572(대표 10/1): 거래 원단회사 고르기 — FABIWOS 는 여러 원단회사에 팔 프로그램. 편직공장 한 곳이 여러 원단회사와 거래하므로
  *   계정(proc_acc.companies)에 거래 원단회사 목록 · 위 [→ 원단회사 ▾] 와 삼선 메뉴에서 고름 · 고른 회사의 할 일 · 재고 · 보낸 내역만 보임
@@ -1147,6 +1147,7 @@ function kShipStat(l) {   /* hotfix581: 내가 보낸 출고 보고의 지금 �
 }
 const kPhFail = () => lsGet(vKey('phfail'), []);
 const kHasPhoto = k => S.logs.some(l => l.by === 'vendor' && l.k === k && ((l.kind === 'st' && l.stage === 'photo') || (l.kind === 'ship' && l.ref)));
+const kInvAsk = x => !!(x && x.inv && !x.photo && !kHasPhoto(x.k));   /* hotfix661(W4 ⭐A): 송장 사진 요청이 살아 있는지 — inv 는 현일텍스 PC 가 "요청 && 사진 없음 && 출고 대기 > 0" 으로 올림 (출고 확인되면 저절로 꺼짐) */
 function kView(x) { const w = kSent(x); const j = w.reduce((a, l) => a + (parseFloat(l.body) || 0), 0), kg = w.reduce((a, l) => a + (parseFloat(l.n) || 0), 0); return { done: (x.done || 0) + j, kg: (x.kg || 0) + kg, pend: Math.max(0, (x.pend || 0) - j), wait: w.length > 0 }; }
 function kAcked(x) { return lsGet(vKey('ack'), []).includes(x.k + ':' + x.cxl) || S.logs.some(l => l.by === 'vendor' && l.kind === 'st' && l.stage === 'ack_cxl' && l.k === x.k); }
 function kTodo(x) { const v = kView(x); return v.pend > 0 || (x.inv && !x.photo && !kHasPhoto(x.k)) || (kPhFail().includes(x.k) && !kHasPhoto(x.k)) || (x.st === 'cxl' && x.cxl > 0 && !kAcked(x)); }   /* hotfix581: 사진을 못 올린 출고도 할 일로 */
@@ -1227,7 +1228,7 @@ function kCard(x) {
     <div class="k-it">${esc(x.item)}${lot}</div><div class="k-meta">${esc(x.date)} · ${kQ(v.done)}절 보냄 · ${esc(x.dest)}<br>${pf ? '출고는 보냈지만 <b>송장 사진</b>이 올라가지 않았습니다. 다시 보내 주십시오.' : esc(CN()) + '가 이 출고의 <b>송장</b>을 요청했습니다. 사진을 찍어 보내 주십시오.'} (팩스로 보내셔도 됩니다)</div>
     <button type="button" class="k-go amber" data-kph="${esc(x.k)}">송장 사진 보내기</button></div>`; }
   const part = v.done > 0; const pct = x.ord ? Math.min(100, Math.round(v.done / x.ord * 100)) : 0;
-  return `<div class="k-card ${part ? 'part' : 'new'}" data-kk="${esc(x.k)}"><span class="k-tag ${part ? 't-o' : 't-r'}">${part ? '일부 보냄' : '새 요청'}</span>${x.part ? ` <span class="k-tag t-s">${esc(x.part)}</span>` : ''}${v.wait ? ' <span class="k-tag t-g">보냄 · 현일 반영 중</span>' : ''}
+  return `<div class="k-card ${part ? 'part' : 'new'}" data-kk="${esc(x.k)}"><span class="k-tag ${part ? 't-o' : 't-r'}">${part ? '일부 보냄' : '새 요청'}</span>${x.part ? ` <span class="k-tag t-s">${esc(x.part)}</span>` : ''}${v.wait ? ' <span class="k-tag t-g">보냄 · 현일 반영 중</span>' : ''}${kInvAsk(x) ? ' <span class="k-tag t-y k-invask">송장 사진 요청</span>' : ''}
     <div class="k-it">${esc(x.item)}${lot}</div>
     <div class="k-q3"><div><small>주문</small><b>${kQ(x.ord)}</b></div><div><small>보냄</small><b>${kQ(v.done)}</b></div><div class="left"><small>남음</small><b>${kQ(v.pend)}</b></div></div>
     ${part ? `<div class="k-bar"><i style="width:${pct}%"></i></div>` : ''}
@@ -1982,7 +1983,7 @@ function kShipSheet(x) {
       <div class="k-num"><button type="button" id="k-m">−</button><input id="k-j" type="number" inputmode="decimal" value="${esc(String(st.j))}"${st.err.j ? ' class="k-bad"' : ''}><button type="button" id="k-p">+</button></div>${errT('j')}
       <div class="k-lab">출고 합계 (kg)${bdg(0)}</div>
       <div class="k-num"><input id="k-kg" type="text" inputmode="decimal" autocomplete="off" placeholder="있으면 · 예: 210.4" value="${esc(st.kg)}"${st.err.kg ? ' class="k-bad"' : ''}></div>${errT('kg')}
-      ${kPhotoFieldM(st)}
+      ${kPhotoFieldM(st, kInvAsk(x) ? `<div class="k-lab">송장 사진${bdg(0)} <small class="k-invask" style="font-weight:700;color:#b45309">현일텍스가 송장 사진을 요청했어요</small></div><div class="k-hint">안 찍어도 보낼 수 있어요(팩스도 됨) · 여러 장 찍을 수 있어요</div>` : '')}
       <div class="k-lab">메모${bdg(0)}</div>
       <div class="k-num"><input id="k-memo" type="text" maxlength="300" autocomplete="off" placeholder="예: 박스 3개 · 오후 차" style="font-size:17px;font-weight:600;text-align:left;padding:0 12px" value="${esc(st.memo)}"></div>
       <div class="row2"><button type="button" class="no" data-x>닫기</button><button type="button" class="ok" id="k-send"${st.busy ? ' disabled' : ''}>${st.busy ? '보내는 중…' : '보냄'}</button></div>`);
