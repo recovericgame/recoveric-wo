@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="FABIWOS">
 <meta name="mobile-web-app-capable" content="yes">
-<title>FABIWOS v2.53 hotfix659</title>
+<title>FABIWOS v2.53 hotfix660</title>
 <script>
 /* ===== HWChat 대화 화면 공용 (hotfix620 · 대표 10/9 "카톡처럼 쉽고 멋있게") — 이음 · 편직팀 앱 · 염/가공소 앱 · 현장 QC 앱이 같은 모양
  *   말풍선(내 글 노랑 · 받은 글 흰색) · 같은 사람 1분 안 글은 묶음(이름 · 사진은 첫 글, 시간은 끝 글) · 안 읽음 1
@@ -32457,6 +32457,40 @@ function validateBlendSum(blends, label) {
     });
     return out.sort((a, b) => (Number(b.pend > 0) - Number(a.pend > 0)) || String(b.date).localeCompare(String(a.date)) || String(b.no).localeCompare(String(a.no)));
   }
+  /* hotfix660(V5 · 기획 20261012_편직앱_출고내역_전체기간 · 대표 승인 A안): 편직팀 앱 [출고량] 전체 기간 — 그 공장의 모든 편직 의뢰서(완료 포함 · 삭제 제외) 출고 줄 중
+   *   나감(dir≠in) · 살아 있음(void 아님) · 확정(출고 대기 아님)만 연도별로 → { 연도: [줄] } (P.pubOut 이 proc_out/{업체}/y/{연도} 에 씀 · 원본은 읽기만)
+   *   줄 = { d 출고 날짜, j 절, kg, to 출고처, nt 비고(120자), it 품목명, lot 생지로트, no 생지출고 번호(없으면 편직 의뢰서 번호), ph 송장 첫 장 · phs 여러 장(두 장 이상), v 'app'|'pc', s 'knit'|'stock', k 재고 줄 열쇠 }
+   *   olds = 그 계정의 옛 이름(vendor_old) — 옛 이름 의뢰서 줄도 이 이름 문서로 */
+  function gsOutPubFor(vn, olds) {
+    const names = new Set([vn].concat(Array.isArray(olds) ? olds : []).map(gsNormV).filter(Boolean)); const W = state.allWorkOrders || []; const Y = {};
+    const G = new Map(); W.forEach(g => { if (g && g.type === '생지출고' && g.id) G.set(g.id, g); });
+    const R1 = n => Math.round((parseFloat(n) || 0) * 10) / 10;
+    W.forEach(w => {
+      if (!w || w.deleted || w.type !== '편직' || !names.has(gsNormV(w.recipient)) || !Array.isArray(w.greige_shipments)) return;
+      const items = (w.items && w.items.length) ? w.items : []; const kk = w.kind || inferKnitKind(w), autoStock = kk === 'stock' || kk === 'buy'; const IT = {};
+      const itemOf = idx => { if (IT[idx]) return IT[idx]; const it = items[idx] || {};
+        let nm = ''; try { const sp = it.item_fid ? itemByFid(it.item_fid) : null; nm = sp ? hwFacTailOff(String(sp.name || ''), w.recipient) : hwFacTailOff(greigeSplit(it.item || '').name || it.item || '', w.recipient); } catch (_) { nm = String(it.item || ''); }
+        const lot = greigeNoClean(it.greige_no) || greigeSplit(it.item || '').no || '';
+        let kd = (it.knit_done && it.knit_done.n != null) ? 1 : null;   /* gsStockRows 와 같은 성격 셈 (생산 완료 → 재고) · 완료된 의뢰서는 재고 */
+        if (kd == null && w.knit_done) { const fj = w.knit_done.final_jul; const pos = items.slice(0, idx + 1).filter(y => y && String(y.item || '').trim()).length - 1; const f = Array.isArray(fj) ? fj[pos] : (pos === 0 ? fj : null); if (f != null && isFinite(parseFloat(f))) kd = 1; }
+        return (IT[idx] = { it: String(nm || '-').slice(0, 80), lot: String(lot || '').slice(0, 40), s: (kd != null || autoStock || w.completed) ? 'stock' : 'knit' }); };
+      w.greige_shipments.forEach(x => {
+        if (!x || x.dir === 'in' || !shLive(x) || gsPend(x)) return;
+        const j = R1(x.jul), kg = R1(x.kg); if (!j && !kg) return;
+        let d = String(x.date || '').slice(0, 10); if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) d = String(x.at || '').slice(0, 10); if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return;
+        const idx = x.item_idx != null ? x.item_idx : 0; const I = itemOf(idx); const g = x.gs_id ? G.get(x.gs_id) : null;
+        let A = []; try { A = gsInvPhotos({ sh: x, w }).L.filter(gsPhIs); } catch (_) { A = []; }
+        if (!A.length && g && g.gs_photo && g.gs_photo.path && !(Array.isArray(g.gs_photos_hide) && g.gs_photos_hide.includes(g.gs_photo.path))) A = [String(g.gs_photo.path)];
+        const nt = String((x.src === 'gs' ? (g && g.gs_note) : x.memo) || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+        const ln = { d, j, kg, to: String(x.dest || (g && g.gs_dest) || '').slice(0, 60), nt, it: I.it, lot: I.lot, no: String(x.gs_number || (g && g.wo_number) || w.wo_number || '').slice(0, 40),
+          v: (x.src === 'app' || (x.conf_log && x.src !== 'office' && x.conf_via !== 'office')) ? 'app' : 'pc', s: I.s, k: w.id + '_' + idx };
+        if (A.length) { ln.ph = A[0]; if (A.length > 1) ln.phs = A.slice(0, 10); }
+        (Y[d.slice(0, 4)] = Y[d.slice(0, 4)] || []).push(ln);
+      });
+    });
+    Object.keys(Y).forEach(y => Y[y].sort((a, b) => b.d.localeCompare(a.d) || a.it.localeCompare(b.it, 'ko') || a.lot.localeCompare(b.lot) || a.no.localeCompare(b.no) || a.j - b.j));
+    return Y;
+  }
   // 공장이 앱에서 보낸 [출고했어요] 를 재고 줄에 적는다 — 트랜잭션 · 같은 보고는 한 번만 (conf_log)
   const gsApplied = new Set(); let gsApplyBusy = false;
   async function gsApplyReports(logs) {
@@ -33663,7 +33697,7 @@ function validateBlendSum(blends, label) {
   window.hwStockIssueCount = () => { try { return gsStockIssues(false).length; } catch (_) { return 0; } };
   async function gsPing(g) { const st = gsStateOf(g); return gsTellVendor(g, `${g.wo_number || ''} ${itemShow(g.gs_item, g.gs_item_fid, '')} ${greigeNoClean(g.gs_greige_no) || ''} — 남은 ${st.pend}절 출고하셨으면 앱에서 [출고했어요]를 눌러 주십시오`, 'req'); }   /* hotfix564: 관리 화면 [편직팀 앱]에서도 씀 */
   const gsAll = () => (state.allWorkOrders || []).filter(w => w && w.type === '생지출고' && !w.deleted);
-  window.__hwGs = { yarnPubFor: v => gsYarnPubFor(v), yarnIssues: a => gsYarnIssues(a), unapplied: () => gsSiUnapplied(), selfShips: a => gsSelfShips(a), yarnReps: a => gsYarnReps(a), yinFor: v => gsYinFor(v), reportsOf: g => gsReportsOf(g), stockIssues: gsStockIssues, stockIssueOpen: gsStockIssueOpen, stockRows: gsStockRows, kdHead: (w, i) => gsKdHeadHtml(w, i), ping: gsPing, all: gsAll, normV: gsNormV, openWait: () => hwGsWaitOpen(), itemOf: g => itemShow(g.gs_item, g.gs_item_fid, ''), lotOf: g => (Array.isArray(g.gs_mix) && g.gs_mix.length > 1) ? g.gs_mix.map(m => greigeNoClean(m.no)).join(' + ') : (greigeNoClean(g.gs_greige_no) || '-'), gsStateOf, gsLinesOf, gsWaitList, gsLineConfirm, gsRestCancel, gsPend, pubFor: gsPubFor, applyReports: gsApplyReports, tell: gsTellVendor, askInv: gsAskInvoice, hasApp: gsHasApp, seenAt: gsSeenAt, photoOpen: gsPhotoOpen, photoSheet: gsPhotoSheet,
+  window.__hwGs = { yarnPubFor: v => gsYarnPubFor(v), yarnIssues: a => gsYarnIssues(a), unapplied: () => gsSiUnapplied(), selfShips: a => gsSelfShips(a), yarnReps: a => gsYarnReps(a), yinFor: v => gsYinFor(v), reportsOf: g => gsReportsOf(g), stockIssues: gsStockIssues, stockIssueOpen: gsStockIssueOpen, stockRows: gsStockRows, kdHead: (w, i) => gsKdHeadHtml(w, i), ping: gsPing, all: gsAll, normV: gsNormV, openWait: () => hwGsWaitOpen(), itemOf: g => itemShow(g.gs_item, g.gs_item_fid, ''), lotOf: g => (Array.isArray(g.gs_mix) && g.gs_mix.length > 1) ? g.gs_mix.map(m => greigeNoClean(m.no)).join(' + ') : (greigeNoClean(g.gs_greige_no) || '-'), gsStateOf, gsLinesOf, gsWaitList, gsLineConfirm, gsRestCancel, gsPend, pubFor: gsPubFor, outPubFor: gsOutPubFor, applyReports: gsApplyReports, tell: gsTellVendor, askInv: gsAskInvoice, hasApp: gsHasApp, seenAt: gsSeenAt, photoOpen: gsPhotoOpen, photoSheet: gsPhotoSheet,
     appMode: gsAppMode, officeShip: gsOfficeShip, officeSelf: gsOfficeSelf, officeRows: gsOfficeRows, pxUnapplied: gsPxUnapplied, pxReapply: gsPxReapply, lineKey: gsLineKey };   /* hotfix634: 사무실 대행 */
   // hotfix562: [출고 확인 대기] 목록 — 생지생산 및 재고 윗줄 단추
   function hwGsWaitOpen(opt) {   /* hotfix581: 공장 보고 → 우리가 [보고대로 확인] · [반려] · 공장 취소 요청 [확인] · hotfix634(R4 · R13): 모든 공장 모아 보기 · 넓게 · 둘로 — ① 앱 보고 확인 ② 사무실이 넣을 것 (opt.focus = 다음에 커서를 둘 줄 열쇠) */
@@ -63195,7 +63229,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix659';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
+  const VERSION = 'v2.53 hotfix660';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
@@ -63497,8 +63531,43 @@ window.addEventListener('beforeunload', e => {
       try { await f.setDoc(f.doc(f.db, f.C('proc_pub'), vn), { vendor: vn, dests: ds.list, dests_set: ds.set, low_jul: lowJ, items: out[vn], lists, n: out[vn].length, stock, gs, gs_n: gs.filter(x => x.pend > 0).length, mv, mv_n: mv.filter(x => x.left > 0).length, yin, ystock, mode: (P.accs.find(a => a.active && a.vendor === vn && (a.app === 'knit' || a.app === 'proc')) || {}).app || (knit && !out[vn].length ? 'knit' : (knit ? 'both' : 'proc')), ...(P.cfg.kd_kg_field ? { kd_kg_field: true } : {}), sig, pv: PUB_V, at: f.serverTimestamp(), by: email() }); n++; }
       catch (e) { sent[vn] = ''; console.warn('[공정 체크 게시]', e && e.message); }
     }
+    try { P.pubOut().catch(e => console.warn('[출고 기록 게시]', e && e.message)); } catch (_) {}   /* hotfix660: 기다리지 않음 (공개본 게시를 늦추지 않게) */
     return n;
   };
+  /* ===== hotfix660(V5 · 대표 승인 A안): 편직팀 앱 출고 기록 — proc_out/{업체}/y/{연도} = { vendor, year, n, j, kg, lines[], sig, at, by } (줄은 __hwGs.outPubFor)
+   *   켜진 계정 중 염/가공소 앱이 아닌 업체만 · 같은 내용(sig)이면 쓰지 않음 — 서버 sig 는 업체마다 한 번 읽어 둠(PC 여러 대여도 한 번) · 줄이 다 없어진 해는 빈 문서로
+   *   규칙 게시 전(권한 없음)이면 조용히 건너뜀(10분 뒤 다시) — 로그아웃 · 오류창 없음 · 30초에 한 번까지(그 사이 바뀐 것은 뒤에) ===== */
+  const outSrv = {}, outSent = {}; let outAt = 0, outT = 0, outDeny = 0, outBusy = false;
+  const outDenied = e => /permission/i.test(String((e && (e.code || e.message)) || ''));
+  P.pubOut = async function () {
+    const f = FB(); if (!f || !f.getDocs || !f.collection || !window.__hwGs || !window.__hwGs.outPubFor) return 0;
+    if (outBusy || Date.now() - outDeny < 600000) return 0;
+    const wait = 30000 - (Date.now() - outAt); if (wait > 0) { if (!outT) outT = setTimeout(() => { outT = 0; try { P.publish(); } catch (_) {} }, wait + 50); return 0; }
+    outBusy = true; outAt = Date.now(); let n = 0;
+    try {
+      const V = {}; P.accs.forEach(a => { if (!a || !a.active || !a.vendor || a.app === 'proc') return; const o = V[a.vendor] || (V[a.vendor] = { knit: false, olds: [] }); if (a.app === 'knit') o.knit = true; (Array.isArray(a.vendor_old) ? a.vendor_old : []).forEach(x => { if (x && !o.olds.includes(x)) o.olds.push(x); }); });
+      const cy = String(new Date().getFullYear());
+      for (const vn of Object.keys(V)) {
+        let Y = {}; try { Y = window.__hwGs.outPubFor(vn, V[vn].olds) || {}; } catch (e) { console.warn('[출고 기록]', e && e.message); continue; }
+        if (!V[vn].knit && !Object.keys(Y).length) continue;   // 편직 출고가 하나도 없는 업체(앱 종류 없는 옛 계정)는 쓰지 않음
+        if (!outSrv[vn]) { const m = {}; try { const qs = await f.getDocs(f.collection(f.db, f.C('proc_out'), vn, 'y')); qs.forEach(d => { const x = d.data() || {}; m[d.id] = x.sig || ''; }); } catch (e) { if (outDenied(e)) { outDeny = Date.now(); return n; } console.warn('[출고 기록 읽기]', e && e.message); continue; } outSrv[vn] = m; }
+        const yrs = new Set(Object.keys(Y).concat(Object.keys(outSrv[vn]), [cy]));
+        for (const yr of yrs) {
+          let L = Y[yr] || [];
+          if (L.length > 4000) { console.warn('[출고 기록] ' + vn + ' ' + yr + '년 ' + L.length + '줄 — 비고를 줄여 씀'); L = L.map(x => Object.assign({}, x, { nt: String(x.nt || '').slice(0, 20) })); }
+          if (JSON.stringify(L).length > 900000) L = L.map(x => { const o = Object.assign({}, x, { nt: '' }); delete o.phs; return o; });
+          const sig = hash(JSON.stringify(L)); const key = vn + '|' + yr;
+          if (outSrv[vn][yr] === sig || outSent[key] === sig) continue;
+          if (!L.length && outSrv[vn][yr] == null && yr !== cy) continue;   // 서버에 없고 줄도 없는 해는 만들지 않음 (올해 문서는 늘 둠 — 앱이 "자료 있음"으로 읽음)
+          const j = Math.round(L.reduce((a, x) => a + (x.j || 0), 0) * 10) / 10, kg = Math.round(L.reduce((a, x) => a + (x.kg || 0), 0) * 10) / 10;
+          try { await f.setDoc(f.doc(f.db, f.C('proc_out'), vn, 'y', yr), { vendor: vn, year: +yr, n: L.length, j, kg, lines: L, sig, at: f.serverTimestamp(), by: email() }); outSent[key] = sig; outSrv[vn][yr] = sig; n++; }
+          catch (e) { if (outDenied(e)) { outDeny = Date.now(); return n; } console.warn('[출고 기록 게시]', e && e.message); }
+        }
+      }
+    } finally { outBusy = false; }
+    return n;
+  };
+  P.pubOutReset = () => { outAt = 0; outDeny = 0; };   /* 시험용 — 30초 · 10분 기다림을 풂 */
 
   /* ---------- 기록 → 지금 상태 (가공소 화면 p.html 과 같은 셈) ---------- */
   const tOf = l => { const a = l && l.at; if (!a) return Date.now(); if (typeof a.toMillis === 'function') return a.toMillis(); if (a.seconds) return a.seconds * 1000; const t = Date.parse(a); return isNaN(t) ? Date.now() : t; };
