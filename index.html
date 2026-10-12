@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="FABIWOS">
 <meta name="mobile-web-app-capable" content="yes">
-<title>FABIWOS v2.53 hotfix662</title>
+<title>FABIWOS v2.53 hotfix663</title>
 <script>
 /* ===== HWChat 대화 화면 공용 (hotfix620 · 대표 10/9 "카톡처럼 쉽고 멋있게") — 이음 · 편직팀 앱 · 염/가공소 앱 · 현장 QC 앱이 같은 모양
  *   말풍선(내 글 노랑 · 받은 글 흰색) · 같은 사람 1분 안 글은 묶음(이름 · 사진은 첫 글, 시간은 끝 글) · 안 읽음 1
@@ -6742,6 +6742,25 @@
     flex-direction: column;
     gap: 10px;
   }
+  /* hotfix663(대표 10/12 "내리다 보면 어느 업체인지 놓침"): 업체 고르기 단추 줄 — 위에 붙어 있음 · 한 줄 가로 스크롤 · 한 번에 한 업체 (기획 20261012_일일보고_업체고르기) */
+  .dr-tabs-wrap { position: sticky; top: 0; z-index: 5; background: #fff; border-bottom: 1px solid var(--gray-300); margin: 0 0 12px; }
+  .dr-tabs-wrap::after { content: ''; position: absolute; top: 0; right: 0; bottom: 0; width: 20px; background: linear-gradient(to right, rgba(255,255,255,0), #fff); pointer-events: none; }
+  .dr-tabs { display: flex; flex-wrap: nowrap; gap: 6px; overflow-x: auto; padding: 8px 14px; scrollbar-width: none; }
+  .dr-tabs::-webkit-scrollbar { display: none; }
+  .dr-tab { flex: 0 0 auto; display: inline-flex; align-items: center; height: 32px; padding: 0 10px; font-size: 12.5px; font-weight: 700; border: 1px solid var(--gray-300); border-radius: 6px; background: #fff; color: var(--gray-700); white-space: nowrap; font-family: inherit; cursor: pointer; }
+  .dr-tab:hover { background: var(--gray-100); }
+  .dr-tab .dr-tab-n { margin-left: 6px; font-size: 11.5px; font-weight: 800; color: var(--gray-500); }
+  .dr-tab .dr-tab-dot { display: inline-block; width: 6px; height: 6px; margin-left: 4px; border-radius: 50%; background: var(--st-bad-ink); }
+  .dr-tab[aria-pressed="true"] { background: var(--brand-700); border-color: var(--brand-700); color: #fff; }
+  .dr-tab[aria-pressed="true"] .dr-tab-n { color: #fff; }
+  .dr-tab[aria-pressed="true"] .dr-tab-dot { box-shadow: 0 0 0 1.5px #fff; }
+  .dr-card.dr-hide { display: none; }
+  .dr-one .dr-card-head { border-left: 4px solid var(--brand-700); }
+  .dr-one .dr-card-name { font-size: 17px; }
+  .dr-one .dr-card-toggle { display: none; }
+  .dr-one .dr-card-preview { display: block !important; }
+  .dr-multi:not(.dr-one) .dr-cards { gap: 14px; }
+  .dr-multi:not(.dr-one) .dr-card-head { border-left: 4px solid var(--gray-300); }
   .dr-card {
     background: #fff;
     border: 1px solid #e5e7eb;
@@ -7169,6 +7188,8 @@
     }
     .dr-card-name { min-width: auto; }
     .dr-card-copy { flex: 1; }
+    .dr-tabs-wrap { top: -12px; }   /* 창 안쪽 여백(12px) 위로 붙임 — 단추 줄 위로 내용이 비치지 않게 */
+    .dr-tab { height: 40px; font-size: 14px !important; }   /* hotfix663: 휴대폰 손가락 · 단추 16px 일괄 규칙(iOS 확대 막기)보다 이 단추만 14px */
     .dr-report {
       padding: 16px 12px 12px;
     }
@@ -17028,7 +17049,7 @@ window.addEventListener('firebase-ready', () => {
     const closed = new Set(Array.from(mb.querySelectorAll('.dr-card')).filter(c => { const p = c.querySelector('.dr-card-preview'); return p && p.style.display === 'none'; }).map(c => c.dataset.recipient));
     const scs = [mb, mb.querySelector('.dash-modal'), document.getElementById('dash-modal-body')].filter(Boolean).map(e => [e, e.scrollTop]);
     const before = (document.getElementById('dash-modal-body') || {}).innerHTML;
-    openDailyReportModal();
+    openDailyReportModal({ keep: true });   /* hotfix663: 고른 업체 유지 */
     const body = document.getElementById('dash-modal-body'); if (body && body.innerHTML === before) return;
     mb.querySelectorAll('.dr-card').forEach(c => { if (!closed.has(c.dataset.recipient)) return; const p = c.querySelector('.dr-card-preview'); const t = c.querySelector('[data-action="dr-toggle"]'); if (p) p.style.display = 'none'; if (t) t.textContent = '▾'; });
     scs.forEach(([e, y]) => { try { e.scrollTop = y; } catch (_) {} });
@@ -30386,7 +30407,7 @@ function validateBlendSum(blends, label) {
   }
   
   // 거래처별 일일 보고 모달 진입
-  function openDailyReportModal() {
+  function openDailyReportModal(opt) {
     const data = buildDailyReportData();
     const modal = document.getElementById('dash-modal-bg');
     if (!modal) { toast('모달 요소 없음', 'error'); return; }
@@ -30409,6 +30430,12 @@ function validateBlendSum(blends, label) {
       return;
     }
     
+    // hotfix663: 업체 고르기 — 창을 열 때마다 첫 업체 · 열린 채 다시 그릴 때(hwDrRefresh)는 고른 것 유지 · '*'=전체
+    const drMulti = data.recipients.length >= 2;
+    let drSel = (opt && opt.keep && (window.__drSel === '*' || data.recipients.includes(window.__drSel))) ? window.__drSel : data.recipients[0];
+    if (!drMulti) drSel = data.recipients[0];
+    window.__drSel = drSel;
+    const drTabs = [];
     // 거래처 카드 리스트
     let cardsHtml = '';
     data.recipients.forEach(r => {
@@ -30452,7 +30479,8 @@ function validateBlendSum(blends, label) {
       }
       
       const safeId = r.replace(/[^\w가-힣]/g, '_');
-      cardsHtml += `<div class="dr-card" data-recipient="${escapeHtml(r)}" data-safe-id="${escapeHtml(safeId)}">
+      drTabs.push(`<button type="button" class="dr-tab" data-dr-sel="${escapeHtml(r)}" aria-pressed="${drSel === r}">${escapeHtml(r)}<span class="dr-tab-n">${totalN}</span>${urgentN > 0 ? '<span class="dr-tab-dot" title="긴급 있음"></span>' : ''}</button>`);
+      cardsHtml += `<div class="dr-card${drSel !== '*' && drSel !== r ? ' dr-hide' : ''}" data-recipient="${escapeHtml(r)}" data-safe-id="${escapeHtml(safeId)}">
         <div class="dr-card-head">
           <div class="dr-card-name">${escapeHtml(r)}</div>
           <div class="dr-card-sub">${subtitle}</div>
@@ -30466,17 +30494,35 @@ function validateBlendSum(blends, label) {
       </div>`;
     });
     
+    const drAllN = data.recipients.reduce((s, r) => s + (data.acc[r] || []).length, 0);
+    const drTabsHtml = drMulti ? `<div class="dr-tabs-wrap"><div class="dr-tabs" role="toolbar" aria-label="업체 고르기"><button type="button" class="dr-tab" data-dr-sel="*" aria-pressed="${drSel === '*'}">전체<span class="dr-tab-n">${drAllN}</span></button>${drTabs.join('')}</div></div>` : '';
     document.getElementById('dash-modal-body').innerHTML = `
-      <div class="dr-modal-container">
+      <div class="dr-modal-container${drMulti ? ' dr-multi' : ''}${drSel !== '*' ? ' dr-one' : ''}">
         <div class="dr-modal-intro">
           진행 의뢰서가 있는 거래처가 자동으로 표시됩니다.<br>
           카드별 [이미지 복사] → 카톡방에 붙여넣기 (Ctrl+V).
         </div>
-        <div class="dr-cards">${cardsHtml}</div>
+        ${drTabsHtml}<div class="dr-cards">${cardsHtml}</div>
       </div>
     `;
     modal.classList.add('show');
     if (window.hwProc) window.hwProc.decorateDaily();   /* hotfix498 */
+
+    // hotfix663: 업체 단추 — 그 업체 카드만 보임 · [전체]는 모두 (다시 그리지 않고 표시만 바꿈)
+    const drSeeTab = b => { const t = b && b.parentNode; if (!t) return; const tr = t.getBoundingClientRect(), br = b.getBoundingClientRect(); if (br.left < tr.left) t.scrollLeft -= tr.left - br.left + 8; else if (br.right > tr.right - 20) t.scrollLeft += br.right - tr.right + 28; };
+    document.querySelectorAll('#dash-modal-body .dr-tab').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const v = btn.dataset.drSel; window.__drSel = v;
+        const box = btn.closest('.dr-modal-container'); if (!box) return;
+        box.classList.toggle('dr-one', v !== '*');
+        box.querySelectorAll('.dr-card').forEach(c => c.classList.toggle('dr-hide', v !== '*' && c.dataset.recipient !== v));
+        box.querySelectorAll('.dr-tab').forEach(b => b.setAttribute('aria-pressed', String(b === btn)));
+        const body = document.getElementById('dash-modal-body'); const intro = box.querySelector('.dr-modal-intro');
+        if (body && intro) { const ib = Math.round(intro.getBoundingClientRect().bottom - body.getBoundingClientRect().top + body.scrollTop); if (body.scrollTop > ib) body.scrollTop = ib; }   /* 새 업체 처음부터 */
+        drSeeTab(btn);
+      });
+    });
+    drSeeTab(document.querySelector('#dash-modal-body .dr-tab[aria-pressed="true"]'));
     
     // 펼침/접기 토글
     document.querySelectorAll('[data-action="dr-toggle"]').forEach(btn => {
@@ -63429,7 +63475,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix662';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
+  const VERSION = 'v2.53 hotfix663';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
