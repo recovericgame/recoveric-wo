@@ -865,7 +865,7 @@ import { initializeFirestore, getFirestore, persistentLocalCache, persistentMult
  *   읽는 것: proc_acc/{내 uid} · proc_pub/{내 업체}.gs (현일텍스가 보낸 생지출고) · proc_log(내 업체 것만)
  *   쓰는 것: proc_log 한 줄 — kind 'ship' part 'gs' (body 절 · n kg · ref 송장 사진) · kind 'st' part 'gs' stage seen | ack_cxl | photo
  *   사진: Storage gs_photos/{업체}/{생지출고}_{시각}.jpg */
-const KVER = 'k92 (hotfix657)';
+const KVER = 'k93 (hotfix658)';
 try { if (matchMedia('(min-width:700px)').matches) document.body.classList.add('k620pc'); } catch (_) {}   /* hotfix620: PC 에서는 휴대폰 화면 너비로 가운데 */
 /* hotfix572(대표 10/1): 거래 원단회사 고르기 — FABIWOS 는 여러 원단회사에 팔 프로그램. 편직공장 한 곳이 여러 원단회사와 거래하므로
  *   계정(proc_acc.companies)에 거래 원단회사 목록 · 위 [→ 원단회사 ▾] 와 삼선 메뉴에서 고름 · 고른 회사의 할 일 · 재고 · 보낸 내역만 보임
@@ -1604,7 +1604,7 @@ function kSelfShipSheet(r) {
   try { kStorage(); } catch (_) {}
   /* hotfix631(대표 10/10): 출고처는 처음엔 안 골라짐 · 몇 절은 빈칸(재고는 맨 위 참고 상자에만) · 출고 합계(kg) 필수 · 송장 사진 · 메모는 선택
      빈칸은 [출고 보내기]를 눌렀을 때 그 칸에 빨간 테두리 + 한 줄 · 첫 빈칸으로 · 고치기 시작하면 바로 풀림 · 재고보다 많으면 노란 확인 한 번 더 (막지 않음) */
-  const real = Math.round((r.rem + (r.pend || 0)) * 10) / 10; const st = { j: '', kg: '', d: '', n: '', q: null, busy: false, tok: 0, err: {}, over: false };
+  const real = Math.round((r.rem + (r.pend || 0)) * 10) / 10; const st = { j: '', kg: '', d: '', n: '', q: null, qs: [], busy: false, tok: 0, err: {}, over: false };   /* hotfix658: 송장 사진 여러 장 */
   const bdg = req => `<span class="k-bdg ${req ? 'req' : 'opt'}">${req ? '필수' : '선택'}</span>`;
   const errT = k => st.err[k] ? `<div class="k-err-t" id="ss-e-${k}">${esc(st.err[k])}</div>` : '';
   const draw = () => {
@@ -1616,7 +1616,7 @@ function kSelfShipSheet(r) {
       <div class="k-num"><button type="button" id="k-m">−</button><input id="k-j" type="number" inputmode="decimal" value="${esc(String(st.j))}"${st.err.j ? ' class="k-bad"' : ''}><button type="button" id="k-p">+</button></div>${errT('j')}
       <div class="k-lab">출고 합계 (kg)${bdg(1)}</div>
       <div class="k-num"><input id="k-kg" type="text" inputmode="decimal" autocomplete="off" placeholder="예: 210.4" value="${esc(st.kg)}"${st.err.kg ? ' class="k-bad"' : ''}></div>${errT('kg')}
-      ${kPhotoField(st, `<div class="k-lab">송장 사진${bdg(0)}</div><div class="k-hint">안 찍어도 보낼 수 있어요</div>`)}
+      ${kPhotoFieldM(st, `<div class="k-lab">송장 사진${bdg(0)}</div><div class="k-hint">안 찍어도 보낼 수 있어요 · 여러 장 찍을 수 있어요</div>`)}
       <div class="k-lab">메모${bdg(0)}</div>
       <div class="k-num"><input id="ss-n" type="text" placeholder="예: 급하게 먼저 보냄" style="font-size:17px;font-weight:600;text-align:left;padding:0 12px" value="${esc(st.n)}"></div>
       ${st.over ? `<div class="k-over" id="ss-over">재고 ${kQ(real)}절보다 많습니다 — 맞으면 한 번 더 누르세요</div>` : ''}
@@ -1630,7 +1630,7 @@ function kSelfShipSheet(r) {
     D.addEventListener('input', () => { st.d = D.value; ok('d', $('sheet').querySelector('.k-dp')); });
     $('k-m').addEventListener('click', () => { J.value = kQ(Math.max(0, (parseFloat(J.value) || 0) - 1)); jNew(); });
     $('k-p').addEventListener('click', () => { J.value = kQ((parseFloat(J.value) || 0) + 1); jNew(); });
-    kBindPhoto(st, draw);
+    kBindPhotoM(st, draw);
     $('k-send').addEventListener('click', async () => {
       if (st.loading) { toast('사진을 보는 중입니다 — 잠시 뒤 다시 누르십시오'); return; }
       st.j = J.value; st.kg = K.value; st.n = N.value; st.d = String(D.value || '').trim();
@@ -1646,7 +1646,8 @@ function kSelfShipSheet(r) {
       const x = { k: r.k, no: r.wo };
       const sent = await put(x, { kind: 'ship', part: 'gs', reason: 'self', body: j, n: kg, chip: st.d.slice(0, 60), label: (r.item + ' ' + (r.lot || '')).trim().slice(0, 80), note: String(st.n || '').trim().slice(0, 200) });
       st.busy = false; const mine = sheetIs(st.tok);
-      if (sent) { if (mine) closeSheet(); ring(); toast(`${kQ(j)}절 → ${st.d} 출고를 ${CN()}에 알렸습니다` + (st.q && st.q.blob ? ' · 송장 사진 올리는 중' : '')); if (st.q && st.q.blob) kPhotoBg(x, st.q.blob); render(); } else if (mine) draw();
+      const blobs = (st.qs || []).map(q => q && q.blob).filter(Boolean);   /* hotfix658: 장마다 예전과 같은 길(gs_photos · st/photo) */
+      if (sent) { if (mine) closeSheet(); ring(); toast(`${kQ(j)}절 → ${st.d} 출고를 ${CN()}에 알렸습니다` + (blobs.length ? ` · 송장 사진 ${blobs.length > 1 ? blobs.length + '장 ' : ''}올리는 중` : '')); if (blobs.length) (async () => { for (const b of blobs) await kPhotoBg(x, b); })(); render(); } else if (mine) draw();
     });
   };
   draw();
@@ -1663,23 +1664,24 @@ function kYinHtml() {
 function kYinJump() { const n = (S.yin || []).filter(y => { const r = kYinOf(y); return !r || r.st === 'rej'; }).length; return n ? `<button type="button" class="yi-jump" onclick="document.getElementById('yi-sec').scrollIntoView({behavior:'smooth'})">원사 받을 것 ${n}건 — 받으면 [원사 받았어요] ↓</button>` : ''; }
 function kYinSheet(y) {
   try { kStorage(); } catch (_) {}
-  const st = { kg: '', n: '', q: null, busy: false, tok: 0 };
+  const st = { kg: '', n: '', q: null, qs: [], busy: false, tok: 0 };   /* hotfix658: 송장 사진 여러 장 */
   const draw = () => {
     st.tok = sheet(`<h3>원사 받았어요 — ${esc(y.no)}</h3><div class="sub">${y.lines.map(ln => esc(ln.name) + ' ' + esc(ln.color || '') + ' · ' + Number(ln.kg).toFixed(1) + 'kg').join('<br>')}<br>발주 합계 <b>${Number(y.kg).toFixed(1)}kg</b></div>
       <div class="k-lab">송장 무게 합계 (kg) <small style="font-weight:600;color:#64748b">(모르면 비워 두세요 — 발주 kg 로)</small></div>
       <div class="k-num"><input id="yi-kg" type="text" inputmode="decimal" autocomplete="off" placeholder="${Number(y.kg).toFixed(1)}" value="${esc(st.kg)}"></div>
-      ${kPhotoField(st)}
+      ${kPhotoFieldM(st)}
       <div class="k-lab">메모 (안 적어도 됩니다)</div>
       <div class="k-num"><input id="yi-n" type="text" placeholder="예: 2박스는 내일 온다고 함" style="font-size:17px;font-weight:600;text-align:left;padding:0 12px" value="${esc(st.n)}"></div>
       <div class="row2"><button type="button" class="no" data-x>닫기</button><button type="button" class="ok" id="k-send"${st.busy ? ' disabled' : ''}>${st.busy ? '보내는 중…' : '받았다고 보내기'}</button></div>`);
     $('sheet').querySelector('[data-x]').addEventListener('click', () => { closeSheet(); render(); });
     const K = $('yi-kg'), N = $('yi-n'); K.addEventListener('input', () => { st.kg = K.value; }); N.addEventListener('input', () => { st.n = N.value; });
-    kBindPhoto(st, draw);
+    kBindPhotoM(st, draw);
     $('k-send').addEventListener('click', async () => { if (st.loading) { toast('사진을 보는 중입니다 — 잠시 뒤 다시 누르십시오'); return; }
       const kgN = hwNum(K.value); const kg = String(K.value || '').trim() ? kgN : y.kg; if (isNaN(kg) || !(kg > 0)) { toast('송장 무게는 숫자로 넣어 주세요', true); K.focus(); return; }
       st.busy = true; st.kg = K.value; st.n = N.value; draw(); const x = { k: y.k, no: y.no };
       const ok = await put(x, { kind: 'st', part: 'gs', stage: 'yarn_in', body: Math.round(kg * 10) / 10, label: y.lines.map(ln => ln.name + (ln.color ? ' ' + ln.color : '')).join(' · ').slice(0, 80), note: String(N.value || '').trim().slice(0, 200) });
-      st.busy = false; const mine = sheetIs(st.tok); if (ok) { if (mine) closeSheet(); ring(); toast(`원사 ${Math.round(kg * 10) / 10}kg 받았다고 ${CN()}에 알렸습니다` + (st.q && st.q.blob ? ' · 송장 사진 올리는 중' : '')); if (st.q && st.q.blob) kPhotoBg(x, st.q.blob); render(); } else if (mine) draw(); });
+      st.busy = false; const mine = sheetIs(st.tok); const blobs = (st.qs || []).map(q => q && q.blob).filter(Boolean);   /* hotfix658 */
+      if (ok) { if (mine) closeSheet(); ring(); toast(`원사 ${Math.round(kg * 10) / 10}kg 받았다고 ${CN()}에 알렸습니다` + (blobs.length ? ` · 송장 사진 ${blobs.length > 1 ? blobs.length + '장 ' : ''}올리는 중` : '')); if (blobs.length) (async () => { for (const b of blobs) await kPhotoBg(x, b); })(); render(); } else if (mine) draw(); });
   };
   draw();
 }
@@ -1876,9 +1878,9 @@ function kBindPhoto(st, redraw) { const b = $('k-ph'), f = $('k-file'); if (!b |
   if (false) b.addEventListener('click', () => f.click()); f.addEventListener('change', async () => { const file = f.files && f.files[0]; if (!file) return; b.textContent = '사진 보는 중…'; st.loading = true; const sb = $('k-send'); if (sb) sb.disabled = true; try { st.q = await kImg(file); } catch (_) { st.q = null; toast('사진을 읽지 못했습니다', true); } st.loading = false; redraw(); }); }   /* hotfix579: 사진을 보는 동안은 [보내기] 잠금 */
 /* hotfix657(V8): [출고했어요] 창 전용 — 송장 사진 여러 장 (미리보기 · ✕ 빼기). 마지막 사진이 흐리면 다음에 찍은 것이 그 사진을 바꿈(다시 찍기), 아니면 한 장 더
  *   찍기 = 앱 안 카메라(kCam)가 바로 열림 · 못 쓰면 휴대폰 카메라(capture) · 앨범은 여러 장 고르기 · 올리는 길은 kPhotoBg(gs_photos) 그대로 */
-function kPhotoFieldM(st) {
+function kPhotoFieldM(st, lab) {   /* hotfix658: lab = 다른 제목 줄 (출고 · 원사 받았어요 · 송장 사진 보내기 창도 이 칸) */
   const L = st.qs || []; const last = L[L.length - 1]; const bad = last ? kImgMsg(last) : '';
-  return `<div class="k-lab">송장 사진<span class="k-bdg opt">선택</span> <small style="font-weight:600;color:#64748b">여러 장 찍을 수 있어요</small></div>
+  return `${lab || '<div class="k-lab">송장 사진<span class="k-bdg opt">선택</span> <small style="font-weight:600;color:#64748b">여러 장 찍을 수 있어요</small></div>'}
     ${L.length ? `<div class="k-phs">${L.map((q, i) => `<span class="k-pht"><img src="${q.prev}" alt="송장 사진 ${i + 1}"><button type="button" data-phx="${i}" aria-label="${i + 1}번째 사진 빼기">✕</button></span>`).join('')}</div>` : ''}
     <button type="button" class="k-ph" id="k-ph">${!L.length ? '송장 촬영' : bad ? '다시 찍기' : '＋ 한 장 더 촬영'}</button>
     <input type="file" id="k-file" accept="image/*" capture="environment" style="display:none">
@@ -1940,14 +1942,21 @@ function kShipSheet(x) {
   draw();
 }
 function kPhotoSheet(x) {
-  const st = { q: null, busy: false, tok: 0 };
+  const st = { q: null, qs: [], busy: false, tok: 0 };   /* hotfix658: 여러 장 — 장마다 올리고 st/photo 한 줄씩 (예전과 같은 길) */
   const draw = () => {
-    st.tok = sheet(`<h3>송장 사진 보내기</h3><div class="sub">${esc(x.item)} ${esc(x.lot || '')} · ${esc(x.date)} · ${esc(x.no)}</div>${kPhotoField(st)}
-      <div class="row2"><button type="button" class="no" data-x>닫기</button><button type="button" class="ok" id="k-send"${!st.q || st.busy ? ' disabled' : ''}>${st.busy ? '보내는 중…' : '보내기'}</button></div>`);
+    st.tok = sheet(`<h3>송장 사진 보내기</h3><div class="sub">${esc(x.item)} ${esc(x.lot || '')} · ${esc(x.date)} · ${esc(x.no)}</div>${kPhotoFieldM(st, '<div class="k-lab">송장 사진 <small style="font-weight:600;color:#64748b">여러 장 찍을 수 있어요</small></div>')}
+      <div class="row2"><button type="button" class="no" data-x>닫기</button><button type="button" class="ok" id="k-send"${!st.qs.length || st.busy ? ' disabled' : ''}>${st.busy ? '보내는 중…' : (st.qs.length > 1 ? st.qs.length + '장 보내기' : '보내기')}</button></div>`);
     $('sheet').querySelector('[data-x]').addEventListener('click', () => { closeSheet(); render(); });
-    kBindPhoto(st, draw);
-    $('k-send').addEventListener('click', async () => { if (!st.q || st.busy || st.loading) return; st.busy = true; draw(); let ref = '';
-      try { ref = await kUpload(st.q.blob, x.k); } catch (e) { const er = String((e && (e.code || e.message)) || '').slice(0, 120); try { put(x, { kind: 'dev_fail', note: ('송장 사진: ' + er).slice(0, 200) }); } catch (_) {} st.busy = false; if (sheetIs(st.tok)) draw(); toast('사진을 올리지 못했습니다 (' + er + ') — 팩스로 보내 주세요', true); return; }
+    kBindPhotoM(st, draw);
+    $('k-send').addEventListener('click', async () => { if (!st.qs.length || st.busy || st.loading) return; st.busy = true; draw(); let ref = '';
+      if (st.qs.length > 1) { const L = st.qs.slice(); let n = 0, er = '';   /* 여러 장 — 보낸 장은 미리보기에서 빠지고 못 보낸 장만 남음 */
+        for (const q of L) { try { const r = await kUpload(q.blob, x.k); if (await put(x, { kind: 'st', part: 'gs', stage: 'photo', ref: r })) { n++; const at = st.qs.indexOf(q); if (at >= 0) st.qs.splice(at, 1); } } catch (e) { er = String((e && (e.code || e.message)) || '').slice(0, 120); } }
+        if (er) { try { put(x, { kind: 'dev_fail', note: ('송장 사진: ' + er).slice(0, 200) }); } catch (_) {} }
+        st.busy = false; const mine = sheetIs(st.tok);
+        if (n === L.length) { lsSet(vKey('phfail'), kPhFail().filter(k => k !== x.k)); delete S.photoUp[x.k]; if (mine) closeSheet(); toast(`송장 사진 ${n}장을 보냈습니다`); render(); }
+        else { if (mine) draw(); toast(n ? `${n}장은 보냈고 ${L.length - n}장은 못 보냈습니다 — [보내기]를 다시 눌러 주세요` : '사진을 올리지 못했습니다' + (er ? ' (' + er + ')' : '') + ' — 팩스로 보내 주세요', true); }
+        return; }
+      try { ref = await kUpload(st.qs[0].blob, x.k); } catch (e) { const er = String((e && (e.code || e.message)) || '').slice(0, 120); try { put(x, { kind: 'dev_fail', note: ('송장 사진: ' + er).slice(0, 200) }); } catch (_) {} st.busy = false; if (sheetIs(st.tok)) draw(); toast('사진을 올리지 못했습니다 (' + er + ') — 팩스로 보내 주세요', true); return; }
       const ok = await put(x, { kind: 'st', part: 'gs', stage: 'photo', ref }); st.busy = false; const mine = sheetIs(st.tok); if (ok) { lsSet(vKey('phfail'), kPhFail().filter(k => k !== x.k)); delete S.photoUp[x.k]; if (mine) closeSheet(); toast('송장 사진을 보냈습니다'); render(); } else if (mine) draw(); });   /* hotfix579: 창이 바뀌었으면 건드리지 않음 */
   };
   draw();
