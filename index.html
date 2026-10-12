@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="FABIWOS">
 <meta name="mobile-web-app-capable" content="yes">
-<title>FABIWOS v2.53 hotfix656</title>
+<title>FABIWOS v2.53 hotfix657</title>
 <script>
 /* ===== HWChat 대화 화면 공용 (hotfix620 · 대표 10/9 "카톡처럼 쉽고 멋있게") — 이음 · 편직팀 앱 · 염/가공소 앱 · 현장 QC 앱이 같은 모양
  *   말풍선(내 글 노랑 · 받은 글 흰색) · 같은 사람 1분 안 글은 묶음(이름 · 사진은 첫 글, 시간은 끝 글) · 안 읽음 1
@@ -821,6 +821,9 @@
   
   .history-item .item-num { color: #888; font-size: 10px; margin-bottom: 2px; }
   .history-item .item-type { display: inline-block; color: #fff; padding: 1px 6px; border-radius: 2px; font-size: 9px; margin-right: 4px; font-weight: 700; }
+  .history-item .hist-wip { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 8px; font-size: 10.5px; font-weight: 800; line-height: 16px; vertical-align: 1px; }   /* hotfix657(V4): 작성 중 표시 */
+  .history-item .hist-wip.cp { color: #b45309; background: #fffbeb; border: 1px solid #fcd34d; }
+  .history-item .hist-wip.ed { color: #1d4ed8; background: #eff6ff; border: 1px solid #bfdbfe; }
   .history-item[data-type="원사"] .item-type { background: var(--badge-yarn); }
   .history-item[data-type="편직"] .item-type { background: var(--badge-knit); }
   .history-item[data-type="염색가공"] .item-type { background: var(--badge-finish); }
@@ -14091,6 +14094,7 @@ function setCopyModeBadge(on) {
   const el = document.getElementById('copy-mode-badge');
   if (!el) return;
   el.style.display = on ? 'inline-block' : 'none';
+  hwHistWork('copy', on);   // hotfix657
 }
 
 // v2.32: 수정 입력 중 뱃지 제어
@@ -14098,6 +14102,23 @@ function setEditModeBadge(on) {
   const el = document.getElementById('edit-mode-badge');
   if (!el) return;
   el.style.display = on ? 'inline-block' : 'none';
+  hwHistWork('edit', on);   // hotfix657
+}
+/* hotfix657(V4): 왼쪽 이력 카드의 작성 중 표시 — state.__histWork = { mode: 'copy' | 'edit', id: 원본 의뢰서 id } (이 화면 안에서만 · 저장하지 않음)
+ *   복사·수정 뱃지가 켜지고 꺼질 때 같이 바뀐다 → 저장 · 취소 · 새 의뢰서 · 유형 바꾸기(resetForm)에서 저절로 사라짐 */
+function hwHistWork(mode, on) {
+  if (typeof state === 'undefined') return;
+  const cur = state.__histWork || null; let nx = cur;
+  if (on) nx = { mode, id: mode === 'edit' ? String(state.currentWorkOrderId || '') : '' };
+  else if (cur && cur.mode === mode) nx = null;
+  if ((cur && cur.mode) === (nx && nx.mode) && (cur && cur.id) === (nx && nx.id)) return;
+  state.__histWork = nx;
+  try { document.dispatchEvent(new CustomEvent('hiwos-rerender-history')); } catch (_) {}
+}
+function hwHistWorkSrc(id) {
+  if (typeof state === 'undefined' || !state.__histWork || state.__histWork.mode !== 'copy') return;
+  state.__histWork = { mode: 'copy', id: String(id || '') };
+  try { document.dispatchEvent(new CustomEvent('hiwos-rerender-history')); } catch (_) {}
 }
 
 // hotfix480: [원사 보기]가 없으면 작성 화면 [원사] · [편직] 단추와 편직 의뢰서 [원사 입고량] 칸을 감춘다
@@ -22003,6 +22024,7 @@ function gyToGsm(gy, widthIn, tube) { const g = parseFloat(gy), w = parseFloat(w
           setFormData(cloned, { clone: true });
           state.currentWorkOrderId = null; state.currentWoNumber = null; state.isDirty = true;
           try { render(); } catch (_) {}
+          hwHistWorkSrc(last.id);   /* hotfix657(V4) */
           toast(`"${spec.name}" 의 가장 최근 의뢰서(${last.wo_number || ''} · ${last.date || ''})를 불러왔습니다 — 컬러 · 수량 · 받는 곳을 확인해 고치십시오`, 'info');
         } catch (e) { console.warn('[latest fill]', e.message); }
         finally { state.__latestFillBusy = false; }
@@ -22441,7 +22463,9 @@ function gyToGsm(gy, widthIn, tube) { const g = parseFloat(gy), w = parseFloat(w
     const list = document.getElementById('history-list');
     // deleted 항목 제외
     let visible = state.allWorkOrders.filter(wo => !wo.deleted && !woLockedForMe(wo));   // hotfix481: 원사 보기 없으면 원사 · 편직 의뢰서는 안 나옴
-    
+    { const G = state.__histGone; if (G && G.size) { Array.from(G).forEach(id => { const w = state.allWorkOrders.find(x => x.id === id); if (!w || w.deleted) G.delete(id); }); visible = visible.filter(wo => !G.has(wo.id)); } }   /* 서버에 삭제가 반영되면 표시를 거둠(휴지통에서 되살리면 다시 보이게) */   /* hotfix657(V4): [삭제]를 누르면 저장이 끝나기 전에도 이력에서 바로 뺌 */
+    const __pin657 = state.currentWorkOrderId ? visible.find(wo => wo.id === state.currentWorkOrderId) : null;   /* hotfix657(V4): 방금 저장해 열려 있는 의뢰서는 검색 · 유형 거름에 안 맞아도 이력에 보임 */
+
     // 타입 필터
     if (state.historyTypeFilter && state.historyTypeFilter !== 'all') {
       visible = visible.filter(wo => wo.type === state.historyTypeFilter);
@@ -22543,6 +22567,11 @@ function gyToGsm(gy, widthIn, tube) { const g = parseFloat(gy), w = parseFloat(w
         : (colorList.length ? `선택 가능한 컬러 ${colorList.length}개 (가나다·ABC 오름차순)` : '');
     }
     
+    /* hotfix657(V4): 이력 순서 = 마지막으로 [저장]한 때(saved_at · 없으면 만든 때) 최신이 위 · 저장 중(시각이 아직 서버에서 안 옴)이면 맨 위 */
+    { const ms = t => { if (t == null) return 0; if (typeof t.toMillis === 'function') return t.toMillis(); if (t.seconds != null) return t.seconds * 1000 + Math.floor((t.nanoseconds || 0) / 1e6); if (typeof t === 'number') return t; const p = Date.parse(t); return isNaN(p) ? 0 : p; };
+      const key = wo => { if ('saved_at' in wo) return wo.saved_at == null ? 9e15 : ms(wo.saved_at); if ('created_at' in wo && wo.created_at == null) return 9e15; return ms(wo.created_at); };
+      if (__pin657 && !visible.includes(__pin657)) visible.push(__pin657);
+      visible = visible.map((wo, i) => ({ wo, i, k: key(wo) })).sort((a, b) => (b.k - a.k) || (a.i - b.i)).map(x => x.wo); }
     if (visible.length === 0) {
       const reason = cq ? `컬러 "${state.historyColorSearch}" 검색 결과 없음`
                    : state.historySearch ? `"${state.historySearch}" 검색 결과 없음` 
@@ -22570,6 +22599,7 @@ function gyToGsm(gy, widthIn, tube) { const g = parseFloat(gy), w = parseFloat(w
         sub = wo.final_destination || '';
       }
       const active = state.currentWorkOrderId === wo.id ? 'active' : '';
+      const __wk = state.__histWork; const wip = (__wk && __wk.id === wo.id && (!g || n === 0)) ? `<span class="hist-wip ${__wk.mode === 'copy' ? 'cp' : 'ed'}">${__wk.mode === 'copy' ? '복사해서 작성 중' : '수정 중'}</span>` : '';   /* hotfix657(V4): 작성 중 표시 — 이 화면 안에서만 · 저장/취소하면 사라짐 */
       return `
         <div class="history-item ${active}" data-id="${wo.id}" data-type="${wo.type || ''}"${g ? ` data-vk="${escapeHtml(g.key)}"` : ''}>
           <div class="item-btns">
@@ -22578,7 +22608,7 @@ function gyToGsm(gy, widthIn, tube) { const g = parseFloat(gy), w = parseFloat(w
             <button class="item-copy-btn" data-id="${wo.id}" title="새 의뢰서로 복사합니다">복사</button>
             ${canDeleteWo(wo) ? `<button class="item-delete-btn" data-id="${wo.id}" title="휴지통으로 보냅니다 (복구 가능)">삭제</button>` : ''}
           </div>
-          <div class="item-num"><span class="item-type">${wo.type || '-'}</span>${escapeHtml(wo.wo_number) || ''}${g ? ` <span style="font-size:10.5px;font-weight:800;color:#2446e8;border:1px solid #bfdbfe;border-radius:8px;padding:0 6px;margin-left:4px;" title="원사 투입량 계산기 등으로 만든 한 건 — 구매처별 의뢰서 ${N}장 중 ${n + 1}">${n + 1}/${N}</span>` : ''}</div>
+          <div class="item-num"><span class="item-type">${wo.type || '-'}</span>${escapeHtml(wo.wo_number) || ''}${g ? ` <span style="font-size:10.5px;font-weight:800;color:#2446e8;border:1px solid #bfdbfe;border-radius:8px;padding:0 6px;margin-left:4px;" title="원사 투입량 계산기 등으로 만든 한 건 — 구매처별 의뢰서 ${N}장 중 ${n + 1}">${n + 1}/${N}</span>` : ''}${wip}</div>
           <div class="item-title">${escapeHtml(title)}</div>
           <div class="item-meta">${d} · ${escapeHtml(sub)}</div>
         </div>`;
@@ -22653,6 +22683,7 @@ function gyToGsm(gy, widthIn, tube) { const g = parseFloat(gy), w = parseFloat(w
           document.getElementById('delete-btn').style.display = 'none';
           document.querySelectorAll('.history-item').forEach(el => el.classList.remove('active'));
           render();
+          hwHistWorkSrc(wo.id);   /* hotfix657(V4): 원본 카드에 "복사해서 작성 중" */
           toast('복사 완료. 수정 후 저장하세요', 'success');
         }
       });
@@ -22671,6 +22702,7 @@ function gyToGsm(gy, widthIn, tube) { const g = parseFloat(gy), w = parseFloat(w
         { const G = (wo.type === '원사' && typeof yarnVendorGroups === 'function') ? yarnVendorGroups(wo) : [];   /* hotfix493: 구매처별 카드는 한 건 — 모든 장이 같이 간다 */
           if (G.length > 1 && !confirm(`한 번 더 확인합니다.\n\n[${wo.wo_number || ''}] 는 원사 투입량 계산기 등으로 만든 한 건이라\n구매처별 의뢰서 ${G.length}장이 모두 지워집니다.\n\n${G.map((g, n) => (n + 1) + '. ' + (g.vendor || '구매처 없음')).join('\n')}\n\n${G.length}장 모두 휴지통으로 보낼까요?`)) return; }
         btn.disabled = true;
+        (state.__histGone = state.__histGone || new Set()).add(id); renderHistory();   /* hotfix657(V4): 누르면 바로 이력에서 뺌 · 실패하면 되돌림 */
         try {
           await updateDoc(doc(db, C('workorders'), id), {
             deleted: true,
@@ -22684,6 +22716,7 @@ function gyToGsm(gy, widthIn, tube) { const g = parseFloat(gy), w = parseFloat(w
           if (__yr601 && window.hwYarnFullReturn) { try { await window.hwYarnFullReturn(wo, __yr601); } catch (e2) { console.warn('[완전 반품]', e2 && e2.message); } }
         } catch (err) {
           btn.disabled = false;
+          try { state.__histGone.delete(id); renderHistory(); } catch (_) {}   /* hotfix657 */
           toast('삭제 실패: ' + (err.message || err), 'error');
         }
       });
@@ -23119,7 +23152,7 @@ function validateBlendSum(blends, label) {
           }
         }
         await updateDoc(doc(db, C('workorders'), state.currentWorkOrderId), {
-          ...payload, updated_at: serverTimestamp(), updated_by: state.user.email
+          ...payload, updated_at: serverTimestamp(), updated_by: state.user.email, saved_at: serverTimestamp()   /* hotfix657(V4): 이력 순서 = 마지막 [저장] */
         });
         // v2.32: 수정 저장 완료 → 수정 모드 종료
         setEditModeBadge(false);
@@ -23141,7 +23174,7 @@ function validateBlendSum(blends, label) {
         const docRef = await addDoc(collection(db, C('workorders')), {
           ...d, wo_number,
           created_at: serverTimestamp(), created_by: state.user.email,
-          updated_at: serverTimestamp(), updated_by: state.user.email
+          updated_at: serverTimestamp(), updated_by: state.user.email, saved_at: serverTimestamp()   /* hotfix657(V4) */
         });
         state.currentWorkOrderId = docRef.id;
         state.currentWoNumber = wo_number;
@@ -52637,7 +52670,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
           stamps: d.stamps || [],
           date: d.date || todayYMD(),
           print_total_qty: totalQty, subject: `[${printTypeLabel(d.print_type)}] ${d.design_name.trim()}`,
-          updated_at: serverTimestamp(), updated_by: state.user.email
+          updated_at: serverTimestamp(), updated_by: state.user.email, saved_at: serverTimestamp()   /* hotfix657(V4) */
         });
         toast('나염작지 수정 완료', 'success');
       } else {
@@ -52654,7 +52687,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
           dest: d.dest_vendor || d.dest_cat || "", dest_cat: d.dest_cat, dest_vendor: d.dest_vendor, print_factory: d.print_factory, print_chain: { gagong: { use: !!(d.chain && d.chain.gagong && d.chain.gagong.use), vendor: (d.chain && d.chain.gagong && d.chain.gagong.vendor) || "" }, hugagong: { use: !!(d.chain && d.chain.hugagong && d.chain.hugagong.use), vendor: (d.chain && d.chain.hugagong && d.chain.hugagong.vendor) || "" } }, print_rows: validRows, proc_memo: d.proc_memo, post_memo: d.post_memo,
           print_total_qty: totalQty, subject: `[${printTypeLabel(d.print_type)}] ${d.design_name.trim()}`,
           stamps: d.stamps || [], memo: '', completed: false, deleted: false,
-          created_at: serverTimestamp(), updated_at: serverTimestamp(),
+          created_at: serverTimestamp(), updated_at: serverTimestamp(), saved_at: serverTimestamp(),   /* hotfix657(V4) */
           created_by: state.user.email, updated_by: state.user.email
         });
         d.id = ref.id;                 // 이후 저장은 '수정'으로 처리 → 중복 생성 방지
@@ -58284,6 +58317,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
         if (delBtn) delBtn.style.display = 'none';
         document.querySelectorAll('.history-item').forEach(el => el.classList.remove('active'));
         render();
+        hwHistWorkSrc(wo.id);   /* hotfix657(V4): 원본 카드에 "복사해서 작성 중" */
         toast('복사 완료. 수정 후 저장하세요', 'success');
       });
     });
@@ -62978,7 +63012,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix656';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
+  const VERSION = 'v2.53 hotfix657';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
