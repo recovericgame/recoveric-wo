@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="FABIWOS">
 <meta name="mobile-web-app-capable" content="yes">
-<title>FABIWOS v2.53 hotfix663</title>
+<title>FABIWOS v2.53 hotfix664</title>
 <script>
 /* ===== HWChat 대화 화면 공용 (hotfix620 · 대표 10/9 "카톡처럼 쉽고 멋있게") — 이음 · 편직팀 앱 · 염/가공소 앱 · 현장 QC 앱이 같은 모양
  *   말풍선(내 글 노랑 · 받은 글 흰색) · 같은 사람 1분 안 글은 묶음(이름 · 사진은 첫 글, 시간은 끝 글) · 안 읽음 1
@@ -7189,7 +7189,7 @@
     .dr-card-name { min-width: auto; }
     .dr-card-copy { flex: 1; }
     .dr-tabs-wrap { top: -12px; }   /* 창 안쪽 여백(12px) 위로 붙임 — 단추 줄 위로 내용이 비치지 않게 */
-    .dr-tab { height: 40px; font-size: 14px !important; }   /* hotfix663: 휴대폰 손가락 · 단추 16px 일괄 규칙(iOS 확대 막기)보다 이 단추만 14px */
+    .dr-tab { height: 44px; font-size: 16px !important; }   /* hotfix663: 휴대폰 손가락 · hotfix664(designer 10/13): 44px · 16px (화면 기준) */
     .dr-report {
       padding: 16px 12px 12px;
     }
@@ -16361,6 +16361,12 @@ window.addEventListener('firebase-ready', () => {
   function isOwnerUser() {
     return !!(state.user && OWNER_EMAILS.includes(state.user.email));
   }
+  /* hotfix664(대표 10/12): 사용자 관리 · 권한 설정을 맡은 사람 = 최고관리자 + 최고관리자가 지정한 사람(settings/user_mgr.emails · 소문자) — 읽기 실패 · 문서 없음 = 지정 없음 */
+  function isUserMgr() {
+    if (isOwnerUser()) return true;
+    const me = String((state.user && state.user.email) || '').trim().toLowerCase();
+    return !!me && Array.isArray(state.userMgrEmails) && state.userMgrEmails.includes(me);
+  }
   function userRole() {
     if (isOwnerUser()) return 'owner';
     if (isAdminEmail()) return 'admin';
@@ -16577,6 +16583,7 @@ window.addEventListener('firebase-ready', () => {
     // hotfix422b: 비밀번호 변경 단추는 최고관리자만
     if (view === 'pinChange') return isOwnerUser() && ownerPinIsSet();
     if (isOwnerUser()) return true;
+    if ((view === 'users' || view === 'permissions') && isUserMgr()) return true;   /* hotfix664: 지정받은 사람 */
     if (view === 'yarnPrice') return personRule('yarnPrice') === 'allow';   /* hotfix604: 원사가격(단가)은 서버 규칙이 사람별 허용만 받음 — [권한 설정]의 [＋ 사람]으로만 */
     if (view === 'yarn' && !canAccessView('yarnSee')) return false;   // hotfix480: 원사 구매내역 = 원사 의뢰서 목록
     if (view === 'yarnCalc' && !canAccessView('yarnSee')) return false;   // hotfix484: 원사 투입량 계산기도 원사 보기가 있어야
@@ -17864,14 +17871,30 @@ window.addEventListener('firebase-ready', () => {
     });
   }
 
+  /* hotfix664: 등급 색 배지 · 인원 요약 · 지정(사용자·권한 관리) — 사용자 관리 · 권한 설정 두 화면이 같이 씀 */
+  const HU_CSS = '<style>.hu-badge{display:inline-block;padding:2px 9px;border-radius:10px;font-size:12px;font-weight:800;line-height:1.5;border:1px solid var(--st-adm-line);background:var(--st-adm-bg);color:var(--st-adm-ink);white-space:nowrap;} .hu-badge.owner{border-color:var(--pr-dye);color:var(--pr-dye);background:var(--surface);} .hu-badge.admin{border-color:var(--st-info-line);background:var(--st-info-bg);color:var(--st-info-ink);} .hu-badge.mgr{border-color:var(--st-ok-line);background:var(--st-ok-bg);color:var(--st-ok-ink);margin-left:4px;} .hu-badge.off{border-color:var(--gray-300);background:var(--gray-100);color:var(--gray-500);} .hu-sum{display:flex;gap:6px 10px;flex-wrap:wrap;align-items:center;margin:0 0 10px;font-size:13px;color:var(--gray-600);} .hu-sum b{color:var(--ink);} .hu-lock{font-size:12px;color:var(--gray-500);font-weight:700;white-space:nowrap;} #hu-box select:disabled,#hu-box input:disabled{background:var(--gray-100);color:var(--gray-500);cursor:not-allowed;} #hu-box .hu-mgr{width:18px;height:18px;cursor:pointer;accent-color:var(--st-ok-solid);}</style>';
+  function huIsOwnerEmail(em) { const e = String(em || '').trim().toLowerCase(); return !!e && OWNER_EMAILS.some(x => x.toLowerCase() === e); }
+  function huIsMgrEmail(em) { const e = String(em || '').trim().toLowerCase(); return !!e && (state.userMgrEmails || []).includes(e); }
+  function huBadge(r) { r = ['owner', 'admin', 'staff'].includes(r) ? r : 'staff'; return '<span class="hu-badge ' + r + '">' + roleLabel(r) + '</span>'; }
+  function huMgrBadge() { return '<span class="hu-badge mgr" title="최고관리자가 맡긴 사람 — 사용자 관리 · 권한 설정을 고칠 수 있습니다">권한 관리</span>'; }
+  function huSummaryHTML(rows) {
+    const on = (rows || []).filter(u => u && u.active !== false && String(u.email || '').trim());
+    const rl = u => huIsOwnerEmail(u.email) ? 'owner' : (['owner', 'admin', 'staff'].includes(u.role) ? u.role : 'staff');
+    const n = r => on.filter(u => rl(u) === r).length;
+    const m = on.filter(u => !huIsOwnerEmail(u.email) && huIsMgrEmail(u.email)).length;
+    return '<div class="hu-sum" id="hu-sum"><span>근무중 <b>' + on.length + '</b>명</span>'
+      + '<span>' + huBadge('owner') + ' <b>' + n('owner') + '</b></span><span>' + huBadge('admin') + ' <b>' + n('admin') + '</b></span><span>' + huBadge('staff') + ' <b>' + n('staff') + '</b></span>'
+      + '<span>' + huMgrBadge() + ' <b>' + m + '</b></span></div>';
+  }
   function renderUsersDash() {
-    if (!isOwnerUser()) return '<div class="dash-empty">최고관리자만 볼 수 있는 화면입니다.</div>';
+    if (!isUserMgr()) return '<div class="dash-empty">최고관리자 또는 최고관리자가 지정한 사람만 고칠 수 있는 화면입니다.</div>';   /* hotfix664 */
     const rows = hwUsersDraft();
-    let h = '<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px;margin-bottom:14px;font-size:12.5px;color:#475569;line-height:1.8;">'
-      + '<strong>이 목록이 로그인 명단입니다.</strong> 여기에 있고 [근무중]인 메일 주소만 들어올 수 있고, 등급(관리자/직원)도 여기서 정해집니다. 최고관리자는 코드에 고정입니다.<br>'
-      + '메일 주소는 로그인에 쓰는 구글 주소와 똑같이 적어 주십시오. 저장하면 그 사람이 다음에 새로 고칠 때부터 적용됩니다.<br>'
-      + '<span style="color:#b45309;">Firestore 보안규칙도 이 문서(emails · admins)를 보게 바꿔야 새 계정이 자료를 읽을 수 있습니다. 규칙은 인수인계 문서의 규칙 파일로 배포하십시오.</span>'
-      + '</div>';
+    const own = isOwnerUser(); const meLc = String((state.user && state.user.email) || '').trim().toLowerCase();
+    let h = HU_CSS + '<div id="hu-box"><div style="background:var(--gray-50);border:1px solid var(--gray-200);border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:13px;color:var(--gray-600);line-height:1.75;">'
+      + '<strong>이 목록이 로그인 명단입니다.</strong> 여기 있고 [근무중]인 구글 메일만 들어올 수 있고, 등급도 여기서 정합니다. 줄 끝 [편집]으로 고친 뒤 [저장]하면 그 사람이 새로 고칠 때부터 적용됩니다.<br>'
+      + (own ? '[사용자·권한 관리] 칸을 켜면 그 사람도 이 화면과 [권한 설정]을 고칠 수 있습니다 (누르면 바로 저장).'
+             : '<span style="color:var(--st-warn-ink);">최고관리자가 맡긴 화면입니다. 최고관리자 줄 · 내 등급 · 내 근무 상태 · 내 메일은 최고관리자만 바꿀 수 있습니다.</span>')
+      + '</div>' + huSummaryHTML(rows);
     h += '<div style="margin-bottom:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">'
       + '<button class="dash-action-btn" id="hu-add" style="background:#1e3a8a;color:#fff;font-weight:700;padding:6px 14px;">＋ 사람 추가</button>'
       + '<button class="dash-action-btn" id="hu-reset" style="padding:6px 12px;">되돌리기</button>'
@@ -17884,28 +17907,52 @@ window.addEventListener('firebase-ready', () => {
       + '<th style="text-align:left;min-width:130px;">이름</th>'
       + '<th style="text-align:left;min-width:230px;">이메일(아이디)</th>'
       + '<th style="min-width:120px;">등급</th>'
+      + (own ? '<th style="min-width:110px;" title="켜면 그 사람도 사용자 관리 · 권한 설정을 고칠 수 있습니다 (최고관리자만 바꿈 · 누르면 바로 저장)">사용자·권한 관리</th>' : '')   /* hotfix664 */
       + '<th style="min-width:96px;">근무 상태</th>'
       + '<th style="text-align:left;min-width:150px;">메모</th>'
-      + '<th style="min-width:60px;">삭제</th></tr></thead><tbody>';
+      + '<th style="min-width:110px;">편집 · 삭제</th></tr></thead><tbody>';
     if (!rows.length) {
-      h += '<tr><td colspan="7" style="text-align:center;color:#9ca3af;padding:18px;">아직 넣은 사람이 없습니다. [＋ 사람 추가]를 눌러 주십시오.</td></tr>';
+      h += '<tr><td colspan="' + (own ? 8 : 7) + '" style="text-align:center;color:#9ca3af;padding:18px;">아직 넣은 사람이 없습니다. [＋ 사람 추가]를 눌러 주십시오.</td></tr>';
     }
+    const LOCK = ' disabled title="최고관리자만 바꿀 수 있습니다"';
     rows.forEach((u, i) => {
       if (!hwStPass('users', u.active !== false) && String(u.email || '').trim()) return;   /* hotfix515: 근무중만(기본) · 종료까지 · 종료만 (새로 넣는 빈 줄은 늘 보임) */
       const st = 'width:100%;padding:6px 8px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;font-family:inherit;';
-      h += '<tr>'
+      /* hotfix664: 평소엔 읽기 모양 · [편집] 누른 줄(새 줄 포함)만 입력칸 · 맡은 사람은 최고관리자 줄 · 내 등급/근무 상태/메일 잠금 */
+      const emLc = String(u.email || '').trim().toLowerCase(); const isMe = !!emLc && emLc === meLc;
+      const ownRow = huIsOwnerEmail(u.email); const rowLock = !own && ownRow; const selfLock = !own && isMe;
+      const role = ['owner', 'admin', 'staff'].includes(u.role) ? u.role : 'staff';
+      const mgrCell = own ? '<td style="text-align:center;">' + (ownRow ? '<span class="hu-lock">언제나</span>' : (emLc ? '<input type="checkbox" class="hu-mgr" data-em="' + escapeHtml(emLc) + '"' + (huIsMgrEmail(emLc) ? ' checked' : '') + ' title="켜면 이 사람도 사용자 관리 · 권한 설정을 고칠 수 있습니다 (바로 저장)">' : '')) + '</td>' : '';
+      const act = rowLock ? '<span class="hu-lock">최고관리자만</span>'
+        : (u.__ed ? '' : '<button class="dash-action-btn hu-ed" data-hu-i="' + i + '" style="padding:4px 12px;">편집</button> ')
+          + (selfLock ? '' : '<button class="dash-action-btn danger hu-del" data-hu-i="' + i + '">삭제</button>');
+      if (!u.__ed || rowLock) {
+        h += '<tr class="hu-ro" data-hu-row="' + i + '"' + (u.active === false ? ' style="opacity:.6;"' : '') + '>'
+          + '<td style="text-align:center;">' + escapeHtml(u.emp_no || '') + '</td>'
+          + '<td style="font-weight:700;">' + escapeHtml(u.name || '') + '</td>'
+          + '<td>' + escapeHtml(u.email || '') + '</td>'
+          + '<td style="text-align:center;">' + huBadge(ownRow ? 'owner' : role) + (!own && !ownRow && huIsMgrEmail(emLc) ? huMgrBadge() : '') + '</td>'
+          + mgrCell
+          + '<td style="text-align:center;"><span class="hu-badge' + (u.active === false ? ' off">근무종료' : '">근무중') + '</span></td>'
+          + '<td>' + escapeHtml(u.memo || '') + '</td>'
+          + '<td class="col-action" style="text-align:center;white-space:nowrap;">' + act + '</td>'
+          + '</tr>';
+        return;
+      }
+      h += '<tr data-hu-row="' + i + '">'
         + '<td><input type="text" class="hu-f" data-hu-k="emp_no" data-hu-i="' + i + '" value="' + escapeHtml(u.emp_no || '') + '" placeholder="E260009" autocomplete="off" style="' + st + 'text-align:center;text-transform:uppercase;"></td>'
         + '<td><input type="text" lang="ko" class="hu-f" data-hu-k="name" data-hu-i="' + i + '" value="' + escapeHtml(u.name || '') + '" placeholder="박영균" style="' + st + '"></td>'
-        + '<td><input type="text" class="hu-f" data-hu-k="email" data-hu-i="' + i + '" value="' + escapeHtml(u.email || '') + '" placeholder="name@gmail.com" style="' + st + '"></td>'
-        + '<td><select class="hu-f" data-hu-k="role" data-hu-i="' + i + '" style="' + st + '">'
-        + ['owner', 'admin', 'staff'].map(r => '<option value="' + r + '"' + ((u.role || 'staff') === r ? ' selected' : '') + '>' + roleLabel(r) + '</option>').join('')
+        + '<td><input type="text" class="hu-f" data-hu-k="email" data-hu-i="' + i + '" value="' + escapeHtml(u.email || '') + '" placeholder="name@gmail.com" style="' + st + '"' + (selfLock ? LOCK : '') + '></td>'
+        + '<td><select class="hu-f" data-hu-k="role" data-hu-i="' + i + '" style="' + st + '"' + (selfLock ? LOCK : '') + '>'
+        + ['owner', 'admin', 'staff'].filter(r => own || r !== 'owner' || role === 'owner').map(r => '<option value="' + r + '"' + (role === r ? ' selected' : '') + '>' + roleLabel(r) + '</option>').join('')
         + '</select></td>'
-        + '<td style="text-align:center;"><select class="hu-f hw-stsel ' + (u.active === false ? 'off' : 'on') + '" data-draft="1" data-hu-k="active" data-hu-i="' + i + '"' + (String(u.email || '').toLowerCase() === String((state.user && state.user.email) || '').toLowerCase() ? ' disabled title="내 계정은 근무종료로 바꿀 수 없습니다"' : ' title="근무종료로 바꾸고 [저장]하면 로그인 · 고르는 칸에서 빠집니다(옛 자료는 그대로)"') + '><option value="1"' + (u.active === false ? '' : ' selected') + '>근무중</option><option value="0"' + (u.active === false ? ' selected' : '') + '>근무종료</option></select></td>'
+        + mgrCell
+        + '<td style="text-align:center;"><select class="hu-f hw-stsel ' + (u.active === false ? 'off' : 'on') + '" data-draft="1" data-hu-k="active" data-hu-i="' + i + '"' + (isMe ? ' disabled title="' + (own ? '내 계정은 근무종료로 바꿀 수 없습니다' : '최고관리자만 바꿀 수 있습니다') + '"' : ' title="근무종료로 바꾸고 [저장]하면 로그인 · 고르는 칸에서 빠집니다(옛 자료는 그대로)"') + '><option value="1"' + (u.active === false ? '' : ' selected') + '>근무중</option><option value="0"' + (u.active === false ? ' selected' : '') + '>근무종료</option></select></td>'
         + '<td><input type="text" lang="ko" class="hu-f" data-hu-k="memo" data-hu-i="' + i + '" value="' + escapeHtml(u.memo || '') + '" placeholder="담당 업무 등" style="' + st + '"></td>'
-        + '<td class="col-action col-act-delete"><button class="dash-action-btn danger hu-del" data-hu-i="' + i + '">삭제</button></td>'
+        + '<td class="col-action" style="text-align:center;white-space:nowrap;">' + act + '</td>'
         + '</tr>';
     });
-    h += '</tbody></table></div>';
+    h += '</tbody></table></div></div>';
     return h;
   }
   function bindUsersDash() {
@@ -17922,9 +17969,14 @@ window.addEventListener('firebase-ready', () => {
     });
     const add = document.getElementById('hu-add');
     if (add) add.addEventListener('click', () => {
-      rows.push({ name: '', email: '', role: 'staff', active: true, memo: '' });
+      rows.push({ name: '', email: '', role: 'staff', active: true, memo: '', __ed: true });   /* hotfix664: 새 줄은 바로 입력칸 (__ed 는 저장 안 함) */
       renderDashboard();
     });
+    document.querySelectorAll('.hu-ed').forEach(b => b.addEventListener('click', () => {   /* hotfix664: 그 줄만 입력칸 */
+      const i = parseInt(b.dataset.huI, 10); if (!rows[i]) return;
+      rows[i].__ed = true; renderDashboard();
+    }));
+    document.querySelectorAll('.hu-mgr').forEach(cb => cb.addEventListener('change', () => saveUserMgr(cb.dataset.em, cb.checked, cb)));   /* hotfix664 */
     const seed = document.getElementById('hu-seed');
     if (seed) seed.addEventListener('click', () => {   // hotfix395
       const have = new Set(rows.map(u => String(u.email || '').toLowerCase()));
@@ -17947,8 +17999,34 @@ window.addEventListener('firebase-ready', () => {
     const sv = document.getElementById('hu-save');
     if (sv) sv.addEventListener('click', () => saveHwUsers());
   }
+  /* hotfix664: 사용자·권한 관리 지정 — settings/user_mgr { emails: 소문자 메일 } 통째로 (최고관리자만 · 규칙도 최고관리자만) */
+  async function saveUserMgr(email, on, cb) {
+    const e = String(email || '').trim().toLowerCase();
+    if (!isOwnerUser() || !e) { toast('최고관리자만 지정할 수 있습니다', 'error'); if (cb) cb.checked = !on; return false; }
+    const u = (state.hwUsers || []).find(x => x && String(x.email || '').trim().toLowerCase() === e);
+    if (on && !u) { toast('먼저 이 사람을 [저장]해 명단에 넣은 뒤 지정해 주십시오', 'error'); if (cb) cb.checked = false; return false; }
+    const nm = (u && u.name) || e;
+    if (!confirm(on ? nm + ' 님에게 사용자 관리 · 권한 설정을 맡길까요?\n(최고관리자 줄 · 그 사람 자신의 등급은 계속 최고관리자만 바꿉니다)' : nm + ' 님의 사용자·권한 관리 지정을 풀까요?')) { if (cb) cb.checked = !on; return false; }
+    const lc = x => String(x || '').trim().toLowerCase();
+    const owners = OWNER_EMAILS.map(lc);
+    let emails = (state.userMgrEmails || []).map(lc).filter(x => x && x !== e && !owners.includes(x));
+    if (on) emails.push(e);
+    emails = Array.from(new Set(emails));
+    if (cb) cb.disabled = true;
+    try {
+      await setDoc(doc(db, C('settings'), 'user_mgr'), { emails, updated_at: serverTimestamp(), updated_by: (state.user && state.user.email) || 'unknown' });
+      state.userMgrEmails = emails;
+      toast(on ? nm + ' 님을 지정했습니다 — 그 사람이 화면을 새로 고치면 [사용자 관리] · [권한 설정]이 보입니다' : nm + ' 님의 지정을 풀었습니다', 'success');
+      renderDashboard();
+      return true;
+    } catch (err) {
+      if (cb) { cb.checked = !on; cb.disabled = false; }
+      toast('지정을 저장하지 못했습니다: ' + ((err && err.code === 'permission-denied') ? '서버가 막았습니다 (최고관리자 계정으로 로그인했는지 확인해 주십시오)' : (err && err.message || err)), 'error');
+      return false;
+    }
+  }
   async function saveHwUsers() {
-    if (!isOwnerUser()) { toast('최고관리자만 저장할 수 있습니다', 'error'); return false; }
+    if (!isUserMgr()) { toast('최고관리자 또는 최고관리자가 지정한 사람만 저장할 수 있습니다', 'error'); return false; }   /* hotfix664 */
     const items = hwUsersDraft().map(u => ({
       name: String(u.name || '').trim(),
       email: String(u.email || '').trim(),
@@ -17967,6 +18045,11 @@ window.addEventListener('firebase-ready', () => {
       if (seen[k]) { toast('같은 메일 주소가 두 번 있습니다: ' + u.email, 'error'); return false; }
       seen[k] = 1;
     }
+    if (!isOwnerUser()) {   /* hotfix664: 맡은 사람 — 서버가 막는 바뀜(내 관리자 여부)을 미리 막는다 */
+      const me = hwMyEmail();
+      const isAdm = list => list.some(u => u && u.active !== false && (u.role === 'admin' || u.role === 'owner') && String(u.email || '').trim().toLowerCase() === me);
+      if (isAdm(items) !== isAdm(hwUsers())) { toast('내 등급 · 근무 상태 · 메일은 최고관리자만 바꿀 수 있습니다 — [되돌리기] 후 다시 해 주십시오', 'error'); return false; }
+    }
     try {
       const lc = e => String(e || '').trim().toLowerCase();
       const emails = Array.from(new Set(items.filter(u => u.active !== false).map(u => lc(u.email)).concat(OWNER_EMAILS.map(lc))));
@@ -17981,13 +18064,18 @@ window.addEventListener('firebase-ready', () => {
       toast('계정 목록을 저장했습니다 — 지금부터 이 목록으로 로그인·등급이 정해집니다', 'success');
       return true;
     } catch (e) {
-      toast('저장 실패: ' + e.message, 'error');
+      toast(huDeniedMsg(e, '계정 목록'), 'error');   /* hotfix664 */
       return false;
     }
   }
+  /* hotfix664: 서버가 막았을 때 알기 쉬운 안내 */
+  function huDeniedMsg(e, what) {
+    if (!(e && (e.code === 'permission-denied' || /insufficient permissions/i.test(e.message || '')))) return what + ' 저장 실패: ' + ((e && e.message) || e);
+    return what + ' — 저장하지 못했습니다. 최고관리자만 바꿀 수 있는 칸(최고관리자 줄 · 내 등급 · 내 사람별 허용)이 바뀌었거나 지정이 풀렸습니다. [되돌리기] 후 다시 해 주십시오';
+  }
 
   async function saveViewPerms(obj, delObj, editObj, peopleObj) {
-    if (!isOwnerUser()) { toast('최고관리자만 바꿀 수 있습니다', 'error'); return false; }
+    if (!isUserMgr()) { toast('최고관리자 또는 최고관리자가 지정한 사람만 바꿀 수 있습니다', 'error'); return false; }   /* hotfix664 */
     const clean = {};
     const cleanDel = {};
     Object.keys(VIEW_PERMS_DEFAULT).forEach(k => {
@@ -18009,6 +18097,13 @@ window.addEventListener('firebase-ready', () => {
       const o = {}; Object.keys(row).forEach(v => { if ((row[v] === 'allow' || row[v] === 'deny') && VIEW_PERMS_DEFAULT[v] !== undefined && !OWNER_LOCKED_VIEWS.includes(v)) o[v] = row[v]; });
       if (Object.keys(o).length) cleanPeople[em] = o;
     });
+    if (!isOwnerUser()) {   /* hotfix664: 맡은 사람 — 원사가격 허용 · 내 사람별 허용 줄은 서버 값 그대로 (규칙이 내 줄 바뀜을 막음) */
+      const raw = state.viewPeople || {}; const me = permEmailKey(state.user && state.user.email);
+      Object.keys(cleanPeople).forEach(em => { delete cleanPeople[em].yarnPrice; });
+      Object.keys(raw).forEach(em => { const r = raw[em] && raw[em].yarnPrice; if (r === 'allow' || r === 'deny') (cleanPeople[em] || (cleanPeople[em] = {})).yarnPrice = r; });
+      Object.keys(cleanPeople).forEach(em => { if (!Object.keys(cleanPeople[em]).length) delete cleanPeople[em]; });
+      if (raw[me] && typeof raw[me] === 'object') cleanPeople[me] = JSON.parse(JSON.stringify(raw[me])); else delete cleanPeople[me];
+    }
     try {
       await setDoc(doc(db, C('settings'), 'permissions'), {
         views: clean,
@@ -18027,7 +18122,7 @@ window.addEventListener('firebase-ready', () => {
       state.viewPeople = cleanPeople;
       return true;
     } catch (e) {
-      toast('권한 저장 실패: ' + e.message, 'error');
+      toast(huDeniedMsg(e, '권한'), 'error');   /* hotfix664 */
       return false;
     }
   }
@@ -18383,6 +18478,18 @@ window.addEventListener('firebase-ready', () => {
       if (typeof hwTopPaint === 'function') hwTopPaint();
       if (state.uiMode === 'dashboard' && state.dashView === 'users') renderDashboard();
     }, err => console.warn('[users sub]', err.message));
+    /* hotfix664: 사용자·권한 관리 지정 명단 (settings/user_mgr · 최고관리자만 고침) — 읽기 실패 · 문서 없음 = 지정 없음 */
+    onSnapshot(doc(db, C('settings'), 'user_mgr'), snap => {
+      const em = (snap.exists() && Array.isArray(snap.data().emails)) ? snap.data().emails : [];
+      state.userMgrEmails = em.map(x => String(x || '').trim().toLowerCase()).filter(Boolean);
+      state.userMgrLoaded = true;
+      if (typeof hwTopPaint === 'function') hwTopPaint();
+      try { applyMenuPermissions(); } catch (_) {}
+      if (state.uiMode === 'dashboard' && (state.dashView === 'users' || state.dashView === 'permissions')) {
+        if (!canAccessView(state.dashView)) state.dashView = hwBootView();
+        renderDashboard();
+      }
+    }, err => { state.userMgrEmails = []; console.warn('[userMgr sub]', err.message); });
     // hotfix383: 수정 이력 구독 — 최고관리자만 (배지와 화면에 쓴다)
     if (isOwnerUser()) {
       onSnapshot(doc(db, C('settings'), 'edit_log'), snap => {
@@ -41002,7 +41109,7 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
   // ===== hotfix260/261: 권한 관리 (최고관리자 전용) =====
   // hotfix476: [권한 설정] = 위 [권한 그룹] (그룹 표 · 사람) + 아래 옛 방식(접힘)
   function renderPermissionsDash() {
-    if (!isOwnerUser()) return `<div class="dash-empty">최고관리자만 볼 수 있는 화면입니다.</div>`;
+    if (!isUserMgr()) return `<div class="dash-empty">최고관리자 또는 최고관리자가 지정한 사람만 고칠 수 있는 화면입니다.</div>`;   /* hotfix664 */
     return puRender();   // hotfix481: 한 표
     return pgRender() + `<details id="pg-old" style="margin-top:26px;"${state.pgOldOpen ? ' open' : ''}><summary style="cursor:pointer;font-size:13px;font-weight:800;color:#6b7280;padding:8px 0;">옛 방식 (등급별 · 사람별 예외) — 그룹에 넣지 않은 사람에게만 먹습니다 · 사람별 예외는 그룹보다 먼저 먹습니다</summary>` + renderPermissionsDashOld() + `</details>`;
   }
@@ -41166,14 +41273,15 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
   function puRoleSel(cls, v, cur) { return `<select class="${cls}" data-v="${escapeHtml(v)}" style="width:100%;padding:3px 4px;border:1px solid #d1d5db;border-radius:5px;font-size:12px;font-family:inherit;${cur === 'owner' ? 'background:#f5f3ff;' : cur === 'staff' ? 'background:#ecfdf5;' : ''}">${['owner', 'admin', 'staff'].map(r => `<option value="${r}"${r === cur ? ' selected' : ''}>${PU_ROLE_T[r]}</option>`).join('')}</select>`; }
   function puRender() {
     const d = puDraft(); const gids = Object.keys(d.groups); const ppl = pgPeople().filter(p => p.role !== 'owner');
+    const own = isOwnerUser(); const meKey = permEmailKey(state.user && state.user.email);   /* hotfix664: 맡은 사람은 내 사람별 허용 · 내 그룹 · 원사가격 허용은 잠금 */
     const LV = ['', '보기', '보기·수정', '보기·수정·삭제'];
     const dash = '<span style="color:#cbd5e1;">—</span>';
-    let h = `<style>#pu-box .dash-table th{position:static !important;top:auto !important;box-shadow:none !important;} #pu-box td{vertical-align:middle;} .pu-chip{display:inline-block;margin:1px 2px;padding:2px 8px;border-radius:10px;font-size:11.5px;font-weight:700;cursor:pointer;border:1px solid #cbd5e1;background:#fff;color:#94a3b8;font-family:inherit;} .pu-chip.on{background:#1e3a8a;color:#fff;border-color:#1e3a8a;} .pu-chip.allow{background:#dcfce7;color:#166534;border-color:#86efac;} .pu-chip.deny{background:#fee2e2;color:#991b1b;border-color:#fca5a5;text-decoration:line-through;}</style>
+    let h = HU_CSS + `<style>#pu-box .dash-table th{position:static !important;top:auto !important;box-shadow:none !important;} #pu-box #pu-table th{position:sticky !important;top:var(--puThTop,48px) !important;z-index:5;box-shadow:0 1px 0 var(--gray-300) !important;} .pu-chip.lk{cursor:not-allowed;opacity:.75;} #pu-box td{vertical-align:middle;} .pu-chip{display:inline-block;margin:1px 2px;padding:2px 8px;border-radius:10px;font-size:11.5px;font-weight:700;cursor:pointer;border:1px solid #cbd5e1;background:#fff;color:#94a3b8;font-family:inherit;} .pu-chip.on{background:#1e3a8a;color:#fff;border-color:#1e3a8a;} .pu-chip.allow{background:#dcfce7;color:#166534;border-color:#86efac;} .pu-chip.deny{background:#fee2e2;color:#991b1b;border-color:#fca5a5;text-decoration:line-through;}</style>
     <div id="pu-box" style="width:100%;">
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px;">
-        <span style="font-size:12.5px;color:#475569;line-height:1.6;">메뉴마다 <strong>누가</strong> 보기 · 수정 · 삭제하는지 한 표에서 정합니다. <strong>권한 그룹</strong> 칩을 누르면 보기 → 보기·수정 → 보기·수정·삭제 → 없음 차례로 바뀝니다. <strong>추가 권한자</strong>는 등급과 그룹보다 먼저 먹습니다(초록 = 허용 · 빨강 = 차단). 최고관리자는 언제나 전부입니다.</span>
+        <span style="font-size:12.5px;color:#475569;line-height:1.6;">메뉴마다 <strong>누가</strong> 보기 · 수정 · 삭제하는지 한 표에서 정합니다. <strong>권한 그룹</strong> 칩을 누르면 보기 → 보기·수정 → 보기·수정·삭제 → 없음 차례로 바뀝니다. <strong>추가 권한자</strong>는 등급과 그룹보다 먼저 먹습니다(초록 = 허용 · 빨강 = 차단). 최고관리자는 언제나 전부입니다.${own ? '' : '<br><span style="color:var(--st-warn-ink);">최고관리자가 맡긴 화면입니다. 내 줄(추가 권한자 · 권한 그룹)과 원사가격 조사 허용은 최고관리자만 바꿀 수 있습니다.</span>'}</span>
       </div>
-      <div style="position:sticky;top:0;z-index:6;background:#fff;display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:8px 0;border-bottom:1px solid #e5e7eb;margin-bottom:10px;">
+      <div id="pu-bar" style="position:sticky;top:0;z-index:6;background:#fff;display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:8px 0;border-bottom:1px solid #e5e7eb;margin-bottom:10px;">
         <button type="button" class="dash-action-btn" id="pg-new" style="padding:7px 14px;font-weight:800;">＋ 새 그룹</button>
         ${gids.map(i => `<span style="display:inline-flex;align-items:center;gap:3px;border:1px solid #cbd5e1;border-radius:14px;padding:2px 4px 2px 10px;font-size:12px;font-weight:700;">${escapeHtml(d.groups[i].name || i)} <span style="color:#94a3b8;font-weight:400;">${Object.values(d.members).filter(x => x === i).length}명</span><button type="button" class="pu-grn" data-g="${escapeHtml(i)}" title="이름 바꾸기" style="border:0;background:none;cursor:pointer;color:#475569;font-size:11px;">이름</button><button type="button" class="pu-gdel" data-g="${escapeHtml(i)}" title="그룹 지우기" style="border:0;background:none;cursor:pointer;color:#b91c1c;font-size:11px;">지우기</button></span>`).join('')}
         <span style="flex:1;"></span>${puDirty() ? '<span id="pg-dirty" style="color:#b45309;font-weight:800;font-size:12.5px;">저장하지 않은 바뀜이 있습니다</span>' : ''}
@@ -41193,8 +41301,8 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
         const gCell = (locked || v === 'yarnPrice') ? dash : (gids.length ? gids.map(i => { const lv = Math.min(puGroupLv(d.groups[i], v), mx); return `<button type="button" class="pu-chip pu-g${lv ? ' on' : ''}" data-g="${escapeHtml(i)}" data-v="${escapeHtml(v)}" data-mx="${mx}" title="누르면 바뀝니다">${escapeHtml(d.groups[i].name || i)}${lv ? ' · ' + LV[lv] : ''}</button>`; }).join('') : '<span style="font-size:11px;color:#94a3b8;">[＋ 새 그룹]으로 만드십시오</span>');
         const rules = []; Object.keys(d.people).forEach(em => { const r = (d.people[em] || {})[v]; if (r === 'allow' || r === 'deny') rules.push([em, r]); });
         const nameOf = em => { const p = ppl.find(x => permEmailKey(x.email) === em); return p ? (p.name || p.email) : em.replace(/,/g, '.'); };
-        const addable = ppl.filter(p => !rules.some(r => r[0] === permEmailKey(p.email)));
-        const pCell = locked ? dash : rules.map(([em, r]) => `<button type="button" class="pu-chip pu-p ${r}" data-em="${escapeHtml(em)}" data-v="${escapeHtml(v)}" title="${r === 'allow' ? '허용 — 누르면 차단' : '차단 — 누르면 뺌'}">${escapeHtml(nameOf(em))}</button>`).join('')
+        const addable = ppl.filter(p => !rules.some(r => r[0] === permEmailKey(p.email)) && (own || (permEmailKey(p.email) !== meKey && v !== 'yarnPrice')));   /* hotfix664 */
+        const pCell = locked ? dash : rules.map(([em, r]) => (!own && (em === meKey || v === 'yarnPrice')) ? `<span class="pu-chip ${r} lk" title="최고관리자만 바꿀 수 있습니다">${escapeHtml(nameOf(em))}</span>` : `<button type="button" class="pu-chip pu-p ${r}" data-em="${escapeHtml(em)}" data-v="${escapeHtml(v)}" title="${r === 'allow' ? '허용 — 누르면 차단' : '차단 — 누르면 뺌'}">${escapeHtml(nameOf(em))}</button>`).join('')
           + (addable.length ? `<select class="pu-padd" data-v="${escapeHtml(v)}" style="font-size:11.5px;padding:2px 4px;border:1px dashed #94a3b8;border-radius:10px;color:#475569;font-family:inherit;max-width:110px;"><option value="">＋ 사람</option>${addable.map(p => `<option value="${escapeHtml(permEmailKey(p.email))}">${escapeHtml(p.name || p.email)}</option>`).join('')}</select>` : '');
         h += `<tr data-pu="${escapeHtml(v)}"><td style="padding-left:20px;${k === 'sub' ? 'color:#475569;font-size:12px;' : 'font-weight:700;'}">${k === 'sub' ? '└ ' : ''}${escapeHtml(pgLabel(v))}</td><td>${viewCell}</td><td>${editCell}</td><td>${delCell}</td><td>${cloneCell}</td><td>${gCell}</td><td>${pCell}</td></tr>`;
       });
@@ -41203,19 +41311,22 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
     // 사람 → 그룹
     h += `<div style="font-size:13px;font-weight:800;color:#1f2937;margin:20px 0 6px;">사람마다 권한 그룹</div><div class="dash-table-wrap" style="max-width:760px;"><table class="dash-table" id="pg-people"><thead><tr><th>이름</th><th>이메일</th><th style="width:90px;">계정 등급</th><th style="width:220px;">권한 그룹</th></tr></thead><tbody>`;
     pgPeople().forEach(p => {
-      const key = permEmailKey(p.email); const cur = d.members[key] || ''; const own = p.role === 'owner';
-      h += `<tr${p.active ? '' : ' style="opacity:.55;"'}><td style="font-weight:700;">${escapeHtml(p.name)}</td><td style="font-size:12px;">${escapeHtml(p.email)}</td><td>${own ? '최고관리자' : (p.role === 'admin' ? '관리자' : '직원')}</td>
-        <td>${own ? '<span style="color:#9ca3af;">언제나 전부</span>' : `<select class="pg-mem" data-key="${escapeHtml(key)}" style="padding:5px 8px;width:100%;"><option value="">(그룹 없음 — 등급대로)</option>${gids.map(i => `<option value="${escapeHtml(i)}"${i === cur ? ' selected' : ''}>${escapeHtml(d.groups[i].name || i)}</option>`).join('')}</select>`}</td></tr>`;
+      const key = permEmailKey(p.email); const cur = d.members[key] || ''; const own = p.role === 'owner'; const meLk = !isOwnerUser() && key === meKey;   /* hotfix664: 등급 배지 · 맡은 사람 내 그룹 잠금 */
+      h += `<tr${p.active ? '' : ' style="opacity:.55;"'}><td style="font-weight:700;">${escapeHtml(p.name)}</td><td style="font-size:12px;">${escapeHtml(p.email)}</td><td style="white-space:nowrap;">${huBadge(own ? 'owner' : p.role)}${!own && huIsMgrEmail(p.email) ? huMgrBadge() : ''}</td>
+        <td>${own ? '<span style="color:#9ca3af;">언제나 전부</span>' : `<select class="pg-mem" data-key="${escapeHtml(key)}" style="padding:5px 8px;width:100%;"${meLk ? ' disabled title="최고관리자만 바꿀 수 있습니다"' : ''}><option value="">(그룹 없음 — 등급대로)</option>${gids.map(i => `<option value="${escapeHtml(i)}"${i === cur ? ' selected' : ''}>${escapeHtml(d.groups[i].name || i)}</option>`).join('')}</select>`}</td></tr>`;
     });
     h += `</tbody></table></div>
-      <div style="font-size:11.5px;color:#b45309;margin-top:10px;line-height:1.7;">서버 보안규칙은 그대로라서 <strong>의뢰서 삭제 · 설정 저장</strong>은 관리자 등급 계정만 실제로 됩니다. 직원 등급에게 삭제를 켜도 저장 단계에서 막힙니다.</div>
-      <div style="margin-top:12px;"><button class="dash-action-btn" id="perm-pin" style="padding:8px 16px;">경영 자료 비밀번호 ${ownerPinIsSet() ? '바꾸기' : '만들기'}</button></div></div>`;
+      <div style="font-size:12px;color:var(--st-prog-ink);margin-top:10px;line-height:1.7;"><strong>의뢰서 삭제 · 설정 저장</strong>은 서버에서 관리자 등급 계정만 됩니다. 직원 등급에게 삭제를 켜도 저장 단계에서 막힙니다.</div>
+      ${own ? `<div style="margin-top:12px;"><button class="dash-action-btn" id="perm-pin" style="padding:8px 16px;">경영 자료 비밀번호 ${ownerPinIsSet() ? '바꾸기' : '만들기'}</button></div>` : ''}</div>`;   /* hotfix664: 비밀번호 단추는 최고관리자만 */
     return h;
   }
   function puRerender() { const box = document.getElementById('pu-box'); if (!box) return; const y = window.scrollY; const bd = document.getElementById('dash-body'); const by = bd ? bd.scrollTop : 0; box.outerHTML = puRender(); puBind(); window.scrollTo(0, y); if (bd) bd.scrollTop = by; }
   function puBind() {
     const box = document.getElementById('pu-box'); if (!box || box.__pu) return; box.__pu = 1;
     const d = puDraft();
+    { const bar = document.getElementById('pu-bar');   /* hotfix664: 표 머리줄을 붙는 단추줄 바로 아래에 붙임 */
+      const setTop = () => { if (!bar || !bar.isConnected) return; box.style.setProperty('--puThTop', ((parseFloat(getComputedStyle(bar).top) || 0) + bar.offsetHeight) + 'px'); };
+      setTop(); if (bar && window.ResizeObserver) new ResizeObserver(setTop).observe(bar); }
     const nw = document.getElementById('pg-new'); if (nw) nw.addEventListener('click', () => {
       const name = String(prompt('새 그룹 이름 (예: 사무 · 현장 · 관리자)') || '').trim(); if (!name) return;
       if (Object.values(d.groups).some(x => x.name === name)) { toast('같은 이름의 그룹이 있습니다', 'error'); return; }
@@ -41243,6 +41354,7 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
       const cl = o => { const r = {}; Object.keys(o || {}).forEach(v => { if (o[v] === true && PG_VIEWS.includes(v) && !OWNER_LOCKED_VIEWS.includes(v)) r[v] = true; }); return r; };
       const groups = {}; Object.keys(d.groups).forEach(i => { const g = d.groups[i]; groups[i] = { name: String(g.name || i), views: cl(g.views), edit: cl(g.edit), del: cl(g.del) }; });
       const members = {}; Object.keys(d.members).forEach(k => { if (groups[d.members[k]]) members[k] = d.members[k]; });
+      if (!isOwnerUser()) { const mk = permEmailKey(state.user && state.user.email); const om = (state.permMembers || {})[mk]; if (om) members[mk] = om; else delete members[mk]; }   /* hotfix664: 맡은 사람의 내 그룹은 그대로 */
       const oldG = state.permGroups, oldM = state.permMembers;
       state.permGroups = groups; state.permMembers = members;   // saveViewPerms 가 이 두 칸을 같이 싣는다
       const ok = await saveViewPerms(d.views, d.deletes, d.edits, d.people);
@@ -55292,7 +55404,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
       body = renderCompleteReports();
       addBtn.style.display = 'none';
     } else if (state.dashView === 'permissions') {
-      title = '권한 관리 (최고관리자 전용)';
+      title = '권한 관리 (최고관리자 · 지정한 사람)';   /* hotfix664 */
       body = viewIsLocked('permissions') ? renderOwnerLockScreen('권한 관리') : renderPermissionsDash();
       addBtn.style.display = 'none';
     } else if (state.dashView === 'procAcc') {   // hotfix498: 가공소 계정 · 공정 체크
@@ -55360,7 +55472,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
       body = renderVendors();
       addBtn.style.display = 'none';
     } else if (state.dashView === 'users') {
-      title = '사용자 관리 (최고관리자 전용)';
+      title = '사용자 관리 (최고관리자 · 지정한 사람)';   /* hotfix664 */
       body = renderUsersDash();
       addBtn.style.display = 'none';
     } else if (state.dashView === 'editLog') {
@@ -63475,7 +63587,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix663';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
+  const VERSION = 'v2.53 hotfix664';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
