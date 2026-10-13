@@ -285,6 +285,7 @@ button{font-family:inherit;cursor:pointer}
 .k-err-t{font-size:15px;font-weight:800;color:var(--red);margin:2px 2px 4px;word-break:keep-all}
 .k-num input.k-bad{border:2px solid var(--red);background:#fef2f2}.k-dp.k-bad{border:1.5px dashed #fca5a5;border-radius:14px;padding:6px}
 .k-over{background:#fffbeb;border:1px solid #fcd34d;border-radius:13px;padding:10px 12px;font-size:15px;font-weight:800;color:var(--amber);margin-top:12px}
+.k-wait{color:var(--amber)}.st-is.st-wait{background:#fffbeb;color:#92400e;font-size:14px}   /* hotfix668: 확인 중 N절 (현일텍스 확인 전 출고 보고) */
 .sh .row2.k-r14 .ok{flex:1.4}
 .k-dp{display:flex;flex-wrap:wrap;gap:8px;margin:4px 0 8px}.k-dp button{border:2px solid #d1fae5;background:#fff;border-radius:14px;padding:12px 16px;font-size:17px;font-weight:800;color:#065f46;font-family:inherit;min-height:52px}.k-dp button.on{background:#059669;border-color:#059669;color:#fff;box-shadow:0 4px 12px rgba(5,150,105,.3)}
 /* hotfix650(디자인 중-11): 눌리는 영역만 44px — 보이는 모양은 그대로(::after 로 둘레만 넓힘) · 회사 바꾸기 · 앱 설치 · 설정 단추 */
@@ -879,7 +880,7 @@ import { initializeFirestore, getFirestore, persistentLocalCache, persistentMult
  *   읽는 것: proc_acc/{내 uid} · proc_pub/{내 업체}.gs (현일텍스가 보낸 생지출고) · proc_log(내 업체 것만)
  *   쓰는 것: proc_log 한 줄 — kind 'ship' part 'gs' (body 절 · n kg · ref 송장 사진) · kind 'st' part 'gs' stage seen | ack_cxl | photo
  *   사진: Storage gs_photos/{업체}/{생지출고}_{시각}.jpg */
-const KVER = 'k102 (hotfix667)';
+const KVER = 'k103 (hotfix668)';
 try { if (matchMedia('(min-width:700px)').matches) document.body.classList.add('k620pc'); } catch (_) {}   /* hotfix620: PC 에서는 휴대폰 화면 너비로 가운데 */
 /* hotfix572(대표 10/1): 거래 원단회사 고르기 — FABIWOS 는 여러 원단회사에 팔 프로그램. 편직공장 한 곳이 여러 원단회사와 거래하므로
  *   계정(proc_acc.companies)에 거래 원단회사 목록 · 위 [→ 원단회사 ▾] 와 삼선 메뉴에서 고름 · 고른 회사의 할 일 · 재고 · 보낸 내역만 보임
@@ -1120,18 +1121,26 @@ function vMigrate(acc) { try { const olds = Array.isArray(acc && acc.vendor_old)
 /* hotfix598: 숫자 읽기 — 전각 숫자 · 앞뒤 빈칸 · 쉼표(210,4 = 210.4 · 1,050 = 1050) · 단위 글자 */
 function hwNum(v) { let s = String(v == null ? '' : v).replace(/[\uFF01-\uFF5E]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0)).replace(/[\u2212\u2013\u2014]/g, '-').trim(); if (/^-?[1-9]\d{0,2}(,\d{3})+(\.\d+)?$/.test(s)) s = s.replace(/,/g, ''); else s = s.replace(/,/g, '.'); const m = s.match(/-?(?:\d+(?:\.\d+)?|\.\d+)/); return m ? parseFloat(m[0]) : NaN; }   /* PC 와 같은 규칙 (0,125 · .5 · −3) */
 window.__hwNum = hwNum;   /* 시험용 */
-async function put(x, o) {
+/* hotfix668: 요청 번호 — 보고 창 하나에 번호 하나(proc_log 문서 이름) · 같은 창에서 다시 보내도 한 번만 들어감
+ *   proc_log 는 만들기만 되므로(규칙) 같은 이름 두 번째 쓰기는 거절됨 → 그 이름을 읽어 있으면 '이미 들어감'으로 처리 (규칙 게시 없이) */
+function kRq() { return 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 6); }
+async function kDupIn(ref, e) { if (!ref || !(e && e.code === 'permission-denied')) return false; try { const s = await getDoc(ref); return !!(s && s.exists()); } catch (_) { return false; } }
+/* hotfix668: 사람 이름(who) 칸 스위치 — 대표가 규칙(proc_log 업체 쓰기 hasOnly 에 who)을 게시한 뒤에만 true · 지금 켜면 보고가 거절됨 */
+const K_WHO_ON = false;
+async function put(x, o, rq) {
   const d = Object.assign({ vendor: S.acc.vendor, k: x.k, wo: x.no || '', note: '', by: 'vendor', uid: S.uid, dev: S.dev, at: serverTimestamp() }, o);
+  if (K_WHO_ON) { try { const w = String(localStorage.getItem('hwk.who') || '').trim().slice(0, 20); if (w) d.who = w; } catch (_) {} }
   Object.keys(d).forEach(k => { if (d[k] === undefined) delete d[k]; });
   const sig = JSON.stringify([d.k, d.kind, d.stage, d.mode, d.part, d.body, d.rib, d.n, d.ref, d.issue, d.date, d.note, d.kg]);   /* hotfix636: + kg (B안 생산 완료 kg 칸) */   /* hotfix596: 같은 내용을 보내는 중에 또 누르면 무시 — 느린 인터넷에서 두 번 눌러 출고가 두 번 잡히던 것 (다른 기록은 막지 않음) */
   S.putBusy = S.putBusy || new Set(); if (S.putBusy.has(sig)) { toast('보내는 중입니다 — 잠시만 기다려 주십시오'); return false; } S.putBusy.add(sig);
+  let ref = null;
   try {
-    const ref = doc(collection(db, 'proc_log')); const w = setDoc(ref, d);   /* hotfix597: 이름을 먼저 정해 보냄 → 보낸 줄을 바로 화면에 (임시) */
+    ref = rq ? doc(db, 'proc_log', rq) : doc(collection(db, 'proc_log')); const w = setDoc(ref, d);   /* hotfix597: 이름을 먼저 정해 보냄 → 보낸 줄을 바로 화면에 (임시) · hotfix668: 보고 창은 요청 번호로 */
     S.tmp = S.tmp || new Map(); S.tmp.set(ref.id, Object.assign({}, d, { id: ref.id, at: { seconds: Date.now() / 1000, nanoseconds: 0 }, __local: true })); w.catch(() => { S.tmp.delete(ref.id); try { S.logEmit && S.logEmit(); } catch (_) {} }); try { S.logEmit && S.logEmit(); } catch (_) {}
     const r = await Promise.race([w.then(() => 'ok'), new Promise(res => setTimeout(() => res('wait'), 10000))]);
-    if (r === 'wait') { S.pendN = (S.pendN || 0) + 1; kPendChip(); w.then(() => {}, () => {}).finally(() => { S.pendN = Math.max(0, (S.pendN || 1) - 1); kPendChip(); }); w.catch(() => toast('보내지 못했습니다 — 인터넷을 확인하십시오', true)); setTimeout(() => toast('신호가 약합니다 — 이 휴대폰에 저장해 두었고, 연결되면 자동으로 보냅니다'), 1600); }   /* 10초 안에 답이 없으면 기다리게 하지 않음 (다시 누르지 않게) */
+    if (r === 'wait') { S.pendN = (S.pendN || 0) + 1; kPendChip(); w.then(() => {}, () => {}).finally(() => { S.pendN = Math.max(0, (S.pendN || 1) - 1); kPendChip(); }); w.catch(async e => { if (rq && await kDupIn(ref, e)) return; toast('보내지 못했습니다 — 인터넷을 확인하십시오', true); }); setTimeout(() => toast('신호가 약합니다 — 이 휴대폰에 저장해 두었고, 연결되면 자동으로 보냅니다'), 1600); }   /* 10초 안에 답이 없으면 기다리게 하지 않음 (다시 누르지 않게) */
     return true;
-  } catch (e) { toast('보내지 못했습니다 — 인터넷을 확인하십시오', true); return false; }
+  } catch (e) { if (rq && await kDupIn(ref, e)) { setTimeout(() => toast('이미 들어간 보고입니다 — 한 번만 들어갔습니다'), 1600); return true; } toast('보내지 못했습니다 — 인터넷을 확인하십시오', true); return false; }   /* hotfix668: 같은 요청 번호가 이미 있으면 보낸 것으로 */
   finally { S.putBusy.delete(sig); }
 }
 
@@ -1316,6 +1325,7 @@ function kStockRow(r) {
   return `<div class="st-r2" data-sec="${sec}"><div class="st-r"><span class="lot">${esc(r.lot || '-')}</span><span class="j${kLow(r.rem) ? ' low' : ''}"><b>${kQ(r.rem)}</b>절</span><span class="kg">${sec === 'stock' && r.kd != null ? '' : '약 '}${Number(r.kg || 0).toFixed(1)}kg</span><span class="d">${esc(String(r.date || '').slice(2).replace(/-/g, '.'))}${r.kind ? ' · ' + esc(r.kind) : ''}</span></div>
     <div class="st-m">${meta}</div>
     ${r.pend ? `<button type="button" class="st-pend" data-spg="${esc(r.k)}"><b>출고 대기 ${kQ(r.pend)}절</b><span>공장에 실제 ${kQ(real)}절 — 출고 대기를 빼면 ${kQ(r.rem)}절</span><em>출고했어요 ›</em></button>` : ''}
+    ${(() => { const w = kWaitOf(r); return w.j > 0 ? `<div class="st-is st-wait">확인 중 ${kQ(w.j)}절 — 보낸 출고를 ${esc(CN())}가 아직 확인하지 않았어요 · 공장에 약 ${kQ(Math.max(0, real - w.j))}절</div>` : ''; })()}
     ${is ? (is.d ? (() => { const a = kAns(is.d); if (!a.rej && !a.adj) return ''; /* hotfix630: 확인 완료 · 반영 띠는 안 그림 */ return kBand(a.rej ? 'rj' : (a.adj ? 'adj' : 'ok'), `${esc(CN())} ${a.rej ? '반려' : (a.adj ? '조정' : '확인 완료')} — ${esc(a.body || '')}`, is.d.id); })() : `<div class="st-is">수량이 다르다고 보냄 (공장 ${kQ(is.i.n)}절) · ${esc(CN())} 확인 중</div>`) : ''}
     ${(() => { const kx = kKx(r); if (kx) return kx.st === 'wait' ? `<div class="st-is">편직 중으로 되돌림 보냄 · ${esc(CN())} 반영 중</div>` : kx.st === 'rej' ? kBand('rj', `편직 중으로 되돌림 — ${esc(CN())} 반려 · ${esc(kAns(kx.d).body)}`, kx.d.id) : '';   /* hotfix651 */
       const kd = kIssueOf(r, KD_ISSUES); if (r.kd != null && !(kd && kd.d && kAns(kd.d).rej)) return (kd && kd.d && kAns(kd.d).adj) ? kBand('adj', `생산 완료 — 짠 것 ${kQ(r.kd)}절 (의뢰 ${kQ(r.ord)}절) · ${esc(CN())} 조정 — ${esc(kAns(kd.d).body || '')}`, kd.d.id, 'st-kdok') : '';   /* hotfix630(대표 10/10 "우리 쪽에서 확인했으면 끝"): 반영 띠는 안 그림 · 조정만 */
@@ -1357,7 +1367,7 @@ function kYStock() {
     <div class="empty" style="padding:14px 10px;font-size:13px">원사 재고 = ${esc(CN())}가 맡긴 원사 − 편직에 쓴 것 ± 이동<br>숫자가 다르면 [수량조정] · 다른 공장으로 보냈으면 [원사이동] · 없는 원사면 [삭제 요청] — ${esc(CN())}가 확인하고 고칩니다</div>`;
 }
 function kYSheet(r, mode) {
-  const st = { kg: mode === 'diff' ? r.kg : '', to: '', n: '', busy: false };
+  const st = { kg: mode === 'diff' ? r.kg : '', to: '', n: '', busy: false, rq: kRq() };   /* hotfix668: 요청 번호 */
   const T = { diff: '수량이 달라요', ship: '다른 곳으로 보냄', del: '삭제 요청' }[mode];
   const draw = () => {
     st.tok = sheet(`<h3>${T} — ${esc(r.yarn)}${r.color ? ' ' + esc(r.color) : ''}</h3><div class="sub">앱에 보이는 원사 <b>${Number(r.kg || 0).toFixed(1)}kg</b><br>${mode === 'del' ? '없는 원사이거나 잘못 잡힌 줄이면 보냅니다. ' + esc(CN()) + '가 허락하면 0 이 됩니다.' : '숫자는 ' + esc(CN()) + '가 확인하고 고칩니다.'}</div>
@@ -1371,7 +1381,7 @@ function kYSheet(r, mode) {
       if (mode !== 'del' && !(kg >= 0 && isFinite(kg))) { toast('kg 를 넣어 주세요', true); return; } if (mode === 'ship' && !(kg > 0)) { toast('보낸 kg 를 넣어 주세요', true); return; } if (mode === 'ship' && !to) { toast('보낸 곳을 골라 주세요', true); return; } if (mode === 'ship' && !(S.dests || []).includes(to)) { toast('보낸 곳은 목록에서 골라 주세요', true); return; } if (mode === 'del' && !String(N.value || '').trim()) { toast('까닭을 적어 주세요', true); return; }
       st.busy = true; st.kg = K ? K.value : ''; st.n = N.value; st.to = to; draw();
       const o = { kind: 'issue', part: 'gs', issue: YI[mode], body: Number(r.kg) || 0, label: (r.yarn + (r.color ? ' ' + r.color : '')).slice(0, 80), note: String(N.value || '').trim().slice(0, 200) }; if (mode !== 'del') o.n = kg; if (mode === 'ship') o.chip = to.slice(0, 60);
-      const ok = await put({ k: r.k, no: '' }, o);
+      const ok = await put({ k: r.k, no: '' }, o, st.rq);
       st.busy = false; const mine = sheetIs(st.tok); if (ok) { if (mine) closeSheet(); ring(); toast(CN() + '에 보냈습니다 — 확인하면 알려 드립니다'); render(); } else if (mine) draw(); });
   };
   draw();
@@ -1504,7 +1514,7 @@ function kPendSheet(r) {
   $('sheet').querySelectorAll('[data-pk]').forEach(b => b.addEventListener('click', () => { const x = kList().find(y => y.k === b.dataset.pk); closeSheet(); if (x) kShipSheet(x); }));
 }
 function kDiffSheet(r) {
-  const real = Math.round((r.rem + (r.pend || 0)) * 10) / 10; const st = { j: real, busy: false };
+  const real = Math.round((r.rem + (r.pend || 0)) * 10) / 10; const st = { j: real, busy: false, rq: kRq() };   /* hotfix668: 요청 번호 */
   const draw = () => {
     st.tok = sheet(`<h3>수량이 달라요 — ${esc(r.item)} ${esc(r.lot || '')}</h3><div class="sub">앱에 보이는 공장 재고 <b>${kQ(real)}절</b>${r.pend ? ` (출고 대기 ${kQ(r.pend)}절 포함)` : ''}<br>숫자는 ${esc(CN())}가 확인하고 고칩니다.</div>
       <div class="k-lab">지금 공장에 실제로 몇 절 있어요?</div>
@@ -1519,7 +1529,7 @@ function kDiffSheet(r) {
     $('d-send').addEventListener('click', async () => { const j = parseFloat(J.value); if (!(j >= 0)) { toast('절수를 넣어 주세요', true); return; }
       if (Math.abs(j - real) < 0.05 && !confirm('앱에 보이는 숫자와 같습니다. 그래도 보낼까요?')) return;
       st.busy = true; st.j = j; st.n = N.value; draw();
-      const ok = await put({ k: r.k, no: r.wo }, { kind: 'issue', part: 'gs', issue: SI_ISSUE, body: real, n: j, label: (r.item + ' ' + (r.lot || '')).trim().slice(0, 80), note: String(N.value || '').trim().slice(0, 200) });
+      const ok = await put({ k: r.k, no: r.wo }, { kind: 'issue', part: 'gs', issue: SI_ISSUE, body: real, n: j, label: (r.item + ' ' + (r.lot || '')).trim().slice(0, 80), note: String(N.value || '').trim().slice(0, 200) }, st.rq);
       st.busy = false; const mine = sheetIs(st.tok); if (ok) { if (mine) closeSheet(); ring(); toast(CN() + '에 보냈습니다 — 확인하고 고치면 알려 드립니다'); render(); } else if (mine) draw(); });
   };
   draw();
@@ -1530,7 +1540,7 @@ function kDiffSheet(r) {
  *   B안: 현일텍스가 규칙에 kg 칸을 게시하고 켜면(proc_pub.kd_kg_field) kg 칸으로 · 한 절 평균이 5kg 미만 · 60kg 초과면 노란 확인 한 번 더 */
 function kKdSheet(r) {
   const kpj = kKpj(r), src = r.kpjSrc || '의뢰서';
-  const st = { j: r.ord, kg: '', n: '', busy: false, err: {}, odd: false, tok: 0 };
+  const st = { j: r.ord, kg: '', n: '', busy: false, err: {}, odd: false, tok: 0, rq: kRq() };   /* hotfix668: 요청 번호 */
   const bdg = req => `<span class="k-bdg ${req ? 'req' : 'opt'}">${req ? '필수' : '선택'}</span>`;
   const errT = k => st.err[k] ? `<div class="k-err-t" id="kd-e-${k}">${esc(st.err[k])}</div>` : '';
   const liveOf = () => { const j = hwNum(st.j), kgT = String(st.kg || '').trim(), kg = hwNum(kgT);
@@ -1568,7 +1578,7 @@ function kKdSheet(r) {
       st.busy = true; draw();
       const o = { kind: 'issue', part: 'gs', issue: KD_ISSUE, body: r.ord, n: j, label: (r.item + ' ' + (r.lot || '')).trim().slice(0, 80), note: String(st.n || '').trim().slice(0, 200) };
       if (kg > 0) Object.assign(o, S.kdKgField ? { kg, mode: 'kg' } : { rib: kg, mode: 'kg' }); else o.mode = 'est';
-      const sent = await put({ k: r.k, no: r.wo }, o);
+      const sent = await put({ k: r.k, no: r.wo }, o, st.rq);
       st.busy = false; const mine = sheetIs(st.tok); if (sent) { if (mine) closeSheet(); ring(); toast(CN() + '에 생산 완료를 보냈습니다 — 재고가 ' + kQ(j) + '절' + (kg > 0 ? ' · ' + kg.toFixed(1) + 'kg' : '') + ' 기준으로 맞춰집니다'); render(); } else if (mine) draw(); });
   };
   draw();
@@ -1671,6 +1681,16 @@ document.addEventListener('click', async e => { const b = e.target.closest && e.
  *   ② [할 일] 아래 [원사 받을 것] — 이 공장으로 오는 원사 의뢰서 · [원사 받았어요] (송장 kg · 송장 사진) → 현일텍스가 확인하면 원사 재고에 들어감 ===== */
 function kAnsOf(id) { return S.logs.filter(u => u.by === 'us' && u.kind === 'note' && u.ref === id).reduce((p, l) => (!p || tOf(l) >= tOf(p)) ? l : p, null); }
 function kSelfOf(r) { return S.logs.filter(l => l.by === 'vendor' && l.kind === 'ship' && l.reason === 'self' && l.k === r.k && Date.now() - tOf(l) < 7 * 864e5).sort((a, b) => tOf(b) - tOf(a)).slice(0, 3).map(l => { const a = kAnsOf(l.id); const cx = kCxOf(l); const st = cx ? 'cx' : (a ? (kAns(a).rej ? 'rej' : 'ok') : 'wait'); return { l, a, st }; }); }
+/* hotfix668: 이 재고 줄(품목 · 로트)의 '확인 전 보고' — 의뢰서 없이 보낸 출고(7일 안 · 답 없음 · 취소 요청 없음) + 생지출고 보고(반영 전)
+ *   다른 휴대폰(같은 아이디 · 다른 담당자)이 보낸 것도 S.logs 로 셈 · skip = 지금 창의 요청 번호(내가 방금 보낸 것은 빼고) */
+function kWaitOf(r, skip) {
+  const self = S.logs.filter(l => l.id !== skip && l.by === 'vendor' && l.kind === 'ship' && l.reason === 'self' && l.k === r.k && Date.now() - tOf(l) < 7 * 864e5 && !kAnsOf(l.id) && !kCxOf(l)).map(l => ({ l, dest: l.chip || '' }));
+  const gs = []; (r.pg || []).forEach(p => { const x = kList().find(i => i.k === p.g); if (x) kSent(x).forEach(l => { if (l.id !== skip) gs.push({ l, dest: x.dest || '', gs: true }); }); });
+  const L = self.concat(gs).sort((a, b) => tOf(b.l) - tOf(a.l));
+  return { L, j: Math.round(L.reduce((a, o) => a + (parseFloat(o.l.body) || 0), 0) * 10) / 10 };
+}
+function kWaitTxt(o) { return `이미 ${kQ(o.l.body)}절 → ${o.dest || '-'} 보냄 (${kHm(o.l)}${o.l.dev && S.dev && o.l.dev !== S.dev ? ' · 다른 휴대폰' : ''} · ${CN()} 확인 중)`; }
+function kWaitBox(L, id) { return `<div class="k-over" id="${id}"><b>확인 전 보고가 있습니다</b><br>${L.slice(0, 4).map(o => esc(kWaitTxt(o))).join('<br>')}<br>같은 출고면 보내지 마세요 · 다른 출고가 맞으면 한 번 더 누르세요</div>`; }
 /* hotfix622(대표 10/9 "어디로 보냈어요?는 우리 쪽에 등록된 곳 중에서 · 우리가 정해 줌"): 보낼 곳 = 현일텍스가 정해 준 곳만 (proc_pub.dests) · 고르기만 하고 글자로 넣지 않음 */
 function kDestPick(id, cur, none) { const L = S.dests || []; const v = L.includes(cur) ? cur : (L.length === 1 && !none ? L[0] : '');   /* hotfix631: none = 처음엔 아무것도 안 고름 (출고 창) */
   if (!L.length) return `<input type="hidden" id="${id}" value=""><div style="border:1.5px dashed #fca5a5;background:#fef2f2;border-radius:14px;padding:12px 14px;font-size:14.5px;line-height:1.55;color:#991b1b;font-weight:700">보낼 곳이 아직 정해지지 않았습니다.<br><span style="font-weight:600;color:#7f1d1d">${esc(CN())}에 [대화]로 "보낼 곳을 정해 주세요"라고 알려 주세요.</span></div>`;
@@ -1681,12 +1701,13 @@ function kSelfShipSheet(r) {
   try { kStorage(); } catch (_) {}
   /* hotfix631(대표 10/10): 출고처는 처음엔 안 골라짐 · 몇 절은 빈칸(재고는 맨 위 참고 상자에만) · 출고 합계(kg) 필수 · 송장 사진 · 메모는 선택
      빈칸은 [출고 보내기]를 눌렀을 때 그 칸에 빨간 테두리 + 한 줄 · 첫 빈칸으로 · 고치기 시작하면 바로 풀림 · 재고보다 많으면 노란 확인 한 번 더 (막지 않음) */
-  const real = Math.round((r.rem + (r.pend || 0)) * 10) / 10; const st = { j: '', kg: '', d: '', n: '', q: null, qs: [], busy: false, tok: 0, err: {}, over: false };   /* hotfix658: 송장 사진 여러 장 */
+  const real0 = Math.round((r.rem + (r.pend || 0)) * 10) / 10; const st = { j: '', kg: '', d: '', n: '', q: null, qs: [], busy: false, tok: 0, err: {}, over: false, rq: kRq(), dup: null };   /* hotfix658: 송장 사진 여러 장 · hotfix668: rq 요청 번호(이 창) · dup 확인 전 보고 안내 */
+  const realNow = () => Math.max(0, Math.round((real0 - kWaitOf(r, st.rq).j) * 10) / 10); let real = realNow();   /* hotfix668: 넘침 확인은 확인 전 보고만큼 뺀 공장 재고로 */
   const bdg = req => `<span class="k-bdg ${req ? 'req' : 'opt'}">${req ? '필수' : '선택'}</span>`;
   const errT = k => st.err[k] ? `<div class="k-err-t" id="ss-e-${k}">${esc(st.err[k])}</div>` : '';
   const draw = () => {
     st.tok = sheet(`<h3>출고 — ${esc(r.item)} <span style="color:#b45309">${esc(r.lot || '')}</span></h3>
-      <div class="k-ref">현재 재고 <b>${kQ(r.rem)}</b>절 (참고)${r.pend ? ` · 출고 대기 <b>${kQ(r.pend)}</b>절` : ''}<br><span style="font-size:14.5px">생지출고의뢰서 없이 먼저 보낼 때 · ${esc(CN())}가 확인하면 재고에서 빠집니다</span></div>
+      <div class="k-ref">현재 재고 <b>${kQ(r.rem)}</b>절 (참고)${r.pend ? ` · 출고 대기 <b>${kQ(r.pend)}</b>절` : ''}${(() => { const w = kWaitOf(r, st.rq).j; return w > 0 ? ` · <b class="k-wait">확인 중 ${kQ(w)}절</b>` : ''; })()}<br><span style="font-size:14.5px">생지출고의뢰서 없이 먼저 보낼 때 · ${esc(CN())}가 확인하면 재고에서 빠집니다</span></div>
       <div class="k-lab">출고처는 어딘가요?${bdg(1)}</div>
       ${kDestPick('ss-d', st.d, true)}${errT('d')}
       <div class="k-lab">몇 절 보냈어요?${bdg(1)}</div>
@@ -1696,8 +1717,9 @@ function kSelfShipSheet(r) {
       ${kPhotoFieldM(st, `<div class="k-lab">송장 사진${bdg(0)}</div><div class="k-hint">안 찍어도 보낼 수 있어요 · 여러 장 찍을 수 있어요</div>`)}
       <div class="k-lab">메모${bdg(0)}</div>
       <div class="k-num"><input id="ss-n" type="text" placeholder="예: 급하게 먼저 보냄" style="font-size:17px;font-weight:600;text-align:left;padding:0 12px" value="${esc(st.n)}"></div>
-      ${st.over ? `<div class="k-over" id="ss-over">재고 ${kQ(real)}절보다 많습니다 — 맞으면 한 번 더 누르세요</div>` : ''}
-      <div class="row2 k-r14"><button type="button" class="no" data-x>닫기</button><button type="button" class="ok" id="k-send"${st.busy ? ' disabled' : ''}>${st.busy ? '보내는 중…' : (st.over ? '맞아요, 보내기' : '출고 보내기')}</button></div>`);
+      ${st.dup ? kWaitBox(st.dup, 'ss-dup') : ''}
+      ${st.over ? `<div class="k-over" id="ss-over">재고 ${kQ(real)}절보다 많습니다${kWaitOf(r, st.rq).j > 0 ? ' (확인 중 ' + kQ(kWaitOf(r, st.rq).j) + '절을 뺀 재고)' : ''} — 맞으면 한 번 더 누르세요</div>` : ''}
+      <div class="row2 k-r14"><button type="button" class="no" data-x>닫기</button><button type="button" class="ok" id="k-send"${st.busy ? ' disabled' : ''}>${st.busy ? '보내는 중…' : (st.over ? '맞아요, 보내기' : (st.dup ? '그래도 보내기' : '출고 보내기'))}</button></div>`);
     $('sheet').querySelector('[data-x]').addEventListener('click', () => { closeSheet(); render(); });
     const J = $('k-j'), K = $('k-kg'), D = $('ss-d'), N = $('ss-n');
     if (st.err.d) { const dp = $('sheet').querySelector('.k-dp'); if (dp) dp.classList.add('k-bad'); }
@@ -1718,10 +1740,12 @@ function kSelfShipSheet(r) {
       if (!kgT) st.err.kg = '출고 합계(kg)를 넣어 주세요'; else if (!(kg > 0)) st.err.kg = '출고 합계(kg)는 숫자로 넣어 주세요 (예: 210.4)';
       const first = ['d', 'j', 'kg'].find(k => st.err[k]);
       if (first) { st.over = false; draw(); const el = first === 'd' ? ($('sheet').querySelector('.k-dp') || $('ss-e-d')) : $(first === 'j' ? 'k-j' : 'k-kg'); if (el) { el.scrollIntoView({ block: 'center' }); if (el.tagName === 'INPUT') el.focus({ preventScroll: true }); } return; }
+      { const wt = kWaitOf(r, st.rq).L; if (wt.length && !st.dup) { st.dup = wt; st.over = false; draw(); const o = $('ss-dup'); if (o) o.scrollIntoView({ block: 'center' }); return; } }   /* hotfix668: 보내기 직전 다시 셈 — 확인 전 보고(다른 휴대폰 것도)가 있으면 안내 + 한 번 더 */
+      real = realNow();
       if (j > real + 0.05 && !st.over) { st.over = true; draw(); const o = $('ss-over'); if (o) o.scrollIntoView({ block: 'center' }); return; }
       st.busy = true; st.j = j; draw();
       const x = { k: r.k, no: r.wo };
-      const sent = await put(x, { kind: 'ship', part: 'gs', reason: 'self', body: j, n: kg, chip: st.d.slice(0, 60), label: (r.item + ' ' + (r.lot || '')).trim().slice(0, 80), note: String(st.n || '').trim().slice(0, 200) });
+      const sent = await put(x, { kind: 'ship', part: 'gs', reason: 'self', body: j, n: kg, chip: st.d.slice(0, 60), label: (r.item + ' ' + (r.lot || '')).trim().slice(0, 80), note: String(st.n || '').trim().slice(0, 200) }, st.rq);
       st.busy = false; const mine = sheetIs(st.tok);
       const blobs = (st.qs || []).map(q => q && q.blob).filter(Boolean);   /* hotfix658: 장마다 예전과 같은 길(gs_photos · st/photo) */
       if (sent) { if (mine) closeSheet(); ring(); toast(`${kQ(j)}절 → ${st.d} 출고를 ${CN()}에 알렸습니다` + (blobs.length ? ` · 송장 사진 ${blobs.length > 1 ? blobs.length + '장 ' : ''}올리는 중` : '')); if (blobs.length) (async () => { for (const b of blobs) await kPhotoBg(x, b); })(); render(); } else if (mine) draw();
@@ -1741,7 +1765,7 @@ function kYinHtml() {
 function kYinJump() { const n = (S.yin || []).filter(y => { const r = kYinOf(y); return !r || r.st === 'rej'; }).length; return n ? `<button type="button" class="yi-jump" onclick="document.getElementById('yi-sec').scrollIntoView({behavior:'smooth'})">원사 받을 것 ${n}건 — 받으면 [원사 받았어요] ↓</button>` : ''; }
 function kYinSheet(y) {
   try { kStorage(); } catch (_) {}
-  const st = { kg: '', n: '', q: null, qs: [], busy: false, tok: 0 };   /* hotfix658: 송장 사진 여러 장 */
+  const st = { kg: '', n: '', q: null, qs: [], busy: false, tok: 0, rq: kRq() };   /* hotfix668: 요청 번호 */   /* hotfix658: 송장 사진 여러 장 */
   const draw = () => {
     st.tok = sheet(`<h3>원사 받았어요 — ${esc(y.no)}</h3><div class="sub">${y.lines.map(ln => esc(ln.name) + ' ' + esc(ln.color || '') + ' · ' + Number(ln.kg).toFixed(1) + 'kg').join('<br>')}<br>발주 합계 <b>${Number(y.kg).toFixed(1)}kg</b></div>
       <div class="k-lab">송장 무게 합계 (kg) <small style="font-weight:600;color:#64748b">(모르면 비워 두세요 — 발주 kg 로)</small></div>
@@ -1756,7 +1780,7 @@ function kYinSheet(y) {
     $('k-send').addEventListener('click', async () => { if (st.loading) { toast('사진을 보는 중입니다 — 잠시 뒤 다시 누르십시오'); return; }
       const kgN = hwNum(K.value); const kg = String(K.value || '').trim() ? kgN : y.kg; if (isNaN(kg) || !(kg > 0)) { toast('송장 무게는 숫자로 넣어 주세요', true); K.focus(); return; }
       st.busy = true; st.kg = K.value; st.n = N.value; draw(); const x = { k: y.k, no: y.no };
-      const ok = await put(x, { kind: 'st', part: 'gs', stage: 'yarn_in', body: Math.round(kg * 10) / 10, label: y.lines.map(ln => ln.name + (ln.color ? ' ' + ln.color : '')).join(' · ').slice(0, 80), note: String(N.value || '').trim().slice(0, 200) });
+      const ok = await put(x, { kind: 'st', part: 'gs', stage: 'yarn_in', body: Math.round(kg * 10) / 10, label: y.lines.map(ln => ln.name + (ln.color ? ' ' + ln.color : '')).join(' · ').slice(0, 80), note: String(N.value || '').trim().slice(0, 200) }, st.rq);
       st.busy = false; const mine = sheetIs(st.tok); const blobs = (st.qs || []).map(q => q && q.blob).filter(Boolean);   /* hotfix658 */
       if (ok) { if (mine) closeSheet(); ring(); toast(`원사 ${Math.round(kg * 10) / 10}kg 받았다고 ${CN()}에 알렸습니다` + (blobs.length ? ` · 송장 사진 ${blobs.length > 1 ? blobs.length + '장 ' : ''}올리는 중` : '')); if (blobs.length) (async () => { for (const b of blobs) await kPhotoBg(x, b); })(); render(); } else if (mine) draw(); });
   };
@@ -1788,7 +1812,7 @@ function kHist() {   /* hotfix581(대표 10/1): 보낸 내역 = 내가 보낸 �
     + '<div class="empty" style="padding:14px 10px;font-size:13px">앱으로 보낸 출고만 나옵니다 · [보낸 것 취소]를 누르면 ' + esc(CN()) + '가 확인한 뒤 다시 출고 대기로 돌아갑니다</div>';
 }
 function kCxSheet(l) {
-  const x = kList().find(i => i.k === l.k) || { k: l.k, no: l.wo }; const st = { busy: false, tok: 0, n: '' };
+  const x = kList().find(i => i.k === l.k) || { k: l.k, no: l.wo }; const st = { busy: false, tok: 0, n: '', rq: kRq() };   /* hotfix668: 요청 번호 */
   const draw = () => { st.tok = sheet(`<h3>보낸 것 취소</h3><div class="sub">${esc(x.item || l.wo || '')} ${esc(x.lot || '')} · ${kQ(l.body)}절${Number(l.n) ? ' · ' + l.n + 'kg' : ''}<br>${esc(CN())}가 확인하면 다시 출고 대기(할 일)로 돌아갑니다.</div>
       <div class="k-lab">왜 취소하나요? (안 적어도 됩니다)</div>
       <div class="k-num"><input id="cx-n" type="text" placeholder="예: 수량을 잘못 넣음" style="font-size:17px;font-weight:600;text-align:left;padding:0 12px" value="${esc(st.n)}"></div>
@@ -1796,7 +1820,7 @@ function kCxSheet(l) {
     $('sheet').querySelector('[data-x]').addEventListener('click', () => { closeSheet(); render(); });
     const N = $('cx-n'); N.addEventListener('input', () => { st.n = N.value; });
     $('cx-send').addEventListener('click', async () => { if (st.busy) return; st.busy = true; draw();
-      const ok = await put({ k: l.k, no: l.wo }, { kind: 'cancel', part: 'gs', ref: l.id, note: String(st.n || '').trim().slice(0, 200) });
+      const ok = await put({ k: l.k, no: l.wo }, { kind: 'cancel', part: 'gs', ref: l.id, note: String(st.n || '').trim().slice(0, 200) }, st.rq);
       st.busy = false; const mine = sheetIs(st.tok); if (ok) { if (mine) closeSheet(); toast('취소를 보냈습니다 — ' + CN() + '가 확인하면 알려 드립니다'); render(); } else if (mine) draw(); });
   };
   draw();
@@ -1860,7 +1884,7 @@ function kMv() {
 }
 function kMvSheet(x, mode) {   /* mode: send | recv | diff */
   const u = kMvU(x); const exp = mode === 'send' ? (x.left > 0 ? x.left : x.qty) : kMvYm(x) ? Math.round(((x.got || 0) + (x.left || 0)) * 10) / 10 : (String(x.k).startsWith('gm:') && x.left > 0 ? x.left : (x.got || x.qty));   /* 원사이동: 받은 합계로 */
-  const st = { j: exp, n: '', busy: false, tok: 0 };
+  const st = { j: exp, n: '', busy: false, tok: 0, rq: kRq() };   /* hotfix668: 요청 번호 */
   if (mode === 'recv') { if (!confirm(`${x.item} ${x.lot || ''}\n${x.from} → ${x.to}\n\n${kMvYm(x) && x.got ? '지금까지 받은 합계 ' : ''}${kQ(exp)}${u} 잘 받았나요?`)) return; kMvPut(x, 'mv_recv', exp, exp, '', ''); return; }
   const draw = () => {
     st.tok = sheet(`<h3>${mode === 'send' ? '보냈어요' : '수량이 달라요'} — ${esc(x.item)} <span style="color:#b45309">${esc(x.lot || '')}</span></h3><div class="sub">${esc(x.from)} → ${esc(x.to)} · ${mode === 'send' ? '의뢰' : '들어와야 할 것'} ${kQ(exp)}${u}</div>
@@ -1876,15 +1900,15 @@ function kMvSheet(x, mode) {   /* mode: send | recv | diff */
     $('mv-go').addEventListener('click', async () => { const j = parseFloat(J.value); if (!(j >= 0) || (mode === 'send' && !(j > 0))) { toast('수를 넣어 주세요', true); return; }
       if (mode === 'diff' && Math.abs(j - exp) < 0.05 && !confirm('들어와야 할 수와 같습니다. [잘 받았어요]로 보낼까요?')) return;
       st.busy = true; st.j = j; st.n = N.value; draw();
-      const ok = await kMvPut(x, mode === 'send' ? 'mv_send' : 'mv_recv', j, exp, String(N.value || '').trim().slice(0, 200), mode === 'diff' && Math.abs(j - exp) >= 0.05 ? 'diff' : '');
+      const ok = await kMvPut(x, mode === 'send' ? 'mv_send' : 'mv_recv', j, exp, String(N.value || '').trim().slice(0, 200), mode === 'diff' && Math.abs(j - exp) >= 0.05 ? 'diff' : '', st.rq);
       st.busy = false; const mine = sheetIs(st.tok); if (ok) { if (mine) closeSheet(); render(); } else if (mine) draw(); });
   };
   draw();
 }
-async function kMvPut(x, stage, n, body, note, reason) {
+async function kMvPut(x, stage, n, body, note, reason, rq) {   /* hotfix668: rq 요청 번호 */
   const o = { kind: 'st', part: 'gs', stage, n: Math.round((parseFloat(n) || 0) * 10) / 10, body: Math.round((parseFloat(body) || 0) * 10) / 10, label: (String(x.item || '') + ' ' + String(x.lot || '')).trim().slice(0, 80), note: note || '' };
   if (reason) o.reason = reason;
-  const ok = await put({ k: x.k, no: x.no || '' }, o);
+  const ok = await put({ k: x.k, no: x.no || '' }, o, rq);
   if (ok) { ring(); toast(stage === 'mv_send' ? `보냈다고 ${CN()}에 알렸습니다` : (reason ? `수량이 다르다고 ${CN()}에 알렸습니다 — 확인하면 알려 드립니다` : `잘 받았다고 ${CN()}에 알렸습니다`)); }
   return ok;
 }
@@ -1976,7 +2000,7 @@ function kBindPhotoM(st, redraw) { const b = $('k-ph'), f = $('k-file'); if (!b 
 function kShipSheet(x) {
   try { kStorage(); } catch (_) {}   /* hotfix581: 사진 올리는 부품을 미리 받아 둠 */
   S.sending = S.sending || {}; if (S.sending[x.k]) { toast('이 건은 지금 보내는 중입니다 — 잠시 뒤 [할 일]을 보십시오'); return; }   /* hotfix579: 같은 건 두 번 보내지 않게 */
-  const v = kView(x); const st = { j: kQ(v.pend), kg: '', q: null, qs: [], memo: '', busy: false, tok: 0, err: {} };   /* hotfix657(V8): 이 창 하나로 끝 — 절(기본 남음) · kg 선택 · 송장 사진 여러 장 · 메모 → [보냄] */
+  const v = kView(x); const st = { j: kQ(v.pend), kg: '', q: null, qs: [], memo: '', busy: false, tok: 0, err: {}, rq: kRq(), dup: null };   /* hotfix668: rq 요청 번호(이 창) · dup 확인 전 보고 안내 */   /* hotfix657(V8): 이 창 하나로 끝 — 절(기본 남음) · kg 선택 · 송장 사진 여러 장 · 메모 → [보냄] */
   const bdg = req => `<span class="k-bdg ${req ? 'req' : 'opt'}">${req ? '필수' : '선택'}</span>`;
   const errT = k => st.err[k] ? `<div class="k-err-t" id="sh-e-${k}">${esc(st.err[k])}</div>` : '';
   const draw = () => {
@@ -1988,7 +2012,8 @@ function kShipSheet(x) {
       ${kPhotoFieldM(st, kInvAsk(x) ? `<div class="k-lab">송장 사진${bdg(0)} <small class="k-invask" style="font-weight:700;color:#b45309">현일텍스가 송장 사진을 요청했어요</small></div><div class="k-hint">안 찍어도 보낼 수 있어요(팩스도 됨) · 여러 장 찍을 수 있어요</div>` : '')}
       <div class="k-lab">메모${bdg(0)}</div>
       <div class="k-num"><input id="k-memo" type="text" maxlength="300" autocomplete="off" placeholder="예: 박스 3개 · 오후 차" style="font-size:17px;font-weight:600;text-align:left;padding:0 12px" value="${esc(st.memo)}"></div>
-      <div class="row2"><button type="button" class="no" data-x>닫기</button><button type="button" class="ok" id="k-send"${st.busy ? ' disabled' : ''}>${st.busy ? '보내는 중…' : '보냄'}</button></div>`);
+      ${st.dup ? kWaitBox(st.dup, 'sh-dup') : ''}
+      <div class="row2"><button type="button" class="no" data-x>닫기</button><button type="button" class="ok" id="k-send"${st.busy ? ' disabled' : ''}>${st.busy ? '보내는 중…' : (st.dup ? '그래도 보냄' : '보냄')}</button></div>`);
     $('sheet').querySelector('[data-x]').addEventListener('click', () => { closeSheet(); render(); });
     const J = $('k-j'), K = $('k-kg');
     const ok = (k, el) => { if (!st.err[k]) return; delete st.err[k]; if (el) el.classList.remove('k-bad'); const t = $('sh-e-' + k); if (t) t.remove(); };   /* 고치기 시작하면 빨강 풀림 */
@@ -2007,11 +2032,16 @@ function kShipSheet(x) {
       if (kgT && !(kg > 0)) st.err.kg = '출고 합계(kg)는 숫자로 넣어 주세요 (예: 210.4)';   /* hotfix657(V8 대표 10/12): kg 은 선택 — 비우면 0 으로 보냄(현일텍스는 n 0 보고도 받음) · 636 의 필수는 거둠 */
       const first = ['j', 'kg'].find(k => st.err[k]);
       if (first) { draw(); const el = $(first === 'j' ? 'k-j' : 'k-kg'); if (el) { el.scrollIntoView({ block: 'center' }); el.focus({ preventScroll: true }); } return; }
-      if (j > v.pend && !confirm(`주문보다 많이 보냈나요? (남은 ${kQ(v.pend)}절 · 적은 ${kQ(j)}절)\n\n맞으면 [확인]`)) return;
+      /* hotfix668: 보내기 직전 다시 셈 — 창을 연 뒤 다른 휴대폰이 보낸 것 · 확인 전 보고가 있으면 안내 + 한 번 더 누름 · 남은 절도 지금 기준 */
+      const sr = (S.stock || []).find(r => (r.pg || []).some(p => p.g === x.k));
+      const wt = sr ? kWaitOf(sr, st.rq).L : kSent(x).filter(l => l.id !== st.rq).map(l => ({ l, dest: x.dest || '', gs: true }));
+      if (wt.length && !st.dup) { st.dup = wt; draw(); const o = $('sh-dup'); if (o) o.scrollIntoView({ block: 'center' }); return; }
+      const pend = Math.max(0, (x.pend || 0) - kSent(x).filter(l => l.id !== st.rq).reduce((a, l) => a + (parseFloat(l.body) || 0), 0));
+      if (j > pend && !confirm(`주문보다 많이 보냈나요? (남은 ${kQ(pend)}절 · 적은 ${kQ(j)}절)\n\n맞으면 [확인]`)) return;
       st.busy = true; S.sending[x.k] = true; draw();
       /* hotfix581(대표 10/1 "전송이 매우 느림"): 숫자를 먼저 보내고 바로 닫음 — 송장 사진은 뒤에서 올림 (못 올리면 할 일에 [송장 사진 못 올림]이 남음) */
       const memo = String(st.memo || '').trim().slice(0, 300); const blobs = (st.qs || []).map(q => q && q.blob).filter(Boolean);
-      let ok2 = false; try { ok2 = await put(x, Object.assign({ kind: 'ship', part: 'gs', body: j, n: kg > 0 ? kg : 0 }, memo ? { note: memo } : {})); } finally { delete S.sending[x.k]; }
+      let ok2 = false; try { ok2 = await put(x, Object.assign({ kind: 'ship', part: 'gs', body: j, n: kg > 0 ? kg : 0 }, memo ? { note: memo } : {}), st.rq); } finally { delete S.sending[x.k]; }
       st.busy = false; const mine = sheetIs(st.tok);
       if (ok2) { if (mine) closeSheet(); ring(); toast((j < v.pend ? `${kQ(j)}절 보냈다고 알렸습니다 — 남은 ${kQ(v.pend - j)}절은 할 일에 남습니다` : `${kQ(j)}절 보냈다고 ${CN()}에 알렸습니다`) + (blobs.length ? ` · 송장 사진 ${blobs.length > 1 ? blobs.length + '장 ' : ''}올리는 중` : '')); if (blobs.length) (async () => { for (const b of blobs) await kPhotoBg(x, b); })(); render(); } else if (mine) draw(); else toast('보내지 못했습니다 — 다시 눌러 주세요', true);   /* hotfix657(V8): 사진은 예전과 같은 길(gs_photos · st/photo 기록)로 한 장씩 차례로 */
     });

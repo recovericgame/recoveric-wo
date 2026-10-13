@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="FABIWOS">
 <meta name="mobile-web-app-capable" content="yes">
-<title>FABIWOS v2.53 hotfix667</title>
+<title>FABIWOS v2.53 hotfix668</title>
 <script>
 /* ===== HWChat 대화 화면 공용 (hotfix620 · 대표 10/9 "카톡처럼 쉽고 멋있게") — 이음 · 편직팀 앱 · 염/가공소 앱 · 현장 QC 앱이 같은 모양
  *   말풍선(내 글 노랑 · 받은 글 흰색) · 같은 사람 1분 안 글은 묶음(이름 · 사진은 첫 글, 시간은 끝 글) · 안 읽음 1
@@ -32433,6 +32433,19 @@ function validateBlendSum(blends, label) {
     if ((st.rep || []).some(o => o && o.id !== l.id && (parseFloat(o.body) || 0) === j && Math.abs(t(o) - t(l)) < 600000)) F.push('같은 수량 보고가 10분 안에 2건 — 두 번 보낸 것일 수 있음');
     return F; }
   if (typeof window !== 'undefined') window.__gsRepFlags = gsRepFlags;
+  /* hotfix668: 공장 출고 보고 확인 전 다시 보기(트랜잭션 안 · 최신 자료) — ① 같은 품목 줄 · 같은 절 · 같은 출고처로 24시간 안에 이미 들어간 출고 줄(다른 보고 · 사무실 직접 입력 포함)
+   *   ② 확인하면 그 줄 재고(의뢰 + 입고 − 출고)가 마이너스 · 둘 중 하나라도 있으면 쓰지 않고 'warn' → 사무실이 [그래도 확인]해야 씀 (막지는 않음) */
+  const GS_DUP_MS = 24 * 3600e3;
+  const gsNv668 = v => { try { return normalizeVendorName(String(v || '').trim()); } catch (_) { return String(v || '').trim(); } };
+  function gsDupLines(sh, ii, j, dest, logId) { const now = Date.now(), dn = gsNv668(dest);
+    return (sh || []).filter(x => x && x.dir !== 'in' && shLive(x) && !gsPend(x) && (x.item_idx != null ? x.item_idx : 0) === ii && (!logId || x.conf_log !== logId) && Math.abs((parseFloat(x.jul) || 0) - j) < 0.05
+      && (!dn || gsNv668(x.dest || x.gs_dest || '') === dn) && (now - (Date.parse(x.conf_at || x.at || '') || 0)) < GS_DUP_MS); }
+  function gsRemOf(w, sh, ii) { const it = ((w && w.items) || [])[ii] || {}; let r = parseFloat(it.jul) || 0; (sh || []).forEach(x => { if (!shLive(x) || (x.item_idx != null ? x.item_idx : 0) !== ii) return; const q = parseFloat(x.jul) || 0; r += x.dir === 'in' ? q : -q; }); return Math.round(r * 10) / 10; }
+  function gsWarn668(w, sh, ii, j, dest, logId, addOut) { const W = []; const hm = s => { const d = new Date(Date.parse(s || '') || 0); return (d.getMonth() + 1) + '/' + d.getDate() + ' ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); };
+    gsDupLines(sh, ii, j, dest, logId).slice(0, 3).forEach(x => W.push(`같은 출고가 이미 들어가 있음 — ${hm(x.conf_at || x.at)} · ${parseFloat(x.jul) || 0}절${(x.dest || x.gs_dest) ? ' → ' + (x.dest || x.gs_dest) : ''} (${x.conf_log ? '공장 보고 확인' : '직접 입력'}${x.conf_by || x.by ? ' · ' + String(x.conf_by || x.by).split('@')[0] : ''})`));
+    const rem = gsRemOf(w, sh, ii), after = Math.round((rem - (addOut || 0)) * 10) / 10; if (after < -0.05) W.push(`확인하면 이 줄 재고가 ${after}절(마이너스)이 됩니다 — 지금 재고 ${rem}절`);
+    return W; }
+  if (typeof window !== 'undefined') window.__gsWarn668 = gsWarn668;
   /* hotfix596: 나눠 적은 보고를 공장이 취소하면 — 그 보고로 확정한 줄 전부를 출고 대기로 되돌림 (한 트랜잭션) */
   async function gsUnconfSpread(g, o, H) {
     const by = (state.user && state.user.email) || ''; const ids = Array.from(new Set(H.map(h => h.wo.id))); const refs = ids.map(id => doc(db, C('workorders'), id));
@@ -32451,7 +32464,7 @@ function validateBlendSum(blends, label) {
     return true;
   }
   // 보고대로 확정 — 트랜잭션 · 같은 보고는 한 번만 (conf_log)
-  async function gsConfirmReport(g, l) {
+  async function gsConfirmReport(g, l, opt) {   /* hotfix668: opt = { chk, ok, w } — [보고대로 확인]에서만 같은 출고 · 마이너스 되물음 */
     if (!g || !l) return false; if (typeof canWriteWo === 'function' && !canWriteWo()) { toast('출고 확인 권한이 없습니다', 'error'); return false; }
     const L = gsLinesOf(g.id); const o = L.find(o => gsPend(o.x)); if (!o) { toast('출고 대기 줄이 없습니다 — 이미 확인했거나 취소됐습니다', 'warning'); return false; }
     const j = parseFloat(l.body) || 0, kg = parseFloat(l.n) || 0; if (!(j > 0)) { toast('보고한 절수가 없습니다', 'error'); return false; }
@@ -32464,12 +32477,14 @@ function validateBlendSum(blends, label) {
         if (sh.some(x => x && x.conf_log === l.id)) return false;
         const i = sh.findIndex(x => x && x.src === 'gs' && x.gs_id === g.id && gsPend(x)); if (i < 0) return false;
         const x = sh[i]; const it = (w.items || [])[x.item_idx || 0] || {}; const kpj = itemKpj(it); const orig = parseFloat(x.jul) || 0;   /* hotfix636: kg/절 = itemKpj */
+        if (opt && opt.chk && !opt.ok) { const W = gsWarn668(w, sh, x.item_idx != null ? x.item_idx : 0, j, x.dest || x.gs_dest || '', l.id, Math.max(0, j - orig)); if (W.length) { opt.w = W; return 'warn'; } }   /* hotfix668 */
         const at = new Date().toISOString();
         sh[i] = Object.assign({}, x, { jul: j, kg: kg > 0 ? Math.round(kg * 10) / 10 : Math.round(j * kpj * 10) / 10, kg_manual: kg > 0, conf: true, conf_at: at, conf_by: by, conf_via: 'app', conf_rep: 'app:' + String(l.uid || '').slice(0, 12), conf_log: l.id, ord_jul: x.ord_jul || orig, ...(l.ref ? { photo: String(l.ref) } : {}), ...(l.note ? { conf_note: String(l.note).slice(0, 300) } : {}) });
         if (j < orig) { const rest = Math.round((orig - j) * 10) / 10; sh.push(Object.assign({ dir: 'out', item_idx: x.item_idx, jul: rest, kg: Math.round(rest * kpj * 10) / 10, kg_manual: false, date: x.date, memo: String(x.memo || '').replace(/ \(남은 것\)$/, '') + ' (남은 것)', src: 'gs', gs_id: x.gs_id, gs_number: x.gs_number || '', void: false, gs_rest: true, rest_of: l.id, conf: false, by, at }, x.gs_lot ? { gs_lot: x.gs_lot } : {})); }
         tx.update(ref, { greige_shipments: sh, updated_at: serverTimestamp(), updated_by: by });
         return true;
       });
+      if (done === 'warn') return 'warn';   /* hotfix668: 쓰지 않음 — 사무실이 되물음에 답한 뒤 다시 */
       if (!done) { toast('이미 확인했거나 출고 대기 줄이 없습니다', 'warning'); return false; }
     } catch (e) { toast('출고 확인을 적지 못했습니다: ' + ((e && e.message) || ''), 'error'); return false; }
     if (l.ref && !(g.gs_photo && g.gs_photo.path)) { try { await updateDoc(doc(db, C('workorders'), g.id), { gs_photo: { path: String(l.ref), at: new Date().toISOString(), log: l.id }, gs_inv_req: false }); } catch (_) {} }
@@ -33760,6 +33775,7 @@ function validateBlendSum(blends, label) {
         sh[ix] = Object.assign({}, x, { kg: xk, kg_manual: true, conf: true, conf_at: new Date().toISOString(), conf_by: by, conf_via: 'merge', ord_jul: x.ord_jul || xj, mg_log: l.id }); });
       if (mj > j + 1e-6) return 'over';
       const nj = Math.round((j - mj) * 10) / 10, nk = Math.max(0, Math.round((tk - mk) * 10) / 10);
+      if (o.chk && !o.ok668) { const W = gsWarn668(w, sh, o.ii, j, l.chip, l.id, nj); if (W.length) { o.w668 = W; return 'warn'; } }   /* hotfix668: [보고대로 확인] — 같은 출고 24시간 안 · 재고 마이너스면 쓰지 않고 되물음 (사무실 대행 · 다시 반영은 그대로) */
       sh.push(Object.assign({ dir: 'out', item_idx: o.ii, jul: nj, kg: nk, kg_manual: kg > 0, date: ymd, dest: String(l.chip || '').slice(0, 60), memo: (o.office ? '사무실 대행 출고' : '편직공장 앱 출고 보고') + (l.chip ? ' → ' + l.chip : '') + (l.note ? ' · ' + String(l.note).slice(0, 80) : '') + (mgN.length ? ' [생지출고 ' + mgN.join(', ') + ' 포함 → 따로 뺌]' : ''), src: o.office ? 'office' : 'app', conf: true, conf_log: l.id, by, at: new Date().toISOString(), void: false, id: stockLineId('gapp') }, o.office ? { conf_via: 'office' } : {}, gsPhFields(o.ph)));   /* hotfix634: o.office = 사무실 대행 기록(src 'office') */
       tx.update(ref, { greige_shipments: sh, updated_at: serverTimestamp(), updated_by: by }); shOut = sh; return 'ok'; }); } catch (e) { console.warn('[공장 출고 확인]', e && e.message); return 'err'; }
     if (res === 'ok' && o.office && shOut) o.wo.greige_shipments = shOut;   /* hotfix634: 사무실 대행은 창을 바로 다시 그림 (gsLineConfirm 과 같게) */
@@ -34283,7 +34299,9 @@ function validateBlendSum(blends, label) {
     if (it.t === 'self') {
       const o = Object.assign({}, it.o, fix ? { fj: fix.j, fk: fix.kg } : {}); if (!o.wo) { toast('편직 의뢰서를 찾지 못했습니다', 'error'); return; }
       if (l.chip && window.hwDestOk && !window.hwDestOk(l.vendor, l.chip) && !confirm(`보낸 곳 "${l.chip}" 은(는) [관리 › 가공소 · 편직공장 계정 › 편직공장별 보낼 곳]에 등록된 곳이 아닙니다.\n그대로 확인하면 재고 출고처로 "${l.chip}" 이 남습니다.\n\n[취소] 후 [반려]로 다시 보내 달라고 할 수 있습니다. 그래도 확인할까요?`)) return;   /* hotfix622 */
-      const go = async () => { b.disabled = true; const r = await gsSelfConfirm(o); if (r === 'over') { toast('체크한 출고 대기 절수가 공장이 보낸 절수보다 많습니다', 'error'); b.disabled = false; return; }
+      const go = async () => { b.disabled = true; o.chk = true; let r = await gsSelfConfirm(o);
+        if (r === 'warn') { if (!confirm(`주의\n\n${(o.w668 || []).map(t => '· ' + t).join('\n')}\n\n같은 출고를 두 번 넣거나 재고보다 많이 빼는 것일 수 있습니다. 그래도 확인하려면 [확인]`)) { b.disabled = false; return; } o.ok668 = true; r = await gsSelfConfirm(o); }   /* hotfix668 */
+        if (r === 'over') { toast('체크한 출고 대기 절수가 공장이 보낸 절수보다 많습니다', 'error'); b.disabled = false; return; }
         if (r === 'ok' || r === 'dup') { toast(`${l.vendor} 출고 ${fix ? fix.j : (parseFloat(l.body) || 0)}절을 재고에 넣었습니다`, 'success'); again(); } else { toast('넣지 못했습니다 — ' + r, 'error'); b.disabled = false; } };
       /* hotfix618: 그 편직 줄에 생지출고 대기가 있으면 — 이 출고에 함께 나간 것을 고름 */
       const PD = (o.wo.greige_shipments || []).filter(x => x && (x.item_idx != null ? x.item_idx : 0) === o.ii && gsPend(x));
@@ -34295,7 +34313,9 @@ function validateBlendSum(blends, label) {
     const g = it.g; const lx = fix ? Object.assign({}, l, { body: fix.j, n: fix.kg }) : l;   /* 같은 보고(id) 그대로 — 고친 절 · kg 로 확정 (두 번 반영 막기 그대로) */
     { const fl = gsRepFlags(gsStateOf(g), lx); if (fl.length && !confirm(`주의\n\n${fl.map(t => '· ' + t).join('\n')}\n\n송장과 맞는지 확인하셨습니까? 맞으면 [확인]`)) return; }   /* hotfix596 */
     if (!confirm(`${g.recipient || ''} ${fix ? '고친 수량으로' : '보고대로'} 확정합니다.\n\n${g.wo_number || ''} · ${parseFloat(lx.body) || 0}절${Number(lx.n) ? ' · ' + lx.n + 'kg' : ''}\n\n재고에 출고로 확정됩니다.`)) return;
-    b.disabled = true; if (await gsConfirmReport(g, lx)) again(); else b.disabled = false;
+    b.disabled = true; const op = { chk: true }; let rr = await gsConfirmReport(g, lx, op);
+    if (rr === 'warn') { if (!confirm(`주의\n\n${(op.w || []).map(t => '· ' + t).join('\n')}\n\n같은 출고를 두 번 넣거나 재고보다 많이 빼는 것일 수 있습니다. 그래도 확인하려면 [확인]`)) { b.disabled = false; return; } op.ok = true; rr = await gsConfirmReport(g, lx, op); }   /* hotfix668 */
+    if (rr === true) again(); else b.disabled = false;
   }
   function gsRepCardBind(root, R, again) {
     if (!root || !R || !R.length) return;
@@ -63660,7 +63680,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix667';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
+  const VERSION = 'v2.53 hotfix668';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
