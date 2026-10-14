@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="FABIWOS">
 <meta name="mobile-web-app-capable" content="yes">
-<title>FABIWOS v2.53 hotfix672</title>
+<title>FABIWOS v2.53 hotfix675</title>
 <script>
 /* ===== HWChat 대화 화면 공용 (hotfix620 · 대표 10/9 "카톡처럼 쉽고 멋있게") — 이음 · 편직팀 앱 · 염/가공소 앱 · 현장 QC 앱이 같은 모양
  *   말풍선(내 글 노랑 · 받은 글 흰색) · 같은 사람 1분 안 글은 묶음(이름 · 사진은 첫 글, 시간은 끝 글) · 안 읽음 1
@@ -11848,11 +11848,11 @@ function woById581(id) { const A = (typeof state !== 'undefined' && Array.isArra
 function gsFnMissing(g) { if (!g || !g.source_fn_id || g.gs_keep) return false; const A = (typeof state !== 'undefined' && Array.isArray(state.allWorkOrders)) ? state.allWorkOrders : []; if (!state.__woLoaded || A.length < 100) return false; return !woById581(g.source_fn_id); }
 function gsFnGone(g) { if (!g || !g.source_fn_id || g.gs_keep) return false; const f = woById581(g.source_fn_id); return !!(f && f.deleted); }
 // hotfix414: 생지출고의뢰서가 가리키는 통(편직 의뢰서 + 품목 줄) — 편직공장 · 품목(fid 또는 이름) · 로트 · (컬러). 여럿이면 컬러가 맞는 것, 그래도 여럿이면 최근 것
-function knitLotFind(itemName, fid, greigeNo, factory, color) {
+function knitLotFind(itemName, fid, greigeNo, factory, color, noLotOk) {   /* hotfix675: noLotOk = 로트 없는 생지도 그 공장 통에서 찾음 — 생지출고 저장 때(gsAutoShipment)만 켬 · 다른 곳은 672 그대로 */
   const id = String(fid || '').trim() || itemFidOf(itemName);
   const k = vendorKey(greigeSplit(itemName).name || itemName);
   const no = greigeNoClean(greigeNo); const fk = greigeLotKeyOf(factory); const ck = color ? yarnColorKey(color) : '';
-  if (!no) return null;
+  if (!no && !(noLotOk && fk)) return null;
   const srcs = itemSourceFids(itemName, fid);   /* hotfix434 */
   const list = ((typeof state !== 'undefined' && Array.isArray(state.allWorkOrders)) ? state.allWorkOrders : []);
   const hits = [];
@@ -11866,11 +11866,12 @@ function knitLotFind(itemName, fid, greigeNo, factory, color) {
         || (srcs.length > 1 && itF && srcs.includes(itF));   /* hotfix434: 파생 품목 → 원래 생지의 통 */
       if (!same) return;
       if ((greigeNoClean(it.greige_no) || greigeSplit(it.item).no) !== no) return;
-      hits.push({ wo, idx, colorOk: !ck || yarnColorKey(it.color) === ck, rank: (srcs.indexOf(itF) < 0 ? 0 : srcs.indexOf(itF)), srcFid: itF });
+      const has = no ? 0 : ((parseFloat(it.jul) || 0) + (wo.greige_shipments || []).reduce((a, x) => a + ((shLive(x) && (x.item_idx != null ? x.item_idx : 0) === idx) ? (x.dir === 'in' ? 1 : -1) * (parseFloat(x.jul) || 0) : 0), 0) > 0 ? 1 : 0);   /* hotfix675(673 그대로): 로트 없는 통이 여럿이면 재고 남은 통 먼저 */
+      hits.push({ wo, idx, colorOk: !ck || yarnColorKey(it.color) === ck, rank: (srcs.indexOf(itF) < 0 ? 0 : srcs.indexOf(itF)), srcFid: itF, has });
     });
   });
   if (!hits.length) return null;
-  hits.sort((a, b) => (b.colorOk - a.colorOk) || (a.rank - b.rank) || String(b.wo.date || '').localeCompare(String(a.wo.date || '')));
+  hits.sort((a, b) => (b.colorOk - a.colorOk) || ((b.has || 0) - (a.has || 0)) || (a.rank - b.rank) || String(b.wo.date || '').localeCompare(String(a.wo.date || '')));
   if (new Set(hits.map(h => h.srcFid || '')).size > 1) hits[0].ambiguous = true;   /* hotfix434: 같은 곳 · 같은 로트 번호가 두 생지에 있음 — 자기 통 → 원래 생지 차례로 고른다 */
   return hits[0];
 }
@@ -32342,7 +32343,7 @@ function validateBlendSum(blends, label) {
       }
       return done.length ? { multi: done, wo: done[0].wo, line: { jul: total } } : null;
     }
-    const hit = knitLotFind(gsWo.gs_item, gsWo.gs_item_fid, gsWo.gs_greige_no, gsWo.recipient, gsWo.gs_color);
+    const hit = knitLotFind(gsWo.gs_item, gsWo.gs_item_fid, gsWo.gs_greige_no, gsWo.recipient, gsWo.gs_color, true);   /* hotfix675: 로트 없는 생지도 공장을 알면 그 통에 출고 대기 (673 V쭈리) — 옛 건 일괄 잇기는 gsRelink 가 거름 */
     if (!hit) return null;
     if (hit.ambiguous) { try { toast('같은 곳에 같은 로트 번호(' + greigeNoClean(gsWo.gs_greige_no) + ')의 생지가 둘 있습니다 — [' + String(((hit.wo.items || [])[hit.idx] || {}).item || '') + '] 통에서 뺍니다. 다르면 [생지 생산 및 재고]에서 고쳐 주십시오', 'warning'); } catch (_) {} }   /* hotfix434 */
     const { wo, idx } = hit; const it = (wo.items || [])[idx] || {};
@@ -32352,7 +32353,7 @@ function validateBlendSum(blends, label) {
     let line = null;
     { const r = await gsShTx(wo.id, sh => {   /* hotfix669: 트랜잭션 — 최신 문서에서 그 생지출고 줄만 고치거나 더함 (그 사이 다른 PC 가 넣은 줄은 그대로) */
         const i = sh.findIndex(x => x && x.src === 'gs' && x.gs_id === gsWo.id); const prev = i >= 0 ? sh[i] : null;
-        line = Object.assign({}, prev || {}, { dir: 'out', item_idx: idx, jul, kg: (prev && prev.kg_manual) ? prev.kg : Math.round(jul * kpj * 10) / 10, kg_manual: !!(prev && prev.kg_manual), date: gsWo.date || todayYMD(), memo: '생지출고 ' + (gsWo.wo_number || '') + (gsWo.gs_dest ? ' → ' + gsWo.gs_dest : ''), src: 'gs', gs_id: gsWo.id, gs_number: gsWo.wo_number || '', void: false, by, at });
+        line = Object.assign({}, prev || {}, { dir: 'out', item_idx: idx, jul, kg: (prev && prev.kg_manual) ? prev.kg : Math.round(jul * kpj * 10) / 10, kg_manual: !!(prev && prev.kg_manual), date: gsWo.date || todayYMD(), memo: '생지출고 ' + (gsWo.wo_number || '') + (gsWo.gs_dest ? ' → ' + gsWo.gs_dest : ''), src: 'gs', gs_id: gsWo.id, gs_number: gsWo.wo_number || '', void: false, by, at, mk: '675' });   /* hotfix675: mk = 675 이후 만든 줄 표시 — 673 사고 자동 복구가 절대 건드리지 않음 */
         if (!prev) line.conf = false;   /* hotfix562 */
         if (i >= 0) sh[i] = line; else sh.push(line); return 'ok'; });
       if (r.res !== 'ok') { if (r.res !== 'err') toast('생지 출고 줄을 적지 못했습니다: ' + ((r.err && r.err.message) || '편직 의뢰서를 찾지 못했습니다'), 'error'); return null; }
@@ -34497,12 +34498,100 @@ function validateBlendSum(blends, label) {
       .sort((a, b) => String(a.fac).localeCompare(String(b.fac), 'ko') || String(a.item).localeCompare(String(b.item), 'ko'));
   }
   async function gsRelink() {
-    const L = (state.allWorkOrders || []).filter(g => { if (!g || g.deleted || g.type !== '생지출고') return false; try { return gsStateOf(g).state === 'none'; } catch (_) { return false; } });
-    let n = 0; for (const g of L) { try { const r = await gsAutoShipment(g); if (r) n++; } catch (_) {} }
+    const cut2 = (() => { const d = new Date(Date.now() - 2 * 864e5); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); })();
+    const noLotOld = g => !(Array.isArray(g.gs_mix) && g.gs_mix.length > 1) && !greigeNoClean(g.gs_greige_no) && !(String(g.date || '').slice(0, 10) >= (cut2 > '2026-10-14' ? cut2 : '2026-10-14'));   /* hotfix675(대표 10/14 673 사고): 로트 없는 생지출고는 2일 안 것만 다시 잇는다(로트 없이 잇기를 시작한 10/14 이후 것만) — 옛 건을 한꺼번에 옛 통에 출고 대기로 붙이지 않음 */
+    const L = (state.allWorkOrders || []).filter(g => { if (!g || g.deleted || g.type !== '생지출고') return false; if (noLotOld(g)) return false; try { return gsStateOf(g).state === 'none'; } catch (_) { return false; } });
+    /* hotfix675(673 그대로 · GS-20261013-001): 그 통에 공장이 의뢰서 없이 [출고했어요]로 같은 절수를 ±2일 안에 보낸 것이 있으면 이미 나간 것 — 잇지 않음 */
+    const selfDone = g => { try { if (Array.isArray(g.gs_mix) && g.gs_mix.length > 1) return false; const h = knitLotFind(g.gs_item, g.gs_item_fid, g.gs_greige_no, g.recipient, g.gs_color, true); if (!h) return false; const key = h.wo.id + '_' + h.idx, q = parseFloat(g.gs_qty) || 0, t0 = Date.parse(String(g.date || '').slice(0, 10)) || 0;
+      return gsLogs().some(l => l && l.by === 'vendor' && l.part === 'gs' && l.kind === 'ship' && l.reason === 'self' && String(l.k) === key && Math.abs((parseFloat(l.body) || 0) - q) < 0.05 && t0 && Math.abs(gsT(l) - t0) <= 2 * 864e5); } catch (_) { return false; } };
+    const L2 = L.filter(g => !selfDone(g) && ((Array.isArray(g.gs_mix) && g.gs_mix.length > 1) || !!knitLotFind(g.gs_item, g.gs_item_fid, g.gs_greige_no, g.recipient, g.gs_color, true)));
+    if (L2.length > 5 && !confirm(`생지출고의뢰서 ${L2.length}건을 한꺼번에 편직 통에 이으려 합니다(출고 대기로 잡힘).
+
+평소에는 한두 건입니다. 이어도 되면 [확인], 모르면 [취소]를 누르고 관리자에게 알려 주십시오.`)) { console.warn('[gs relink] 5건 넘음 — 멈춤', L2.length); return 0; }   /* hotfix675: 안전 장치 — 한 번에 5건 넘게 이으려 하면 사람에게 묻는다 */
+    let n = 0; for (const g of L2) { try { const r = await gsAutoShipment(g); if (r) n++; } catch (_) {} }
     if (n) toast(`생지출고의뢰서 ${n}건을 새 통에 이었습니다 — 출고 대기로 잡혔습니다`, 'success');
     return n;
   }
   window.hwGsNoStock = gsNoStockList; window.hwGsRelink = gsRelink;
+  /* hotfix675(대표 10/14 673 사고 · 대표 부재 — 자동 복구 한 번): 673 의 gsRelink 가 옛 로트 없는 생지출고를 옛 편직 통에 출고 대기로 붙인 줄을 뺀다
+   *   언제: 675 를 연 사무실 직원(의뢰서 쓰기 권한) PC 에서 자료가 다 들어온 뒤 · 10/21 까지만 · 문서마다 fix673_done 이 있으면 다시 안 함(트랜잭션 — 여러 PC 가 동시에 열어도 한 번)
+   *   뺄 줄(A · 모두 맞아야): src 'gs' · conf false · 지움 아님 · 출고 · kg 직접 넣음 아님 · 만든 시각(at) 10/14 13시(KST) 이후 · 칸이 relink 가 쓰는 칸뿐 · 메모 "생지출고 …"
+   *     · 그 생지출고 의뢰서: 날짜 10/13 이하 · 로트 없음 · 섞임 아님 · 줄 날짜 = 의뢰서 날짜 · 그 의뢰서에 걸린 출고 줄이 모두 이 모양(확인 줄 · 다른 줄이 하나라도 있으면 손대지 않음)
+   *   뺄 줄(B): 오늘(10/14~) 생지출고 의뢰서 줄이 두 개 이상(확인 전 · 같은 모양)이면 가장 먼저 만든 하나만 남김
+   *   남김: 오늘 생지출고 줄 하나 · 확인 줄 · 사무실이 넣은 줄 · 그 밖 모든 줄 — 뺀 줄은 그 편직 의뢰서 fix673_removed[] 에 통째로(+ 뺀 시각 · 뺀 사람 · 까닭) 보관 · 최고관리자 [되살리기]
+   *   뒤: 오늘 로트 없는 생지출고에 줄이 하나도 없으면 gsAutoShipment 로 하나 만듦 · 원사 사용 줄 다시 셈 · 공장 공개본(proc_pub) 다시 씀 */
+  const U675 = { from: '2026-10-14T04:00:00.000Z', to: '2026-10-14T14:59:59.999Z', gsMax: '2026-10-13', today: '2026-10-14', until: '2026-10-21' };
+  const U675_KEYS = ['dir', 'item_idx', 'jul', 'kg', 'kg_manual', 'date', 'memo', 'src', 'gs_id', 'gs_number', 'void', 'by', 'at', 'conf'];
+  const u675Rng = opt => ({ from: (opt && opt.from) || U675.from, to: (opt && opt.to) || U675.to });   /* 673 이 살아 있던 때만: 10/14 13:00 ~ 23:59 KST */
+  const u675Shape = (x, rg) => !!(x && !x.mk && x.src === 'gs' && x.conf === false && !x.void && x.dir === 'out' && !x.kg_manual && String(x.at || '') >= rg.from && String(x.at || '') <= rg.to && !Object.keys(x).some(k => !U675_KEYS.includes(k)) && /^생지출고 /.test(String(x.memo || '')));
+  /* 지금 자료로 고름 → { [편직 의뢰서 id]: [{ gs_id, at, why }] } — 트랜잭션 안에서는 최신 줄에 같은 gs_id · at 가 있을 때만 뺌 */
+  function u675Plan(opt) {
+    const rg = u675Rng(opt), gsMax = (opt && opt.gsMax) || U675.gsMax, today = (opt && opt.today) || U675.today;
+    const W = state.allWorkOrders || []; const G = new Map(); W.forEach(w => { if (w && w.type === '생지출고') G.set(w.id, w); });
+    const byGs = new Map(); W.forEach(w => { if (!w || w.deleted || w.type !== '편직' || !Array.isArray(w.greige_shipments)) return; w.greige_shipments.forEach(x => { if (x && x.src === 'gs' && x.gs_id) { const a = byGs.get(x.gs_id) || []; a.push({ w, x }); byGs.set(x.gs_id, a); } }); });
+    const plan = {}; const add = (w, x, why) => { (plan[w.id] = plan[w.id] || []).push({ gs_id: x.gs_id, at: x.at, why }); };
+    byGs.forEach((L, gid) => { const g = G.get(gid); if (!g) return; const gd = String(g.date || '').slice(0, 10); if (!gd) return;
+      const noLot = !(Array.isArray(g.gs_mix) && g.gs_mix.length > 1) && !greigeNoClean(g.gs_greige_no);
+      if (gd <= gsMax) { if (!noLot) return; if (!L.every(o => u675Shape(o.x, rg) && String(o.x.date || '') === String(g.date || ''))) return; L.forEach(o => add(o.w, o.x, 'old')); return; }   /* A */
+      if (gd >= today) { const P = L.filter(o => u675Shape(o.x, rg)); if (P.length < 2 || P.length !== L.length) return; P.sort((a, b) => String(a.x.at).localeCompare(String(b.x.at)) || String(a.w.id).localeCompare(String(b.w.id))); P.slice(1).forEach(o => add(o.w, o.x, 'dup')); }   /* B */
+    });
+    return plan;
+  }
+  function u675Rows(plan) { const out = []; const W = state.allWorkOrders || []; Object.keys(plan).forEach(id => { const w = W.find(x => x && x.id === id); if (!w) return; plan[id].forEach(p => { const x = (w.greige_shipments || []).find(s => s && s.gs_id === p.gs_id && s.at === p.at) || {}; const it = (w.items || [])[x.item_idx || 0] || {}; out.push({ woId: id, wo: w.wo_number || id, rec: w.recipient || '', item: itemShow(it.item, it.item_fid, ''), jul: parseFloat(x.jul) || 0, gs: x.gs_number || p.gs_id, why: p.why }); }); }); return out; }
+  async function u675Fix(opt) {
+    const plan = u675Plan(opt); const by = (state.user && state.user.email) || ''; const now = new Date().toISOString(); let n = 0, m = 0, bad = 0; const done = [];
+    for (const id of Object.keys(plan)) { const P = plan[id]; let rm = [];
+      const r = await gsShTx(id, (sh, d, ex) => { if (d.fix673_done) return 'done'; rm = []; const keep = []; sh.forEach(x => { const p = x && P.find(q => q.gs_id === x.gs_id && q.at === x.at && u675Shape(x, u675Rng(opt))); if (p) rm.push({ line: x, why: p.why }); else keep.push(x); });
+        if (!rm.length) return 'none'; sh.length = 0; keep.forEach(x => sh.push(x));
+        ex.fix673_removed = (Array.isArray(d.fix673_removed) ? d.fix673_removed : []).concat(rm.map(o => ({ line: o.line, why: o.why, rm_at: now, rm_by: by }))); ex.fix673_done = true; return 'ok'; }, true);
+      if (r.res === 'ok') { n += rm.length; m++; rm.forEach(o => done.push({ woId: id, line: o.line })); const w = (state.allWorkOrders || []).find(x => x && x.id === id); try { if (w) await knitUseRefresh(w); } catch (e) { console.warn('[use refresh]', e.message); } }
+      else if (r.res === 'err') bad++; }
+    /* 오늘 로트 없는 생지출고에 줄이 하나도 없으면 하나 (gsAutoShipment — 공장을 알 때만 · 같은 통이면 같은 줄을 고침이라 두 PC 가 해도 하나) */
+    let made = 0; const today = (opt && opt.today) || U675.today;
+    for (const g of (state.allWorkOrders || []).filter(g => g && !g.deleted && g.type === '생지출고' && String(g.date || '').slice(0, 10) >= today && !(Array.isArray(g.gs_mix) && g.gs_mix.length > 1) && !greigeNoClean(g.gs_greige_no) && g.recipient)) {
+      let st = null; try { st = gsStateOf(g).state; } catch (_) {} if (st !== 'none') continue; try { const r = await gsAutoShipment(g); if (r) made++; } catch (_) {} }
+    if (n || made) { try { if (window.hwProc && window.hwProc.publish) await window.hwProc.publish(); } catch (_) {} }
+    return { n, m, bad, made, done };
+  }
+  function u675Bar(R) {
+    const old = document.getElementById('u675-bar'); if (old) old.remove(); const b = document.createElement('div'); b.id = 'u675-bar';
+    b.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);bottom:16px;z-index:9000;display:flex;gap:10px;align-items:center;background:#ecfdf5;border:1px solid #10b981;color:#065f46;border-radius:10px;padding:8px 12px;font-size:14px;box-shadow:0 2px 8px rgba(0,0,0,.2);max-width:calc(100vw - 32px)';
+    b.innerHTML = `<span>오후에 잘못 붙은 출고 대기 <b>${R.n}건</b>(의뢰서 ${R.m}건)을 되돌렸습니다</span><button type="button" class="u675-more" style="min-height:44px;padding:0 14px;border-radius:8px;border:1px solid #10b981;background:#fff;color:#065f46;font-size:14px;font-weight:700;cursor:pointer">자세히</button><button type="button" class="u675-x" aria-label="닫기" style="min-height:44px;min-width:44px;border:0;background:none;font-size:16px;cursor:pointer">✕</button>`;
+    document.body.appendChild(b); b.querySelector('.u675-x').addEventListener('click', () => b.remove()); b.querySelector('.u675-more').addEventListener('click', () => u675List(false)); }
+  /* 되돌린 줄 모두(편직 의뢰서 fix673_removed) — 최고관리자는 줄마다 [되살리기] · [백업 받기] */
+  function u675All() { const out = []; (state.allWorkOrders || []).forEach(w => { if (!w || w.deleted || w.type !== '편직' || !Array.isArray(w.fix673_removed)) return; w.fix673_removed.forEach((e, i) => { if (!e || !e.line) return; const x = e.line; const it = (w.items || [])[x.item_idx || 0] || {}; out.push({ woId: w.id, i, wo: w.wo_number || w.id, rec: w.recipient || '', item: itemShow(it.item, it.item_fid, ''), jul: parseFloat(x.jul) || 0, gs: x.gs_number || x.gs_id || '', back: !!e.back, e }); }); }); return out; }
+  async function u675Back(woId, gsId, at) {
+    const by = (state.user && state.user.email) || ''; const now = new Date().toISOString(); let ok = false;
+    const r = await gsShTx(woId, (sh, d, ex) => { const R = Array.isArray(d.fix673_removed) ? d.fix673_removed.map(e => Object.assign({}, e)) : []; const e = R.find(e => e && e.line && e.line.gs_id === gsId && e.line.at === at && !e.back); if (!e) return 'none';
+      if (!sh.some(x => x && x.gs_id === gsId && x.at === at)) sh.push(e.line); e.back = true; e.back_at = now; e.back_by = by; ex.fix673_removed = R; ok = true; return 'ok'; });
+    if (r.res === 'ok' && ok) { const w = (state.allWorkOrders || []).find(x => x && x.id === woId); try { if (w) await knitUseRefresh(w); } catch (_) {} try { if (window.hwProc && window.hwProc.publish) await window.hwProc.publish(); } catch (_) {} }
+    return r.res === 'ok' && ok;
+  }
+  function u675List() {
+    const own = !!(window.__isOwner && window.__isOwner()); const A = u675All();
+    const rows = A.map((t, k) => `<tr${t.back ? ' style="color:#94a3b8"' : ''}><td>${gmEsc(t.wo)}</td><td>${gmEsc(t.rec)}</td><td>${gmEsc(t.item)}</td><td style="text-align:right">${t.jul}절</td><td>${gmEsc(t.gs)}</td><td>${t.back ? '되살림' : (own ? `<button type="button" class="btn u675-back" data-k="${k}" style="min-height:44px;height:auto;padding:8px 12px;font-size:14px">되살리기</button>` : '')}</td></tr>`).join('');
+    const live = A.filter(t => !t.back);
+    gmModal('오늘 되돌린 출고 대기', A.length ? `<div style="font-size:14px;margin-bottom:8px">10/14 오후(673)에 옛 로트 없는 생지출고 의뢰서가 옛 편직 통에 <b>출고 대기</b>로 붙어 뺀 줄 <b>${live.length}건 · ${Math.round(live.reduce((a, t) => a + t.jul, 0) * 10) / 10}절</b>입니다. 확인된 줄 · 오늘 생지출고 · 사무실이 넣은 줄은 그대로 두었습니다.${own ? ' 잘못 뺀 줄은 [되살리기]로 되돌립니다.' : ''}</div>
+      <div style="max-height:55vh;overflow:auto"><table class="hw-r7-t u675-t" style="width:100%;font-size:13px"><thead><tr><th>편직 의뢰서</th><th>편직공장</th><th>품목</th><th>절</th><th>생지출고 의뢰서</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
+      ${own ? '<div style="margin-top:12px"><button type="button" class="btn u675-bk" style="min-height:44px;height:auto;padding:10px 16px;font-size:14px">백업 받기</button></div>' : ''}<div class="u675-msg" style="margin-top:8px;font-size:14px"></div>` : '<div style="font-size:14px">되돌린 줄이 없습니다.</div>', m => {
+      const msg = m.querySelector('.u675-msg'); const bk = m.querySelector('.u675-bk');
+      if (bk) bk.addEventListener('click', () => { const ids = [...new Set(A.map(t => t.woId))]; const docs = (state.allWorkOrders || []).filter(w => w && ids.includes(w.id)).map(w => ({ id: w.id, wo_number: w.wo_number, greige_shipments: w.greige_shipments || [], fix673_removed: w.fix673_removed || [] }));
+        const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify({ at: new Date().toISOString(), why: '675 되돌린 출고 대기', workorders: docs }, null, 1)], { type: 'application/json' })); a.download = '675_되돌린출고대기_' + new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12) + '.json'; document.body.appendChild(a); a.click(); a.remove(); if (msg) msg.textContent = '백업 파일을 내려받았습니다'; });
+      m.querySelectorAll('.u675-back').forEach(b => b.addEventListener('click', async () => { const t = A[+b.dataset.k]; if (!t || b.disabled) return; b.disabled = true; const ok = await u675Back(t.woId, t.e.line.gs_id, t.e.line.at); if (msg) msg.textContent = ok ? `${t.wo} · ${t.gs} ${t.jul}절을 되살렸습니다` : '되살리지 못했습니다 — 다시 눌러 주십시오'; if (ok) b.replaceWith(document.createTextNode('되살림')); else b.disabled = false; u675Btn(); }));
+    }, true);
+  }
+  function u675Btn() { try { const n = (window.__isOwner && window.__isOwner() && todayYMD() <= U675.until) ? u675All().filter(t => !t.back).length : 0; let b = document.getElementById('u675-btn');
+    if (!n) { if (b) b.remove(); return; } if (!b) { b = document.createElement('button'); b.type = 'button'; b.id = 'u675-btn'; b.style.cssText = 'position:fixed;right:16px;bottom:72px;z-index:9000;min-height:44px;padding:0 16px;border-radius:10px;border:1px solid #cbd5e1;background:#fff;color:#0f172a;font-size:14px;font-weight:700;box-shadow:0 2px 8px rgba(0,0,0,.2);cursor:pointer'; b.addEventListener('click', () => u675List()); document.body.appendChild(b); }
+    b.textContent = '오늘 되돌린 출고 대기 (' + n + ')'; } catch (_) {} }
+  let u675Ran = false;
+  async function u675Auto() {
+    if (u675Ran) return; try { if (todayYMD() > U675.until) { u675Ran = true; return; } if (window.__hwViewAs || /(?:^|[?&])app=qc(?:&|$)/.test(location.search)) { u675Ran = true; return; }
+      if (!state.user || !state.__woLoaded || !(window.hwProc && window.hwProc.started)) return; if (!canAccessView('write')) { u675Ran = true; return; } } catch (_) { return; }
+    u675Ran = true; let R = null; try { R = await u675Fix(window.__u675T || undefined); } catch (e) { console.warn('[675 fix]', e && e.message); }   /* __u675T = 시험용 시각 범위 */
+    if (R && R.n) u675Bar(R); u675Btn();
+    if (!R || R.bad) { try { toast('일부 되돌리기 실패 — 다시 열면 다시 시도합니다', 'warning'); } catch (_) {} }   /* 실패한 문서는 fix673_done 이 안 걸려 새로 고침 때 다시 시도 */ }
+  { let k = 0; const iv = setInterval(() => { k++; if (u675Ran || k > 120) { clearInterval(iv); return; } u675Auto(); }, 5000); setInterval(u675Btn, 30000); }
+  window.hwGsUndo675 = { plan: u675Plan, fix: u675Fix, all: u675All, back: u675Back, list: u675List, btn: u675Btn, auto: u675Auto, ran: () => u675Ran, reset: () => { u675Ran = false; }, ship: g => gsAutoShipment(g) };   /* reset · ship · plan/fix 의 opt 는 시험용 */
   /* hotfix592(대표 10/2): [생산 전] 줄 삭제 — 그 줄을 만든 생지출고의뢰서와, 그 생지출고를 만든 염/가공 의뢰서까지 고른 것을 함께 휴지통으로.
      휴지통에서 염/가공을 되살리면 같이 보낸 생지출고도 되살아남(gs_del_by_fn) · 영구삭제는 휴지통에서 최고관리자만 */
   async function gsNoStockDelete(key) {
@@ -63822,7 +63911,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix672';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
+  const VERSION = 'v2.53 hotfix675';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
