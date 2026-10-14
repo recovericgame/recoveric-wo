@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="FABIWOS">
 <meta name="mobile-web-app-capable" content="yes">
-<title>FABIWOS v2.53 hotfix671</title>
+<title>FABIWOS v2.53 hotfix672</title>
 <script>
 /* ===== HWChat 대화 화면 공용 (hotfix620 · 대표 10/9 "카톡처럼 쉽고 멋있게") — 이음 · 편직팀 앱 · 염/가공소 앱 · 현장 QC 앱이 같은 모양
  *   말풍선(내 글 노랑 · 받은 글 흰색) · 같은 사람 1분 안 글은 묶음(이름 · 사진은 첫 글, 시간은 끝 글) · 안 읽음 1
@@ -33765,8 +33765,10 @@ function validateBlendSum(blends, label) {
     const hid = gsHideSet();   /* hotfix634(R4): [삭제]한 보고는 확인할 것에서 뺌 (재고는 그대로) */
     return L.filter(l => l && l.by === 'vendor' && l.part === 'gs' && l.kind === 'ship' && l.reason === 'self' && l.id && !String(l.id).startsWith('tmp') && gsKnitKey(l.k) && !hid.has(l.id)).map(l => {
       const wid = String(l.k).replace(/_\d+$/, ''), ii = parseInt(String(l.k).split('_').pop(), 10) || 0; const wo = (state.allWorkOrders || []).find(w => w && w.id === wid) || null;
-      const line = wo ? (wo.greige_shipments || []).find(x => x && x.conf_log === l.id) : null; const c = cx[l.id] || null; const a = ans.get(l.id) || null; const ca = c ? ans.get(c.id) || null : null;
-      const st = c ? (ca ? 'cxdone' : (line && !line.void ? 'cxreq' : 'cxpre')) : (line && !line.void ? 'ok' : (a && (a.rej || /^현일텍스 반려/.test(String(a.note || ''))) ? 'rej' : 'wait'));
+      const line = wo ? ((wo.greige_shipments || []).find(x => x && x.conf_log === l.id && !x.void) || (wo.greige_shipments || []).find(x => x && x.conf_log === l.id)) : null; const c = cx[l.id] || null; const a = ans.get(l.id) || null; const ca = c ? ans.get(c.id) || null : null;   /* hotfix672: 살아 있는 줄을 먼저 (취소 줄 + 다시 넣은 줄) */
+      /* hotfix672(V쭈리 · data-steward): 사무실이 확인했던 보고(확인 글 · 줄 기록)는 줄이 지워지거나 취소돼도 다시 '대기'로 올리지 않음 → 'gone'(확인했던 보고 · 줄이 지워짐) — [다시 넣기]는 사유를 거쳐서만 */
+      const wasConf = !!line || !!(a && !a.rej && /^현일텍스 확인/.test(String(a.note || '')));
+      const st = c ? (ca ? 'cxdone' : (line && !line.void ? 'cxreq' : 'cxpre')) : (line && !line.void ? 'ok' : (a && (a.rej || /^현일텍스 반려/.test(String(a.note || ''))) ? 'rej' : (wasConf ? 'gone' : 'wait')));
       return { l, wo, ii, line, c, st, ph: gsPhotoFor(l) }; }).filter(o => all || o.st === 'wait' || o.st === 'cxreq' || o.st === 'cxpre').sort((a, b) => gsT(b.l) - gsT(a.l));
   }
   const gsLineKey = x => [x.gs_id || '', x.gs_number || '', x.date || '', x.jul, x.gs_rest ? 'r' : '', x.recorded_at || x.at || ''].join('|');   /* hotfix618: 생지출고 줄에는 id 가 없음 — 이것으로 같은 줄을 찾음 */
@@ -33793,9 +33795,9 @@ function validateBlendSum(blends, label) {
   /* hotfix670(designer · 대표 "편리하게"): 브라우저 prompt → 하단 시트. 사유 칩 한 번 누르면 확정(44px) · [직접 쓰기]를 누를 때만 입력칸 · 두 글자 미만이면 창 그대로 · [취소]
    *   마지막에 고른 사유를 이 PC 에 기억(localStorage hw_ovr_why · 칩에 "지난번" 표시 · 직접 쓴 것이면 맨 앞 칩) · 비동기 — 부르는 곳은 await */
   const HW_GUARD_WHY = ['보고 누락', '숫자 오기', '중복 입력', '업체 요청'];
-  function hwAppGuard(vn, what) {
+  function hwAppGuard(vn, what, force) {   /* hotfix672: force = 처리 방식과 상관없이 사유를 받음 ([다시 넣기]) */
     const v = gsNormV(vn) || String(vn || '').trim(); let m = 'office'; try { m = window.hwWorkMode ? window.hwWorkMode(v) : 'office'; } catch (_) {}
-    if (m !== 'app') return Promise.resolve(false);
+    if (m !== 'app' && !force) return Promise.resolve(false);
     const old = document.getElementById('hw-guard'); if (old && old.__done) old.__done(null);
     if (!document.getElementById('hw-guard-css')) { const st = document.createElement('style'); st.id = 'hw-guard-css';
       st.textContent = `#hw-guard{position:fixed;inset:0;z-index:100200;background:rgba(15,23,42,.55);display:flex;align-items:center;justify-content:center;padding:16px;font-family:var(--font-gothic)}
@@ -34200,6 +34202,12 @@ function validateBlendSum(blends, label) {
         <td style="${td}text-align:center;white-space:nowrap;"><b style="color:#b91c1c">공장이 취소 요청</b> <button class="dash-action-btn hw-ss-cx" data-i="${i}" style="background:#b91c1c;color:#fff;border-color:#991b1b;font-weight:800;">취소 확인</button> <button class="dash-action-btn hw-kc-open" data-v="${escapeHtml(l.vendor || '')}" data-m="gs" data-pre="${escapeHtml('[' + String(l.label || '').trim() + ' · 출고 ' + (parseFloat(l.body) || 0) + '절 → ' + (l.chip || '') + '] ')}" style="color:#047857;border-color:#a7f3d0;font-weight:800;">대화</button></td></tr>`; });
       h += `</tbody></table></div>`;
     }
+    /* hotfix672(V쭈리): 확인했던 보고인데 출고 줄이 지워짐(옛 [삭제]) · 취소됨 — 대기로 올리지 않고 흐리게 따로 · [다시 넣기]는 사유 시트를 거쳐서만 (60일 안) */
+    const GN = gsSelfShips(true).filter(o => o.st === 'gone' && Date.now() - gsT(o.l) < 60 * 864e5);
+    if (GN.length) {
+      h += `<div class="hw-gone" style="margin:4px 0 14px;padding:10px 12px;border:1px dashed var(--gray-300);background:var(--gray-50);border-radius:10px;color:var(--gray-600);"><div style="font-size:13px;font-weight:900;color:var(--gray-700);">확인했던 보고 · 줄이 지워짐 ${GN.length}건 <span style="font-size:12px;font-weight:600;">— 재고에 넣었다가 출고 줄을 지우거나 취소한 보고입니다. 확인할 것이 아닙니다. 다시 넣어야 할 때만 [다시 넣기]</span></div>
+        ${GN.map((o, i) => { const l = o.l; return `<div class="hw-gone-r" data-log="${escapeHtml(l.id)}" style="display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:7px 0;border-top:1px solid var(--gray-200);font-size:12.5px;opacity:.75;"><span style="white-space:nowrap;">${escapeHtml(hm(l))}</span><b>${escapeHtml(l.vendor || '')} → ${escapeHtml(l.chip || '-')}</b><span>${escapeHtml(String(l.label || ''))}</span><b>${parseFloat(l.body) || 0}절${Number(l.n) ? ' · ' + l.n + 'kg' : ''}</b><span style="padding:1px 8px;border-radius:8px;background:var(--gray-200);color:var(--gray-700);font-weight:800;">${o.line && o.line.void ? '줄 취소됨' : '줄 지워짐'}</span><span style="flex:1"></span><button class="dash-action-btn hw-gone-re" data-i="${i}" style="height:36px;" title="사유를 고른 뒤 이 보고를 다시 재고에 넣습니다">다시 넣기</button></div>`; }).join('')}</div>`;
+    }
     if (!L.length) h += `<div style="padding:30px;text-align:center;color:#94a3b8;font-size:13px;">${SS.length || RC.length ? '생지출고의뢰서로 보낸 것 중 ' : ''}출고 확인을 기다리는 생지출고가 없습니다.</div>`;
     else {
       h += `<div class="dash-table-wrap"><table class="dash-table" style="width:100%;"><thead><tr><th>생지출고</th><th>보낸 날</th><th>편직공장</th><th>구분</th><th style="text-align:left;">품목</th><th>생지로트</th><th>출고처</th><th title="주문 · 보냄(확인) · 남음(대기)">주문 · 보냄 · 남음</th><th>상태</th><th title="앱 = 편직공장이 휴대폰 앱으로 넣음 · 카톡 = 앱 계정 없음">길</th><th>작업</th></tr></thead><tbody>`;
@@ -34239,6 +34247,11 @@ function validateBlendSum(blends, label) {
     const body = document.getElementById('dash-modal-body');
     const again = () => setTimeout(() => { if (bg.classList.contains('show')) hwGsWaitOpen(); }, 400);
     gsRepCardBind(body, RC, again);   /* hotfix631: 공장이 보낸 출고 카드 — 입·출고 창과 같은 함수 */
+    body.querySelectorAll('.hw-gone-re').forEach(b => b.addEventListener('click', async () => { const o = GN[+b.dataset.i]; if (!o || b.disabled) return; const l = o.l; const j = parseFloat(l.body) || 0;   /* hotfix672: [다시 넣기] — 사유 시트 → 같은 확인 함수(트랜잭션 · 살아 있는 줄이 있으면 'dup') */
+      const ovr = await hwAppGuard(l.vendor, `확인했던 보고를 다시 재고에 넣습니다 — ${j}절 → ${l.chip || '-'}\n줄을 지운 까닭을 확인한 뒤에만 넣으십시오 (재고에서 다시 빠집니다).`, true); if (!ovr) return;
+      b.disabled = true; const o2 = Object.assign({}, o, { ovr, chk: true }); let r = await gsSelfConfirm(o2);
+      if (r === 'warn') { if (!confirm(`주의\n\n${(o2.w668 || []).map(t => '· ' + t).join('\n')}\n\n그래도 다시 넣으려면 [확인]`)) { b.disabled = false; return; } o2.ok668 = true; r = await gsSelfConfirm(o2); }
+      if (r === 'ok') { toast(`${j}절을 다시 넣었습니다 (사유: ${ovr.why})`, 'success'); again(); } else { toast(r === 'dup' ? '이미 살아 있는 출고 줄이 있습니다 — 다시 넣지 않았습니다' : '다시 넣지 못했습니다 (' + r + ')', r === 'dup' ? 'warning' : 'error'); b.disabled = false; } }));
     body.querySelectorAll('.hw-gsx-ok').forEach(b => b.addEventListener('click', async () => { const o = CX[parseInt(b.dataset.i, 10)]; if (!o) return;
       if (!confirm(o.applied ? `편직공장이 보낸 것(${parseFloat(o.sh.body) || 0}절)을 취소했습니다.\n\n확인하면 확정을 풀고 다시 출고 대기로 돌립니다 (공장 재고가 다시 채워짐).\n\n확인할까요?` : `편직공장이 보낸 것(${parseFloat(o.sh.body) || 0}절) 보고를 취소했습니다.\n아직 확정 전이라 재고는 그대로입니다.\n\n확인할까요?`)) return;
       b.disabled = true; if (await gsCancelAck(o)) again(); else b.disabled = false; }));
@@ -34353,8 +34366,9 @@ function validateBlendSum(blends, label) {
     const sb = 'height:36px;font-size:13px;padding:0 12px;font-weight:800;';   /* hotfix635: 32 → 36px (대기 창 단추 높이 통일) */
     return `<div class="hw-rc" style="background:#f5f3ff;border:1px solid #ddd6fe;border-radius:10px;padding:10px 12px;margin-bottom:14px;">
       <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;"><b style="font-size:15px;color:#6d28d9;">공장이 보낸 출고 — 확인할 것</b><b class="hw-rc-n" style="font-size:15px;color:#6d28d9;">${R.length}건</b></div>
-      ${R.map((it, i) => { const l = it.l; const j = parseFloat(l.body) || 0, kg = Number(l.n) || 0;
-        return `<div class="hw-rc-it" data-ri="${i}" data-log="${escapeHtml(l.id)}"${it.t === 'rep' ? ` data-gs="${escapeHtml(it.g.id)}"` : ''} style="display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:10px 0;${i ? 'border-top:1px solid #ddd6fe;' : ''}">
+      ${(() => { const FG = {}; return R.map(it => { if (it.t !== 'rep') return null; const k = it.g.id; const p = FG[k] || (FG[k] = []); p.push(it); return p.length > 1 ? { first: p[0], n: p.length } : null; }); })().map((d2, i) => { const it = R[i]; const l = it.l; const j = parseFloat(l.body) || 0, kg = Number(l.n) || 0;   /* hotfix672: 같은 생지출고 요청에서 온 두 번째 이후 보고 — 크게 표시 */
+        const dupH = d2 ? `<div class="hw-rc-dup2" style="flex-basis:100%;padding:8px 12px;border-radius:8px;background:var(--st-warn-bg);border:2px solid var(--st-warn-solid);color:var(--st-warn-ink);font-size:15px;font-weight:900;line-height:1.45;">같은 요청의 ${['', '', '두', '세', '네', '다섯'][d2.n] || d2.n} 번째 보고입니다 <span style="font-size:13px;font-weight:700;">— 먼저 온 보고: ${escapeHtml(hm(d2.first.l))} · ${parseFloat(d2.first.l.body) || 0}절${Number(d2.first.l.n) ? ' · ' + d2.first.l.n + 'kg' : ''} (${escapeHtml(String(d2.first.l.dev || '') && String(d2.first.l.dev) === String(l.dev || '') ? '같은 휴대폰' : '다른 휴대폰')}). 같은 출고면 [반려] — 따로 더 보낸 것이면 [보고대로 확인]</span></div>` : '';
+        return `<div class="hw-rc-it${d2 ? ' hw-rc-2nd' : ''}" data-ri="${i}" data-log="${escapeHtml(l.id)}"${it.t === 'rep' ? ` data-gs="${escapeHtml(it.g.id)}"` : ''} style="display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:10px 0;${i ? 'border-top:1px solid #ddd6fe;' : ''}${d2 ? 'background:var(--st-warn-bg);padding-left:8px;padding-right:8px;' : ''}">${dupH}
           ${it.ph ? (cid => `<img class="gs-photo-pop hw-rc-ph" data-path="${escapeHtml(it.ph)}" data-t="${escapeHtml(it.what)}" data-phc="${cid}" data-i="0" alt="송장" style="width:56px;height:56px;border-radius:6px;border:1px solid #cbd5e1;object-fit:cover;cursor:zoom-in;background:#e2e8f0;flex:none;">${gsPhStrip(it.pr, it.what, cid, 3)}`)(gsPhReg(it.t === 'rep' ? { l, g: it.g, fb: it.g.gs_photo && it.g.gs_photo.path } : { l, fb: it.o && it.o.ph })) : '<div style="width:56px;height:56px;border-radius:6px;border:1px dashed #cbd5e1;display:flex;align-items:center;justify-content:center;font-size:11px;color:#94a3b8;flex:none;">사진 없음</div>'}
           <div style="flex:1 1 240px;min-width:0;font-size:13px;line-height:1.55;">
             <div>${escapeHtml(hm(l))} · <b>${escapeHtml(l.vendor || '')} → ${escapeHtml(it.dest || '-')}</b> · <b>${j}절</b>${kg ? ' · ' + kg + ' kg' : ''}</div>
@@ -63808,7 +63822,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix671';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
+  const VERSION = 'v2.53 hotfix672';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
