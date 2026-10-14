@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="FABIWOS">
 <meta name="mobile-web-app-capable" content="yes">
-<title>FABIWOS v2.53 hotfix673</title>
+<title>FABIWOS v2.53 hotfix672</title>
 <script>
 /* ===== HWChat 대화 화면 공용 (hotfix620 · 대표 10/9 "카톡처럼 쉽고 멋있게") — 이음 · 편직팀 앱 · 염/가공소 앱 · 현장 QC 앱이 같은 모양
  *   말풍선(내 글 노랑 · 받은 글 흰색) · 같은 사람 1분 안 글은 묶음(이름 · 사진은 첫 글, 시간은 끝 글) · 안 읽음 1
@@ -11852,7 +11852,7 @@ function knitLotFind(itemName, fid, greigeNo, factory, color) {
   const id = String(fid || '').trim() || itemFidOf(itemName);
   const k = vendorKey(greigeSplit(itemName).name || itemName);
   const no = greigeNoClean(greigeNo); const fk = greigeLotKeyOf(factory); const ck = color ? yarnColorKey(color) : '';
-  if (!no && !fk) return null;   /* hotfix673(대표 10/14 V쭈리): 로트 없는 생지(로트 "-")도 같은 편직공장 · 같은 품목의 로트 없는 통에 출고 대기 줄 — 전엔 여기서 바로 null 이라 줄이 안 생기고 알림도 없었음 */
+  if (!no) return null;
   const srcs = itemSourceFids(itemName, fid);   /* hotfix434 */
   const list = ((typeof state !== 'undefined' && Array.isArray(state.allWorkOrders)) ? state.allWorkOrders : []);
   const hits = [];
@@ -11866,12 +11866,11 @@ function knitLotFind(itemName, fid, greigeNo, factory, color) {
         || (srcs.length > 1 && itF && srcs.includes(itF));   /* hotfix434: 파생 품목 → 원래 생지의 통 */
       if (!same) return;
       if ((greigeNoClean(it.greige_no) || greigeSplit(it.item).no) !== no) return;
-      const has = no ? 0 : ((parseFloat(it.jul) || 0) + (wo.greige_shipments || []).reduce((a, x) => a + ((shLive(x) && (x.item_idx != null ? x.item_idx : 0) === idx) ? (x.dir === 'in' ? 1 : -1) * (parseFloat(x.jul) || 0) : 0), 0) > 0 ? 1 : 0);   /* hotfix673: 로트 없는 통이 여럿이면 재고 남은 통 먼저 */
-      hits.push({ wo, idx, colorOk: !ck || yarnColorKey(it.color) === ck, rank: (srcs.indexOf(itF) < 0 ? 0 : srcs.indexOf(itF)), srcFid: itF, has });
+      hits.push({ wo, idx, colorOk: !ck || yarnColorKey(it.color) === ck, rank: (srcs.indexOf(itF) < 0 ? 0 : srcs.indexOf(itF)), srcFid: itF });
     });
   });
   if (!hits.length) return null;
-  hits.sort((a, b) => (b.colorOk - a.colorOk) || (b.has - a.has) || (a.rank - b.rank) || String(b.wo.date || '').localeCompare(String(a.wo.date || '')));
+  hits.sort((a, b) => (b.colorOk - a.colorOk) || (a.rank - b.rank) || String(b.wo.date || '').localeCompare(String(a.wo.date || '')));
   if (new Set(hits.map(h => h.srcFid || '')).size > 1) hits[0].ambiguous = true;   /* hotfix434: 같은 곳 · 같은 로트 번호가 두 생지에 있음 — 자기 통 → 원래 생지 차례로 고른다 */
   return hits[0];
 }
@@ -34499,10 +34498,7 @@ function validateBlendSum(blends, label) {
   }
   async function gsRelink() {
     const L = (state.allWorkOrders || []).filter(g => { if (!g || g.deleted || g.type !== '생지출고') return false; try { return gsStateOf(g).state === 'none'; } catch (_) { return false; } });
-    /* hotfix673(대표 10/14 GS-20261013-001): 그 통에 공장이 의뢰서 없이 [출고했어요]로 같은 절수를 ±2일 안에 보낸 것이 있으면 이미 나간 것 — 잇지 않음(두 번 빠짐 막기) */
-    const selfDone = g => { try { if (Array.isArray(g.gs_mix) && g.gs_mix.length > 1) return false; const h = knitLotFind(g.gs_item, g.gs_item_fid, g.gs_greige_no, g.recipient, g.gs_color); if (!h) return false; const key = h.wo.id + '_' + h.idx, q = parseFloat(g.gs_qty) || 0, t0 = Date.parse(String(g.date || '').slice(0, 10)) || 0;
-      return gsLogs().some(l => l && l.by === 'vendor' && l.part === 'gs' && l.kind === 'ship' && l.reason === 'self' && String(l.k) === key && Math.abs((parseFloat(l.body) || 0) - q) < 0.05 && t0 && Math.abs(gsT(l) - t0) <= 2 * 864e5); } catch (_) { return false; } };
-    let n = 0; for (const g of L) { if (selfDone(g)) continue; try { const r = await gsAutoShipment(g); if (r) n++; } catch (_) {} }
+    let n = 0; for (const g of L) { try { const r = await gsAutoShipment(g); if (r) n++; } catch (_) {} }
     if (n) toast(`생지출고의뢰서 ${n}건을 새 통에 이었습니다 — 출고 대기로 잡혔습니다`, 'success');
     return n;
   }
@@ -63826,7 +63822,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix673';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
+  const VERSION = 'v2.53 hotfix672';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
