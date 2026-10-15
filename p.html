@@ -770,18 +770,30 @@ html body #hwb-snack button{min-height:44px}
   function embedHost() { try { const P = window.parent; if (P && P !== window && /[?&]embed=1(?:&|$)/.test(location.search) && P.HWChat && P.HWChat.viewer && P.document && P.document.body) return P; } catch (_) {} return null; }
   function viewer(a, name, opt) { opt = opt || {}; if (!opt.here) { const P = embedHost(); if (P) { try { return P.HWChat.viewer(a, name, Object.assign({}, opt, { here: 1 })); } catch (_) {} } } css(); const list = Array.isArray(a) ? a : [{ u: a, n: name }]; let i = Array.isArray(a) ? (Number(name) || 0) : 0;
     const v = document.createElement('div'); v.className = 'hwk-vw'; const t0 = Date.now();
-    v.innerHTML = `<div class="vh"><button type="button" data-x>✕</button><b></b>${list.length > 1 && opt.saveAll ? '<button type="button" data-sa>모두 저장</button>' : ''}<button type="button" data-s>원본 저장</button></div><div class="vb"><img alt=""></div>${list.length > 1 ? '<button type="button" class="nav l" data-p>‹</button><button type="button" class="nav r" data-n>›</button>' : ''}`;
+    v.innerHTML = `<div class="vh"><button type="button" data-x>✕</button><b></b>${CP_OK() ? '<button type="button" data-cp title="지금 사진을 복사 — 카톡 · 메일에 Ctrl+V 로 붙여 넣기 (Ctrl+C 도 됨)">이미지 복사</button>' : ''}${list.length > 1 && opt.saveAll ? '<button type="button" data-sa>모두 저장</button>' : ''}<button type="button" data-s>원본 저장</button></div><div class="vb"><img alt=""></div>${list.length > 1 ? '<button type="button" class="nav l" data-p>‹</button><button type="button" class="nav r" data-n>›</button>' : ''}`;
     document.body.appendChild(v); ovPush(v); const img = v.querySelector('img'), tt = v.querySelector('.vh b');
     const show = async () => { const it = list[i]; tt.textContent = (list.length > 1 ? (i + 1) + ' / ' + list.length + ' · ' : '') + (it.n || '사진'); img.removeAttribute('src'); let u = it.u || blobOf.get(it.p) || ''; if (!u && opt.urlOf) { try { u = await opt.urlOf(it.p); } catch (_) {} } if (u) img.src = u; };
     const go = d => { if (list.length < 2) return; i = (i + d + list.length) % list.length; show(); };
     v.querySelector('[data-x]').onclick = () => ovRemove(v);
     v.querySelector('[data-s]').onclick = () => { const it = list[i]; if (opt.save && it.p) opt.save(it).then(ok => { if (ok) toast('저장했습니다'); }).catch(e => toast(errText(e), true)); else window.open(img.src, '_blank', 'noopener'); };
+    const cpGo = () => { if (!CP_OK()) { toast('이 기기에서는 사진을 길게 눌러 복사하십시오'); return; } if (!img.getAttribute('src')) { toast('사진을 불러오는 중입니다 — 잠시 뒤 다시', true); return; } imgCopy(img).then(() => toast('복사했습니다'), e => toast('복사하지 못했습니다 — ' + ((e && e.message) || '이 사진은 복사할 수 없음'), true)); };   /* hotfix688(L32) */
+    const cpb = v.querySelector('[data-cp]'); if (cpb) cpb.onclick = cpGo;
+    const cpKey = e => { if (!v.isConnected) { document.removeEventListener('keydown', cpKey, true); return; } if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey || String(e.key || '').toLowerCase() !== 'c') return; const vs = document.querySelectorAll('.hwk-vw'); if (vs[vs.length - 1] !== v) return;
+      const ae = document.activeElement; if (ae && (/^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName) || ae.isContentEditable)) return; if (String((window.getSelection && window.getSelection()) || '').trim()) return; e.preventDefault(); e.stopPropagation(); cpGo(); };   /* 글자를 고른 상태 · 입력 칸이면 글자 복사 그대로 */
+    document.addEventListener('keydown', cpKey, true);
     const sa = v.querySelector('[data-sa]'); if (sa) sa.onclick = () => { toast(list.length + '장 저장을 시작합니다 — 크롬이 "여러 파일 다운로드"를 물으면 [허용]'); opt.saveAll(list); };
     const pv = v.querySelector('[data-p]'), nx = v.querySelector('[data-n]'); if (pv) pv.onclick = () => go(-1); if (nx) nx.onclick = () => go(1);
     v.querySelector('.vb').onclick = e => { if (e.target.tagName !== 'IMG' && Date.now() - t0 > 700) ovRemove(v); };
     let sx = null; v.addEventListener('touchstart', e => { if (e.touches.length === 1) sx = e.touches[0].clientX; }, { passive: true }); v.addEventListener('touchend', e => { if (sx == null) return; const dx = (e.changedTouches[0] || {}).clientX - sx; sx = null; if (Math.abs(dx) > 60) go(dx < 0 ? 1 : -1); });
     v.tabIndex = -1; v.addEventListener('keydown', e => { if (e.key === 'ArrowLeft') go(-1); else if (e.key === 'ArrowRight') go(1); else if (e.key === 'Escape') { e.stopPropagation(); ovRemove(v); } }); setTimeout(() => v.focus(), 30);
     show(); }
+  /* hotfix688(L32): 사진 → png 클립보드 — 그림판(canvas)으로 png 로 바꿔 담음 · 다른 주소 사진이라 그림판이 막히면 fetch 로 받아 createImageBitmap 으로 다시 그림 · Safari 는 단추 누른 그 순간에 써야 해서 Promise 째 넘김 */
+  const CP_OK = () => !!(window.isSecureContext !== false && navigator.clipboard && navigator.clipboard.write && window.ClipboardItem);
+  function imgPngBlob(img) {
+    const draw = src => new Promise((res, rej) => { try { const c = document.createElement('canvas'); c.width = src.naturalWidth || src.width; c.height = src.naturalHeight || src.height; if (!c.width || !c.height) return rej(new Error('사진 크기를 읽지 못함')); c.getContext('2d').drawImage(src, 0, 0); c.toBlob(b => b ? res(b) : rej(new Error('png 로 바꾸지 못함')), 'image/png'); } catch (e) { rej(e); } });
+    return draw(img).catch(async () => { const r = await fetch(img.currentSrc || img.src); const b = await r.blob(); if (b.type === 'image/png') return b; return draw(await createImageBitmap(b)); });
+  }
+  function imgCopy(img) { return navigator.clipboard.write([new ClipboardItem({ 'image/png': imgPngBlob(img) })]); }
   async function copy(t) { try { await navigator.clipboard.writeText(t); toast('복사했습니다'); } catch (_) { const a = document.createElement('textarea'); a.value = t; a.style.position = 'fixed'; a.style.opacity = '0'; document.body.appendChild(a); a.select(); try { document.execCommand('copy'); toast('복사했습니다'); } catch (__) { toast('복사하지 못했습니다', true); } a.remove(); } }
   const FTYPES = [
     { t: '문서 전체', s: 'PDF · 엑셀 · 한글 · 워드 · PPT', c: '#475569', x: 'DOC', a: '.pdf,.xls,.xlsx,.csv,.doc,.docx,.ppt,.pptx,.hwp,.hwpx,.txt' },
@@ -994,7 +1006,7 @@ import { initializeFirestore, getFirestore, persistentLocalCache, persistentMult
  *   읽는 것: proc_acc/{내 uid} · proc_pub/{내 업체} · proc_log(내 업체 것만)
  *   쓰는 것: proc_log 한 줄 추가(고치기 · 지우기 없음) · 처음 로그인 때 내 기기 등록 한 번
  */
-const PVER = 'p137 (hotfix687)';
+const PVER = 'p138 (hotfix688)';
 /* hotfix574(대표 10/1): 거래 원단회사 고르기 (판매 대비) — 가공소 한 곳이 여러 원단회사와 거래. 앱을 열면 먼저 [거래 원단회사] 화면 — 회사마다 진행 중 · 확인 요청 · 입력 전 건수
  *   계정(proc_acc.companies [{id, name, src}])에 회사 목록 · 없으면 현일텍스 · 고른 회사는 휴대폰이 기억(hwp.co) · 위 [› 회사 이름]을 누르면 다시 고름
  *   지금 서버 = 현일텍스 자료. 다른 원단회사가 FABIWOS 를 쓰면 그 회사 자료 자리(src)를 더함 */
