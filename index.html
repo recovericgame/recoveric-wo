@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="FABIWOS">
 <meta name="mobile-web-app-capable" content="yes">
-<title>FABIWOS v2.53 hotfix697</title>
+<title>FABIWOS v2.53 hotfix698</title>
 <script>
 /* ===== HWChat 대화 화면 공용 (hotfix620 · 대표 10/9 "카톡처럼 쉽고 멋있게") — 이음 · 편직팀 앱 · 염/가공소 앱 · 현장 QC 앱이 같은 모양
  *   말풍선(내 글 노랑 · 받은 글 흰색) · 같은 사람 1분 안 글은 묶음(이름 · 사진은 첫 글, 시간은 끝 글) · 안 읽음 1
@@ -8015,6 +8015,9 @@
     html.hw-z90 .ysj-chip .x { width: 40px; height: 40px; }
     html.hw-z90 .ysj-box { width: min(1067px, 100vw); } html.hw-z90 .ysj-box.sm { width: min(534px, 100vw); }
     html.hw-z90 #cp-nb-use { font-size: 14.5px !important; min-height: 40px !important; }
+    /* hotfix698: [+ 사종 추가] 창 단추 · 같은 사종 접힘 단추 — 90% 화면에서도 보이는 글자 13 · 높이 30 */
+    html.hw-z90 #cp-modal-cancel, html.hw-z90 #cp-modal-save, html.hw-z90 #cp-f-comp-auto, html.hw-z90 #cp-f-comp-addmat { font-size: 14.5px !important; }
+    html.hw-z90 .ysj-fold { min-height: 34px !important; }
   }
   /* hotfix695 디자인 보완: 같은 사종 접힘 단추 — 휴대폰에서 글자가 세로로 쪼개지지 않게 */
   @media (max-width: 640px) { html body td:has(> .ysj-fold) { flex-wrap: wrap; } html body .ysj-fold { white-space: nowrap; display: block; width: auto !important; max-width: 100%; flex: none; min-height: 44px !important; text-align: left; padding: 0 !important; } }
@@ -23859,7 +23862,7 @@ body:has(#ysj-pick:not([style*="none"])) #hw-si-ask{display:none!important}
           if (sp) { if (String(sp.name || '') !== v) { el.value = sp.name; el.dispatchEvent(new Event('change', { bubbles: true })); } return; }
           el.value = ''; const g = document.getElementById(key === 'rib' ? 'f_rib_gno' : 'f_body_gno'); if (g) g.value = '';
           try { render(); markDirty(); } catch (_) {}
-          if (typeof window.offerItemCodeRequest === 'function') window.offerItemCodeRequest(v, label); else toast('등록된 ' + label + '만 고를 수 있어 칸을 비웠습니다', 'warning');
+          if (typeof window.offerItemCodeRequest === 'function') window.offerItemCodeRequest(v, label, el); else toast('등록된 ' + label + '만 고를 수 있어 칸을 비웠습니다', 'warning');
         }, 150));
         const cb = document.getElementById(key === 'rib' ? 'f_rib_showsample' : 'f_body_showsample');
         if (cb) cb.addEventListener('change', () => { try { refreshPartItemLists(); } catch (_) {} });
@@ -38732,7 +38735,7 @@ body:has(#hw-pb) #hwp-notif,body:has(#hw-pb) #hw-si-ask,body:has(#hw-pb) #u675-b
   const yarnUseTag = u => u.v === 2
     ? `<span class="hw-bs ${u.basis === 'real' ? 'real' : u.basis === 'real_office' ? 'office' : 'est'}" title="생지 ${(parseFloat(u.src_kg) || 0).toFixed(1)}kg ÷ (1 − ${u.loss}%) × ${u.pct}%${u.src === 'ship' ? ' · 생지 출고분' : ' · 생산 완료'}">${u.basis === 'real' ? '실측' : u.basis === 'real_office' ? '실측(대행)' : '추정'}</span>`
     : `<span class="hw-bs est" title="${u.jul}절 × ${u.kg_per_jul}kg × ${u.pct}% (로스 없음 · 생지 kg 기준 전 식)">추정(이전)</span>`;
-  function renderYarnStockDash() {
+  function renderYarnStockDash(headOnly) {   /* hotfix698: headOnly = 위 숫자 판 · 입고 기록 없는 의뢰서까지만(검색 줄 감추기 때 숫자만 다시) */
     if (!state.yarnLedgerLoaded) return `<div class="dash-empty">원사 재고 원장을 읽는 중입니다…</div>`;
     if (state.yarnLedgerErr) return `<div class="dash-empty" style="color:#b91c1c;">원사 재고 원장(stock/yarn)을 읽지 못했습니다 — ${escapeHtml(state.yarnLedgerErr)}<br><span style="font-size:12px;color:#64748b;">Firebase 보안규칙이 hotfix412 txt 로 게시되어 있는지(practice_stock 허용) 확인해 주십시오.</span></div>`;
     const S = state.ysFilter || (state.ysFilter = { vendor: '', yarn: '', from: '', to: '', open: '' });
@@ -38741,7 +38744,9 @@ body:has(#hw-pb) #hwp-notif,body:has(#hw-pb) #hw-si-ask,body:has(#hw-pb) #u675-b
     const vk = vendorKey(S.vendor);
     const q = String(S.yarn || '').trim().toLowerCase();
     const inRange = d => { const x = String(d || '').slice(0, 10); if (S.from && x && x < S.from) return false; if (S.to && x && x > S.to) return false; return true; };
-    const rows = all.filter(r => (!vk || vendorKey(r.vendor || '(업체 없음)') === vk) && (!q || hwTextMatch(String(r.yarn || ''), q) || hwTextMatch(String(r.color || ''), q) || hwTextMatch(String(r.vendor || ''), q)));   /* 602: 업체로도 */
+    const ysHit = (r, qq) => !qq || hwTextMatch(String(r.yarn || ''), qq) || hwTextMatch(String(r.color || ''), qq) || hwTextMatch(String(r.vendor || ''), qq);   /* 602: 업체로도 */
+    const rows0 = all.filter(r => (!vk || vendorKey(r.vendor || '(업체 없음)') === vk));   /* hotfix698: 표는 검색 전 줄로 그리고 검색은 줄 감추기 */
+    const rows = rows0.filter(r => ysHit(r, q));
     const tot = rows.reduce((a, r) => { a.in += r.in_kg; a.use += r.use_kg; a.adj += r.adjust_kg; a.mv += r.move_kg; a.ret += r.ret_kg || 0; a.st += r.stock_kg; return a; }, { in: 0, use: 0, adj: 0, mv: 0, ret: 0, st: 0 });
     /* hotfix637: 편직 사용을 실측 · 실측(대행) · 추정으로 나눔 · v2(로스 들어간 줄)는 로스 보기에서 다시 안 뺌 · 켜기 전(줄 없음)엔 636 화면 그대로 */
     const UX = yarnUseSplit(); const ux = rows.reduce((a, r) => { const o = UX.get(r.key); if (o) { a.v2 += o.v2; a.real += o.real; a.office += o.office; a.est += o.est; } return a; }, { v2: 0, real: 0, office: 0, est: 0 });
@@ -38757,12 +38762,14 @@ body:has(#hw-pb) #hwp-notif,body:has(#hw-pb) #hw-si-ask,body:has(#hw-pb) #u675-b
     const sg = x => (x > 0 ? '+' : '') + f1(x);
     const ysVk692 = w => !vk || (w.yarns || []).some(y => y && String(y.dest || '').trim() && (vendorKey(y.dest) === vk || vendorKey(yarnVendorCanon(y.dest).name) === vk));   /* hotfix692(M1): 왼쪽 업체를 고르면 그 업체로 가는 의뢰서만 */
     const PIN = (state.allWorkOrders || []).filter(w => w && !w.deleted && w.type === '원사' && !w.received && (w.yarns || []).some(y => y && y.type) && ysVk692(w)).sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));   /* hotfix552: 입고 기록이 없는 원사 의뢰서 */
-    const PIN0 = PIN.length; const PINv = q ? PIN.filter(w => hwTextMatch([w.wo_number, w.date].concat((w.yarns || []).filter(y => y && y.type).map(y => yarnNameShow(y.type) + ' ' + y.type + ' ' + (y.dest || ''))).join(' '), q)) : PIN;   /* hotfix559 */
+    const pinHit = (w, qq) => !qq || hwTextMatch([w.wo_number, w.date].concat((w.yarns || []).filter(y => y && y.type).map(y => yarnNameShow(y.type) + ' ' + y.type + ' ' + (y.dest || ''))).join(' '), qq);
+    const PIN0 = PIN.length; const PINv = q ? PIN.filter(w => pinHit(w, q)) : PIN;   /* hotfix559 */
+    window.__ysQ = { rows0, hit: ysHit, PIN, pinHit };   /* hotfix698 */
     state.__ysInIds = PINv.map(w => w.id);
     let h = (window.hwStkTabs ? `<div class="hw-stk-row" style="display:flex;align-items:center;margin:0 0 8px;">${window.hwStkTabs('yarnStock')}</div>` : '') /* hotfix677: 재고 탭 (생지 재고 화면과 같은 모양) */ + `<div class="ys2-bar">
       <input type="text" lang="ko" id="ys-q" value="${escapeHtml(S.yarn || '')}" placeholder="사종 · 컬러 · 업체 찾기" style="min-width:220px;">
       <input type="date" id="ys-from" value="${escapeHtml(S.from || '')}" title="펼친 기록의 기간"><span style="color:#94a3b8">~</span><input type="date" id="ys-to" value="${escapeHtml(S.to || '')}" title="펼친 기록의 기간">
-      <span class="n" title="기간은 펼친 기록에만">${rows.length}줄</span><span class="gap"></span>
+      <span class="n" id="ys-n" title="기간은 펼친 기록에만">${rows.length}줄</span><span class="gap"></span>
       ${(n => `<button type="button" class="hw692-btn pri" id="ys-yin692" title="편직공장이 [원사 받았어요]로 보낸 송장 kg · 사진 — 화면 안 서랍에서 [보고대로 입고]">원사 입고 보고${n ? ` <span class="hw692-badge">${n}</span>` : ''}</button>`)((() => { try { return (window.hwYinCountV ? window.hwYinCountV(vk ? S.vendor : '') : (window.hwYarnRepCount ? window.hwYarnRepCount() : 0)); } catch (_) { return 0; } })())}
       ${PIN0 ? `<button type="button" class="hw692-btn sub${S.inOpen === true ? ' on' : ''}" id="ys-in-t" aria-pressed="${S.inOpen === true}" title="입고 기록이 없는 원사 구매 의뢰서 — 원사가 들어왔으면 [입고 반영]을 눌러야 입고 kg · 재고에 들어갑니다">입고 기록 없는 의뢰서 <span class="hw692-badge">${PIN0}</span></button>` : ''}
       ${canAdj ? `<button type="button" class="ys2-btn mv" id="ys-ymnew" title="원사를 다른 편직공장 · 창고로 옮기는 의뢰서">＋ 원사이동 의뢰서</button>` : ''}
@@ -38788,7 +38795,7 @@ body:has(#hw-pb) #hwp-notif,body:has(#hw-pb) #hw-si-ask,body:has(#hw-pb) #u675-b
         <span class="ys2-seg"><button type="button" class="ys2-btn${U.basis === 'ship' ? ' ok' : ''}" data-yuc="basis:ship"${own ? '' : ' disabled'} title="생지를 출고(가공처로 보냄)한 만큼만 원사에서 뺍니다">생지 출고한 만큼</button><button type="button" class="ys2-btn${U.basis === 'knit' ? ' ok' : ''}" data-yuc="basis:knit"${own ? '' : ' disabled'} title="편직한 생지(생지 재고에 들어간 것) 전체만큼 원사에서 뺍니다">편직한 생지 전체</button></span>
         <span style="color:#cbd5e1">|</span>
         <label style="display:inline-flex;gap:5px;align-items:center;cursor:${own ? 'pointer' : 'default'};"><input type="checkbox" data-yuc="loss_view"${U.loss_view ? ' checked' : ''}${own ? '' : ' disabled'}> 로스 <input type="number" min="0" max="20" step="0.5" data-yuc="loss_pct" value="${U.loss_pct}" style="width:52px;padding:2px 4px;border:1px solid #cbd5e1;border-radius:5px;"${own ? '' : ' disabled'}>% 뺀 재고로 보기</label>
-        <span style="color:#64748b;">${U.loss_view ? `지금 재고는 로스 ${U.loss_pct}% (편직 사용 ${f1(tot.use - ux.v2)}kg × ${U.loss_pct}% = ${f1(lossKg)}kg)를 뺀 숫자입니다 · 원장은 그대로` : `로스를 빼지 않은 남은 수량입니다 (로스 ${U.loss_pct}%를 빼면 ${f1(tot.st - lossKg)}kg)`}${ux.v2 > 0 ? ' · 로스가 이미 들어간 실측 줄은 빼지 않습니다' : ''}${own ? '' : ' · 바꾸기는 최고관리자'}</span>
+        <span class="ys2-use-t" style="color:#64748b;">${U.loss_view ? `지금 재고는 로스 ${U.loss_pct}% (편직 사용 ${f1(tot.use - ux.v2)}kg × ${U.loss_pct}% = ${f1(lossKg)}kg)를 뺀 숫자입니다 · 원장은 그대로` : `로스를 빼지 않은 남은 수량입니다 (로스 ${U.loss_pct}%를 빼면 ${f1(tot.st - lossKg)}kg)`}${ux.v2 > 0 ? ' · 로스가 이미 들어간 실측 줄은 빼지 않습니다' : ''}${own ? '' : ' · 바꾸기는 최고관리자'}</span>
         ${(() => { const d = RF ? new Date(RF) : null; const t = d ? `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}` : '';   /* hotfix637(명세 4-1 · 4-3): 생지 kg 기준 스위치 · 편직 로스 */
           const raw = yarnUseRaw(); const kl = yarnLossPct('', ''); const nv = Object.keys((raw.knit_loss_by_vendor && typeof raw.knit_loss_by_vendor === 'object') ? raw.knit_loss_by_vendor : {}).length; const dis = own ? '' : ' disabled';
           return `<div class="ys2-use2"><b>생지 kg 기준</b>${RF ? `<span class="on-t" title="이 시각 뒤 생산 완료 · 출고 확인부터 생지 kg ÷ (1 − 로스) × 비율">켜짐 · ${t}부터</span><button type="button" class="ys2-btn sm" data-yrf="off"${dis}>끄기</button>` : `<span class="off-t">꺼짐 — 절 × kg/절 × 비율 (로스 없음)</span><button type="button" class="ys2-btn sm ok" data-yrf="on"${dis} title="이 시각부터 들어오는 보고만 생지 kg 기준 — 켜기 전 원장 백업 · 다시 세면 바뀌는 의뢰서 0건일 때만 켜짐">이 시각부터 켜기</button>`}<button type="button" class="ys2-btn sm" data-yrf="pv" title="지금 다시 세면 원사 사용량이 바뀌는 의뢰서">지금 다시 세면 바뀌는 의뢰서</button>
@@ -38798,12 +38805,12 @@ body:has(#hw-pb) #hwp-notif,body:has(#hw-pb) #hw-si-ask,body:has(#hw-pb) #u675-b
       return `<div class="ys-in" style="border-color:#fecaca;background:#fef2f2;"><div style="padding:10px 12px;font-size:12.5px;color:#7f1d1d;line-height:1.7;"><b>휴지통에 있는 원사 구매 의뢰서 ${O.length}건의 입고가 아직 원사 재고에 남아 있습니다</b> — 반품(완전 반품)으로 처리하면 재고에서 빠지고 기록이 남습니다.<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;">${O.map(w => `<button class="dash-action-btn ys-orph" data-id="${escapeHtml(w.id)}" style="font-size:11.5px;padding:3px 10px;">${escapeHtml(w.wo_number || '')} · ${escapeHtml(w.supplier || '')} → 반품 처리</button>`).join('')}</div></div></div>`; })()}
     ${(() => { if (!PIN0) return '';
       const op = S.inOpen === true; const prog = PINv.filter(w => !w.completed).length;   /* hotfix692(M1): 띠 → 도구 줄 [입고 기록 없는 의뢰서 N] 배지 단추로 펼침 (기본 접힘 · 표는 감춰 둠) · [원사 받았어요] 안내 띠 → [원사 입고 보고] 주 단추 */
-      return `<div class="ys-in" style="${op ? '' : 'display:none;'}"><div class="ys-in-h" style="cursor:default;"><b>입고 기록이 없는 원사 구매 의뢰서 ${q ? `"${escapeHtml(S.yarn)}" ${PINv.length}건 / 전체 ${PIN0}건` : PINv.length + '건'}</b><span>진행 중 ${prog} · 완료(옛) ${PINv.length - prog}</span></div>
-        ${true ? `<div class="ys2-inbar">한 건씩 [입고 반영] · 한꺼번에 하려면 오른쪽 단추 (출고처가 빈 의뢰서는 건너뜀)${PINv.length && canAdj ? `<button type="button" class="ys2-btn ok" id="ys-in-all">전체 입고 반영 (${PINv.length}건)</button>` : ''}</div>
-        <div class="ys-in-b"><table class="ys2-t ys3-in"><colgroup><col style="width:92px"><col style="width:92px"><col><col style="width:110px"><col style="width:86px"><col style="width:150px"><col style="width:112px"></colgroup><thead><tr><th class="l">발주일</th><th class="l">입고 예정</th><th class="l">사종 → 출고처(편직공장)</th><th>발주 kg</th><th class="c">상태</th><th class="c">원사 구매 의뢰서</th><th class="c">입고</th></tr></thead><tbody>${PINv.map(w => { const kg = (w.yarns || []).reduce((a, y) => a + (parseFloat(y.total_kg) || 0), 0);
+      return `<div class="ys-in ys-in-pin" style="${op ? '' : 'display:none;'}"><div class="ys-in-h" style="cursor:default;"><b>입고 기록이 없는 원사 구매 의뢰서 ${q ? `"${escapeHtml(S.yarn)}" ${PINv.length}건 / 전체 ${PIN0}건` : PINv.length + '건'}</b><span>진행 중 ${prog} · 완료(옛) ${PINv.length - prog}</span></div>
+        ${true ? `<div class="ys2-inbar">한 건씩 [입고 반영] · 한꺼번에 하려면 오른쪽 단추 (출고처가 빈 의뢰서는 건너뜀)${PIN.length && canAdj ? `<button type="button" class="ys2-btn ok" id="ys-in-all"${PINv.length ? '' : ' style="display:none;"'}>전체 입고 반영 (${PINv.length}건)</button>` : ''}</div>
+        <div class="ys-in-b"><table class="ys2-t ys3-in"><colgroup><col style="width:92px"><col style="width:92px"><col><col style="width:110px"><col style="width:86px"><col style="width:150px"><col style="width:112px"></colgroup><thead><tr><th class="l">발주일</th><th class="l">입고 예정</th><th class="l">사종 → 출고처(편직공장)</th><th>발주 kg</th><th class="c">상태</th><th class="c">원사 구매 의뢰서</th><th class="c">입고</th></tr></thead><tbody>${PIN.map(w => { const kg = (w.yarns || []).reduce((a, y) => a + (parseFloat(y.total_kg) || 0), 0); const pv = !q || pinHit(w, q);
           const noDest = (w.yarns || []).filter(y => y && (y.type || y.total_kg)).some(y => !String(y.dest || '').trim());
-          return `<tr class="${noDest ? 'nd' : ''}"><td class="l">${escapeHtml(String(w.date || '').slice(2))}</td><td class="l">${escapeHtml(String(w.arrival_date || '-').slice(2))}</td><td class="l">${(w.yarns || []).filter(y => y && y.type).map(y => `<div class="ys3-yl"><b>${escapeHtml(yarnNameShow(y.type))}</b> → ${String(y.dest || '').trim() ? `<b>${escapeHtml(yarnVendorCanon(y.dest).name)}</b>` : '<em class="ys3-nd">출고처 없음</em>'} <span>${(parseFloat(y.total_kg) || 0).toFixed(1)}kg</span></div>`).join('')}</td><td style="font-weight:800;">${kg.toFixed(1)}</td><td class="c">${w.completed ? '<span style="color:#94a3b8;">완료(옛)</span>' : '<span style="color:#b45309;font-weight:800;">진행 중</span>'}</td><td class="c" style="white-space:nowrap"><button type="button" class="ys2-wo ys-wo" data-id="${escapeHtml(w.id)}" title="${escapeHtml(w.wo_number || '')} 보기">보기</button> <button type="button" class="ys2-wo ed ys-woed" data-id="${escapeHtml(w.id)}" title="${escapeHtml(w.wo_number || '')} 고치기 (출고처 · 수량 등)">수정</button></td><td class="c">${noDest ? '<button type="button" class="ys2-wo ed ys-woed" data-id="' + escapeHtml(w.id) + '" title="출고처를 넣어야 입고 반영이 됩니다">출고처 넣기</button>' : `<button class="ys2-btn ok sm yr-done" data-id="${escapeHtml(w.id)}">입고 반영</button>`}</td></tr>`; }).join('') || '<tr><td colspan="7" style="color:#94a3b8;padding:14px">찾는 글자에 맞는 의뢰서가 없습니다</td></tr>'}</tbody></table></div>` : ''}</div>`; })()}
-    <div class="ys2-grid">
+          return `<tr class="${noDest ? 'nd' : ''}${pv ? '' : ' hw-qh'}" data-ysin="${escapeHtml(w.id)}"${pv ? '' : ' style="display:none;"'}><td class="l">${escapeHtml(String(w.date || '').slice(2))}</td><td class="l">${escapeHtml(String(w.arrival_date || '-').slice(2))}</td><td class="l">${(w.yarns || []).filter(y => y && y.type).map(y => `<div class="ys3-yl"><b>${escapeHtml(yarnNameShow(y.type))}</b> → ${String(y.dest || '').trim() ? `<b>${escapeHtml(yarnVendorCanon(y.dest).name)}</b>` : '<em class="ys3-nd">출고처 없음</em>'} <span>${(parseFloat(y.total_kg) || 0).toFixed(1)}kg</span></div>`).join('')}</td><td style="font-weight:800;">${kg.toFixed(1)}</td><td class="c">${w.completed ? '<span style="color:#94a3b8;">완료(옛)</span>' : '<span style="color:#b45309;font-weight:800;">진행 중</span>'}</td><td class="c" style="white-space:nowrap"><button type="button" class="ys2-wo ys-wo" data-id="${escapeHtml(w.id)}" title="${escapeHtml(w.wo_number || '')} 보기">보기</button> <button type="button" class="ys2-wo ed ys-woed" data-id="${escapeHtml(w.id)}" title="${escapeHtml(w.wo_number || '')} 고치기 (출고처 · 수량 등)">수정</button></td><td class="c">${noDest ? '<button type="button" class="ys2-wo ed ys-woed" data-id="' + escapeHtml(w.id) + '" title="출고처를 넣어야 입고 반영이 됩니다">출고처 넣기</button>' : `<button class="ys2-btn ok sm yr-done" data-id="${escapeHtml(w.id)}">입고 반영</button>`}</td></tr>`; }).join('')}<tr class="ys-in-none"${PINv.length ? ' style="display:none;"' : ''}><td colspan="7" style="color:#94a3b8;padding:14px">찾는 글자에 맞는 의뢰서가 없습니다</td></tr></tbody></table></div>` : ''}</div>`; })()}
+    `; if (headOnly) return h; h += `<div class="ys2-grid">
       <div class="ys2-vl"><h5>업체 (원사가 있는 곳)</h5>
         <button type="button" class="ys-vendor${vk ? '' : ' on'}" data-v=""><span>전체</span><em class="${all.reduce((a, r) => a + r.stock_kg, 0) < 0 ? 'neg' : ''}">${f1(all.reduce((a, r) => a + r.stock_kg, 0))}</em></button>
         ${vendors.map(v => { const s = all.filter(r => vendorKey(r.vendor || '(업체 없음)') === vendorKey(v)).reduce((a, r) => a + r.stock_kg, 0); return `<button type="button" class="ys-vendor${vk === vendorKey(v) ? ' on' : ''}" data-v="${escapeHtml(v)}"><span>${escapeHtml(v)}</span><em class="${s < 0 ? 'neg' : ''}">${f1(s)}</em></button>`; }).join('')}
@@ -38812,12 +38819,12 @@ body:has(#hw-pb) #hwp-notif,body:has(#hw-pb) #hw-si-ask,body:has(#hw-pb) #u675-b
         <div class="ys2-tw"><table class="ys2-t"><colgroup><col><col style="width:130px"><col style="width:96px"><col style="width:96px"><col style="width:80px"><col style="width:86px"><col style="width:80px"><col style="width:130px"><col style="width:282px"></colgroup><thead><tr>
           <th class="l" style="min-width:200px;">사종 · 컬러</th><th class="l">업체</th><th>입고</th><th>사용</th><th>조정</th><th>이동</th><th>반품</th><th>재고 kg</th><th class="c">작업</th>
         </tr></thead><tbody>`;
-    if (!rows.length) h += `<tr><td colspan="9" style="text-align:center;color:#9ca3af;padding:24px;">아직 원사 재고 기록이 없습니다 — [원사 의뢰서 조회]의 [입고완료] 또는 위 [입고 반영]이 첫 줄을 만듭니다${canAdj ? ' (또는 [＋ 기초 재고])' : ''}.</td></tr>`;
+    h += `<tr class="ys-none"${rows.length ? ' style="display:none;"' : ''}><td colspan="9" style="text-align:center;color:#9ca3af;padding:24px;">아직 원사 재고 기록이 없습니다 — [원사 의뢰서 조회]의 [입고완료] 또는 위 [입고 반영]이 첫 줄을 만듭니다${canAdj ? ' (또는 [＋ 기초 재고])' : ''}.</td></tr>`;
     const nz = (x, cls) => x ? `<span class="${cls || ''}">${f1(x)}</span>` : '<span class="z">-</span>';
     const __kf = new Set(knitFactoryList().map(v => gsNormV(v)));   /* hotfix636: 편직공장 줄에만 [실재고 넣기] */
-    rows.forEach(r => {
-      const open = S.open === r.key; const t = window.hwYmTransitKey ? window.hwYmTransitKey(r.key) : 0;
-      h += `<tr class="ys-row${open ? ' open' : ''}" data-key="${escapeHtml(r.key)}">
+    rows0.forEach(r => {
+      const open = S.open === r.key; const t = window.hwYmTransitKey ? window.hwYmTransitKey(r.key) : 0; const rv = !q || ysHit(r, q);   /* hotfix698 */
+      h += `<tr class="ys-row${open ? ' open' : ''}${rv ? '' : ' hw-qh'}" data-key="${escapeHtml(r.key)}"${rv ? '' : ' style="display:none;"'}>
         <td class="l" title="${escapeHtml(r.yarn || '')}"><div class="nm"><i>▶</i><b>${escapeHtml(yarnNameShow(r.yarn))}</b><span class="ys2-cl">${escapeHtml(r.color || YARN_LW)}</span></div></td><td class="l vd">${escapeHtml(r.vendor || '(업체 없음)')}</td>
         <td>${nz(r.in_kg)}</td><td>${r.use_kg ? '<span class="u">−' + f1(r.use_kg) + '</span>' : '<span class="z">-</span>'}</td><td>${nz(r.adjust_kg)}</td><td>${nz(r.move_kg)}</td><td>${nz(r.ret_kg, 'rt')}</td>
         <td>${(() => { const U = window.hwYarnUseCfg ? window.hwYarnUseCfg() : { loss_view: false, loss_pct: 3 }; const v = U.loss_view ? r.stock_kg - (r.use_kg - v2Of(r)) * U.loss_pct / 100 : r.stock_kg; return `<span class="ys2-st${v < 0 ? ' neg' : Math.abs(v) < 0.05 ? ' zero' : ''}" title="${U.loss_view ? '로스 ' + U.loss_pct + '% 뺀 값 · 빼기 전 ' + f1(r.stock_kg) + 'kg' : ''}">${f1(v)}</span>`; })()}${t ? `<span class="ys2-wait" title="원사이동 의뢰서로 오는 중">입고 대기 +${f1(t)}</span>` : ''}</td>
@@ -38826,7 +38833,7 @@ body:has(#hw-pb) #hwp-notif,body:has(#hw-pb) #hw-si-ask,body:has(#hw-pb) #u675-b
         const ls = yarnStockLines(r.key);
         const uses = ls.filter(x => x.kind === 'use'); const tagOn = !!RF || v2Of(r) > 0;   /* hotfix637: 꼬리표는 켠 뒤 · 새 식 줄이 있을 때만 */
         const recs = yarnLedger().filter(x => x && yarnLedgerKey(x) === r.key && x.kind !== 'use' && inRange(x.date));
-        h += `<tr class="ys2-det"><td colspan="9">
+        h += `<tr class="ys2-det${rv ? '' : ' hw-qh'}" data-ysdet="1"${rv ? '' : ' style="display:none;"'}><td colspan="9">
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
             <div><div style="font-size:12px;font-weight:800;color:#334155;margin-bottom:6px;">어느 통이 얼마 썼나 (${uses.length})</div>
               ${uses.length ? `<table class="dash-table ys2-ut" style="font-size:12px;"><thead><tr><th>통</th><th>절</th><th>kg/절</th><th>비율</th><th>사용 kg</th></tr></thead><tbody>` + uses.map(u => { const wo = state.allWorkOrders.find(w => w.id === u.wo_id); const done = !!(wo && wo.knit_done); return `<tr><td style="text-align:left;">${escapeHtml(u.item || '')} <span style="font-family:var(--font-gothic);font-weight:700;color:#1e3a8a;">${escapeHtml(u.greige_no || '')}</span> <span style="font-size:10.5px;color:#94a3b8;">${done ? '편직완료' : '기획 중(출고분)'}</span>${tagOn ? yarnUseTag(u) : ''}${u.wo_id ? ` <button type="button" class="ys2-wo ys-wo" data-id="${escapeHtml(u.wo_id)}" title="${escapeHtml(u.wo_number || '')}">의뢰작지</button>` : ''}</td><td style="text-align:right;">${u.jul}</td><td style="text-align:right;">${u.kg_per_jul}</td><td style="text-align:right;">${u.pct}%</td><td style="text-align:right;font-weight:700;">${f1(u.kg)}</td></tr>`; }).join('') + `</tbody></table>` : '<div style="font-size:12px;color:#9ca3af;">아직 쓴 통이 없습니다.</div>'}</div>
@@ -38894,7 +38901,19 @@ body:has(#hw-pb) #hwp-notif,body:has(#hw-pb) #hw-si-ask,body:has(#hw-pb) #u675-b
     document.getElementById('ys-yin692')?.addEventListener('click', () => { if (window.hwYinDrawer) window.hwYinDrawer(S.vendor || ''); });   /* hotfix692(M1): 원사 입고 보고 서랍 */
     document.getElementById('ys-use692')?.addEventListener('click', () => { S.useOpen692 = !S.useOpen692; const d = document.getElementById('ys-more692'); if (d) d.open = false; renderDashboard(); });
     document.querySelectorAll('#ys-more692 .pop > button').forEach(b => b.addEventListener('click', () => { const d = document.getElementById('ys-more692'); if (d) d.open = false; }));
-    bindRerenderSearch('ys-q', v => { S.yarn = v || ''; });
+    bindQuickSearch('ys-q', v => { S.yarn = v || ''; }, v => {   /* hotfix698: 줄 감추기 · 위 숫자 판만 다시 셈 · [전체 입고 반영] 대상 = 보이는 의뢰서 */
+      const body = document.getElementById('dash-body'); if (!window.__ysQ || !body || state.dashView !== 'yarnStock' || !body.querySelector('.ys2-kpi') || !body.querySelector('tr.ys-none')) return false;
+      const tp = document.createElement('template'); tp.innerHTML = renderYarnStockDash(true); const Q = window.__ysQ, q = String(S.yarn || '').trim().toLowerCase();
+      ['.ys2-kpi', '.ys2-pm'].forEach(s => { const a = body.querySelector(s), b = tp.content.querySelector(s); if (a && b) a.replaceWith(b); });
+      [['.ys2-use-t'], ['.ys-in-pin .ys-in-h']].forEach(([s]) => { const a = body.querySelector(s), b = tp.content.querySelector(s); if (a && b) a.innerHTML = b.innerHTML; });
+      const keys = new Set(Q.rows0.filter(r => Q.hit(r, q)).map(r => r.key)); let n = 0;
+      body.querySelectorAll('tr.ys-row').forEach(tr => { const on = keys.has(tr.dataset.key); if (on) n++; hwQRow(tr, on); const d = tr.nextElementSibling; if (d && d.dataset.ysdet) hwQRow(d, on); });
+      body.querySelector('tr.ys-none').style.display = n ? 'none' : ''; const yn = document.getElementById('ys-n'); if (yn) yn.textContent = n + '줄';
+      const ids = new Set(state.__ysInIds || []); let pn = 0;
+      body.querySelectorAll('tr[data-ysin]').forEach(tr => { const on = ids.has(tr.dataset.ysin); if (on) pn++; hwQRow(tr, on); });
+      const nn = body.querySelector('tr.ys-in-none'); if (nn) nn.style.display = pn ? 'none' : '';
+      const ia = document.getElementById('ys-in-all'); if (ia) { ia.style.display = pn ? '' : 'none'; ia.textContent = '전체 입고 반영 (' + pn + '건)'; }
+      return true; });
     ['from', 'to'].forEach(k => { const el = document.getElementById('ys-' + k); if (el) el.addEventListener('change', () => { S[k] = el.value || ''; renderDashboard(); }); });
     // hotfix416: 재고조정 · 이동 · 기초 재고 · 취소
     const rowOf = key => yarnStockRows().find(r => r.key === key);
@@ -39927,12 +39946,12 @@ body:has(#hw-pb) #hwp-notif,body:has(#hw-pb) #hw-si-ask,body:has(#hw-pb) #u675-b
       list = list.filter(wo => gsPartOf(wo) === state.gsPart);
     }
     const gq = String(state.gsSearch || '').trim().toLowerCase();
-    if (gq) {
-      list = list.filter(wo => [
+    const gsHit = (wo, qq) => !qq || [
         wo.gs_item, wo.recipient, wo.gs_dest, gsPartOf(wo),
         wo.gs_invoice_no, wo.source_fn_number, wo.wo_number, wo.gs_color, wo.internal_memo, wo.gs_note, wo.gs_greige_no
-      ].some(s => hwTextMatch(String(s || ''), gq)));
-    }
+      ].some(s => hwTextMatch(String(s || ''), qq));
+    const listAll = list;   /* hotfix698: 표는 검색 전 줄로 그리고 검색은 줄 감추기(gsQuick) */
+    if (gq) list = list.filter(wo => gsHit(wo, gq));
     const totalCount = state.allWorkOrders.filter(wo =>
       wo.type === '생지출고' && !wo.deleted && (state.showCompleted || !wo.completed)
     ).length;
@@ -39958,7 +39977,7 @@ body:has(#hw-pb) #hwp-notif,body:has(#hw-pb) #hw-si-ask,body:has(#hw-pb) #u675-b
     html += `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0 6px 4px;">
       <input type="text" id="gs-search" lang="ko" list="gs-search-datalist" autocomplete="off" autocorrect="off" spellcheck="false" placeholder="품목 · 수신처 · 출고처 · 메모 검색 (일부만 적어도 됩니다)" value="${escapeHtml(state.gsSearch || '')}" style="flex:1;min-width:220px;max-width:380px;padding:7px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;font-family:inherit;">
       <datalist id="gs-search-datalist">${gsSuggestList.map(n => `<option value="${escapeHtml(n)}"></option>`).join('')}</datalist>
-      ${state.gsSearch ? `<button class="dash-action-btn" id="gs-search-clear" style="font-size:11px;padding:5px 10px;">지우기</button>` : ''}
+      <button class="dash-action-btn" id="gs-search-clear" style="font-size:11px;padding:5px 10px;${state.gsSearch ? '' : 'display:none;'}">지우기</button>
       <span style="font-size:12px;color:#6b7280;margin-left:4px;">구분</span>
       <button class="sp-tab-btn gs-part-btn${(state.gsPart || 'all') === 'all' ? ' active' : ''}" data-gs-part="all" style="padding:5px 12px;font-size:12px;">전체</button>
       <button class="sp-tab-btn gs-part-btn${state.gsPart === '몸판' ? ' active' : ''}" data-gs-part="몸판" style="padding:5px 12px;font-size:12px;">몸판</button>
@@ -39967,13 +39986,15 @@ body:has(#hw-pb) #hwp-notif,body:has(#hw-pb) #hw-si-ask,body:has(#hw-pb) #u675-b
     </div>`;   /* hotfix689(L33 · 디자인 B-8): 거래처 거르기를 검색 줄로 — 거르기 3줄 → 날짜 줄 + 검색 줄 */
     html += `<div style="font-size:11px;color:#555;margin:0 0 6px 4px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
       <span class="hw-help" data-hf="692" style="color:#5b6678;">염색작지 [보기] → [생지출고의뢰 만들기]에서 자동 생성됩니다</span>
-      ${renderFilterSummary('gs', totalCount, list.length)}
+      <span id="gs-fsum" style="display:contents;">${renderFilterSummary('gs', totalCount, list.length)}</span>
       <button class="dash-action-btn gs-photo-sheet" title="지금 거른 목록(기간 · 거래처 · 품목)의 송장 사진을 한 번에 — 인쇄 창에서 [PDF로 저장]" style="font-weight:800;color:#1e3a8a;border-color:#bfdbfe;">송장 사진 모아 보기 · PDF</button>
       ${(n => n ? `<button class="dash-action-btn gs-rep-open" style="font-weight:800;background:#f5f3ff;border-color:#c4b5fd;color:#6d28d9;" title="편직공장이 보냈다고 알린 것 · 취소 요청 — 우리가 확인해야 재고에 확정">확인할 것 ${n}</button>` : '')(window.hwGsNeedCount ? window.hwGsNeedCount() : 0)}
       <button class="dash-action-btn hw-goview" data-go="knit" style="margin-left:auto;font-weight:800;" title="생지생산 및 재고 화면으로">생지생산 및 재고 →</button>
     </div>`;
 
-    if (list.length === 0) {
+    window.__gsQ = { all: listAll, hit: gsHit, total: totalCount };   /* hotfix698 */
+    if (listAll.length > 0) html += `<div class="dash-empty" id="gs-qempty"${list.length ? ' style="display:none;"' : ''}>검색 조건에 맞는 생지출고의뢰가 없습니다.<br><br>검색어를 지우거나 구분을 <strong>[전체]</strong>로 바꿔 보세요.</div>`;
+    if (listAll.length === 0) {
       const emptyMsg = (gq || (state.gsPart && state.gsPart !== 'all'))
         ? `검색 조건에 맞는 생지출고의뢰가 없습니다.<br><br>검색어를 지우거나 구분을 <strong>[전체]</strong>로 바꿔 보세요.`
         : isFiltered
@@ -39983,7 +40004,7 @@ body:has(#hw-pb) #hwp-notif,body:has(#hw-pb) #hw-si-ask,body:has(#hw-pb) #u675-b
       return html;
     }
 
-    html += `<div class="dash-bulk-bar-slot" data-type="생지출고"></div><div class="dash-table-wrap"><table class="dash-table" data-list-type="생지출고"><thead><tr>
+    html += `<div class="dash-bulk-bar-slot" data-type="생지출고"></div><div class="dash-table-wrap" id="gs-qwrap"${list.length ? '' : ' style="display:none;"'}><table class="dash-table" data-list-type="생지출고"><thead><tr>
       <th class="col-select" title="선택"></th>
       <th class="col-no">NO</th>
       ${sortableTh('gs', 'date', '작성일', 'col-date')}
@@ -40007,17 +40028,19 @@ body:has(#hw-pb) #hwp-notif,body:has(#hw-pb) #hw-si-ask,body:has(#hw-pb) #u675-b
 
     let sumJul = 0, sumKg = 0, hasEstimate = false;
     window.__gsLastList = list;   // hotfix563: [송장 사진 모아 보기]
-    list.forEach(wo => {
-      const completedClass = wo.completed ? 'completed' : '';
+    const gsOn = new Set(list);   /* hotfix698: 검색에 안 맞는 줄은 감춘 채로 그림(합계는 보이는 줄만) */
+    listAll.forEach(wo => {
+      const gsVis = gsOn.has(wo);
+      const completedClass = (wo.completed ? 'completed' : '') + (gsVis ? '' : ' hw-qh');
       const qtyTxt = (wo.gs_qty || wo.gs_qty === 0) ? `${wo.gs_qty}` : '-';
       const partTxt = wo.gs_part === 'rib' ? '리프' : (wo.gs_part === 'body' ? '몸판' : '-');
       const kgInfo = gsWeightOf(wo);
-      if (kgInfo.kg != null) { sumKg += kgInfo.kg; if (kgInfo.est) hasEstimate = true; }
-      sumJul += (parseFloat(wo.gs_qty) || 0);
+      if (gsVis && kgInfo.kg != null) { sumKg += kgInfo.kg; if (kgInfo.est) hasEstimate = true; }
+      if (gsVis) sumJul += (parseFloat(wo.gs_qty) || 0);
       const kgCell = (kgInfo.kg == null)
         ? `<td class="col-num center">-</td>`
         : `<td class="col-num center"${kgInfo.est ? ` style="color:#6b7280;" title="저장된 중량이 없어 절당 ${kgInfo.perJul.toFixed(1)}kg로 계산한 값입니다"` : ''}>${kgInfo.est ? '약 ' : ''}${kgInfo.kg.toFixed(1)}</td>`;
-      html += `<tr class="${completedClass}" data-row-id="${wo.id}">
+      html += `<tr class="${completedClass}" data-row-id="${wo.id}" data-gsq="1"${gsVis ? '' : ' style="display:none;"'}>
         <td class="col-select"><input type="checkbox" class="dash-row-cb" data-id="${wo.id}" data-list-type="생지출고"></td>
         <td class="col-no id-hover" title="${escapeHtml(wo.wo_number || '')}"><span class="id-text">${escapeHtml(wo.wo_number || '-')}</span></td>
         <td class="col-date">${formatYMD(wo.date)}</td>
@@ -40045,15 +40068,17 @@ body:has(#hw-pb) #hwp-notif,body:has(#hw-pb) #hw-si-ask,body:has(#hw-pb) #u675-b
       </tr>`;
     });
 
-    html += `<tr style="background:#f1f5f9;font-weight:800;border-top:2px solid #cbd5e1;">
+    const gsSum = (list, sumJul) => `<tr id="gs-sumrow" style="background:#f1f5f9;font-weight:800;border-top:2px solid #cbd5e1;">
       <td colspan="8" style="text-align:right;padding-right:10px;">화면에 보이는 ${list.length}건 합계</td>
       <td class="col-num center" style="color:#c0271f;">${Math.round(sumJul * 10) / 10}절</td>
       <td colspan="3"></td>
       ${(() => { let j = 0, k = 0; list.forEach(w => { const st = gsStateOf(w); j += st.done; k += st.doneKg; }); return `<td class="col-num center" style="color:#166534;white-space:nowrap;">${j ? Math.round(j * 10) / 10 + '절' : ''}</td><td class="col-num center" style="color:#166534;white-space:nowrap;">${j ? k.toFixed(1) + 'kg' : ''}</td>`; })()}
       <td colspan="5"></td>
     </tr>`;
+    html += gsSum(list, sumJul);
     html += `</tbody></table></div>`;
-    html += gsVendorSummaryHtml(list);
+    html += `<div id="gs-vsum" style="display:contents;">${gsVendorSummaryHtml(list)}</div>`;
+    window.__gsQ.sum = gsSum;   /* hotfix698: 검색 줄 감추기 때 합계 줄 · 출고처별 합계를 보이는 줄로 다시 */
     return html;
   }
 
@@ -41220,18 +41245,9 @@ body:has(#hw-pb) #hwp-notif,body:has(#hw-pb) #hw-si-ask,body:has(#hw-pb) #u675-b
     if (filter.recipient && filter.recipient !== 'all') {
       filtered = filtered.filter(x => (x.claim.recipient || '') === filter.recipient);
     }
-    if (filter.search) {
-      const q = filter.search.toLowerCase();
-      filtered = filtered.filter(x => {
-        const wo = x.wo;
-        const c = x.color;
-        const claim = x.claim;
-        return [
-          wo.wo_number, wo.lot_no,
-          c.name, claim.recipient, claim.reason
-        ].some(v => hwTextMatch((v || '').toString(), q));
-      });
-    }
+    /* hotfix698: 검색 글자는 줄 감추기(claimsQuick) — 표는 검색 전 줄로 그리고 맞지 않는 줄만 감춤 · NO 는 보이는 줄 차례 */
+    const clHit = (x, q) => !q || [x.wo.wo_number, x.wo.lot_no, x.color.name, x.claim.recipient, x.claim.reason].some(v => hwTextMatch((v || '').toString(), q));
+    const clQ = String(filter.search || '').toLowerCase();
     
     // 정렬
     if (filter.sort === 'amount_desc') {
@@ -41343,10 +41359,13 @@ body:has(#hw-pb) #hwp-notif,body:has(#hw-pb) #hw-si-ask,body:has(#hw-pb) #u675-b
     
     // 본 목록 (테이블)
     let listHtml = '';
+    const clOn = filtered.map(x => clHit(x, clQ)); const clN = clOn.filter(Boolean).length; let clNo = 0;
+    window.__clQ = { list: filtered, hit: clHit };
     if (filtered.length === 0) {
       listHtml = `<div class="dash-empty">${claims.length === 0 ? '아직 땡처리된 컬러가 없습니다.' : '조건에 맞는 클레임이 없습니다.'}</div>`;
     } else {
-      listHtml = `<div class="dash-table-wrap"><table class="dash-table claims-table"><thead><tr>
+      listHtml = `<div class="dash-empty" id="cl-qempty"${clN ? ' style="display:none;"' : ''}>조건에 맞는 클레임이 없습니다.</div>`;   /* hotfix698 */
+      listHtml += `<div class="dash-table-wrap" id="cl-qwrap"${clN ? '' : ' style="display:none;"'}><table class="dash-table claims-table"><thead><tr>
         <th class="col-no">NO</th>
         <th class="col-date">처리일</th>
         <th>의뢰서 / LOT</th>
@@ -41367,8 +41386,8 @@ body:has(#hw-pb) #hwp-notif,body:has(#hw-pb) #hw-si-ask,body:has(#hw-pb) #u675-b
         const rowCls = recipBlank ? 'claims-row-warn' : '';
         const qtyTag = isPartial ? ` <span style="font-size:10px;color:#b91c1c;">(땡처리 ${x.partialQty.body}/${x.partialQty.rib}절)</span>` : '';
         const partialAttr = isPartial ? ` data-partial="1" data-discard-idx="${x.discardIdx}"` : '';
-        listHtml += `<tr class="${rowCls}" data-cl692="${idx}">
-          <td class="col-no">${idx + 1}</td>
+        listHtml += `<tr class="${rowCls}${clOn[idx] ? '' : ' hw-qh'}" data-cl692="${idx}"${clOn[idx] ? '' : ' style="display:none;"'}>
+          <td class="col-no">${clOn[idx] ? ++clNo : ''}</td>
           <td class="col-date">${escapeHtml(date)}</td>
           <td><strong>${escapeHtml(wo.wo_number || '-')}</strong>${wo.lot_no ? `<br><span class="claims-lot">${escapeHtml(wo.lot_no)}</span>` : ''}</td>
           <td>${escapeHtml(c.name || '-')}${qtyTag}</td>
@@ -47142,9 +47161,11 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
     if (ok) toast('[' + nm + '] 코드 등록 요청을 보냈습니다 — 코드를 만들 수 있는 사람에게 알림이 뜹니다', 'success');
     return ok;
   }
-  function offerItemCodeRequest(name, label) {
+  function offerItemCodeRequest(name, label, el) {
     const nm = String(name || '').trim(); if (!nm) return;
     if (canMakeItemCode()) {
+      /* hotfix698: 의뢰서 작성 중이면 화면을 옮기지 않고 그 위에 [+ 생지 추가] 창만 — 만들면 그 칸에 바로 골라짐(쓰던 의뢰서 그대로) */
+      if (el && el.isConnected && state.uiMode === 'write') { if (confirm('[' + nm + '] 은(는) 등록된 ' + (label || '품목') + '이 아닙니다.\n지금 [+ 생지 추가] 창을 열어 만들까요? (쓰던 의뢰서는 그대로)')) openKnitNewItemModal({ name: nm, onDone: n2 => { if (!el.isConnected) return; try { refreshPartItemLists(); } catch (_) {} el.value = n2; el.dataset.lastSpec = ''; el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); try { render(); markDirty(); } catch (_) {} } }); else toast('등록된 ' + (label || '품목') + '만 고를 수 있어 칸을 비웠습니다', 'warning'); return; }
       if (confirm('[' + nm + '] 은(는) 등록된 ' + (label || '품목') + '이 아닙니다.\n지금 [생지 및 편직 설정 › + 생지 추가]로 가서 만들까요?')) { if (typeof window.hwGoView === 'function') window.hwGoView('knitSetup'); setTimeout(() => openKnitNewItemModal({ name: nm }), 250); }
       else toast('등록된 ' + (label || '품목') + '만 고를 수 있어 칸을 비웠습니다', 'warning');
       return;
@@ -54390,8 +54411,8 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
             <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-bottom:7px;">
               <span style="font-size:12px;font-weight:700;color:#374151;">성분 (혼용율)</span>
               <span style="font-size:11px;color:#9ca3af;">— 거래처에 알리는 혼용율을 낼 때 쓰는 값입니다</span>
-              <button class="dash-action-btn" id="cp-f-comp-auto" style="margin-left:auto;font-size:11px;padding:4px 9px;">이름 보고 채우기</button>
-              <button class="dash-action-btn" id="cp-f-comp-addmat" style="font-size:11px;padding:4px 9px;">＋ 소재 이름</button>
+              <button class="dash-action-btn" id="cp-f-comp-auto" style="margin-left:auto;font-size:13px;padding:4px 9px;">이름 보고 채우기</button>
+              <button class="dash-action-btn" id="cp-f-comp-addmat" style="font-size:13px;padding:4px 9px;">＋ 소재 이름</button>
             </div>
             <div id="cp-f-comp-rows" style="display:flex;flex-direction:column;gap:6px;"></div>
             <div id="cp-f-comp-sum" style="font-size:11.5px;font-weight:700;margin-top:7px;min-height:16px;"></div>
@@ -54419,8 +54440,8 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
             <input type="text" id="cp-f-memo" autocomplete="off" style="${st}" placeholder="선택 입력"></div>
           <div id="cp-f-hist" style="font-size:11.5px;color:#6b7280;line-height:1.7;"></div>
           <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:4px;">
-            <button class="dash-action-btn" id="cp-modal-cancel" style="padding:7px 16px;">취소</button>
-            <button class="dash-action-btn" id="cp-modal-save" style="background:#1e3a8a;color:#fff;font-weight:700;padding:7px 18px;">저장</button>
+            <button class="dash-action-btn" id="cp-modal-cancel" style="padding:7px 16px;font-size:13px;">취소</button>
+            <button class="dash-action-btn" id="cp-modal-save" style="background:#1e3a8a;color:#fff;font-weight:700;padding:7px 18px;font-size:13px;">저장</button>
           </div>
         </div>
       </div>
@@ -54442,10 +54463,8 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
     let rows = buildFinishSampleRows();
     const total = rows.length;
     const q = String(state.samplesSearch || '').trim().toLowerCase();
-    if (q) {
-      rows = rows.filter(r => [r.item, r.color, r.dye, r.proc, r.gubun, r.wo_number]
-        .some(s => hwTextMatch(String(s || ''), q)));
-    }
+    /* hotfix698: 검색 글자는 줄 감추기로(spQuick) — 표는 검색 전 줄로 그리고 맞지 않는 줄만 감춤 */
+    const spHit = (r, qq) => !qq || [r.item, r.color, r.dye, r.proc, r.gubun, r.wo_number].some(s => hwTextMatch(String(s || ''), qq));
     if (state.samplesShrinkOnly) {
       rows = rows.filter(r => (r.sw != null && r.sw > SAMPLE_SHRINK_WARN) || (r.sl != null && r.sl > SAMPLE_SHRINK_WARN));
     }
@@ -54477,15 +54496,18 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
 
     const arrow = k => (state.samplesSortKey === k) ? (state.samplesSortDir === 'asc' ? ' ▲' : ' ▼') : '';
     const th = (k, label, cls) => `<th class="sp-sort-th${cls ? ' ' + cls : ''}" data-sp-sort="${k}">${label}${arrow(k)}</th>`;
+    const hit = rows.map(r => spHit(r, q)); const nHit = hit.filter(Boolean).length;   /* hotfix698 */
+    const spN = n => `${n}줄 표시${n !== total ? ` (전체 ${total}줄)` : ''}`;
+    window.__spQ = { rows, hit: spHit, n: spN };
 
     let html = `<div class="hw692-sptb" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px;">
       ${tabsHtml || ''}
       <input type="text" id="sp-search" lang="ko" autocomplete="off" placeholder="원단 · 컬러 · 염색처 · 가공처 검색" value="${escapeHtml(state.samplesSearch || '')}" style="flex:1;min-width:200px;max-width:340px;padding:7px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;font-family:inherit;">
-      ${state.samplesSearch ? `<button class="dash-action-btn" id="sp-search-clear" style="font-size:11px;padding:5px 10px;">지우기</button>` : ''}
+      <button class="dash-action-btn" id="sp-search-clear" style="font-size:11px;padding:5px 10px;${state.samplesSearch ? '' : 'display:none;'}">지우기</button>
       <label style="display:inline-flex;align-items:center;gap:5px;font-size:12px;color:#374151;cursor:pointer;">
         <input type="checkbox" id="sp-shrink-only" ${state.samplesShrinkOnly ? 'checked' : ''}> 축률 ${SAMPLE_SHRINK_WARN}% 초과만
       </label>
-      <span style="margin-left:auto;font-size:12px;color:#6b7280;">${rows.length}줄 표시${rows.length !== total ? ` (전체 ${total}줄)` : ''}</span>
+      <span id="sp-n" style="margin-left:auto;font-size:12px;color:#6b7280;">${spN(nHit)}</span>
     </div>`;
 
     if (total === 0) {
@@ -54495,7 +54517,8 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
       return html + `<div class="dash-empty">조건에 맞는 샘플이 없습니다.</div>`;
     }
 
-    html += `<div class="dash-table-wrap"><table class="dash-table dash-table-no-select sp-table"><thead><tr>
+    html += `<div class="dash-empty" id="sp-qempty"${nHit ? ' style="display:none;"' : ''}>조건에 맞는 샘플이 없습니다.</div>`;   /* hotfix698 */
+    html += `<div class="dash-table-wrap" id="sp-qwrap"${nHit ? '' : ' style="display:none;"'}><table class="dash-table dash-table-no-select sp-table"><thead><tr>
       ${th('date', '발주일', 'col-date')}
       ${th('item', '원단명')}
       ${th('gubun', '구분')}
@@ -54513,7 +54536,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
       <th class="hw-mp-h">메모</th>
     </tr></thead><tbody>`;
 
-    rows.forEach(r => {
+    rows.forEach((r, ri) => {
       const shrinkCell = (v) => {
         if (v == null) return `<td class="col-num">-</td>`;
         const bad = v > SAMPLE_SHRINK_BAD;   // hotfix484: 3.0% 넘으면 굵은 빨강
@@ -54532,7 +54555,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
         : '앞 차수 없음';
       const roundCell = `<td class="col-num"><span class="${r.round >= 2 ? 'sp-round-n' : 'sp-round-1'}" title="${escapeHtml(prevTip)}">${r.round}차</span></td>`;
       const memo = (state.sampleMemos || {})[sampleMemoKey(r.woId, r.colorIdx, r.part)] || '';
-      return html += `<tr class="sp-row" data-sp-id="${r.woId}">
+      return html += `<tr class="sp-row${hit[ri] ? '' : ' hw-qh'}" data-sp-id="${r.woId}" data-spq="${ri}"${hit[ri] ? '' : ' style="display:none;"'}>
         <td class="col-date">${formatYMD(r.date)}</td>
         <td>${escapeHtml(r.item || '-')}</td>
         <td><span class="${r.part === 'rib' ? 'sp-part-rib' : 'sp-part-body'}">${r.gubun}</span></td>
@@ -54956,14 +54979,14 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
   // ===== v2.12: 일괄 처리 헬퍼 =====
   function getSelectedRowIds(listType) {
     const cbs = document.querySelectorAll(`#dash-body .dash-row-cb[data-list-type="${listType}"]:checked`);
-    return Array.from(cbs).map(cb => cb.dataset.id);
+    return Array.from(cbs).filter(cb => !cb.closest('tr.hw-qh')).map(cb => cb.dataset.id);   /* hotfix698: 검색으로 감춘 줄은 빼고 */
   }
   
   function updateBulkBar(listType) {
     const slot = document.querySelector(`#dash-body .dash-bulk-bar-slot[data-type="${listType}"]`);
     if (!slot) return;
     const ids = getSelectedRowIds(listType);
-    const total = document.querySelectorAll(`#dash-body .dash-row-cb[data-list-type="${listType}"]`).length;
+    const total = Array.from(document.querySelectorAll(`#dash-body .dash-row-cb[data-list-type="${listType}"]`)).filter(cb => !cb.closest('tr.hw-qh')).length;   /* hotfix698 */
     const allCb = document.querySelector(`#dash-body .dash-all-cb[data-list-type="${listType}"]`);
     if (allCb) {
       allCb.checked = ids.length > 0 && ids.length === total;
@@ -58402,6 +58425,24 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
       run();
     });
   }
+  /* hotfix698: 빠른 검색 — 표를 다시 그리지 않고 이미 그린 줄만 감춤/보임(695 cfQuick 방식) · 글자마다 다음 화면 · 한글 조합 중 · Enter 바로
+   *   quick(v) 가 true 를 돌려주지 않으면(표가 아직 없음 등) 예전처럼 화면을 다시 그림 */
+  function bindQuickSearch(id, setValue, quick) {
+    const el = document.getElementById(id); if (!el || el.__hq) return; el.__hq = 1; el.dataset.hwLive = '1';
+    let raf = 0;
+    const full = cur => { const pos = cur.selectionStart; const wasF = document.activeElement === cur; hwSearchKeep(document.querySelector('.dashboard-panel'), document.getElementById('dash-body'), () => renderDashboard(), cur.value, state.dashView);
+      const again = document.getElementById(id); if (again && wasF) { again.dataset.dlKeep = '1'; again.focus({ preventScroll: true }); delete again.dataset.dlKeep; const p = pos == null ? again.value.length : pos; try { again.setSelectionRange(p, p); } catch (_) {} } };
+    const go = () => { if (raf) cancelAnimationFrame(raf); raf = 0; const cur = document.getElementById(id); if (!cur) return; setValue(cur.value); let ok = false; try { ok = quick(cur.value) === true; } catch (e) { console.warn('[빠른 검색]', e); } if (!ok) full(cur); };
+    const kick = () => { if (!raf) raf = requestAnimationFrame(go); };
+    el.addEventListener('input', kick); el.addEventListener('compositionend', kick); el.addEventListener('change', () => { __imeComposing = false; go(); });
+    el.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.isComposing) go(); });
+  }
+  /* hotfix698: 줄 감추기 공통 — 감춘 줄은 class hw-qh · 체크한 줄을 감추면 체크를 풂(일괄 작업 대상에서 빠짐) */
+  function hwQRow(tr, on) {
+    if (!tr) return; if ((tr.style.display === 'none') === !on) { tr.classList.toggle('hw-qh', !on); return; }
+    tr.style.display = on ? '' : 'none'; tr.classList.toggle('hw-qh', !on);
+    if (!on) tr.querySelectorAll('input.dash-row-cb:checked').forEach(cb => { cb.checked = false; tr.classList.remove('row-selected'); });
+  }
 
   function attachDashHandlers() {
     // hotfix336: 사용자 관리 화면
@@ -58430,10 +58471,15 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
     if (state.dashView === 'claims') {
       // 검색
       // hotfix258: 한글 조합 보호
-      bindRerenderSearch('claims-search', v => {
+      bindQuickSearch('claims-search', v => {
         if (!state.claimsFilter) state.claimsFilter = { recipient: 'all', search: '', sort: 'date_desc' };
         state.claimsFilter.search = v;
-      });
+      }, v => {   /* hotfix698: 줄 감추기 · NO 는 보이는 줄 차례 */
+        const Q = window.__clQ, body = document.getElementById('dash-body'), wrap = document.getElementById('cl-qwrap'); if (!Q || !body || !wrap || state.dashView !== 'claims') return false;
+        const q = String(v || '').toLowerCase(); let n = 0;
+        body.querySelectorAll('tr[data-cl692]').forEach(tr => { const x = Q.list[+tr.dataset.cl692]; if (!x) return; const on = Q.hit(x, q); hwQRow(tr, on); const no = tr.querySelector('td.col-no'); if (no) no.textContent = on ? String(++n) : ''; });
+        wrap.style.display = n ? '' : 'none'; const em = document.getElementById('cl-qempty'); if (em) em.style.display = n ? 'none' : '';
+        return true; });
       // 거래처 필터
       const recipSel = document.getElementById('claims-recipient-filter');
       if (recipSel) {
@@ -61230,6 +61276,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
         const listType = allCb.dataset.listType;
         const rowCbs = document.querySelectorAll(`#dash-body .dash-row-cb[data-list-type="${listType}"]`);
         rowCbs.forEach(cb => {
+          if (cb.closest('tr.hw-qh')) return;   /* hotfix698: 검색으로 감춘 줄은 고르지 않음 */
           cb.checked = allCb.checked;
           const tr = cb.closest('tr');
           if (tr) tr.classList.toggle('row-selected', cb.checked);
@@ -62565,7 +62612,18 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
     });
 
     // ===== hotfix257/258: 생지출고 목록 검색 =====
-    bindRerenderSearch('gs-search', v => { state.gsSearch = v; });
+    bindQuickSearch('gs-search', v => { state.gsSearch = v; }, v => {   /* hotfix698: 줄 감추기 · 합계 · 출고처별 합계 · [송장 사진 모아 보기] 대상 · 고른 줄(감춘 줄은 풂) */
+      const Q = window.__gsQ, body = document.getElementById('dash-body'), wrap = document.getElementById('gs-qwrap'); if (!Q || !Q.sum || !body || !wrap || state.dashView !== 'gs') return false;
+      const q = String(v || '').trim().toLowerCase(); const L = Q.all.filter(w => Q.hit(w, q)); const on = new Set(L.map(w => String(w.id)));
+      body.querySelectorAll('tr[data-gsq]').forEach(tr => hwQRow(tr, on.has(tr.dataset.rowId)));
+      window.__gsLastList = L;
+      const sr = document.getElementById('gs-sumrow'); if (sr) sr.outerHTML = Q.sum(L, L.reduce((a, w) => a + (parseFloat(w.gs_qty) || 0), 0));
+      const vs = document.getElementById('gs-vsum'); if (vs) vs.innerHTML = gsVendorSummaryHtml(L);
+      const fs = document.getElementById('gs-fsum'); if (fs) fs.innerHTML = renderFilterSummary('gs', Q.total, L.length);
+      wrap.style.display = L.length ? '' : 'none'; const em = document.getElementById('gs-qempty'); if (em) em.style.display = L.length ? 'none' : '';
+      const cl = document.getElementById('gs-search-clear'); if (cl) cl.style.display = state.gsSearch ? '' : 'none';
+      try { updateBulkBar('생지출고'); } catch (_) {}
+      return true; });
     const gsClearEl = document.getElementById('gs-search-clear');
     if (gsClearEl) gsClearEl.addEventListener('click', () => { state.gsSearch = ''; renderDashboard(); });
     document.querySelectorAll('#dash-body .gs-part-btn').forEach(b => b.addEventListener('click', () => {
@@ -62578,7 +62636,13 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
       state.samplesTab = b.dataset.spTab || '염색가공';
       renderDashboard();
     }));
-    bindRerenderSearch('sp-search', v => { state.samplesSearch = v; });
+    bindQuickSearch('sp-search', v => { state.samplesSearch = v; }, v => {   /* hotfix698: 줄 감추기(다시 그리지 않음) */
+      const Q = window.__spQ, body = document.getElementById('dash-body'), wrap = document.getElementById('sp-qwrap'); if (!Q || !body || !wrap || state.dashView !== 'samples') return false;
+      const q = String(v || '').trim().toLowerCase(); let n = 0;
+      body.querySelectorAll('tr[data-spq]').forEach(tr => { const on = Q.hit(Q.rows[+tr.dataset.spq], q); if (on) n++; hwQRow(tr, on); });
+      wrap.style.display = n ? '' : 'none'; const em = document.getElementById('sp-qempty'); if (em) em.style.display = n ? 'none' : '';
+      const sn = document.getElementById('sp-n'); if (sn) sn.textContent = Q.n(n); const cl = document.getElementById('sp-search-clear'); if (cl) cl.style.display = state.samplesSearch ? '' : 'none';
+      return true; });
     const spClearEl = document.getElementById('sp-search-clear');
     if (spClearEl) spClearEl.addEventListener('click', () => { state.samplesSearch = ''; renderDashboard(); });
     const spShrinkEl = document.getElementById('sp-shrink-only');
@@ -66007,7 +66071,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix697';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
+  const VERSION = 'v2.53 hotfix698';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
