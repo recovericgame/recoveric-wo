@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="FABIWOS">
 <meta name="mobile-web-app-capable" content="yes">
-<title>FABIWOS v2.53 hotfix703</title>
+<title>FABIWOS v2.53 hotfix704</title>
 <script>
 /* ===== HWChat 대화 화면 공용 (hotfix620 · 대표 10/9 "카톡처럼 쉽고 멋있게") — 이음 · 편직팀 앱 · 염/가공소 앱 · 현장 QC 앱이 같은 모양
  *   말풍선(내 글 노랑 · 받은 글 흰색) · 같은 사람 1분 안 글은 묶음(이름 · 사진은 첫 글, 시간은 끝 글) · 안 읽음 1
@@ -11096,10 +11096,12 @@ function formBaseMark() { try { state.__formBase = JSON.stringify(getFormData())
  *   __woTouched: false = 새로 쓰기 · 불러오기 뒤 아직 손대지 않음 · true = 사람이 넣음(또는 복사 · 되살리기처럼 저장 전 새 의뢰서) · undefined = 예전대로 */
 function formBaseSoon() { state.__woTouched = false; const my = (state.__woBaseSeq = (state.__woBaseSeq || 0) + 1); [0, 400, 1500].forEach(ms => setTimeout(() => { if (state.__woBaseSeq === my && state.__woTouched === false) formBaseMark(); }, ms)); }
 if (typeof document !== 'undefined') ['input', 'change', 'click', 'paste', 'drop'].forEach(tp => document.addEventListener(tp, e => { try { if (!e.isTrusted || !e.target || !e.target.closest) return; const t = e.target; if (!t.closest('#form-panel')) return; if (tp === 'click' && !t.closest('button, [role=button], label, input[type=checkbox], input[type=radio], input[type=color]')) return; state.__woTouched = true; } catch (_) {} }, true));
-function formChanged() { if (!state.isDirty) return false; if (state.__woTouched === false) return false; try { return JSON.stringify(getFormData()) !== (state.__formBase || ''); } catch (_) { return true; } }
+function formChanged() { if (state.currentType === '나염' && typeof window.__printChanged704 === 'function') return window.__printChanged704();   /* hotfix704(QA1 중4): 나염은 나염 칸끼리 비교 */
+  if (!state.isDirty) return false; if (state.__woTouched === false) return false; try { return JSON.stringify(getFormData()) !== (state.__formBase || ''); } catch (_) { return true; } }
 // 폼이 무엇인지 한 줄 (팝업 글에 씀)
 function formBriefText() {
-  try { const d = getFormData(); const t = d.type || state.currentType || '';
+  try { const d = getFormData(); const t = (state.currentType === '나염' || state.currentType === '공문') ? state.currentType : (d.type || state.currentType || '');   /* hotfix704(QA1 중4): 나염 · 공문은 지금 종류 이름으로 */
+    if (t === '나염') return '나염 의뢰서' + (state.currentWoNumber ? ' (' + state.currentWoNumber + ' 수정 중)' : ' (새로 작성 중)');
     const who = t === '원사' ? d.supplier : (t === '편직' ? d.recipient : ((d.recipients && (d.recipients.dyeing || d.recipients.processing)) || ''));
     const item = t === '원사' ? d.purpose : (t === '편직' ? (Array.isArray(d.items) && d.items[0] ? d.items[0].item : '') : (d.body && d.body.item));
     return [t ? t + ' 의뢰서' : '의뢰서', who, item].filter(Boolean).join(' · ') + (state.currentWoNumber ? ' (' + state.currentWoNumber + ' 수정 중)' : ' (새로 작성 중)');
@@ -11417,6 +11419,7 @@ function hwKnitKindUi() {
   const sel = document.querySelector('.vendor-select[data-target="k_recipient"]'); const want = buy ? '생지 구매처,편직처' : '편직처';
   if (sel && sel.dataset.vtype !== want) { sel.dataset.vtype = want; try { refreshVendorSelects(); } catch (_) {} }
   const tb = document.getElementById('type-badge'); if (tb && tb.dataset.type === '편직') tb.textContent = buy ? '생지구매 의뢰서' : '편직 의뢰서';
+  if (tb && tb.dataset.type === '편직') { const kb = document.querySelector('.type-btn[data-type="편직"]'), bb = document.querySelector('.type-btn[data-hwside="wo:생지구매"]'); if (kb && bb) { kb.classList.toggle('active', !buy); bb.classList.toggle('active', buy); } }   /* hotfix704(QA1 하18): 성격이 생지구매면 위 종류 단추도 [생지구매]가 켜짐 */
 }
 if (typeof document !== 'undefined') document.addEventListener('change', e => { if (e.target && e.target.id === 'k_kind') { try { hwKnitKindUi(); document.querySelectorAll('#knit-items .knit-row').forEach(r => { const g = r.querySelector('.k-gno'); if (g && (e.target.value === 'sample' || (g.value === 'S' && g.dataset.auto === '1')) && typeof r.__tryAutoGreigeNo === 'function') { if (e.target.value === 'sample') g.dataset.auto = '1'; r.__tryAutoGreigeNo(); } }); if (typeof render === 'function') render(); } catch (_) {} } });   /* hotfix592: 샘플 ↔ 로트 S */
 
@@ -11800,7 +11803,7 @@ function attachPickList(inp, itemsFn, onPick, opts) {
   { const f0 = itemsFn; itemsFn = () => { const L = f0() || []; const n = inp.dataset.hwNew && typeof window.hwNewPickRow === 'function' ? window.hwNewPickRow(inp) : null; return n ? L.concat([n]) : L; }; }   /* hotfix641(S6): data-hw-new 칸은 목록 끝에 [＋ 새로 만들기] (권한이 있을 때) */
   if (inp.hasAttribute('list')) { inp.dataset.pickDl = inp.getAttribute('list'); inp.removeAttribute('list'); }   // 브라우저 기본 목록이 같이 뜨지 않게
   const O = opts || {};
-  let box = null, hits = [], cur = -1;
+  let box = null, hits = [], cur = -1, kbMv = false;   /* hotfix704(QA1 중5): kbMv = 화살표로 줄을 고름 */
   const place = (first) => { if (!box || !box.isConnected) return; const r = inp.getBoundingClientRect(); const vv = window.visualViewport; const VH = vv ? vv.height + vv.offsetTop : window.innerHeight; const VW = window.innerWidth;   /* hotfix598: 휴대폰 자판이 올라와 있으면 보이는 높이로 · 화면 폭 안으로 */
     if (!first && (r.bottom < 0 || r.top > VH)) { close(); return; } const z = hwZf(); const below = VH - r.bottom; const h = Math.min(box.scrollHeight, 300);
     box.style.maxWidth = ((VW - 16) / z) + 'px'; box.style.minWidth = Math.min(Math.max(200, r.width), VW - 16) / z + 'px'; box.style.left = (r.left / z) + 'px';
@@ -11841,7 +11844,7 @@ function attachPickList(inp, itemsFn, onPick, opts) {
     box.innerHTML = (cols ? `<div class="pick-head"><span class="pc-row">${O.head.map((c, i) => `<span class="pc c${i}">${escapeHtml(c)}</span>`).join('')}</span></div>` : '')
       + hits.map((t, i) => `<div class="pick-item${t.muted ? ' muted' : ''}${t.cls ? ' ' + t.cls : ''}${now && hwNorm(t.value) === now ? ' on' : ''}" data-i="${i}">${cellHtml(t)}${t.badge ? `<em class="pick-badge">${escapeHtml(t.badge)}</em>` : ''}</div>`).join('');
     box.querySelectorAll('.pick-item').forEach(d => d.addEventListener('mousedown', e => { e.preventDefault(); const it = hits[parseInt(d.dataset.i, 10)]; if (it) pick(it); }));
-    cur = typed ? 0 : hits.findIndex(t => now && hwNorm(t.value) === now);
+    cur = typed ? 0 : hits.findIndex(t => now && hwNorm(t.value) === now); kbMv = false;
     place(true); if (!box) return; paintCur();
     if (!typed) { const on = box.querySelector('.pick-item.on'); if (on) on.scrollIntoView({ block: 'center' }); }
     document.removeEventListener('scroll', onScroll, true); document.addEventListener('scroll', onScroll, true); window.removeEventListener('resize', onScroll); window.addEventListener('resize', onScroll);
@@ -11849,7 +11852,8 @@ function attachPickList(inp, itemsFn, onPick, opts) {
   inp.addEventListener('focus', open); inp.addEventListener('input', open); inp.addEventListener('click', open);
   /* hotfix548: 한글 조합이 끝났을 때 · 키를 뗐는데 글자가 바뀌어 있으면 다시 거른다(입력기마다 input 이 빠지는 때가 있어서) */
   inp.addEventListener('compositionend', () => { const pe = inp.__pickEnter; inp.__pickEnter = 0; if (document.activeElement !== inp) return;
-    if (pe && Date.now() - pe < 500) { setTimeout(() => { if (document.activeElement !== inp) return; open({ type: 'input', __now: true }); if (box && hits.length) pick(hits[cur >= 0 ? cur : 0]); }, 0); return; }   /* hotfix598: 조합 중 누른 Enter — 글자가 다 들어간 뒤 고름 (글자가 덧붙거나 엉뚱한 것을 고르지 않게) */
+    if (pe && Date.now() - pe < 500) { if (inp.dataset.hwLive && !kbMv) { close(); return; }   /* hotfix704(QA1 중5): 검색칸 조합 중 Enter — 친 글자 그대로(목록만 닫음) */
+      setTimeout(() => { if (document.activeElement !== inp) return; open({ type: 'input', __now: true }); if (box && hits.length) pick(hits[cur >= 0 ? cur : 0]); }, 0); return; }   /* hotfix598: 조합 중 누른 Enter — 글자가 다 들어간 뒤 고름 (글자가 덧붙거나 엉뚱한 것을 고르지 않게) */
     open({ type: 'input' }); });
   let pv = 0; function startPoll() { if (pv) return; pv = setInterval(() => { if (document.activeElement !== inp) { clearInterval(pv); pv = 0; return; } if (lastQ !== null && inp.value !== lastQ && !inp.__pickSkip) open({ type: 'input', __now: true }); }, 200); }   /* hotfix598: 목록을 열 때도 시작(datalist 칸은 처음 누를 때 빠졌음) */
   inp.addEventListener('focus', startPoll);
@@ -11860,8 +11864,9 @@ function attachPickList(inp, itemsFn, onPick, opts) {
     const comp = ev.isComposing || inp.__composing;
     if (ev.key === 'Enter' && comp) { if (box) { inp.__pickEnter = Date.now(); ev.stopPropagation(); } return; }   /* hotfix598: 조합 중 Enter → compositionend 뒤에 고름 */
     if (!box) { if (ev.key === 'ArrowDown') { open({ type: 'focus' }); ev.preventDefault(); } return; }
-    if (ev.key === 'ArrowDown') { cur = Math.min(hits.length - 1, cur + 1); paintCur(); ev.preventDefault(); }
-    else if (ev.key === 'ArrowUp') { cur = Math.max(0, cur - 1); paintCur(); ev.preventDefault(); }
+    if (ev.key === 'ArrowDown') { cur = Math.min(hits.length - 1, cur + 1); kbMv = true; paintCur(); ev.preventDefault(); }
+    else if (ev.key === 'ArrowUp') { cur = Math.max(0, cur - 1); kbMv = true; paintCur(); ev.preventDefault(); }
+    else if (ev.key === 'Enter' && inp.dataset.hwLive && !kbMv) { close(); }   /* hotfix704(QA1 중5): 검색칸은 화살표로 고른 때만 Enter 로 고름 · 아니면 목록만 닫고 친 글자 그대로 거름 */
     else if (ev.key === 'Enter') { if (inp.value !== lastQ) { clearTimeout(tmr); open({ type: 'input', __now: true }); }   /* hotfix598: 빨리 치고 바로 Enter — 지금 글자로 다시 거른 뒤 고름 */
       if (box && cur >= 0 && hits[cur]) { ev.preventDefault(); ev.stopPropagation(); pick(hits[cur]); } }
   });
@@ -11942,6 +11947,7 @@ document.addEventListener('focusin', e => {
     { const dk = inp.dataset.pickDl || id;   /* hotfix701(P5 · tester): 원사 품목(용도) · B/T 품목 목록 맨 끝 [＋ 품목 추가](최고관리자) · [＋ 품목 등록 요청](그 밖) · 편직 품목은 최고관리자 아니면 요청 줄 */
       if (dk === 'y-purpose-datalist' && window.hwItemAddRow) L.push(window.hwItemAddRow(inp, () => String((document.getElementById('y_dest') || {}).value || (document.querySelector('#yarn-items .y-dest') || {}).value || '').trim(), '품목', () => { try { yarnFillFromSpec(); } catch (_) {} }));
       if (dk === 'knit-item-datalist' && inp.id === 'bt_item' && window.hwItemAddRow) L.push(window.hwItemAddRow(inp, () => '', '품목'));
+      if (dk === 'knit-fac-item-datalist') (window.__knitNoFee704 || []).forEach(x => L.push({ value: '', label: x.name + ' — 편직 값(침수 · 원사)이 없어 고를 수 없습니다 · 누르면 편직 설정', search: x.name, typedOnly: true, muted: true, cls: 'hw704-nk', act: el => { const o = window.__hf462; if (o && typeof o.openKnit === 'function') o.openKnit(x.fid, x.fac, null, () => { try { if (el && el.__pick) el.__pick.reset(); } catch (_) {} }, {}); } }));   /* hotfix704(QA1 중10): 편직 값 없는 생지 안내 줄 — 의뢰서에는 안 들어감 */
       if (dk === 'knit-fac-item-datalist' && window.hwItemAddRow) L.push(window.hwItemAddRow(inp, () => String((document.getElementById('k_recipient') || {}).value || '').trim(), '품목')); }   /* hotfix701(tester 9): 편직 품목도 원사 · B/T 와 같은 [＋ 품목 추가] */
     if ((inp.dataset.pickDl || id) === 'knit-fac-item-datalist' && typeof window.hwKnitNewItem === 'function' && !window.hwItemAddRow) L.push({ value: '', label: '＋ 새로 만들기 — 품목(생지)', always: true, badge: '새로', act: el => { const fac = String((document.getElementById('k_recipient') || {}).value || '').trim(); window.hwKnitNewItem({ name: String(el.value || '').trim(), fac, onDone: nm => { el.value = nm; el.dataset.fid = ''; try { el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); } catch (_) {} try { if (typeof refreshKnitFacItemList === 'function') refreshKnitFacItemList(); } catch (_) {} } }); } });
     return L; });
@@ -15205,6 +15211,11 @@ function setFormData(d, opts={}) {
     document.getElementById('k_recipient').value = d.recipient || '';
     document.getElementById('k_kind').value = d.kind || inferKnitKind(d) || 'regular';
     try { hwKnitKindUi(); } catch (_) {}   /* hotfix588 */
+    /* hotfix704(QA1 중2): [수정] · [복사] 때 보이는 수신처 고르기 칸도 숨은 값에 맞춤(목록에 없으면 "등록 안 됨" 줄로 넣고 고름) · 숨은 값(저장값)은 그대로 */
+    try { const rv = String(d.recipient || '').trim(), sel = document.querySelector('.vendor-select[data-target="k_recipient"]');
+      if (sel) { const nm = rv ? ((typeof normalizeVendorName === 'function' ? normalizeVendorName(rv) : rv) || rv) : '';
+        if (nm && ![...sel.options].some(op => op.value === nm)) { const op = document.createElement('option'); op.value = nm; op.textContent = nm + ' ' + String(typeof vendorMissingTag === 'function' ? vendorMissingTag(nm) : '').replace(/<[^>]*>/g, ''); sel.insertBefore(op, sel.querySelector('option[data-hw-add]') || null); }
+        sel.value = nm; } } catch (_) {}
     document.getElementById('k_notes').value = d.notes || ''; document.getElementById('k_notes').dataset.autoNotes = '';   // hotfix404
     { const ys = document.getElementById('k-yarnin-show'); if (ys) ys.checked = d.yarn_in_show === true; }   /* hotfix494 */
     document.getElementById('knit-items').innerHTML = '';
@@ -22910,7 +22921,7 @@ body:has(#ysj-pick:not([style*="none"])) #hw-si-ask{display:none!important}
 .ysj-box .bh{height:56px;flex:none;display:flex;align-items:center;padding:0 16px;font-size:20px;font-weight:800;border-bottom:1px solid var(--gray-200,#e2e8f0)}.ysj-box .bb{flex:1;overflow:auto;padding:16px;font-size:14px}.ysj-box .bf{flex:none;display:flex;gap:8px;justify-content:flex-end;padding:12px 16px;border-top:1px solid var(--gray-200,#e2e8f0)}
 .ysj-ok{min-height:48px;display:flex;align-items:center;padding:0 14px;border-radius:8px;font-size:16px;font-weight:800;border:1px solid var(--st-ok-line,#a7f3d0);background:var(--st-ok-bg,#ecfdf5);color:var(--st-ok-ink,#065f46)}.ysj-ok.bad{border-color:var(--st-bad-line,#fecaca);background:var(--st-bad-bg,#fef2f2);color:var(--st-bad-ink,#b91c1c)}
 .ysj-tb{width:100%;border-collapse:collapse;margin-top:12px;font-size:14px}.ysj-tb th{height:40px;background:var(--gray-50,#f8fafc);text-align:center;font-weight:700}.ysj-tb td{height:44px;border-bottom:1px solid var(--gray-100,#f1f5f9);padding:0 8px}.ysj-tb td.r{text-align:right;white-space:nowrap}.ysj-tb tr.sum td{border-top:2px solid var(--gray-600,#475569);font-weight:800}
-@media (max-width:640px){.ysj-b3 button{min-height:52px}.ysj-foot .ysj-ft{display:none}.ysj-foot .ysj-fb{flex:1;min-width:0;min-height:44px;padding:0 6px}.ysj-body{padding:4px 12px 12px}.ysj-card{padding:12px}.ysj-long{display:none}.ysj-bar{width:120px}.ysj-num{font-size:14px}.ysj-tab,.ysj-pill,.ysj-chip .rn,.ysj-hd .ysj-fb{min-height:44px}.ysj-hit{width:44px;height:44px}.ysj-row{gap:2px}.ysj-chip .x{width:44px;height:44px}.ysj-box,.ysj-box.sm{width:100vw;max-height:100vh;border-radius:0}.ysj-tb th:nth-child(3),.ysj-tb td:nth-child(3){display:none}.ysj-tb th,.ysj-tb td{width:auto!important;padding:0 4px}.ysj-row .kg{font-size:14px}}`;
+@media (max-width:640px){.ysj-b3 button{min-height:52px}.ysj-foot .ysj-ft{display:none}.ysj-foot .ysj-fb{flex:1;min-width:0;min-height:44px;padding:0 6px}.ysj-body{padding:4px 12px 12px}.ysj-card{padding:12px}.ysj-long{display:none}.ysj-bar{width:120px}.ysj-num{font-size:14px}.ysj-tab,.ysj-pill,.ysj-chip .rn,.ysj-hd .ysj-fb{min-height:44px}.ysj-hit{width:44px;height:44px}.ysj-row{gap:2px}.ysj-chip .x{width:44px;height:44px}.ysj-box,.ysj-box.sm{width:100vw;max-height:100vh;border-radius:0}.ysj-tb th:nth-child(3),.ysj-tb td:nth-child(3){display:none}.ysj-tb th,.ysj-tb td{width:auto!important;padding:0 4px}.ysj-tb th{white-space:nowrap}.ysj-tb td:nth-child(-n+2){word-break:break-all}.ysj-row .kg{font-size:14px}}`;   /* hotfix704(Q11): 375 미리보기 머리글(차이 등) 줄바꿈 안 함 · 이름 칸이 줄어듦 */
     document.head.appendChild(s);
   }
   function ysjCount(C) { const a = C.A.filter(c => Y5.A[c.id] && !Y5.A[c.id].auto).length + C.A.filter(c => Y5.A[c.id] && Y5.A[c.id].auto).length, b = C.B.filter(x => Y5.B[x.id]).length; return { a, b, an: C.A.length, bn: C.B.length }; }
@@ -22926,7 +22937,7 @@ body:has(#ysj-pick:not([style*="none"])) #hw-si-ask{display:none!important}
     const r = c.m.find(o => o.id === rep) || c.m.find(o => o.id === c.def); if (!r) return '';
     const nm = ysjName703(r.y), raw = String(r.y.name || '').trim();
     const diff = new Set(c.m.filter(o => !ex.includes(o.id)).map(o => vendorKey(ysjName703(o.y)))).size > 1;
-    return `<div class="ysj-after703" style="margin-top:8px;padding:8px 12px;border-radius:8px;border:1px solid var(--st-ok-line,#a7f3d0);background:var(--st-ok-bg,#ecfdf5);color:var(--st-ok-ink,#065f46);"><div style="font-size:16px;font-weight:800;word-break:break-all;">묶은 뒤 이 이름으로 보입니다: <span class="nm703">${escapeHtml(nm)}</span></div><div style="font-size:13px;color:var(--gray-600,#475569);margin-top:2px;word-break:break-all;">저장 이름 ${escapeHtml(raw)} 그대로 · 구매처는 의뢰서 줄에서</div>${diff ? '<div class="ysj-diff703" style="margin-top:6px;padding:4px 8px;border-radius:6px;font-size:13px;font-weight:700;background:var(--st-prog-bg,#fffbeb);border:1px solid var(--st-prog-line,#fcd34d);color:var(--st-prog-ink,#92400e);">묶은 뒤 이름은 대표 ● 것 하나입니다</div>' : ''}</div>`;
+    return `<div class="ysj-after703" style="margin-top:8px;padding:8px 12px;border-radius:8px;border:1px solid var(--st-ok-line,#a7f3d0);background:var(--st-ok-bg,#ecfdf5);color:var(--st-ok-ink,#065f46);"><div style="font-size:16px;font-weight:800;word-break:break-all;">묶은 뒤 이 이름으로 보입니다: <span class="nm703">${escapeHtml(nm)}</span></div><div style="font-size:13px;color:var(--gray-600,#475569);margin-top:2px;word-break:break-all;" title="저장 이름: ${escapeHtml(raw)}">저장 이름은 바뀌지 않음 · 구매처는 의뢰서 줄에서</div>${diff ? '<div class="ysj-diff703" style="margin-top:6px;padding:4px 8px;border-radius:6px;font-size:13px;font-weight:700;background:var(--st-prog-bg,#fffbeb);border:1px solid var(--st-prog-line,#fcd34d);color:var(--st-prog-ink,#92400e);">묶은 뒤 이름은 대표 ● 것 하나입니다</div>' : ''}</div>`;
   }
   function ysjCardA(c) {
     const d = Y5.A[c.id], v = d ? d.v : c.rec, rep = (r => (c.m.find(o => o.id === r) || { y: {} }).y.active !== false ? r : c.def)((d && d.rep) || c.def), ex = (d && d.ex) || [];
@@ -23676,6 +23687,11 @@ body:has(#ysj-pick:not([style*="none"])) #hw-si-ask{display:none!important}
     const mk = new Set(mine.map(vendorKey));
     const use = mine.length ? all.filter(s => mk.has(vendorKey(s.name))) : all;
     dl.innerHTML = use.map(s => `<option value="${escapeHtml(s.name)}"></option>`).join('');
+    /* hotfix704(QA1 중10): 그 공장 생지인데 편직 값이 없어 목록에 못 뜨는 것 — 친 글자가 맞으면 목록 끝에 회색 안내 줄(고르기 칸 attachPickList 쪽) · 규칙(편직 값 있어야 뜸)은 그대로 */
+    try { const inUse = new Set(use.map(s => specFid(s))); const sfx = n => { const m = /(([^()]*))s*$/.exec(String(n || '').trim()); return m ? m[1].trim() : ''; };
+      const facOk = t => { if (!t) return true; const z = x => String(x || '').replace(/s/g, ''); try { if (vendorSameAs(t, '', fac)) return true; } catch (_) {} if (z(fac).startsWith(z(t))) return true; try { return typeof kfFactoryShort === 'function' && kfFactoryShort(fac) === t; } catch (_) { return false; } };   /* 이름 끝 (공장) = 그 공장(짧은 이름 포함) */
+      const KF = (state.knitFee && typeof state.knitFee === 'object') ? state.knitFee : {}; const hasKF = id => { const k = KF[id]; return !!(k && Object.keys(k).some(v => v && k[v] && Object.keys(k[v]).some(x => k[v][x] !== '' && k[v][x] != null))); };
+      window.__knitNoFee704 = (fac && mine.length) ? all.filter(s => { const id = specFid(s); return id && !inUse.has(id) && !hasKF(id) && facOk(sfx(s.name)); }).map(s => ({ name: String(s.name || ''), fid: specFid(s), fac })) : []; } catch (_) { window.__knitNoFee704 = []; }
     window.__knitItemPh = !fac ? '수신처 먼저' : (mine.length ? `${fac} 품목 ${use.length}개` : `전체 ${use.length}개 (${fac} 등록 품목 없음)`);
     document.querySelectorAll('#knit-items .k-item').forEach(el => { el.placeholder = window.__knitItemPh; });
   }
@@ -24413,6 +24429,7 @@ body:has(#ysj-pick:not([style*="none"])) #hw-si-ask{display:none!important}
         ? `"${state.historySearch}" 로 좁힘`
         : (itemList.length ? `선택 가능한 품목 ${itemList.length}개 (가나다·ABC 오름차순)` : '');
     }
+    { const of704 = state.historyTypeFilter === '공문'; ['history-search', 'history-item-hint', 'history-color-search', 'history-color-hint'].forEach(id => { const e = document.getElementById(id); if (e) e.style.display = of704 ? 'none' : ''; }); }   /* hotfix704(QA1 하17): 공문일 때는 품목 · 컬러 검색 칸 감춤(공문엔 품목 · 컬러 없음) */
     
     // 검색어 필터 (대소문자 무시, 다양한 필드 종합 검색)
     if (state.historySearch) {
@@ -42004,11 +42021,18 @@ body:has(#hw-pb) #hwp-notif,body:has(#hw-pb) #hw-si-ask,body:has(#hw-pb) #u675-b
       else if (wo.type === '공문') summary = `${wo.recipient || '-'} / ${wo.title || '-'}`;
       else if (wo.type === '생지출고') summary = `${wo.recipient || '-'} → ${wo.gs_dest || '-'} / ${itemShow(wo.gs_item, wo.gs_item_fid, '') || '-'} ${greigeNoClean(wo.gs_greige_no) || ''} · ${wo.gs_qty || 0}절${wo.gs_del_by_fn ? ' · 염/가공 삭제로 같이' : ''}`;   /* hotfix585 */
       else summary = `${woDisplayItem(wo) || '-'} / ${wo.final_destination || '-'}`;
+      /* hotfix704(QA1 하14): 주요 정보 끝에 수량(읽기만) — 같은 공장 같은 품목 여러 건 구분 */
+      try { const n = x => parseFloat(x) || 0; const fq = v => Math.round(v * 10) / 10; let q = '';
+        if (wo.type === '원사') { const t = (wo.yarns || []).reduce((a, y) => a + n(y && y.total_kg), 0); if (t) q = fq(t) + 'kg'; }
+        else if (wo.type === '편직') { const t = (wo.items || []).reduce((a, it) => a + n(it && it.jul), 0); if (t) q = fq(t) + '절'; }
+        else if (wo.type === '염색가공') { const t = (wo.colors || []).reduce((a, c) => a + n(c && c.body), 0); if (t) q = fq(t) + '절'; }
+        else if (wo.type === '나염') { if (n(wo.print_total_qty)) q = fq(n(wo.print_total_qty)) + '절'; }
+        if (q) summary += ' · ' + q; } catch (_) {}
       
       const delDate = trMs(wo.deleted_at) ? trYmd(trMs(wo.deleted_at)).slice(2).replace(/-/g, '.') : '-';   /* hotfix585: 연도까지 */
       
       html += `<tr class="deleted">
-        <td class="col-no id-hover" title="${escapeHtml(wo.wo_number || '')}"><span class="id-text">${escapeHtml(wo.wo_number || '-')}</span></td>
+        <td class="col-no" style="white-space:nowrap;" title="${escapeHtml(wo.wo_number || '')}"><span class="id-text">${escapeHtml(wo.wo_number || '-')}</span></td>
         <td>${escapeHtml(wo.type || '-')}</td>
         <td class="col-date">${formatYMD(wo.date)}</td>
         <td class="col-date">${delDate}</td>
@@ -48676,7 +48700,9 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
         readBasics();
         return cur;
       };
+      let kfSaved704 = false;   /* hotfix704(QA1 중3): 저장 성공 순간부터 "바뀜 없음" — 창이 흐려지며 닫히는 동안 [닫기]에 거짓 경고가 뜨지 않게 */
       const dirty = () => {
+        if (kfSaved704) return false;
         if (basicsChanged()) return true;   // hotfix422g: 생지 기본 칸(품목명 · 구분 · 조직)도 "닫을까요" 판단에 넣는다
         if (pendG !== savedG) return true;   /* hotfix436 */
         if (!V || !wrap.querySelector('#kf-inch')) return false;
@@ -49044,6 +49070,7 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
         };
         // hotfix421: [저장]하면 창이 닫히고 적던 값이 남지 않는다 (대표 확정 — 품목 디테일 수정 창과 같게). 담아 둔 것도 지운다
         if (ok) {
+          kfSaved704 = true; try { wrap.style.pointerEvents = 'none'; } catch (_) {}   /* hotfix704(QA1 중3): 흐려지는 동안 창 단추를 못 누르게 */
           if (opts && opts.newItem && state.dashView === 'costCalc') { state.ccMode = 'exist'; state.ccCardFid = key; }   // hotfix422i: 신규품목원가 → 그 품목이 기존품목원가로 열린다
           Object.assign(K, knitFeeOf(key)); yarns = kfYarnNamesFor(key, V); cardYarns = kfCardYarnNames(key);   /* hotfix462 */ touched = false; if (kfH) { kfH.drop(); }
           toast(gNow ? (savedG ? '원래 생지를 저장했습니다 — ' + String((itemByFid(savedG) || {}).name || '') : '원래 생지를 비웠습니다 — 이 품목은 다시 생지입니다') : '[' + V + '] 편직 값을 저장했습니다', 'success');
@@ -56226,7 +56253,12 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
     fp.innerHTML = renderPrintModalBody();
     attachPrintModalHandlers();
     renderNayeomLivePreview();
+    printBase704();   /* hotfix704(QA1 중4): 나염으로 옮기면 번호 · 기준값을 나염 것으로 다시 잡음(앞 종류 공문 번호 · 기준값이 남아 엉뚱한 경고가 뜨던 것) */
   }
+  /* hotfix704(QA1 중4): 나염 "바뀜" = 나염 작성 칸 지금 값 ↔ 연 때(또는 저장한 때) 값 — 공용 폼(염색가공 칸)과 따로 */
+  function printSnap704() { try { syncPrintDraftFromForm(); return JSON.stringify(__printDraft || {}); } catch (_) { return ''; } }
+  function printBase704() { try { const d = __printDraft || {}; state.isDirty = false; state.__woTouched = false; state.currentWoNumber = d.id ? (((state.allWorkOrders || []).find(w => w.id === d.id) || {}).wo_number || d.saved_wo_number || null) : null; state.__printBase = printSnap704(); } catch (_) {} }
+  window.__printChanged704 = () => !!state.__printBase && printSnap704() !== state.__printBase;
   window.__showNayeomForm = (id) => openPrintOrderModal(id);
   window.__nayeomPreview = () => renderNayeomLivePreview();
   window.__openNayeomPreview = (id) => openPrintPreview(id);
@@ -56586,6 +56618,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
       if (typeof renderHistory === 'function') renderHistory();
       // 저장해도 입력 내용은 그대로 유지 (초기화하지 않음). 미리보기만 갱신.
       renderNayeomLivePreview();
+      printBase704();   /* hotfix704(QA1 중4): 저장 성공 뒤 기준값 · 번호를 다시 잡음 */
     } catch (e) {
       if (btn) btn.disabled = false;
       toast('저장 실패: ' + (e.message || e), 'error');
@@ -59405,6 +59438,13 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
   document.addEventListener('compositionstart', () => { __imeComposing = true; }, true);
   document.addEventListener('compositionend', () => { __imeComposing = false; }, true);
   const __searchTimers = {};
+  /* hotfix704(QA1 상1): 검색칸마다 마지막으로 그린 글자 · 마우스를 누르고 있는 동안 미룬 다시 그리기(뗀 뒤 click 이 끝나면 그림) */
+  const __searchDrawn = {};
+  let __hwPtrDown = false, __hwPtrQ = [];
+  function __hwPtrFlush() { const q = __hwPtrQ; __hwPtrQ = []; q.forEach(f => { try { f(); } catch (e) { console.warn('[검색 다시 그림]', e); } }); }
+  function __hwPtrAfter(fn) { if (!__hwPtrQ.includes(fn)) __hwPtrQ.push(fn); setTimeout(() => { if (__hwPtrQ.includes(fn)) { __hwPtrDown = false; __hwPtrFlush(); } }, 1500); }   /* 떼는 것을 놓쳐도 1.5초 뒤 그림 */
+  document.addEventListener('pointerdown', () => { __hwPtrDown = true; }, true);
+  ['pointerup', 'pointercancel'].forEach(t => window.addEventListener(t, () => { __hwPtrDown = false; if (__hwPtrQ.length) setTimeout(__hwPtrFlush, 0); }, true));   /* click 은 같은 차례에 먼저 끝남 */
   /* hotfix640(S7): 검색창에 칠 때 화면이 출렁이지 않게 — 다시 그리는 동안 ① 스크롤 자리 기억 ② 결과 칸(box) 높이를 min-height 로 잠금
    *   (검색 글자가 있을 때만 · 같은 화면(tag)에서 커지기만 함 — 결과가 줄어도 스크롤바가 사라져 표가 옆으로 밀리거나 위로 튀지 않음) ③ fn() ④ 스크롤 되돌림(바로 + 다음 그림 틀)
    *   검색 글자가 비면 잠금을 풂 · 대시보드 화면이 바뀌면 renderDashboard 가 풂 · 스크롤바 자리는 CSS scrollbar-gutter 로 늘 비워 둠 */
@@ -59428,10 +59468,12 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
     const run = () => {
       const cur = document.getElementById(id);
       if (!cur) return;
+      if (__hwPtrDown && document.activeElement !== cur) { __hwPtrAfter(run); return; }   /* hotfix704(QA1 상1): 다른 곳을 누르고 있는 동안 늦게 온 타이머도 뗀 뒤로 */
       { const ae = document.activeElement; if (ae && ae !== cur && ae.__composing) { schedule(); return; } }   // 다른 칸에서 글자를 만드는 중 — 뒤로 미룬다 (hotfix559: 이 칸이면 바로 — 칸은 그대로 두고 다시 그림 · 전역 표시가 꺼지지 않고 남아 검색이 멈추던 것도 막음)
       const pos = cur.selectionStart;
       const wasFocused = (document.activeElement === cur);
       hwSearchKeep(document.querySelector('.dashboard-panel'), document.getElementById('dash-body'), () => { setValue(cur.value); renderDashboard(); }, cur.value, state.dashView);   /* hotfix640(S7) */
+      __searchDrawn[id] = cur.value + '\u0001' + state.dashView;   /* hotfix704(QA1 상1): 마지막으로 그린 글자 */
       const again = document.getElementById(id);
       if (again && wasFocused) {
         again.dataset.dlKeep = '1'; again.focus({ preventScroll: true }); delete again.dataset.dlKeep;   /* hotfix486 · hotfix640: 칸 쪽으로 화면을 끌지 않음 */
@@ -59446,9 +59488,16 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
     el.addEventListener('input', schedule);
     el.addEventListener('compositionend', schedule);
     // 목록에서 고른 경우는 곧바로 반영
-    el.addEventListener('change', () => {
+    /* hotfix704(QA1 상1): 칸을 떠날 때(change) — ① 마지막으로 그린 글자와 같으면 다시 그리지 않음 ② 다르면 마우스를 누르고 있는 동안은 미루고 뗀 뒤(click 끝난 뒤) 한 번 그림
+     *   (누르는 순간 표를 다시 그리면 click 이 새 단추에 가지 않아 첫 누름이 무시되던 것) ③ 목록에서 고른 경우(코드가 보낸 change)는 그대로 바로 반영 */
+    el.addEventListener('change', ev => {
       clearTimeout(__searchTimers[id]);
       __imeComposing = false;
+      if (ev && ev.isTrusted) {
+        const cur = document.getElementById(id);
+        if (cur && __searchDrawn[id] === cur.value + '\u0001' + state.dashView) return;
+        if (__hwPtrDown) { __hwPtrAfter(run); return; }
+      }
       run();
     });
   }
@@ -67129,7 +67178,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix703';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
+  const VERSION = 'v2.53 hotfix704';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
@@ -69028,7 +69077,7 @@ body.hw-popdash #dashboard-panel{position:fixed!important;top:3vh;left:3vw;right
 .pick-list{position:fixed;z-index:101000;background:#fff;border:1px solid #cbd5e1;border-radius:10px;box-shadow:0 14px 34px rgba(15,23,42,.18);max-height:300px;overflow:auto;font-size:13px;padding:4px}
 .pick-list .pick-item{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:7px;cursor:pointer;white-space:nowrap;color:#0f172a}
 .pick-list .pick-item:hover,.pick-list .pick-item.kb{background:#eff6ff}.pick-list .pick-item.on{background:#dbeafe;font-weight:800;color:#1e3a8a}
-.pick-list .pick-item.muted{color:#94a3b8}.pick-src{color:#94a3b8}
+.pick-list .pick-item.muted{color:#94a3b8}.pick-src{color:#94a3b8}.pick-list .pick-item.hw704-nk{white-space:normal;color:var(--gray-500,#64748b);font-size:14px;min-height:44px;line-height:1.35}
 .pick-badge{margin-left:auto;font-style:normal;font-size:11px;font-weight:700;color:#0e7490;background:#ecfeff;border-radius:8px;padding:1px 7px}
 .pick-list .pick-item.hw-new{border-top:1px solid #e2e8f0;border-radius:0 0 7px 7px;margin-top:2px;color:#1d4ed8;font-weight:700}.pick-list .pick-item.hw-new .pick-badge{color:#1d4ed8;background:#eff6ff}   /* hotfix641(S6): [＋ 새로 만들기] 줄 — 모든 칸 같은 모양 */
 .pick-list.pick-table{padding:0}.pick-head{position:sticky;top:0;background:#f8fafc;border-bottom:1px solid #e2e8f0;padding:6px 10px;font-size:11.5px;font-weight:800;color:#475569;z-index:1}
