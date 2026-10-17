@@ -1003,7 +1003,7 @@ import { initializeFirestore, getFirestore, persistentLocalCache, persistentMult
  *   읽는 것: proc_acc/{내 uid} · proc_pub/{내 업체}.gs (현일텍스가 보낸 생지출고) · proc_log(내 업체 것만)
  *   쓰는 것: proc_log 한 줄 — kind 'ship' part 'gs' (body 절 · n kg · ref 송장 사진) · kind 'st' part 'gs' stage seen | ack_cxl | photo
  *   사진: Storage gs_photos/{업체}/{생지출고}_{시각}.jpg */
-const KVER = 'k142 (hotfix707)';
+const KVER = 'k145 (hotfix710)';
 try { if (matchMedia('(min-width:700px)').matches) document.body.classList.add('k620pc'); } catch (_) {}   /* hotfix620: PC 에서는 휴대폰 화면 너비로 가운데 */
 /* hotfix572(대표 10/1): 거래 원단회사 고르기 — FABIWOS 는 여러 원단회사에 팔 프로그램. 편직공장 한 곳이 여러 원단회사와 거래하므로
  *   계정(proc_acc.companies)에 거래 원단회사 목록 · 위 [→ 원단회사 ▾] 와 삼선 메뉴에서 고름 · 고른 회사의 할 일 · 재고 · 보낸 내역만 보임
@@ -1557,10 +1557,19 @@ function kYIssues(r) { return S.logs.filter(l => l.by === 'vendor' && l.kind ===
 function kKg(n) { return Number(n || 0).toLocaleString('ko-KR', { minimumFractionDigits: 1, maximumFractionDigits: 1 }); }
 function kKg2(n) { return Number(n || 0).toLocaleString('ko-KR', { minimumFractionDigits: 1, maximumFractionDigits: 2 }); }   /* hotfix679: 원사 kg — 천단위 쉼표 · 소수 둘째 자리까지 */   /* hotfix657(V1): 13,142.4 — 천단위 쉼표 · 소수 1자리 */
 function kYKg(r) { const v = Number(r && r.kg2); return r && r.kg2 != null && isFinite(v) ? v : Number((r && r.kg) || 0); }   /* 679 마무리: 원사 재고 표시용 kg (옛 판 PC 가 보낸 자료는 kg) */
+/* 갈래Y(R4 · R5 판 1): 원사 이름 보이는 글자만 — 이름 안에 색상이 이미 있으면 두 번 안 보임 · 이름 속 브랜드 낱말(밑줄 조각 · "(브랜드-구매처)")은 뗌 · 받은 글자 · 보내는 글(label)은 그대로 */
+const K_YBR = ['헝이', '효성', '마오동', '일신'];
+function kYTok(s, c) { const t = String(c || '').trim(); if (!t) return false; const e = t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); return new RegExp('(^|[\\s_])' + e + '(?=$|[\\s_(（])').test(String(s || '')); }
+function kYShow(n, c) { let s = String(n == null ? '' : n).trim(); const t = String(c || '').trim();
+  s = s.replace(/\s*[(（]([^()（）]*)-[^()（）-]*[)）]\s*$/, (m, a) => K_YBR.includes(String(a).trim()) ? '' : m);
+  if (s.indexOf('_') > 0) { const P = s.split('_'); const o = [P[0]]; P.slice(1).forEach(p => { const h = String(p).split(/[\s(（]/)[0].trim(); if (h && K_YBR.includes(h)) { const rest = String(p).slice(String(p).indexOf(h) + h.length); if (rest) o[o.length - 1] += rest; } else o.push(p); }); s = o.join('_'); }
+  if (t && s.endsWith(' ' + t) && kYTok(s.slice(0, -(t.length + 1)), t)) s = s.slice(0, -(t.length + 1)).trim();
+  return s || String(n || ''); }
+function kYCol(n, c) { const t = String(c || '').trim(); return t && !kYTok(kYShow(n, t), t) ? t : ''; }   /* 이름에 이미 있는 색상은 옆에 또 안 붙임 */
 function kYRow(r) {
   const L = kYIssues(r);
   const kg = Number(r.kg || 0), kgS = kYKg(r);   /* 679 마무리(designer ⑤): 보이는 kg = kg2(소수 둘째 자리 · 표시용) — 색 · 요청에 보내는 값은 kg 그대로 */   /* hotfix657(V2): 사종마다 독립 카드 · 음수 .neg(빨강 띠) · 0 .zero(회색) · 천단위 쉼표 */
-  return `<div class="st-r2 ys${kg < 0 ? ' neg' : kg === 0 ? ' zero' : ''}"><div class="ys-h"><span class="ys-n">${esc(r.yarn)}${r.color ? ' <small class="ys-c">' + esc(r.color) + '</small>' : ''}</span><span class="ys-kg"><b>${kKg2(kgS)}</b>kg</span></div>
+  return `<div class="st-r2 ys${kg < 0 ? ' neg' : kg === 0 ? ' zero' : ''}"><div class="ys-h"><span class="ys-n" title="${esc(r.yarn)}">${esc(kYShow(r.yarn, r.color))}${kYCol(r.yarn, r.color) ? ' <small class="ys-c">' + esc(r.color) + '</small>' : ''}</span><span class="ys-kg"><b>${kKg2(kgS)}</b>kg</span></div>
     ${L.map(o => { const w = o.i.issue === YI.diff ? '수량이 다르다고 보냄 (' + o.i.n + 'kg)' : o.i.issue === YI.ship ? (o.i.chip || '') + '(으)로 ' + o.i.n + 'kg 보냄' : '삭제 요청'; if (!o.d) return `<div class="st-is">${esc(w)} · ${esc(CN())} 확인 중</div>`; const a = kAns(o.d);
         if (/모자람으로 기록/.test(String(o.d.note || ''))) return kBand('adj', `${esc(w)} — ${esc(CN())} 확인 · ${esc(String(o.d.note || '').replace(/^현일텍스\s*확인\s*—?\s*/, ''))}`, o.d.id);   /* hotfix636(명세 3-5): 현일텍스가 모자람으로 기록 — 띠 + [확인 ✕] */
         if (!a.rej && !a.adj) return '';   /* hotfix630: 확인 완료 띠는 안 그림 */ return kBand(a.rej ? 'rj' : 'adj', `${esc(w)} — ${esc(CN())} ${a.rej ? '반려 · ' + esc(a.body) : '조정 · ' + esc(a.body)}`, o.d.id); }).join('')}
@@ -1580,7 +1589,7 @@ function kYSheet(r, mode) {
   const st = { kg: mode === 'diff' ? r.kg : '', to: '', n: '', busy: false, rq: kRq() };   /* hotfix668: 요청 번호 */
   const T = { diff: '수량이 달라요', ship: '다른 곳으로 보냄', del: '삭제 요청' }[mode];
   const draw = () => {
-    st.tok = sheet(`<h3>${T} — ${esc(r.yarn)}${r.color ? ' ' + esc(r.color) : ''}</h3><div class="sub">앱에 보이는 원사 <b>${kY2(kYKg(r))}kg</b><br>${mode === 'del' ? '없는 원사이거나 잘못 잡힌 줄이면 보냅니다. ' + esc(CN()) + '가 허락하면 0 이 됩니다.' : '숫자는 ' + esc(CN()) + '가 확인하고 고칩니다.'}</div>
+    st.tok = sheet(`<h3>${T} — ${esc(kYShow(r.yarn, r.color))}${kYCol(r.yarn, r.color) ? ' ' + esc(r.color) : ''}</h3><div class="sub">앱에 보이는 원사 <b>${kY2(kYKg(r))}kg</b><br>${mode === 'del' ? '없는 원사이거나 잘못 잡힌 줄이면 보냅니다. ' + esc(CN()) + '가 허락하면 0 이 됩니다.' : '숫자는 ' + esc(CN()) + '가 확인하고 고칩니다.'}</div>
       ${mode === 'ship' ? `<div class="k-lab">보낸 곳</div>${kDestPick('y-to', st.to)}` : ''}
       ${mode !== 'del' ? `<div class="k-lab">${mode === 'diff' ? '지금 공장에 실제로 몇 kg 있어요?' : '보낸 kg'}</div><div class="k-num"><input id="y-kg" type="number" inputmode="decimal" value="${esc(String(st.kg))}" style="font-size:22px"></div>` : ''}
       <div class="k-lab">${mode === 'del' ? '까닭' : '메모 (안 적어도 됩니다)'}</div><div class="k-num"><input id="y-n" type="text" placeholder="${mode === 'del' ? '예: 이 원사는 받은 적 없음' : '예: 박스 2개 남음'}" style="font-size:17px;font-weight:600;text-align:left;padding:0 12px" value="${esc(st.n)}"></div>
@@ -1968,7 +1977,7 @@ function kYinHtml() {
   const Y = (S.yin || []).filter(y => { const r = kYinOf(y); return !r || r.st === 'rej'; }); if (!Y.length) return '';   /* hotfix672: 누가 [원사 받았어요]를 보내면 모든 휴대폰 [할 일]에서 바로 빠짐 → [보낸 것 · 최근] */
   return `<div class="sec-t" id="yi-sec" style="margin-top:14px">원사 받을 것 ${Y.length}건 <small style="font-weight:600;color:#64748b;font-size:12.5px">— 원사가 오면 [원사 받았어요] · 송장 사진</small></div>` + Y.map(y => { const r = kYinOf(y);
     return `<div class="yi-card"><div class="yi-h"><b>${esc(y.no)}</b><span>발주 ${esc(String(y.date || '').slice(5).replace('-', '/'))}${y.eta ? ' · 입고 예정 ' + esc(y.eta.slice(5).replace('-', '/')) : ''}</span></div>
-      ${y.lines.map(ln => `<div class="yi-ln">${esc(ln.name)} <small>${esc(ln.color || '')} · ${ln.qty ? kY2(ln.qty) + esc(ln.unit || '') + ' · ' : ''}${kY2(ln.kg)}kg</small></div>`).join('')}
+      ${y.lines.map(ln => `<div class="yi-ln">${esc(kYShow(ln.name, ln.color))} <small>${esc(kYCol(ln.name, ln.color))}${kYCol(ln.name, ln.color) ? ' · ' : ''}${ln.qty ? kY2(ln.qty) + esc(ln.unit || '') + ' · ' : ''}${kY2(ln.kg)}kg</small></div>`).join('')}
       ${r ? (r.a ? (r.st !== 'rej' ? '' /* hotfix630: 확인 완료 띠는 안 그림 */ : kBand('rj', `받았다고 보냄 — 송장 ${kY2(r.l.body)}kg · ${r.st === 'ok' ? esc(CN()) + ' 확인 완료' : esc(CN()) + ' 반려 — ' + esc(kAns(r.a).body)}`, r.a.id, '', 'margin:8px 0 0')) :`<div class="st-is" style="margin:8px 0 0">받았다고 보냄 — 송장 ${kY2(r.l.body)}kg · ${esc(CN())} 확인 중</div>`) : ''}
       ${!r || r.st === 'rej' ? `<button type="button" class="yi-go" data-yin="${esc(y.k)}">원사 받았어요</button>` : ''}</div>`; }).join('');
 }
@@ -1978,7 +1987,7 @@ function kYinSheet(y) {
   const st = { kg: '', n: '', q: null, qs: [], busy: false, tok: 0, rq: kRqFor('ky', y.k, S.logs.filter(l => l.by === 'vendor' && l.kind === 'st' && l.stage === 'yarn_in' && l.k === y.k)) };   /* hotfix668: 요청 번호 · hotfix672: 그 원사 의뢰서에 묶인 이름 */
   const r0 = kYinOf(y); S.guard = { tok: () => st.tok, busy: () => st.busy, what: '원사 받았다고 보냈습니다', done: () => { const r = kYinOf(y); return r && r.st !== 'rej' && !(r.l.id === st.rq && r.l.dev === S.dev) && (!r0 || r.l.id !== r0.l.id) ? r.l : null; } };   /* hotfix672 */   /* hotfix658: 송장 사진 여러 장 */
   const draw = () => {
-    st.tok = sheet(`<h3>원사 받았어요 — ${esc(y.no)}</h3><div class="sub">${y.lines.map(ln => esc(ln.name) + ' ' + esc(ln.color || '') + ' · ' + kY2(ln.kg) + 'kg').join('<br>')}<br>발주 합계 <b>${kY2(y.kg)}kg</b></div>
+    st.tok = sheet(`<h3>원사 받았어요 — ${esc(y.no)}</h3><div class="sub">${y.lines.map(ln => esc(kYShow(ln.name, ln.color)) + (kYCol(ln.name, ln.color) ? ' ' + esc(ln.color) : '') + ' · ' + kY2(ln.kg) + 'kg').join('<br>')}<br>발주 합계 <b>${kY2(y.kg)}kg</b></div>
       <div class="k-lab">송장 무게 합계 (kg) <small style="font-weight:600;color:#64748b">(모르면 비워 두세요 — 발주 kg 로)</small></div>
       <div class="k-num"><input id="yi-kg" type="text" inputmode="decimal" autocomplete="off" placeholder="${kY2(y.kg)}" value="${esc(st.kg)}"></div>
       ${kPhotoFieldM(st)}
