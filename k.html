@@ -248,6 +248,7 @@ button{font-family:inherit;cursor:pointer}
 .k-ph{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;min-height:68px;border:2px dashed #86efac;border-radius:15px;background:#f0fdf4;font-size:17px;font-weight:800;color:var(--g1);margin-top:6px}
 .k-ph img{max-height:260px;max-width:100%;object-fit:contain;border-radius:8px;image-orientation:from-image}
 .k-phs{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0 2px}.k-pht{position:relative;width:96px;height:96px;border-radius:12px;overflow:hidden;border:1px solid var(--line);background:#f8fafc}.k-pht img{width:100%;height:100%;object-fit:cover;image-orientation:from-image}.k-pht button{position:absolute;top:0;right:0;width:44px;height:44px;border:0;border-radius:0 0 0 12px;background:rgba(15,23,42,.62);color:#fff;font-size:18px;font-weight:900;font-family:inherit}   /* hotfix657(V8): 송장 사진 여러 장 미리보기 · ✕ 44px */
+.k-ph2{display:flex;gap:8px}.k-ph2 .k-ph{flex:1;min-width:0}.k-pht.old{border:2px solid #b45309}.k-phold{background:#fffbeb;border:1px solid #fcd34d;color:#92400e;border-radius:12px;padding:8px 12px;font-size:14.5px;font-weight:700;margin:6px 0 0;word-break:keep-all}.k-pht .k-phd{position:absolute;left:0;right:0;bottom:0;background:#fde047;color:#713f12;font-size:12px;font-weight:800;font-style:normal;line-height:1.25;text-align:center;padding:2px 2px;word-break:keep-all}   /* 송장 사진 칸 [촬영] [가져오기] 두 단추 · 오늘/어제가 아닌 날 찍은 사진 노란 글씨 */
 /* hotfix581: 송장 촬영 — 격자 · 세로 송장 틀 */
 #kcam{position:fixed;inset:0;z-index:200;background:#000;display:flex;flex-direction:column}
 #kcam video{flex:1;width:100%;height:100%;object-fit:cover;min-height:0}
@@ -1003,7 +1004,7 @@ import { initializeFirestore, getFirestore, persistentLocalCache, persistentMult
  *   읽는 것: proc_acc/{내 uid} · proc_pub/{내 업체}.gs (현일텍스가 보낸 생지출고) · proc_log(내 업체 것만)
  *   쓰는 것: proc_log 한 줄 — kind 'ship' part 'gs' (body 절 · n kg · ref 송장 사진) · kind 'st' part 'gs' stage seen | ack_cxl | photo
  *   사진: Storage gs_photos/{업체}/{생지출고}_{시각}.jpg */
-const KVER = 'k146 (hotfix711)';
+const KVER = 'k147 (hotfix712)';
 try { if (matchMedia('(min-width:700px)').matches) document.body.classList.add('k620pc'); } catch (_) {}   /* hotfix620: PC 에서는 휴대폰 화면 너비로 가운데 */
 /* hotfix572(대표 10/1): 거래 원단회사 고르기 — FABIWOS 는 여러 원단회사에 팔 프로그램. 편직공장 한 곳이 여러 원단회사와 거래하므로
  *   계정(proc_acc.companies)에 거래 원단회사 목록 · 위 [→ 원단회사 ▾] 와 삼선 메뉴에서 고름 · 고른 회사의 할 일 · 재고 · 보낸 내역만 보임
@@ -2203,21 +2204,45 @@ function kBindPhoto(st, redraw) { const b = $('k-ph'), f = $('k-file'); if (!b |
   if (false) b.addEventListener('click', () => f.click()); f.addEventListener('change', async () => { const file = f.files && f.files[0]; if (!file) return; b.textContent = '사진 보는 중…'; st.loading = true; const sb = $('k-send'); if (sb) sb.disabled = true; try { st.q = await kImg(file); } catch (_) { st.q = null; toast('사진을 읽지 못했습니다', true); } st.loading = false; redraw(); }); }   /* hotfix579: 사진을 보는 동안은 [보내기] 잠금 */
 /* hotfix657(V8): [출고했어요] 창 전용 — 송장 사진 여러 장 (미리보기 · ✕ 빼기). 마지막 사진이 흐리면 다음에 찍은 것이 그 사진을 바꿈(다시 찍기), 아니면 한 장 더
  *   찍기 = 앱 안 카메라(kCam)가 바로 열림 · 못 쓰면 휴대폰 카메라(capture) · 앨범은 여러 장 고르기 · 올리는 길은 kPhotoBg(gs_photos) 그대로 */
+/* 송장 사진 칸 [촬영] [가져오기] (기획 20261018_송장가져오기 · 712 빠른 줄) — 가져오기는 휴대폰 앨범 여러 장(한 창에 K_PH_MAX 장까지)
+ *   사진 찍은 날 = 사진 속 날짜(EXIF) → 없으면 파일 시각 → 없으면 모름 · 저장하지 않고 화면 표시만(오늘 · 어제가 아니면 노란 글씨 · 막지 않음) */
+const K_PH_MAX = 20;
+async function kShotDay(file) {
+  const ymd = (y, m, d) => y + '-' + String(m).padStart(2, '0') + '-' + String(d).padStart(2, '0');
+  try { const b = new DataView(await file.slice(0, 131072).arrayBuffer());
+    if (b.getUint16(0) === 0xFFD8) { let o = 2;
+      while (o + 10 < b.byteLength) { const m = b.getUint16(o), n = b.getUint16(o + 2);
+        if (m === 0xFFE1 && b.getUint32(o + 4) === 0x45786966) { const t = o + 10, le = b.getUint16(t) === 0x4949; const u16 = p => b.getUint16(t + p, le), u32 = p => b.getUint32(t + p, le);
+          const tag = (p, id) => { const c = u16(p); for (let i = 0; i < c; i++) { const e = p + 2 + i * 12; if (u16(e) === id) return u32(e + 8); } return null; };
+          const i0 = u32(4), ex = tag(i0, 0x8769); let p = ex != null ? tag(ex, 0x9003) : null; if (p == null) p = tag(i0, 0x0132);
+          if (p != null) { let s = ''; for (let i = 0; i < 10; i++) s += String.fromCharCode(b.getUint8(t + p + i)); const d = s.match(/^(\d{4}):(\d\d):(\d\d)/); if (d && +d[1] > 2000) return ymd(d[1], d[2], d[3]); }
+          break; }
+        if ((m & 0xFF00) !== 0xFF00 || m === 0xFFDA) break; o += 2 + n; } } } catch (_) {}
+  const lm = file && file.lastModified; if (!lm) return ''; const d = new Date(lm); return ymd(d.getFullYear(), d.getMonth() + 1, d.getDate());
+}
+function kShotOld(day) { if (!day) return ''; const f = t => { const d = new Date(t); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
+  const now = Date.now(); if (day === f(now) || day === f(now - 864e5)) return ''; return (+day.slice(5, 7)) + '/' + (+day.slice(8, 10)) + ' 에 찍은 사진'; }
 function kPhotoFieldM(st, lab) {   /* hotfix658: lab = 다른 제목 줄 (출고 · 원사 받았어요 · 송장 사진 보내기 창도 이 칸) */
   const L = st.qs || []; const last = L[L.length - 1]; const bad = last ? kImgMsg(last) : '';
   return `${lab || '<div class="k-lab">송장 사진<span class="k-bdg opt">선택</span> <small style="font-weight:600;color:#64748b">여러 장 찍을 수 있어요</small></div>'}
-    ${L.length ? `<div class="k-phs">${L.map((q, i) => `<span class="k-pht"><img src="${q.prev}" alt="송장 사진 ${i + 1}"><button type="button" data-phx="${i}" aria-label="${i + 1}번째 사진 빼기">✕</button></span>`).join('')}</div>` : ''}
-    <button type="button" class="k-ph" id="k-ph">${!L.length ? '송장 촬영' : bad ? '다시 찍기' : '＋ 한 장 더 촬영'}</button>
+    ${L.length ? `<div class="k-phs">${L.map((q, i) => `<span class="k-pht${kShotOld(q.day) ? ' old' : ''}"><img src="${q.prev}" alt="송장 사진 ${i + 1}">${kShotOld(q.day) ? `<em class="k-phd">${kShotOld(q.day)}</em>` : ''}<button type="button" data-phx="${i}" aria-label="${i + 1}번째 사진 빼기">✕</button></span>`).join('')}</div>` : ''}
+    ${(() => { const O = L.map((q, i) => kShotOld(q.day) ? i + 1 : 0).filter(Boolean); return O.length ? `<div class="k-phold">송장 ${O.join(' · ')} 은 ${O.length === 1 ? kShotOld(L[O[0] - 1].day) : '오늘 · 어제가 아닌 날 찍은 사진'}이에요. 맞으면 그대로 보내세요. 빼려면 ✕ 한 번.</div>` : ''; })()}
+    <div class="k-ph2"><button type="button" class="k-ph" id="k-ph">${!L.length ? '촬영' : bad ? '다시 찍기' : '＋ 한 장 더 촬영'}</button><button type="button" class="k-ph" id="k-ph-g">가져오기</button></div>
+    <div class="k-hint" style="word-break:keep-all">가져오기는 앨범에서 여러 장을 한 번에 고릅니다 (${K_PH_MAX}장까지)</div>
     <input type="file" id="k-file" accept="image/*" capture="environment" style="display:none">
     ${last ? (bad ? `<div class="k-warn">${esc(bad)}<br><small style="font-weight:600">[다시 찍기]를 누르면 이 사진을 바꿉니다. 그래도 보낼 수 있습니다.</small></div>` : `<div class="k-okm" data-kphok>사진이 잘 찍혔습니다.${L.length > 1 ? ' (' + L.length + '장)' : ''}</div>`) : ''}`;
 }
 function kBindPhotoM(st, redraw) { const b = $('k-ph'), f = $('k-file'); if (!b || !f) return;
   const take = async (file, add) => { b.textContent = '사진 보는 중…'; st.loading = true; const sb = $('k-send'); if (sb) sb.disabled = true; let q = null;
     try { q = await kImg(file); } catch (_) { toast('사진을 읽지 못했습니다', true); }
+    if (q) q.day = file instanceof File ? await kShotDay(file) : '';   /* 찍은 날(표시만 · 저장 안 함) */
     st.loading = false; if (q) { const L = st.qs = st.qs || []; if (!add && L.length && kImgMsg(L[L.length - 1])) L[L.length - 1] = q; else L.push(q); } redraw(); };
-  b.addEventListener('click', async () => { const r = await kCam(); if (r === null) return; if (r instanceof Blob) { take(r, false); return; }
+  b.addEventListener('click', async () => { delete f.dataset.imp; const r = await kCam(); if (r === null) return; if (r instanceof Blob) { take(r, false); return; }
     if (r === 'file') { f.removeAttribute('capture'); f.setAttribute('multiple', ''); } else { f.setAttribute('capture', 'environment'); f.removeAttribute('multiple'); } f.click(); });
-  f.addEventListener('change', async () => { const fs = Array.from(f.files || []); const many = fs.length > 1; for (const file of fs) await take(file, many); });
+  { const g = $('k-ph-g'); if (g) g.addEventListener('click', () => { f.removeAttribute('capture'); f.setAttribute('multiple', ''); f.dataset.imp = '1'; f.click(); }); }   /* [가져오기] = 휴대폰 앨범에서 여러 장 */
+  f.addEventListener('change', async () => { let fs = Array.from(f.files || []); const many = fs.length > 1 || f.dataset.imp === '1'; const room = Math.max(0, K_PH_MAX - (st.qs || []).length);
+    if (fs.length > room) { fs = fs.slice(0, room); toast('한 번에 ' + K_PH_MAX + '장까지 — ' + (room ? room + '장만 넣었어요' : '더 넣을 수 없어요')); }
+    for (const file of fs) await take(file, many); });
   $('sheet').querySelectorAll('[data-phx]').forEach(x => x.addEventListener('click', () => { (st.qs || []).splice(+x.dataset.phx, 1); redraw(); })); }
 /* hotfix689(경선 회사 · 대표 10/15): 송장 판독 — [출고했어요] 창에서 송장을 찍으면 바로 읽어 절 · kg 을 비교 (명세 4-1 환산 · 5장 판정 · 6장 판독)
  *   흐름: 사진 → 빠른 판독(줄이 읽히는 대로 채움) → 송장 합계와 안 맞거나 애매 칸이 있으면 정밀 판독 자동 재확인 → 판정 한 줄 → 절 · kg 칸에 판독 값이 바로 들어감(691 집 방식 · [되돌리기]) → [보냄]
