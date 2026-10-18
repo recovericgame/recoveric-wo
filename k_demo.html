@@ -63,17 +63,25 @@
   const sum = ds => ds.reduce((a, d) => a + +d, 0);
   const G = (g, dest, item, lot, ds, o) => Object.assign({ g, ship_to: dest, fabric: item, lot, color: '', rows: ds.map(d => R(d)), stated_count_raw: String(ds.length), stated_total_raw: (sum(ds) / 10).toFixed(1) }, o || {});
   const A10 = ['201', '199', '202', '198', '200', '203', '197', '200', '201', '199'], B8 = ['211', '209', '210', '212', '208', '210', '211', '209'], C6 = ['200', '202', '198', '201', '199', '200'], D5 = ['240', '241', '239', '242', '238'];
+  const W20a = Array.from({ length: 20 }, (_, i) => String(200 + (i % 5) - 2 + (i === 0 ? 4 : 0))), W20b = Array.from({ length: 20 }, (_, i) => String(209 + (i % 3) - 1 + (i < 3 ? 1 : 0))), W10 = ['200', '199', '201', '198', '200', '202', '199', '200', '199', '200'];   /* hotfix713 s5: 두 장은 같은 20절 */
   const gA = () => G(1, '시험염색', '시험와플', '101', A10), gB = () => G(1, '시험염색', '시험쭈리', '202', B8), gC = () => G(1, '시험가공', '시험면스판', '303', C6);
   const SC = {
     s1: { name: '기본 · 사진 3장 → 3건 모두 일치(초록)', sheets: [{ groups: [gA()] }, { groups: [gB()] }, { groups: [gC()] }] },
     s2: { name: '송장 한 장에 출고 3묶음 → 카드 3장', n: 1, sheets: [{ groups: [gA(), Object.assign(gB(), { g: 2 }), Object.assign(gC(), { g: 3 })] }] },
     s3: { name: '흐린 사진 · 못 읽은 사진 · 애매한 글씨', blur: [0], sheets: [{ groups: [gA()] }, { fail: 'empty' }, { groups: [G(1, '시험염색', '시험쭈리', '202', B8.map((d, i) => d), { rows: B8.map((d, i) => R(d, i === 2 || i === 5 ? { confidence: 'low', raw: d + '?' } : {})) })] }] },
-    s4: { name: '짝 없음 · 송장 합계 안 맞음 · 절당 중량 넘침', sheets: [{ groups: [G(1, '시험염색', '시험스웨터', '909', ['205', '204', '206'])] }, { groups: [G(1, '시험가공', '시험면스판', '303', C6, { stated_total_raw: '121.5' })] }, { groups: [G(1, '시험가공', '시험기모', '404', D5)] }] }
+    s4: { name: '짝 없음 · 송장 합계 안 맞음 · 절당 중량 넘침', sheets: [{ groups: [G(1, '시험염색', '시험스웨터', '909', ['205', '204', '206'])] }, { groups: [G(1, '시험가공', '시험면스판', '303', C6, { stated_total_raw: '121.5' })] }, { groups: [G(1, '시험가공', '시험기모', '404', D5)] }] },
+    /* hotfix713: 판독 꺼진 공장 — 의뢰서 없이 먼저 보낸 출고 3건(사진 없음 · 1분 간격) + 그 시각에 찍은 가상 송장 3장(두 장은 같은 20절) → 시각 짝으로 사진만 붙음 */
+    s5: { name: '판독 꺼진 공장 · 이미 보낸 출고 3건에 송장 3장(사진만 · 시각 짝)', off: true, sheets: [{ groups: [G(1, '대흥(가상)', '시험와플', '', W20a)] }, { groups: [G(1, '대흥(가상)', '시험쭈리', '', W20b)] }, { groups: [G(1, '대흥(가상)', '시험면스판', '', W10)] }] }
   };
   /* 줄 위치(0~1000) — 아래 가상 송장 그림과 같은 자리 · 줄을 누르면 사진 그 근처에 표시 */
   Object.keys(SC).forEach(id => SC[id].sheets.forEach(sh => { let line = 0; (sh.groups || []).forEach(g => { line += 2; g.rows.forEach(r => { r.y = Math.round((260 + line * 34) / 1400 * 1000); line++; }); line += 1; g.posT = { y: Math.round((260 + (line - 1) * 34) / 1400 * 1000), x: 620 }; }); }));
   let cur = 's1';
-  const apply = () => { window.__kInvFake = { sheets: JSON.parse(JSON.stringify(SC[cur].sheets)), firstMs: 900, rowMs: 60 }; };
+  /* hotfix713: s5 = 판독 끔(가짜 판독 없음 · 공개본 inv_read 뺌) + 보낸 출고 3건(사진 없음) — 다른 시나리오로 바꾸면 판독 켬으로 돌아감(보낸 3건은 남음) */
+  const OFF_T = (() => { const b = Math.floor((Date.now() - 2 * 3600e3) / 60e3) * 60e3; return [b, b + 60e3, b + 120e3]; })();
+  const offSet = on => { const k = 'proc_pub/' + V, P = DB.get(k); if (!P) return; const Q = Object.assign({}, P); if (on) delete Q.inv_read; else Q.inv_read = 'real'; DB.set(k, Q);
+    if (on) [['demo_o1', 'WA1_0', '시험와플', 20, 402.4], ['demo_o2', 'WB1_0', '시험쭈리', 20, 418.6], ['demo_o3', 'WC1_0', '시험면스판', 10, 199.8]].forEach(([id, kk, item, j, kg], i) => { if (!DB.get('proc_log/' + id)) DB.set('proc_log/' + id, { vendor: V, by: 'vendor', kind: 'ship', part: 'gs', reason: 'self', k: kk, wo: 'KN-' + kk.slice(0, -2), body: j, n: kg, chip: '시험염색', label: item, note: '', at: { seconds: Math.floor(OFF_T[i] / 1000), nanoseconds: 0 }, dev: 'demo' }); });
+    if (window.__fire) try { window.__fire(); } catch (_) {} };
+  const apply = () => { if (SC[cur].off) { window.__kInvFake = null; offSet(true); return; } if (DB.get('proc_pub/' + V) && !DB.get('proc_pub/' + V).inv_read) offSet(false); window.__kInvFake = { sheets: JSON.parse(JSON.stringify(SC[cur].sheets)), firstMs: 900, rowMs: 60 }; };
   apply();
   window.__demo = { SC, goMv: () => goMv(), newMv: () => newMv(), get cur() { return cur; }, set: id => { if (SC[id]) { cur = id; apply(); paintPanel(); } }, photos, office: () => openOffice() };
 
@@ -98,7 +106,7 @@
     window.__demoNoCam = true; if (!K.state()) K.open(null); else K.open(null);
     closePanel();
     const base = (K.state() && K.state().seq) || 0;
-    for (let i = 0; i < n; i++) { const idx = base + i, sh = S0.sheets[idx % S0.sheets.length]; await K.add(await photo(sh, idx, (S0.blur || []).includes(i))); }
+    for (let i = 0; i < n; i++) { const idx = base + i, sh = S0.sheets[idx % S0.sheets.length]; const b = await photo(sh, idx, (S0.blur || []).includes(i)); await K.add(S0.off ? new File([b], '가상송장_' + (i + 1) + '.jpg', { type: 'image/jpeg', lastModified: OFF_T[i % 3] + 5000 }) : b); }   /* hotfix713 s5: 찍은 시각 = 보낸 출고 시각 */
   }
 
   /* 4 — 화면: 위 띠 · 시험 도구 · 사무실 화면 */
@@ -428,7 +436,7 @@ button{font-family:inherit;cursor:pointer}
 #kcam .fr{position:absolute;left:8%;right:8%;top:6%;bottom:calc(118px + 4%);border:3px solid #34d399;border-radius:10px;box-shadow:0 0 0 2000px rgba(0,0,0,.18);pointer-events:none}
 #kcam .tip{position:absolute;top:12px;left:0;right:0;text-align:center;color:#fff;font-size:16px;font-weight:800;text-shadow:0 1px 4px #000}
 #kcam .bar{height:118px;display:flex;align-items:center;justify-content:space-around;background:#0b1f17;padding-bottom:env(safe-area-inset-bottom)}
-#kcam .bar button{border:0;background:#1f3d31;color:#fff;font-size:16px;font-weight:800;border-radius:14px;padding:12px 16px}
+#kcam .bar button{border:0;background:#1f3d31;color:#fff;font-size:16px;font-weight:800;border-radius:14px;padding:12px 16px;min-height:44px}
 #kcam .bar .shot{width:78px;height:78px;border-radius:50%;background:#fff;border:6px solid #34d399;padding:0}
 .k-hseg{display:flex;gap:6px;margin:12px 0 8px}.k-hseg button{flex:1;border:1px solid var(--line);background:#fff;border-radius:12px;padding:10px 0;font-size:15px;font-weight:800;color:#475569}.k-hseg button.on{background:var(--g1);color:#fff;border-color:var(--g1)}
 .k-hrng{display:flex;gap:6px;align-items:center;background:#fff;border:1px solid var(--line);border-radius:14px;padding:8px;margin-bottom:10px}.k-hrng input,.k-hrng select{flex:1;min-width:0;font-size:16px;font-weight:700;border:1px solid #cbd5e1;border-radius:10px;padding:9px 8px;background:#fff}
@@ -441,6 +449,7 @@ button{font-family:inherit;cursor:pointer}
 .ig-note{font-size:13.5px;color:var(--sub);background:#f8fafc;border-radius:11px;padding:10px 12px}
 #toast{position:fixed;left:50%;bottom:92px;transform:translateX(-50%) translateY(20px);background:#0f172a;color:#fff;border-radius:13px;padding:12px 18px;font-size:15px;font-weight:700;opacity:0;transition:.25s;z-index:40;max-width:90vw;text-align:center;pointer-events:none;word-break:keep-all}
 #toast.on{opacity:.96;transform:translateX(-50%)}#toast.err{background:var(--red)}
+body:has(#sheet.on) #toast{top:calc(10px + env(safe-area-inset-top));bottom:auto;transform:translateX(-50%) translateY(-20px)}body:has(#sheet.on) #toast.on{transform:translateX(-50%)}   /* hotfix713b(디자인 점검): 창이 열려 있으면 알림은 화면 맨 위 — 칸 · [닫기] · 아래 단추를 가리지 않게 */
 .kk{display:none;position:fixed;inset:0;z-index:50;background:var(--g1);color:#fff;padding:40px 26px;text-align:center;flex-direction:column;justify-content:center;gap:14px}
 .kk.on{display:flex}.kk b{font-size:21px}.kk p{opacity:.88;line-height:1.6;margin:0}.kk button{height:54px;border:0;border-radius:13px;background:#fff;color:var(--g1);font-size:17px;font-weight:900}
 .moved{position:fixed;inset:0;z-index:60;background:var(--g1);color:#fff;display:flex;flex-direction:column;justify-content:center;align-items:center;gap:12px;padding:30px;text-align:center;font-size:17px;line-height:1.6}
@@ -634,6 +643,28 @@ html body .set .rw button{min-height:44px}
 #sheet .kb-foot{position:sticky;bottom:calc(-18px - env(safe-area-inset-bottom));z-index:6;background:var(--surface,#fff);margin:10px -18px calc(-18px - env(safe-area-inset-bottom));padding:6px 18px calc(18px + env(safe-area-inset-bottom));border-top:1px solid var(--gray-200)}#sheet .kb-foot .row2{margin-top:0}
 .kb-hold{margin-top:8px}.kb-hold .kb-sub{margin-top:6px}
 .kb-th[data-s="hold"] i{background:var(--st-warn-solid)}
+/* hotfix713: 판독 꺼진 공장도 — 사진마다 "어느 출고" (찍은 시각 · 빨강 = 안 정함) · 추천 단추 · 카드 종류 표 · 같은 출고 의심 · 재고 줄 출고처 */
+.kb-th[data-s="pick"] i{background:var(--st-bad-solid)}.kb-th.on{border-color:var(--g2);border-width:3px}
+.kb-th small{position:absolute;left:0;right:0;bottom:0;background:rgba(15,23,42,.62);color:#fff;font-size:12px;font-weight:800;line-height:1.3;text-align:center}.kb-th small~i{bottom:20px}
+.kb-ask{margin-top:8px;padding:12px;border-radius:12px;border:2px solid var(--g2);background:var(--surface,#fff)}
+.kb-ask-p{display:flex;gap:10px;align-items:flex-start}.kb-ask-p img{width:72px;height:96px;object-fit:cover;border-radius:8px;border:1px solid var(--gray-200);flex:none}.kb-ask-p b{font-size:15px;color:var(--ink)}
+.kb-ask-h{margin:10px 0 2px;font-size:17px;font-weight:900;color:var(--ink)}
+.kb-rec{display:block;width:100%;margin-top:8px;min-height:56px;text-align:left;padding:8px 14px;border-radius:12px;border:2px solid var(--g2);background:var(--st-ok-bg);font-family:inherit;color:var(--ink)}.kb-rec b{display:block;font-size:17px;font-weight:900}.kb-rec>span{display:block;font-size:14px;color:var(--sub);font-weight:600;margin-top:2px}
+.kb-same{display:block;width:100%;margin-top:10px;min-height:52px;border-radius:12px;border:0;background:var(--g2);color:#fff;font-size:17px;font-weight:900;font-family:inherit}
+.kb-more{display:block;width:100%;margin-top:10px;min-height:48px;border-radius:12px;border:2px solid var(--st-warn-solid);background:var(--st-warn-bg);color:var(--st-warn-ink);font-size:16px;font-weight:900;font-family:inherit}
+.kb-all{display:block;width:100%;margin-top:8px;min-height:48px;border-radius:12px;border:2px solid var(--g2);background:#fff;color:var(--g1);font-size:16px;font-weight:900;font-family:inherit}
+.kb-q{display:block;width:100%;margin-top:8px;min-height:48px;font-size:16px;border:2px solid var(--gray-300);border-radius:10px;padding:0 12px;font-family:inherit}
+.kb-hint2{font-size:13px;color:var(--sub);margin:4px 2px 0;word-break:keep-all}
+.kb-on1{display:flex;align-items:center;gap:8px;margin-top:4px;font-size:14px;font-weight:700;color:var(--st-ok-ink)}.kb-on1 button{min-height:44px;padding:0 12px;border-radius:10px;border:1.5px solid var(--gray-200);background:#fff;font-size:14px;font-weight:800;font-family:inherit;color:var(--sub)}
+.kb-bd{display:inline-block;padding:2px 8px;border-radius:8px;font-size:13px;font-weight:900;white-space:nowrap;background:var(--st-info-bg);color:var(--st-info-ink)}.kb-bd[data-t="gs"]{background:var(--st-ok-bg);color:var(--st-ok-ink)}.kb-bd[data-t="stk"],.kb-bd[data-t="dup"]{background:var(--st-warn-bg);color:var(--st-warn-ink)}
+.kb-mc .kb-h{flex-wrap:wrap}.kb-nm{min-width:0;word-break:keep-all}
+.kb-how{display:block;width:100%;margin-top:8px;min-height:44px;text-align:left;padding:6px 12px;border-radius:10px;border:1.5px solid var(--st-ok-line);background:var(--st-ok-bg);color:var(--st-ok-ink);font-size:14.5px;font-weight:700;font-family:inherit}
+.kb-mph{display:flex;align-items:center;gap:6px;margin-top:8px;flex-wrap:wrap}.kb-mph button{position:relative;width:44px;height:56px;padding:0;border-radius:8px;overflow:hidden;border:1.5px solid var(--gray-200);background:var(--gray-50)}.kb-mph img{width:100%;height:100%;object-fit:cover;display:block}.kb-mph b{position:absolute;left:3px;top:2px;font-size:12px;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.6)}.kb-mph span{font-size:13px;font-weight:700;color:var(--sub)}
+.kb-lab2{margin-top:8px;font-size:14px;font-weight:800;color:var(--sub)}.kb-dps{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}.kb-dps button{min-height:44px;padding:0 14px;border-radius:10px;border:1.5px solid var(--gray-300);background:#fff;font-size:15px;font-weight:800;font-family:inherit;color:var(--ink)}.kb-dps button.on{background:var(--g1);border-color:var(--g1);color:#fff}
+.kb-mfs{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}.kb-mf{display:block;border:1.5px solid var(--gray-200);border-radius:10px;padding:4px 10px;background:var(--gray-50)}.kb-mf span{display:block;font-size:13px;font-weight:700;color:var(--sub)}.kb-mf input{display:block;width:100%;min-height:40px;border:0;background:transparent;font-size:18px;font-weight:800;font-family:inherit;color:var(--ink);padding:0}.kb-mf input.k-bad{outline:2px solid var(--st-bad-solid);border-radius:6px}
+#sheet #kb-send:disabled{background:var(--gray-300);color:var(--gray-700);box-shadow:none;cursor:not-allowed}#kb-left{color:var(--ink);font-weight:800;font-size:13px}   /* hotfix713b: 보낼 것 없으면 잠김 모양 · 안내 진하게 */
+.kb-repl{margin-top:6px;padding:6px 10px;border-radius:8px;background:var(--st-info-bg);color:var(--st-info-ink);font-size:14px;font-weight:800;word-break:keep-all}
+.kb-dup{display:flex;gap:8px;margin-top:8px}.kb-dup button{flex:1;min-height:48px;border-radius:12px;border:2px solid var(--g2);background:#fff;color:var(--g1);font-size:16px;font-weight:900;font-family:inherit}.kb-dup button.on{background:var(--g2);color:#fff}
 .kb-g{display:grid;grid-template-columns:repeat(4,1fr);gap:2px 6px;margin-top:6px}.kb-g span{font-size:13px;color:var(--sub);font-weight:700}.kb-g b{display:block;font-size:16px;font-weight:900;color:var(--ink)}
 .kb-why{margin-top:5px;font-size:13px;font-weight:700;color:var(--sub)}.kb-c[data-col="red"] .kb-why{color:var(--st-bad-ink)}.kb-c[data-col="yellow"] .kb-why{color:var(--st-warn-ink)}
 .kb-fit{margin-top:8px;width:100%;min-height:44px;border-radius:10px;border:0;background:var(--st-warn-solid);color:#fff;font-size:15px;font-weight:900}
@@ -1176,7 +1207,7 @@ import { initializeFirestore, getFirestore, persistentLocalCache, persistentMult
  *   읽는 것: proc_acc/{내 uid} · proc_pub/{내 업체}.gs (현일텍스가 보낸 생지출고) · proc_log(내 업체 것만)
  *   쓰는 것: proc_log 한 줄 — kind 'ship' part 'gs' (body 절 · n kg · ref 송장 사진) · kind 'st' part 'gs' stage seen | ack_cxl | photo
  *   사진: Storage gs_photos/{업체}/{생지출고}_{시각}.jpg */
-const KVER = '시험판 · k146 (hotfix711) 바탕';
+const KVER = '시험판 · k148 (hotfix713) 바탕';
 try { if (matchMedia('(min-width:700px)').matches) document.body.classList.add('k620pc'); } catch (_) {}   /* hotfix620: PC 에서는 휴대폰 화면 너비로 가운데 */
 /* hotfix572(대표 10/1): 거래 원단회사 고르기 — FABIWOS 는 여러 원단회사에 팔 프로그램. 편직공장 한 곳이 여러 원단회사와 거래하므로
  *   계정(proc_acc.companies)에 거래 원단회사 목록 · 위 [→ 원단회사 ▾] 와 삼선 메뉴에서 고름 · 고른 회사의 할 일 · 재고 · 보낸 내역만 보임
@@ -1212,7 +1243,7 @@ window.__hwNet = () => (HW_LP ? 'long-polling(고정)' : 'auto');
 const $ = id => document.getElementById(id);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 let tT = null;
-function toast(m, err) { const t = $('toast'); t.textContent = m; t.className = 'on' + (err ? ' err' : ''); clearTimeout(tT); tT = setTimeout(() => { t.className = ''; }, 2800); }
+function toast(m, err) { const t = $('toast'); t.textContent = m; t.className = 'on' + (err ? ' err' : ''); clearTimeout(tT); tT = setTimeout(() => { t.className = ''; }, $('sheet') && $('sheet').classList.contains('on') ? 1800 : 2800); }   /* hotfix713b: 창 위 알림은 빨리 사라짐 */
 function myDev() { let d = ''; try { d = localStorage.getItem('hwp.dev') || ''; } catch (_) {} if (!/^[a-z0-9]{24}$/.test(d)) { const cs = 'abcdefghijklmnopqrstuvwxyz0123456789'; const a = new Uint32Array(24); crypto.getRandomValues(a); d = Array.from(a, x => cs[x % cs.length]).join(''); try { localStorage.setItem('hwp.dev', d); } catch (_) {} } return d; }
 const tOf = l => { const a = l && l.at; if (!a) return Date.now(); if (typeof a.toMillis === 'function') return a.toMillis(); if (a.seconds) return a.seconds * 1000; const t = Date.parse(a); return isNaN(t) ? Date.now() : t; };
 function lsGet(k, d) { try { const v = JSON.parse(localStorage.getItem(k) || 'null'); return v == null ? d : v; } catch (_) { return d; } }
@@ -1578,7 +1609,7 @@ function render() {
   if (S.tab === 'set') { $('list').innerHTML = kSet(); return; }
   if (!S.gotPub) { $('list').innerHTML = '<div class="empty">불러오는 중 …</div>'; return; }
   if (!S.coShown) setTimeout(() => coHome(false), 0);   /* hotfix574 */
-  if (!todo.length) { $('list').innerHTML = (S.kind ? '' : kYinHtml()) + ((S.dest || S.kind) ? `<div class="empty"><b>✓</b>고른 곳에는 할 일이 없습니다.<br>전체 할 일 ${todoAll.length}건<br><br><button type="button" class="k-go" style="max-width:260px;margin:0 auto" data-dclear>모두 보기</button></div>` : `<div class="empty"><b>✓</b>지금 할 일이 없습니다.<br>현일텍스가 생지 출고를 보내면<br>여기에 나타나고 휴대폰이 울립니다.</div>`) + (S.kind ? '' : kRecentHtml(L)); return; }   /* hotfix672: 보낸 것 · 최근 */
+  if (!todo.length) { $('list').innerHTML = (S.kind ? '' : kYinHtml()) + ((S.dest || S.kind) ? `<div class="empty"><b>✓</b>고른 곳에는 할 일이 없습니다.<br>전체 할 일 ${todoAll.length}건<br><br><button type="button" class="k-go" style="max-width:260px;margin:0 auto" data-dclear>모두 보기</button></div>` : kbTopHtml() + `<div class="empty"><b>✓</b>지금 할 일이 없습니다.<br>현일텍스가 생지 출고를 보내면<br>여기에 나타나고 휴대폰이 울립니다.</div>`) + (S.kind ? '' : kRecentHtml(L)); return; }   /* hotfix672: 보낸 것 · 최근 */
   const ORD = { new: 0, part: 1, inv: 2, cxl: 3 };
   todo.sort((a, b) => (ORD[kKind(a)] ?? 9) - (ORD[kKind(b)] ?? 9) || String(a.date || '').localeCompare(String(b.date || '')));
   $('list').innerHTML = (S.kind ? '' : kYinJump()) + kbTopHtml() + `<div class="sec-t">${S.dest ? esc(S.dest) + '(으)로 보낼 ' : esc(CN()) + ' 생지 출고 요청 '}${todo.length}건</div>` + todo.map(kCard).join('') + (S.kind ? '' : kRecentHtml(L) + kYinHtml());   /* hotfix672: 보낸 것 · 최근 */   /* hotfix614: 원사 받을 것 */
@@ -1887,7 +1918,7 @@ function kStock() {
   const perB = `<div class="kd-per" role="group" aria-label="기간">${KPER.map(([m, t]) => `<button type="button" data-kper="${m}" aria-pressed="${P.m === m}" class="${P.m === m ? 'on' : ''}">${t}</button>`).join('')}</div>${P.m === 'range' ? `<div class="kd-rng"><input type="date" id="kper-a" value="${P.da}" aria-label="시작일"><span>~</span><input type="date" id="kper-b" value="${P.db}" aria-label="끝일"></div>` : ''}`;
   const head = `<div class="k-sum-t">${esc(CN())} 생지현황</div>${perB}
     <div class="kd-g">${kdc('출고량 · ' + esc(P.lab), kQ(O.j), O.kg > 0 ? O.kg.toFixed(1) + 'kg' : '', 'out')}${kdc('대기 · 지금', kQ(tp), '', tp > 0 ? 'pd on' : 'pd')}${kdc('재고량 · 지금', kQ(tj), (sub === 'stock' ? '' : '약 ') + tk.toFixed(1) + 'kg', 'rem')}</div>`;
-  $('list').innerHTML = segH + seg2 + `<div class="st-tone ${sub}"><div class="k-sum kd">${head}</div>
+  $('list').innerHTML = kbTopHtml() + segH + seg2 + `<div class="st-tone ${sub}"><div class="k-sum kd">${head}</div>
     <div class="st-find"><input id="st-q" type="search" placeholder="품목명으로 검색" value="${esc(S.sq || '')}" autocomplete="off"></div><div id="st-res">${kStockRes()}</div></div>
     <div class="empty" style="padding:14px 10px;font-size:13px"><span class="hw-help">재고절 = ${esc(CN())}가 맡긴 생지 − 보낸 것 − 출고 대기<br></span>숫자가 실제와 다르면 [수량조정] — ${esc(CN())}가 확인하고 고칩니다</div>`;
   const i = $('st-q'); i.addEventListener('input', () => { S.sq = i.value; clearTimeout(i.__t); i.__t = setTimeout(() => kResKeep(kStockRes), 200); });   /* hotfix640(S7) */
@@ -2157,7 +2188,7 @@ function kYinHtml() {
 function kYinJump() { const n = (S.yin || []).filter(y => { const r = kYinOf(y); return !r || r.st === 'rej'; }).length; return n ? `<button type="button" class="yi-jump" onclick="document.getElementById('yi-sec').scrollIntoView({behavior:'smooth'})">원사 받을 것 ${n}건 — 받으면 [원사 받았어요] ↓</button>` : ''; }
 function kYinSheet(y) {
   try { kStorage(); } catch (_) {}
-  const st = { kg: '', n: '', q: null, qs: [], busy: false, tok: 0, rq: kRqFor('ky', y.k, S.logs.filter(l => l.by === 'vendor' && l.kind === 'st' && l.stage === 'yarn_in' && l.k === y.k)) };   /* hotfix668: 요청 번호 · hotfix672: 그 원사 의뢰서에 묶인 이름 */
+  const st = { yarn: 1, kg: '', n: '', q: null, qs: [], busy: false, tok: 0, rq: kRqFor('ky', y.k, S.logs.filter(l => l.by === 'vendor' && l.kind === 'st' && l.stage === 'yarn_in' && l.k === y.k)) };   /* hotfix668: 요청 번호 · hotfix672: 그 원사 의뢰서에 묶인 이름 */
   const r0 = kYinOf(y); S.guard = { tok: () => st.tok, busy: () => st.busy, what: '원사 받았다고 보냈습니다', done: () => { const r = kYinOf(y); return r && r.st !== 'rej' && !(r.l.id === st.rq && r.l.dev === S.dev) && (!r0 || r.l.id !== r0.l.id) ? r.l : null; } };   /* hotfix672 */   /* hotfix658: 송장 사진 여러 장 */
   const draw = () => {
     st.tok = sheet(`<h3>원사 받았어요 — ${esc(y.no)}</h3><div class="sub">${y.lines.map(ln => esc(kYShow(ln.name, ln.color)) + (kYCol(ln.name, ln.color) ? ' ' + esc(ln.color) : '') + ' · ' + kY2(ln.kg) + 'kg').join('<br>')}<br>발주 합계 <b>${kY2(y.kg)}kg</b></div>
@@ -2394,13 +2425,26 @@ async function kShotDay(file) {
 }
 function kShotOld(day) { if (!day) return ''; const f = t => { const d = new Date(t); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
   const now = Date.now(); if (day === f(now) || day === f(now - 864e5)) return ''; return (+day.slice(5, 7)) + '/' + (+day.slice(8, 10)) + ' 에 찍은 사진'; }
+/* hotfix713: 찍은 시각(밀리초) — 사진 속 찍은 날짜 · 시각(EXIF 0x9003 · 없으면 0x0132) → 파일 시각 → 0 · [송장 한꺼번에] 줄 세우기 · 시각 짝에만(저장 안 함) */
+async function kShotAt(file, exifOnly) {   /* hotfix713b: exifOnly = 사진 속 찍은 시각만(없으면 0) */
+  try { const b = new DataView(await file.slice(0, 131072).arrayBuffer());
+    if (b.getUint16(0) === 0xFFD8) { let o = 2;
+      while (o + 10 < b.byteLength) { const m = b.getUint16(o), n = b.getUint16(o + 2);
+        if (m === 0xFFE1 && b.getUint32(o + 4) === 0x45786966) { const t = o + 10, le = b.getUint16(t) === 0x4949; const u16 = p => b.getUint16(t + p, le), u32 = p => b.getUint32(t + p, le);
+          const tag = (p, id) => { const c = u16(p); for (let i = 0; i < c; i++) { const e = p + 2 + i * 12; if (u16(e) === id) return u32(e + 8); } return null; };
+          const i0 = u32(4), ex = tag(i0, 0x8769); let p = ex != null ? tag(ex, 0x9003) : null; if (p == null) p = tag(i0, 0x0132);
+          if (p != null) { let s = ''; for (let i = 0; i < 19; i++) s += String.fromCharCode(b.getUint8(t + p + i)); const d = s.match(/^(\d{4}):(\d\d):(\d\d) (\d\d):(\d\d):(\d\d)/); if (d && +d[1] > 2000) { const v = new Date(+d[1], +d[2] - 1, +d[3], +d[4], +d[5], +d[6]).getTime(); if (v > 0) return v; } }
+          break; }
+        if ((m & 0xFF00) !== 0xFF00 || m === 0xFFDA) break; o += 2 + n; } } } catch (_) {}
+  return exifOnly ? 0 : (file && file.lastModified) || 0;
+}
 function kPhotoFieldM(st, lab) {   /* hotfix658: lab = 다른 제목 줄 (출고 · 원사 받았어요 · 송장 사진 보내기 창도 이 칸) */
   const L = st.qs || []; const last = L[L.length - 1]; const bad = last ? kImgMsg(last) : '';
   return `${lab || '<div class="k-lab">송장 사진<span class="k-bdg opt">선택</span> <small style="font-weight:600;color:#64748b">여러 장 찍을 수 있어요</small></div>'}
     ${L.length ? `<div class="k-phs">${L.map((q, i) => `<span class="k-pht${kShotOld(q.day) ? ' old' : ''}"><img src="${q.prev}" alt="송장 사진 ${i + 1}">${kShotOld(q.day) ? `<em class="k-phd">${kShotOld(q.day)}</em>` : ''}<button type="button" data-phx="${i}" aria-label="${i + 1}번째 사진 빼기">✕</button></span>`).join('')}</div>` : ''}
     ${(() => { const O = L.map((q, i) => kShotOld(q.day) ? i + 1 : 0).filter(Boolean); return O.length ? `<div class="k-phold">송장 ${O.join(' · ')} 은 ${O.length === 1 ? kShotOld(L[O[0] - 1].day) : '오늘 · 어제가 아닌 날 찍은 사진'}이에요. 맞으면 그대로 보내세요. 빼려면 ✕ 한 번.</div>` : ''; })()}
     <div class="k-ph2"><button type="button" class="k-ph" id="k-ph">${!L.length ? '촬영' : bad ? '다시 찍기' : '＋ 한 장 더 촬영'}</button><button type="button" class="k-ph" id="k-ph-g">가져오기</button></div>
-    <div class="k-hint" style="word-break:keep-all">가져오기는 앨범에서 여러 장을 한 번에 고릅니다 (${K_PH_MAX}장까지)</div>
+    <div class="k-hint" style="word-break:keep-all">가져오기는 앨범에서 여러 장을 한 번에 고릅니다 (${K_PH_MAX}장까지)</div>${!kInvReader() && L.length >= 2 && !st.yarn ? '<div class="k-hint kb-mix" style="word-break:keep-all">여러 품목 송장이 섞였으면 [송장 한꺼번에]에서 나누세요</div>' : ''}
     <input type="file" id="k-file" accept="image/*" capture="environment" style="display:none">
     ${last ? (bad ? `<div class="k-warn">${esc(bad)}<br><small style="font-weight:600">[다시 찍기]를 누르면 이 사진을 바꿉니다. 그래도 보낼 수 있습니다.</small></div>` : `<div class="k-okm" data-kphok>사진이 잘 찍혔습니다.${L.length > 1 ? ' (' + L.length + '장)' : ''}</div>`) : ''}`;
 }
@@ -2559,6 +2603,7 @@ function kInvHtml(st) {
     : `<div class="kiv-vd"><b>${J.verdict === 'wait' ? '송장 합계가 안 보여요' : J.verdict === 'match' ? '일치' : '차이 ' + KINV.sg(J.diff10) + 'kg'}</b><span>${J.verdict === 'match' ? '송장 = 판독' : KIV_NAME[J.verdict]}${J.cntBad ? ' · 절수 다름' : ''}</span>${kInvWhy(J, 1)}</div>
       <div class="kiv-sm">송장 합계 <b>${J.st10 == null ? '—' : KINV.f1(J.st10)}</b> · 판독 <b>${KINV.f1(J.read10)}</b>kg · ${J.n}절${J.sc != null && J.cntBad ? ' (송장 ' + J.sc + '절)' : ''}</div>
       ${J.verdict === 'wait' ? '<div class="kiv-sm">하단 합계까지 나오게 다시 찍어 주세요 (또는 아래에서 합계를 눌러 넣기)</div>' : ''}
+      ${st.item && v.head && v.head.fabric && (st.qs || []).length >= 2 && !kbSame(kbNm(v.head.fabric), kbNm(st.item)) ? `<div class="kiv-sm kiv-oth" style="color:var(--st-warn-ink);font-weight:800">이 사진은 ${esc(v.head.fabric)} 송장으로 보여요 <button type="button" class="kiv-clr" data-kiv="clear" style="min-height:44px;margin-left:6px">빼기</button></div>` : ''}
       ${kInvWhy(J)}
       ${exact ? '<div class="kiv-sm">정밀 확인 중…</div><div class="kiv-bar"><i></i></div>' : ''}`;
   const onA = kInvAp(st), P0 = onA ? (st.invPrev || {}) : st;   /* hotfix691: 판독 값이 칸에 들어가 있으면 "넣었던 값" 과 대조 */
@@ -2723,10 +2768,10 @@ async function kFp(blob) { const buf = await blob.arrayBuffer();
 function kKpjOf(key, base, at) { if (!key) return parseFloat(base) > 0 ? parseFloat(base) : null; const L = S.logs.filter(l => l.kind === 'kpj' && l.by === 'vendor' && l.k === key && parseFloat(l.new10) > 0).sort((a, b) => tOf(b) - tOf(a)); const l = L[0];
   if (l && tOf(l) > (Number(at) || 0)) return Math.round(l.new10) / 10; return parseFloat(base) > 0 ? parseFloat(base) : null; }
 const kKpjX = x => x && x.kk ? kKpjOf(x.kk, x.kpj, x.kpjAt) : (x && parseFloat(x.kpj) > 0 ? parseFloat(x.kpj) : null);
-function kbNew(pre) { return { id: 'b' + Date.now().toString(36), at: Date.now(), seq: 0, sheets: [], man: {}, pre: pre ? pre.k : '', open: '', ed: null, pick: false, busy: false, act: 0 }; }
+function kbNew(pre) { return { id: 'b' + Date.now().toString(36), at: Date.now(), seq: 0, sheets: [], man: {}, as: {}, pre: pre ? pre.k : '', open: '', ed: null, pick: false, busy: false, act: 0 }; }
 function kbLoad() { const o = lsGet(vKey('bat'), null); if (!o || !o.id || Date.now() - (o.at || 0) > 2 * 864e5) return null;
-  o.sheets = (o.sheets || []).map(s => Object.assign({}, s, { q: { prev: s.prev || '' }, st: s.st === 'done' ? 'done' : 'lost', err: s.st === 'done' ? '' : (s.err || '사진을 다시 골라 주세요') })); o.busy = false; o.act = 0; o.open = ''; o.ed = null; o.pick = false; o.man = o.man || {}; o.seq = o.seq || o.sheets.length; return o; }
-function kbSave(B) { const pack = withPrev => ({ id: B.id, at: B.at, seq: B.seq, pre: B.pre, man: B.man, sheets: B.sheets.filter(s => s.fp).map(s => ({ i: s.i, fp: s.fp, prev: withPrev && s.q ? s.q.prev : '', st: s.st, err: s.err || '', res: s.res || null })) });
+  o.sheets = (o.sheets || []).map(s => Object.assign({}, s, { q: { prev: s.prev || '' }, st: s.st === 'done' || s.st === 'man' ? s.st : 'lost', err: s.st === 'done' || s.st === 'man' ? '' : (s.err || '사진을 다시 골라 주세요') })); o.busy = false; o.act = 0; o.open = ''; o.ed = null; o.pick = false; o.man = o.man || {}; o.as = o.as || {}; o.seq = o.seq || o.sheets.length; return o; }   /* hotfix713: 고른 짝(as)도 남김 · 판독 없는 사진(man) */
+function kbSave(B) { const pack = withPrev => ({ id: B.id, at: B.at, seq: B.seq, pre: B.pre, man: B.man, as: B.as || {}, sheets: B.sheets.filter(s => s.fp).map(s => ({ i: s.i, fp: s.fp, prev: withPrev && s.q ? s.q.prev : '', st: s.st, err: s.err || '', res: s.res || null, at: s.at || 0, t0: s.t0 || 0 })) });
   try { localStorage.setItem(vKey('bat'), JSON.stringify(pack(true))); } catch (_) { lsSet(vKey('bat'), pack(false)); } }
 function kbClear() { const B = S.bat; if (B) B.sheets.forEach(s => { try { if (s.ac) s.ac.abort(); } catch (_) {} try { if (s.url) URL.revokeObjectURL(s.url); } catch (_) {} }); S.bat = null; lsSet(vKey('bat'), null); }
 const kbErr = m => /limit/.test(m) ? '오늘 판독 한도를 다 썼습니다 — 사진만 보내고 숫자는 손으로 넣어 주세요' : /price/.test(m) ? '판독 준비 중(단가 확인 전) — 손으로 넣어 주세요' : /empty/.test(m) ? '송장 글씨를 못 읽었습니다 — 다시 찍거나 손으로 넣어 주세요' : /reading/.test(m) ? '다른 휴대폰에서 같은 사진을 읽는 중 · 잠시 뒤 [다시 읽기]를 누르면 그 결과가 옵니다(0원)' : /busy/.test(m) ? '판독이 몰려 있습니다 — 잠시 뒤 [다시 읽기]' : /time/.test(m) ? '판독 시간이 넘었습니다 — [다시 읽기] 또는 손으로' : /cut/.test(m) ? '연결이 끊겼습니다 — [다시 읽기]' : /stop/.test(m) ? '읽기를 그만했습니다' : navigator.onLine === false ? '인터넷 연결되면 읽음' : '송장을 읽지 못했습니다 — [다시 읽기] 또는 손으로 넣어 주세요';   /* 700 실사용 시험 ④: 원인별 문구 */
@@ -2749,28 +2794,86 @@ async function kbRead(B, s, rd) {
 window.addEventListener('online', () => { const B = S.bat; if (!B) return; let n = 0; B.sheets.forEach(s => { if (s.st === 'off' && s.q && s.q.rd) { s.st = 'wait'; n++; } }); if (n) { kbPump(B); kbPaint(B); } });   /* 아직 한 번도 안 보낸 사진만 */
 async function kbAdd(B, file) {
   if (B.sheets.length >= KB_MAX) { toast('한 번에 ' + KB_MAX + '장까지 — 보낸 뒤 다시 찍어 주세요', true); return; }
-  const s = { i: B.seq++, st: 'prep', q: null, fp: '', err: '' }; B.sheets.push(s); kbPaint(B);
-  let q = null, fp = ''; try { q = await kImg2(file); fp = await kFp(q.rd); } catch (_) { q = null; }
+  const s = { i: B.seq++, st: 'prep', q: null, fp: '', err: '', at: 0, t0: Date.now() }; B.sheets.push(s); kbPaint(B);
+  let q = null, fp = ''; try { if (typeof File !== 'undefined' && file instanceof File) { const lm = file.lastModified || 0; s.at = (await kShotAt(file, true)) || (lm && Date.now() - lm > 120e3 ? lm : 0); } else s.at = Date.now(); q = await kImg2(file);   /* hotfix713b(실사용 3): 앨범 사진에 찍은 시각이 없으면(파일 시각이 방금) "날짜 모름" — 시각 짝 안 함 · 촬영은 지금 */ fp = await kFp(q.rd); } catch (_) { q = null; }   /* hotfix713: 찍은 시각(사진 속 → 파일 시각 → 지금) — 줄 세우기 · 시각 짝에만 · 저장 안 함 */
   if (S.bat !== B) return;
   if (!q) { B.sheets.splice(B.sheets.indexOf(s), 1); toast('사진을 읽지 못했습니다', true); kbPaint(B); return; }
   if (B.sheets.some(z => z !== s && z.fp === fp)) { B.sheets.splice(B.sheets.indexOf(s), 1); toast('같은 사진입니다 — 한 번만 읽습니다'); kbPaint(B); return; }
-  s.q = q; s.fp = fp; s.warn = kImgMsg(q); s.st = s.warn ? 'hold' : navigator.onLine === false ? 'off' : 'wait'; if (s.st === 'off') s.err = '인터넷 연결되면 읽음';   /* 700 실사용 시험 ②: 흐리면 읽기 전에 [다시 찍기 / 그대로 읽기] */
+  s.q = q; s.fp = fp; s.warn = kImgMsg(q); s.st = s.warn ? 'hold' : !kInvReader() ? 'man' : navigator.onLine === false ? 'off' : 'wait'; if (s.st === 'off') s.err = '인터넷 연결되면 읽음';   /* hotfix713: 판독 꺼진 공장 = 읽지 않고 고르기(man) */   /* 700 실사용 시험 ②: 흐리면 읽기 전에 [다시 찍기 / 그대로 읽기] */
   kbSave(B); kbPump(B); kbPaint(B);
 }
-window.__kbat = { add: f => S.bat && kbAdd(S.bat, f), open: x => kbOpen(x), list: () => kList(), state: () => S.bat, cards: () => S.bat ? kbCards(S.bat).map(c => Object.assign({ id: c.id, k: c.x ? c.x.k : '', why: c.why, merged: !!c.merged, diff: !!c.diff, sent: !!c.sent, n: c.parts.length }, (({ color, why: w, avg10, kpj10, pct }) => ({ color, whys: w, avg10, kpj10, pct }))(kbJudge(c)))) : [], send: () => S.bat && kbSend(S.bat), clear: kbClear };   /* 시험용 */
+window.__kbat = { add: f => S.bat && kbAdd(S.bat, f), open: x => kbOpen(x), list: () => kList(), state: () => S.bat, cards: () => S.bat ? kbCards(S.bat).map(c => Object.assign({ id: c.id, k: c.x ? c.x.k : '', t: c.x ? c.x.t || 'gs' : '', ck: kbCk(c.x), mc: !!c.mc, how: c.how || '', dupR: !!c.dupR, ready: kbReady({ c, j: kbJudge(c) }), why: c.why, merged: !!c.merged, diff: !!c.diff, sent: !!c.sent, n: c.parts.length }, (({ color, why: w, avg10, kpj10, pct }) => ({ color, whys: w, avg10, kpj10, pct }))(kbJudge(c)))) : [], send: () => S.bat && kbSend(S.bat), clear: kbClear, recs: i => S.bat ? kbRecs(S.bat, S.bat.sheets.find(s => s.i === (i || 0)) || null, null).map(z => ({ t: z.t || 'gs', ck: kbCk(z), item: z.item })) : [], as: () => S.bat ? JSON.parse(JSON.stringify(S.bat.as || {})) : {} };   /* 시험용 (hotfix713: recs · as) */
 /* 짝짓기 (기획 3-4) — 송장 한 장 → 묶음 G 여러 개 → 출고 대기 줄 */
 const kbCands = () => kList().filter(x => x.st !== 'void' && kView(x).pend > 0);
+/* ===== hotfix713(기획 20261018_송장가져오기_품목거르기 3-1 ~ 3-6 · 대표 결정 ① ②): 후보 넓힘 · 판독 꺼진 공장 고르기 · 같은 출고는 사진만
+ *   후보 = (가) 사진 없는 출고 보고(3일 안 · 취소/반려 아님) { t:'rep' } · (나) 출고 대기 줄(700 그대로 · t 없음) · (다) 공장 재고 줄(남은 절 > 0) { t:'stk' } — 짝 열쇠 ck(r:보고 · s:재고 · 출고 대기 줄은 k)
+ *   보낼 때(새 칸 0): (가) = 그 보고 열쇠로 사진 기록만 · 메모 "[송장 한꺼번에 · 짝 방법 · 사진 M/D · 보고 번호]"(PC 가 그 보고에 붙여 보임) · (나) = 출고 보고(700 길) · (다) = 의뢰서 없이 출고 보고(재고 [출고] 길 · reason self) */
+const KB_D3 = 3 * 864e5, KB_TW = 30 * 60e3;
+const kbCk = z => (z && (z.ck || z.k)) || '';
+const kbDay = t => { const d = new Date(t || Date.now()); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
+const kbHmT = t => { const d = new Date(t); return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); };
+const kbPhLk = l => { const m = String((l && l.note) || '').match(/ · 보고 ([A-Za-z0-9_-]+)\]$/); return m ? m[1] : ''; };   /* 사진 기록 메모가 가리키는 보고 */
+const kbLive = l => !kCxOf(l) && !kRejOf(l) && !(l.reason === 'self' && (a => !!(a && kAns(a).rej))(kAnsOf(l.id)));
+function kbRepPh(l) {   /* 이 보고에 붙은 사진 수 — PC(gsPhWin)와 같은 창: 보고 1분 전 ~ 같은 열쇠 다음 보고 전 · 24시간 안 · 또는 메모로 이 보고를 가리킨 것 */
+  if (l.ref) return 1; const t0 = tOf(l); const LL = S.logs.filter(x => x.by === 'vendor' && x.k === l.k);
+  const nx = LL.filter(x => x.kind === 'ship' && x.id !== l.id && tOf(x) > t0).map(tOf).sort((a, b) => a - b)[0] || Infinity;
+  return LL.filter(x => x.kind === 'st' && x.stage === 'photo' && x.ref && (kbPhLk(x) ? kbPhLk(x) === l.id : (tOf(x) >= t0 - 60e3 && tOf(x) < nx && tOf(x) - t0 < 864e5))).length; }
+function kbRepIt(l) { if (l.reason === 'self') { const r = (S.stock || []).find(z => z.k === l.k); return r ? { item: r.item || '', lot: r.lot || '' } : { item: String(l.label || ''), lot: '' }; }
+  const x = kList().find(z => z.k === l.k); return x ? { item: x.item || '', lot: x.lot || '', dest: x.dest || '' } : { item: String(l.wo || ''), lot: '' }; }
+function kbReps(all) {   /* 3일 안 이 공장 출고 보고 — all 이 아니면 사진 없는 것만((가)) */
+  return S.logs.filter(l => l.by === 'vendor' && l.kind === 'ship' && l.part === 'gs' && l.id && !String(l.id).startsWith('tmp') && Date.now() - tOf(l) < KB_D3 && kbLive(l) && (all || !kbRepPh(l))).map(l => { const it = kbRepIt(l);
+    return { t: 'rep', ck: 'r:' + l.id, k: l.k, no: l.wo || '', l, item: it.item, lot: it.lot, dest: l.reason === 'self' ? String(l.chip || '') : (it.dest || ''), j: parseFloat(l.body) || 0, kg: parseFloat(l.n) || 0 }; }); }
+const kbStkLeft = r => Math.max(0, Math.round(((parseFloat(r.rem) || 0) + (parseFloat(r.pend) || 0) - kWaitOf(r).j) * 10) / 10);
+const kbStkOf = r => ({ t: 'stk', ck: 's:' + r.k, k: r.k, no: r.wo || '', r, item: r.item || '', lot: r.lot || '', dest: '', kk: r.k, kpj: r.kpjW, kpjAt: r.kpjAt, date: r.date || '' });
+const kbStks = () => (S.stock || []).filter(r => r && r.k && kbStkLeft(r) > 0).map(kbStkOf);
+const kbPend = z => !z ? 0 : z.t === 'rep' ? z.j : z.t === 'stk' ? kbStkLeft(z.r) : kView(z).pend;
+function kbFind(ck) { if (!ck) return null; if (ck.startsWith('r:')) return kbReps(true).find(z => z.ck === ck) || null;
+  if (ck.startsWith('s:')) { const r = (S.stock || []).find(z => 's:' + z.k === ck); return r ? kbStkOf(r) : null; } return kList().find(z => z.k === ck) || null; }
+function kbDestOf(s) { const a = kbNz(s); if (!a) return ''; const L = S.dests || []; return L.find(d => kbNz(d) === a) || L.find(d => { const b = kbNz(d); return b.startsWith(a) || a.startsWith(b); }) || ''; }   /* 판독 "대흥" → 정해 준 곳 "대흥섬유"(앞쪽 같으면 같음) */
+function kbDupOf(item, j, kg10, skip) {   /* 3-2 1) · 3-6: 3일 안 보낸 보고와 품목 · 절 · kg(±0.2kg) 같음 → 그 보고(가장 최근) */
+  const a = kbNm(item); if (!a || !(j > 0) || !(kg10 > 0)) return null;
+  return kbReps(true).filter(z => !(skip && skip(z)) && kbSame(a, kbNm(z.item)) && Math.abs(z.j - j) < 0.05 && Math.abs(Math.round(z.kg * 10) - kg10) <= 2).sort((p, q) => tOf(q.l) - tOf(p.l))[0] || null; }
+const kbIsMan = (B, s) => !!(s && s.st !== 'lost' && s.st !== 'prep' && (s.st === 'man' || (B.as && B.as[s.i])));   /* 판독 없이 고르는 사진(판독 꺼진 공장 · 못 읽어 손으로 고른 사진) */
+const kbMine = (B, z) => !!(B && z && z.l && /^iv_/.test(String(z.l.id)) && B.sheets.some(s => s.fp && String(z.l.id).startsWith('iv_' + String(s.fp).slice(0, 16))));   /* 이 묶음에서 방금 보낸 보고는 중복 비교에서 뺌 */
+function kbUsed(B) { const u = new Set(); Object.keys(B.as || {}).forEach(i => (B.as[i] || []).forEach(a => a && a.c && u.add(a.c))); return u; }
+function kbAuto(B) {   /* 3-3 1) 시각 짝 — (가) 보고 중 찍은 시각 ±30분 · ±30분 안에 1건이거나, 가장 가까운 것이 뚜렷이 가깝고(다음 것이 두 배 + 10초 넘게 멂) 그 보고에도 이 사진이 뚜렷이 가장 가까울 때만 · 한 보고에 한 장 */
+  if (!B || B.sheets.some(s => s.st === 'prep')) return; B.as = B.as || {}; const M = B.sheets.filter(s => s.st === 'man' && s.at && !B.as[s.i]).sort((a, b) => a.at - b.at); if (!M.length) return;   /* 가져오는 사진이 다 준비된 뒤에 한 번에 */
+  const used = kbUsed(B); const R = kbReps(false); let ch = false;
+  const near = (t, L, f) => L.map(o => ({ o, d: Math.abs(f(o) - t) })).filter(v => v.d <= KB_TW).sort((a, b) => a.d - b.d);
+  const far = (a, b) => b >= 2 * a + 10e3;   /* b 가 a 보다 뚜렷이 멂 (10/15 세원처럼 1분 간격 보고도 가름 · 가운데 찍은 사진은 고르기) */
+  M.forEach(s => { const c = near(s.at, R.filter(z => !used.has(z.ck)), z => tOf(z.l)); if (!c.length || (c.length > 1 && !far(c[0].d, c[1].d))) return;
+    const back = near(tOf(c[0].o.l), M.filter(o => o !== s && !B.as[o.i]), o => o.at); if (back.length && !far(c[0].d, back[0].d)) return;
+    B.as[s.i] = [{ c: c[0].o.ck, how: 'time' }]; used.add(c[0].o.ck); ch = true; });
+  if (ch) kbSave(B);
+}
+function kbRecs(B, s, ex) {   /* 3-3 2) ~ 4) 추천 순서 — (가) 같은 날 · 시각 가까운 순 → (나) 출고 희망일 = 찍은 날 → 가까운 순 → (다) 최근 14일 많이 낸 품목 → 재고 많은 순 → 그 밖의 (가) · 이 묶음에서 이미 고른 줄은 뒤로 */
+  const t = (s && s.at) || Date.now(), D = kbDay(t), used = kbUsed(B); const dd = x => { const v = Date.parse(x || ''); return isNaN(v) ? 9e15 : Math.abs(v - Date.parse(D)); };
+  const RA = kbReps(false); const A1 = RA.filter(z => kbDay(tOf(z.l)) === D).sort((a, b) => s && s.at ? Math.abs(tOf(a.l) - t) - Math.abs(tOf(b.l) - t) : tOf(a.l) - tOf(b.l));   /* hotfix713b: 날짜 모름 = 이른 보고부터 */
+  const Bn = kbCands().slice().sort((a, b) => (Number(b.date === D) - Number(a.date === D)) || dd(a.date) - dd(b.date));
+  const cnt = {}; S.logs.forEach(l => { if (l.by === 'vendor' && l.kind === 'ship' && l.part === 'gs' && Date.now() - tOf(l) < 14 * 864e5) { const n = kbNm(kbRepIt(l).item); cnt[n] = (cnt[n] || 0) + 1; } });
+  const Cc = kbStks().map(z => Object.assign(z, { often: cnt[kbNm(z.item)] || 0 })).sort((a, b) => b.often - a.often || kbStkLeft(b.r) - kbStkLeft(a.r));
+  const L = A1.concat(Bn, Cc, RA.filter(z => !A1.includes(z)).sort((a, b) => tOf(b.l) - tOf(a.l))).filter(z => !(ex && ex.has(kbCk(z))));
+  return L.filter(z => !used.has(kbCk(z))).concat(L.filter(z => used.has(kbCk(z))));
+}
+function kbRecHtml(z, ix, s) {   /* 추천 · 목록 단추 한 줄 — 품목 · 로트 · 절 + 근거 */
+  const nm = esc(z.item || '-') + (z.lot ? ' <span class="kb-lot">' + esc(z.lot) + '</span>' : '');
+  const sub = z.t === 'rep' ? (kbDay(tOf(z.l)) === kbDay() ? '오늘' : esc(String(new Date(tOf(z.l)).getMonth() + 1) + '/' + new Date(tOf(z.l)).getDate())) + ' ' + kbHmT(tOf(z.l)) + ' 에 보고한 출고' + (z.dest ? ' · ' + esc(z.dest) : '') + ' · 사진 없음'
+    : z.t === 'stk' ? '재고에서 출고' + (z.often ? ' · 이 공장이 자주 내는 품목' : '') + ' · 재고 ' + kQ(kbStkLeft(z.r)) + '절' + (z.r && z.r.date ? ' · ' + esc(String(z.r.date).slice(5).replace('-', '/')) + ' 생산' : '')
+    : '출고 대기 · ' + esc(z.dest || '-') + ' · 남은 ' + kQ(kView(z).pend) + '절' + (z.date ? ' · ' + esc(String(z.date).slice(5).replace('-', '/')) : '') + (z.no ? ' · ' + esc(z.no) : '');   /* hotfix713b(실사용 8): 같은 품목 · 로트 줄 구분 */
+  return `<button type="button" class="kb-rec" data-kb="as" data-c="${esc(kbCk(z))}" data-i="${s ? s.i : ''}"><b>${nm}${z.t === 'rep' ? ' · ' + kQ(z.j) + '절' : ''}</b><span>${sub}</span></button>`; }
 function kbCards(B) {
   const L = kbCands(), taken = new Map(), out = []; const pre = B.pre ? kList().find(x => x.k === B.pre) : null; let preUsed = false;
   const lotOf = z => String(z.lot || '').split('+').map(kbNz).filter(Boolean);
   B.sheets.forEach(s => {
+    if (B.as && B.as[s.i]) return;   /* hotfix713: 손으로 고르는 사진은 아래 kbManCards */
     if (s.st !== 'done' || !s.res) { if (s.st === 'fail' || s.st === 'lost' || s.st === 'off') out.push({ id: 's' + s.i, fail: true, s, parts: [], why: s.err || '읽지 못함' }); return; }
     s.res.groups.forEach((g, gi) => {
-      const id = 'iv_' + String(s.fp || '').slice(0, 16) + '_' + (g.g || gi + 1); const m = B.man[id] || {}; let x = null, why = '', diff = false;
-      const sentL = S.logs.find(l => l.id === id), sent = !!sentL;
-      if (m.k) x = kList().find(z => z.k === m.k) || null;   /* 사람이 고른 줄 · 보낸 카드 */
-      else if (sentL) x = kList().find(z => z.k === sentL.k) || null;   /* 이미 보낸 사진(같은 번호) — 보낸 그 줄 */
+      const id = 'iv_' + String(s.fp || '').slice(0, 16) + '_' + (g.g || gi + 1); const m = B.man[id] || {}; let x = null, why = '', diff = false, dupR = false;
+      const sentL = S.logs.find(l => l.id === id), sent = !!sentL || !!m.done;   /* hotfix713: done = 사진만 붙여 보냄 */
+      if (m.k) x = kbFind(m.k);   /* 사람이 고른 줄 · 보낸 카드 (hotfix713: 보고 · 재고 줄도) */
+      else if (sentL) x = sentL.reason === 'self' ? kbFind('s:' + sentL.k) : (kList().find(z => z.k === sentL.k) || null);   /* 이미 보낸 사진(같은 번호) — 보낸 그 줄 */
       else if (pre && !preUsed && !taken.has(pre.k)) { x = pre; preUsed = true; }   /* 7) 줄에서 연 창 = 그 줄이 먼저 */
+      else if (!m.nw && (x = kbDupOf(g.item, g.rows.length, KINV.judge(g.rows, g.cRaw, g.tRaw, S.invTol10).read10, z => kbMine(B, z)))) dupR = true;   /* hotfix713(3-2 1) · 대표 결정 ②): 3일 안 같은 품목 · 절 · kg 보고 → 새 보고 없이 사진만 */
       else {
         const gl = kbNz(g.lot), gi2 = kbNm(g.item), gd = kbNm(g.dest), n = g.rows.length; let pool = null;
         const byLot = gl ? L.filter(z => lotOf(z).includes(gl)) : [];
@@ -2778,19 +2881,38 @@ function kbCards(B) {
         else if (byLot.length > 1) pool = byLot;
         else { const bn = gi2 && gd ? L.filter(z => kbSame(gi2, kbNm(z.item)) && kbSame(gd, kbNm(z.dest))) : []; if (bn.length === 1) x = bn[0]; else if (bn.length > 1) pool = bn; }   /* 2) 품목 + 출고처 */
         if (!x && pool) { const free = pool.filter(z => !taken.has(z.k)); if (free.length === 1) x = free[0]; else { const ex = free.filter(z => Math.abs(kView(z).pend - n) < 0.05); if (ex.length === 1) x = ex[0]; else why = 'pick'; } }   /* 3) 남은 절로 가름 · 못 가르면 고르기(대표 결정 ②) */
+        if (!x && !why) {   /* hotfix713(3-1 (다)): 출고 대기 줄에 없으면 공장 재고 줄 — 로트 → 품목(재고 줄엔 출고처 없음) → 남은 절 · 못 가르면 고르기 */
+          const SK = kbStks(); const sl = gl ? SK.filter(z => lotOf(z).includes(gl)) : []; let sp = null;
+          if (sl.length === 1) { x = sl[0]; diff = !!(gi2 && !kbSame(gi2, kbNm(x.item))); } else if (sl.length > 1) sp = sl;
+          else { const si = gi2 ? SK.filter(z => kbSame(gi2, kbNm(z.item))) : []; if (si.length === 1) x = si[0]; else if (si.length > 1) sp = si; }
+          if (!x && sp) { const free = sp.filter(z => !taken.has(z.ck)); if (free.length === 1) x = free[0]; else { const ex = free.filter(z => Math.abs(kbStkLeft(z.r) - n) < 0.05); if (ex.length === 1) x = ex[0]; else why = 'pick'; } } }
         if (!x && !why) why = 'none';   /* 4) 짝 없음 */
         if (x && byLot.length === 1) diff = !!((gi2 && !kbSame(gi2, kbNm(x.item))) || (gd && !kbSame(gd, kbNm(x.dest))));
       }
-      if (x && taken.has(x.k) && !m.k) { const c = taken.get(x.k); c.parts.push({ s, g }); c.merged = true; return; }   /* 5) 이어진 송장 → 한 카드에 합산 */
-      const c = { id, x, parts: [{ s, g }], why: x ? '' : why, diff, sent, man: m }; out.push(c); if (x && !taken.has(x.k)) taken.set(x.k, c);
+      if (x && taken.has(kbCk(x)) && !m.k) { const c = taken.get(kbCk(x)); const sg = q => [q.item, q.lot, q.rows.map(r => r.digits).join(','), q.cRaw, q.tRaw].join('|');   /* hotfix713b(실사용 4): 숫자가 똑같은 두 장 = 같은 송장을 두 번 찍음 → 합치지 않음(20 → 40절 막음) */
+        if (!m.dblOk && c.parts.some(p => sg(p.g) === sg(g))) { out.push({ id, x, parts: [{ s, g }], why: '', diff, sent, man: m, dbl: c.parts.find(p => sg(p.g) === sg(g)).s }); return; }
+        c.parts.push({ s, g }); c.merged = true; return; }   /* 5) 이어진 송장 → 한 카드에 합산 */
+      const c = { id, x, parts: [{ s, g }], why: x ? '' : why, diff, sent, man: m, dupR }; out.push(c); if (x && !taken.has(kbCk(x))) taken.set(kbCk(x), c);
     });
   });
+  kbManCards(B, out);   /* hotfix713: 판독 없이 고른 사진 카드 */
   return out;
+}
+/* hotfix713(3-3 · 3-4 · 3-5): 손으로 고른 사진 → 카드(짝 줄 하나에 한 카드 · 같은 줄 사진은 합침 · 한 장 여러 품목은 칸(slot)마다) · 보고 번호 iv_{지문 16}_m{칸} */
+function kbManCards(B, out) {
+  const by = new Map(); const S2 = B.sheets.filter(s => kbIsMan(B, s)).sort((a, b) => (a.at || a.t0 || 0) - (b.at || b.t0 || 0) || a.i - b.i);
+  S2.forEach(s => (B.as[s.i] || []).forEach((a, slot) => { if (!a || !a.c) return; const x = kbFind(a.c); if (!x) return;
+    const id = 'm:' + a.c; let c = by.get(id);
+    if (c) { c.parts.push({ s, g: null, slot }); c.merged = true; return; }
+    c = { id, x, parts: [{ s, g: null, slot }], why: '', how: a.how || 'pick', mc: true, sid: 'iv_' + String(s.fp || '').slice(0, 16) + '_m' + (slot + 1), man: B.man[id] || {} };
+    c.sent = !!c.man.done || S.logs.some(l => l.id === c.sid); by.set(id, c); out.push(c); }));   /* hotfix713b(실사용 2): 사진만 붙여 보낸 카드도 보냄 */
 }
 /* 카드 판정 (기획 3-5) — 회색 > 빨강 > 노랑 > 초록 · 숫자는 0.1kg 정수 */
 function kbRows(c) { const m = c.man || {}; return m.rows || [].concat(...c.parts.map(p => p.g.rows.map(r => Object.assign({}, r, { __s: p.s.i })))); }
 function kbJudge(c) {
   if (c.fail) return { color: 'gray', why: [c.why], J: null };
+  if (c.mc) return kbJudgeM(c);   /* hotfix713: 손으로 고른 사진 카드 */
+  if (c.dbl && !c.sent) return { color: 'red', why: ['같은 송장 두 번 — 사진 ' + (c.dbl.i + 1) + '과 숫자가 똑같아요 · 하나는 빼 주세요'], J: null, dbl: true };   /* hotfix713b: 보내지 않음 */
   const m = c.man || {}, rows = kbRows(c);
   const cs = c.parts.map(p => KINV.countOf(p.g.cRaw)), ts = c.parts.map(p => KINV.totalKg10(p.g.tRaw));
   const cRaw = m.cRaw != null ? m.cRaw : (cs.every(v => v != null) ? String(cs.reduce((a, b) => a + b, 0)) : '');
@@ -2798,11 +2920,14 @@ function kbJudge(c) {
   const tRaw = m.tRaw != null ? m.tRaw : (t10 == null ? '' : KINV.f1(t10));
   const J = KINV.judge(rows, cRaw, tRaw, S.invTol10); const x = c.x;
   if (!x) return { color: 'gray', why: [c.why === 'pick' ? '같은 품목 · 로트 줄이 여럿 — 줄을 골라 주세요' : '짝 없음 — 출고 줄을 골라 주세요'], J, cRaw, tRaw };
-  const pend = kView(x).pend, kpj = kKpjX(x), kpj10 = kpj ? Math.round(kpj * 10) : null, avg10 = J.n > 0 ? Math.round(J.read10 / J.n) : null;
+  if (x.t === 'rep') return { color: c.merged ? 'yellow' : 'green', why: [c.dupR ? kbWhen(tOf(x.l)) + ' 같은 출고를 이미 보냈어요 · 사진만 붙여요' : '이미 보낸 출고 · 사진만 붙여요'].concat(c.merged ? [c.parts.length + '장 합침 · 확인'] : []), J, cRaw, tRaw, rep: true, pend: x.j };   /* hotfix713: (가) · 같은 출고 = 새 보고 없이 사진만 */
+  const dest = x.t === 'stk' ? (m.d || kbDestOf((c.parts[0] && c.parts[0].g && c.parts[0].g.dest) || '')) : '';   /* hotfix713: 재고 줄 = 출고처는 판독이 읽었을 때만 채움 · 아니면 고름 */
+  const pend = kbPend(x), kpj = kKpjX(x), kpj10 = kpj ? Math.round(kpj * 10) : null, avg10 = J.n > 0 ? Math.round(J.read10 / J.n) : null;
   const over = !!(kpj10 && J.n > 0 && Math.abs(J.read10 - kpj10 * J.n) * 100 > 5 * kpj10 * J.n);   /* ±5% — 5.00% 는 안 · 넘으면 노랑 */
   const pct = kpj10 && J.n > 0 ? Math.round((J.read10 / J.n - kpj10) / kpj10 * 10000) / 100 : null;
   const why = []; let red = false, yel = false;
   if (!(J.n > 0) || !(J.read10 > 0)) { red = true; why.push('절 · kg 이 없어 보낼 수 없음'); }
+  if (x.t === 'stk' && !c.sent && !(dest && (S.dests || []).includes(dest))) { red = true; why.push('출고처를 골라 주세요'); }   /* hotfix713: 그 카드만 막힘 */
   if (J.st10 != null && Math.abs(J.diff10) > J.tol10) { red = true; why.push('송장 합계와 ' + KINV.f1(Math.abs(J.diff10)) + 'kg 다름'); }
   if (J.cntBad) { red = true; why.push('송장 ' + J.sc + '절 · 읽은 줄 ' + J.n + '절'); }
   if (!c.sent && J.n > pend + 1e-9) { red = true; why.push('남은 ' + kQ(pend) + '절보다 많음'); }
@@ -2811,24 +2936,40 @@ function kbJudge(c) {
   if (c.merged) { yel = true; why.push(c.parts.length + '장 합침 · 확인'); }
   if (c.diff) { yel = true; why.push('품목/출고처 다름'); }
   if (J.st10 == null || J.sc == null) { yel = true; why.push('송장 합계 없음'); }
-  return { color: red ? 'red' : yel ? 'yellow' : 'green', why, J, cRaw, tRaw, kpj10, avg10, pct, over, pend };
+  return { color: red ? 'red' : yel ? 'yellow' : 'green', why, J, cRaw, tRaw, kpj10, avg10, pct, over, pend, dest };
 }
+const kbMd = t => { const d = new Date(t); return kbDay(t) === kbDay() ? '오늘' : (d.getMonth() + 1) + '/' + d.getDate(); };
+const kbWhen = t => kbDay(t) === kbDay() ? '오늘' : kbMd(t) + ' 에';   /* hotfix713: '오늘 같은 출고를' · '10/14 에 같은 출고를' */
+function kbJudgeM(c) {   /* hotfix713(3-5 · 3-6): 손으로 고른 카드 — 사진만(숫자 칸 없음) · 출고 대기(절 · kg) · 재고(출고처 · 절 · kg) · 빈칸은 그 카드만 막힘 · 3일 안 같은 품목 · 절 · kg 보고가 있으면 사진만 붙임(기본) */
+  const x = c.x, m = c.man || {}, B = S.bat; const why = [];
+  if (c.sent) return { color: 'green', why: [], mc: true, ready: false, rep: x.t === 'rep' };
+  const noBlob = c.parts.some(p => !(p.s.q && p.s.q.blob)); if (noBlob) return { color: 'red', why: ['사진을 다시 가져와 주세요 (앱을 다시 켜서 원본이 없음)'], mc: true, ready: false, rep: x.t === 'rep' };
+  if (c.merged) why.push(c.parts.length + '장 합침');
+  if (x.t === 'rep') return { color: c.merged ? 'yellow' : 'green', why: ['숫자 칸 없음 · 사진만 붙습니다'].concat(why), mc: true, ready: true, rep: true };
+  const j = hwNum(m.j), kg = hwNum(m.kg), kg10 = kg > 0 ? Math.round(kg * 10) : 0, dest = x.t === 'stk' ? String(m.d || '') : (x.dest || '');
+  const miss = []; if (x.t === 'stk' && !(dest && (S.dests || []).includes(dest))) miss.push('출고처'); if (!(j > 0)) miss.push('절'); if (!(kg > 0)) miss.push('kg');
+  if (miss.length) return { color: B && (B.tried || (B.touched || {})[c.id]) ? 'red' : 'gray', why: ['빈칸: ' + miss.join(' · ')], mc: true, ready: false, j, kg10, dest, miss };   /* hotfix713b: 한 줄 · 그 카드 칸을 떠나면 빨강 */
+  const dupAlt = kbDupOf(x.item, j, kg10, z => kbMine(B, z)), dup = m.nw ? null : dupAlt;
+  if (dup) return { color: 'yellow', why: [kbWhen(tOf(dup.l)) + ' 같은 출고를 이미 보냈어요. 사진만 붙일까요?'], mc: true, ready: true, j, kg10, dest, dup, dupAlt };
+  if (j > kbPend(x) + 1e-9) why.push('남은 ' + kQ(kbPend(x)) + '절보다 많음');
+  return { color: why.length ? 'yellow' : 'green', why, mc: true, ready: true, j, kg10, dest, dupAlt };
+}
+const kbReady = o => !!(o.c.x && !o.c.sent && !(o.j && o.j.dbl) && (o.c.mc ? o.j.ready : (o.c.x.t === 'rep' || (o.j.J && o.j.J.n > 0 && o.j.J.read10 > 0 && !(o.c.x.t === 'stk' && !(o.j.dest && (S.dests || []).includes(o.j.dest)))))));   /* hotfix713: 보낼 수 있는 카드 */
 const kbPct = p => p.toFixed(Math.abs(Math.abs(p) - 5) < 0.05 ? 2 : 1);   /* 5% 언저리는 둘째 자리까지(4.99 · 5.01 이 5.0 으로 보이지 않게) */
 const KB_COL = { green: '초록', yellow: '노랑', red: '빨강', gray: '회색' };
 const KB_ORD = { red: 0, gray: 1, yellow: 2, green: 3 };
-function kbTopHtml() { if (!kInvReader()) return ''; const n = kInvLeftN(); const B = S.bat || lsGet(vKey('bat'), null);
+function kbTopHtml() { const n = kInvReader() ? kInvLeftN() : null; const B = S.bat || lsGet(vKey('bat'), null);
   return `<div class="kb-top"><button type="button" class="k-go" data-kbat>송장 한꺼번에${B && B.sheets && B.sheets.length ? ' · 이어서' : ''}</button></div>${n != null ? `<div class="kb-left">오늘 남은 판독 약 ${n}장</div>` : ''}`; }
 function kbOpen(pre) {
-  if (!kInvReader()) { toast('송장 판독이 켜져 있지 않습니다'); return; }
-  try { kStorage(); } catch (_) {}
-  if (!S.kinvFl) { S.kinvFl = 1; kInvFlush(); }
+  try { kStorage(); } catch (_) {}   /* hotfix713(대표 결정 ①): 판독 꺼진 공장도 열림 — 사진마다 "어느 출고"를 고름(판독 0원) */
+  if (kInvReader() && !S.kinvFl) { S.kinvFl = 1; kInvFlush(); }
   let B = S.bat; if (!B) { B = kbLoad() || kbNew(pre); S.bat = B; } if (pre) B.pre = pre.k;
   kbDraw(B);
 }
 function kbDraw(B) {
   const n = kInvLeftN();
-  B.tok = sheet(`<h3>송장 한꺼번에</h3><div class="sub">여러 장을 찍으면 출고 줄마다 저절로 짝지어요${n != null && n > 0 ? ' · 오늘 남은 판독 약 ' + n + '장' : ''}</div>${n === 0 ? '<div class="k-warn kb-zero">오늘 남은 판독 0장 — 사진만 보내기 가능 · 절 · kg 은 [출고했어요]에서 손으로 넣어 주세요</div>' : ''}
-    <div class="kb-add"><button type="button" data-kb="cam">＋ 찍기</button><button type="button" data-kb="alb">앨범에서</button></div><input type="file" id="kb-file" accept="image/*" multiple style="display:none">
+  B.tok = sheet(`<h3>송장 한꺼번에${B.sheets.length ? ' · ' + B.sheets.length + '장' : ''}</h3><div class="sub">${kInvReader() ? '여러 장을 찍으면 출고 줄마다 저절로 짝지어요' + (n != null && n > 0 ? ' · 오늘 남은 판독 약 ' + n + '장' : '') : '여러 장을 가져오면 사진마다 어느 출고인지 정해요 · 보낸 출고에는 사진만 붙어요'}</div>${n === 0 ? '<div class="k-warn kb-zero">오늘 남은 판독 0장 — 사진만 보내기 가능 · 절 · kg 은 [출고했어요]에서 손으로 넣어 주세요</div>' : ''}
+    <div class="kb-add"><button type="button" data-kb="cam">촬영</button><button type="button" data-kb="alb">가져오기</button></div><input type="file" id="kb-file" accept="image/*" multiple style="display:none">
     <div id="kb-body"></div>
     <div class="kb-foot"><div class="row2"><button type="button" class="no" data-x>닫기</button><button type="button" class="ok" id="kb-send" disabled>모두 보냄</button></div><div class="kb-left" id="kb-left"></div></div>`);   /* 700 실사용 시험 ①: [모두 보냄] 아래 고정 */
   const sh = $('sheet'), f = $('kb-file');
@@ -2840,32 +2981,91 @@ function kbDraw(B) {
       if (r === 'file') { f.removeAttribute('capture'); f.setAttribute('multiple', ''); f.click(); } else if (r === undefined) { f.setAttribute('capture', 'environment'); f.removeAttribute('multiple'); f.click(); } break; } });
   $('kb-send').addEventListener('click', () => kbSend(B));
   $('kb-body').addEventListener('click', e => kbClick(B, e));
+  $('kb-body').addEventListener('input', e => { const t = e.target; if (!t || !t.dataset) return;   /* hotfix713: 카드 칸 · 출고 찾기 — 넣는 동안 다시 그리지 않음 */
+    if (t.id === 'kb-q') { B.q = t.value; const L = $('kb-allL'), a = kbAskOf(B); if (L && a) L.innerHTML = kbAllHtml(B, a.s, a.slot, null); return; }
+    if (t.dataset.mf && t.dataset.id) { const m = B.man[t.dataset.id] = Object.assign({}, B.man[t.dataset.id] || {}); m[t.dataset.mf] = t.value; kbSave(B); const CJ = kbCards(B).map(c => ({ c, j: kbJudge(c) })); kbBtn(B, CJ, 0); kbLiveCard(B, CJ.find(o => o.c.id === t.dataset.id)); } });
+  $('kb-body').addEventListener('change', e => { const t = e.target; if (t && t.dataset && t.dataset.mf) { B.touched = Object.assign({}, B.touched || {}, { [t.dataset.id]: 1 }); } if (t && t.dataset && t.dataset.mf) setTimeout(() => { const a = document.activeElement; if (!(a && a.dataset && a.dataset.mf)) kbPaint(B); }, 350); });   /* 칸을 떠나면 같은 출고 의심 · 빨강 다시 봄 — 누른 단추가 먼저 눌리게 잠시 뒤 */
   kbPump(B); kbPaint(B);
   if (!B.sheets.length && !B.autoCam && !window.__demoNoCam) { B.autoCam = 1; setTimeout(() => { const c = sheetIs(B.tok) && $('sheet').querySelector('[data-kb="cam"]'); if (c) c.click(); }, 60); }   /* 창이 열리면 바로 카메라(누름 N + 2) */
 }
 function kbCardHtml(c, j, open) {
+  if (c.mc) return kbManCardHtml(S.bat, c, j);   /* hotfix713 */
   const x = c.x, J = j.J, g = c.parts[0] ? c.parts[0].g : null;
-  const t = c.fail ? '사진 ' + (c.s.i + 1) : x ? esc(x.dest || '-') + ' · ' + esc(x.item) + (x.lot ? ' <span class="kb-lot">' + esc(x.lot) + '</span>' : '') : '짝 없음 · ' + esc((g && (g.item || g.dest)) || '') + (g && g.lot ? ' ' + esc(g.lot) : '');
+  const t = c.fail ? '사진 ' + (c.s.i + 1) : x ? (x.t ? `<span class="kb-bd" data-t="${x.t}">${x.t === 'rep' ? '사진만 붙임' : '재고에서 출고'}</span> ` : '') + esc((x.t === 'stk' ? j.dest : x.dest) || '-') + ' · ' + esc(x.item) + (x.lot ? ' <span class="kb-lot">' + esc(x.lot) + '</span>' : '') : '짝 없음 · ' + esc((g && (g.item || g.dest)) || '') + (g && g.lot ? ' ' + esc(g.lot) : '');   /* hotfix713: 종류 표 · 재고 줄은 고른 출고처 */
   const v = c.sent ? '보냄' : c.fail ? '읽지 못함' : !x ? (c.why === 'pick' ? '고르기' : '짝 없음') : j.color === 'green' ? '일치' : j.color === 'red' ? '확인 필요' : '확인';
   const cell = (l, b) => `<div><span>${l}</span><b>${b}</b></div>`;
-  const grid = J ? `<div class="kb-g">${cell('절', J.n)}${cell('kg', KINV.f1(J.read10))}${cell('평균 절당', j.avg10 == null ? '—' : KINV.f1(j.avg10))}${cell('기준', j.kpj10 ? KINV.f1(j.kpj10) : '<small style="font-size:12px;color:var(--dim)">기준 없음</small>')}${cell('송장 절', J.sc == null ? '—' : J.sc)}${cell('송장 kg', J.st10 == null ? '—' : KINV.f1(J.st10))}${cell('차이%', j.pct == null ? '—' : (j.pct > 0 ? '+' : '') + kbPct(j.pct))}${cell('남은 절', x ? kQ(kView(x).pend) : '—')}</div>` : '';
+  const grid = J ? `<div class="kb-g">${cell('절', J.n)}${cell('kg', KINV.f1(J.read10))}${cell('평균 절당', j.avg10 == null ? '—' : KINV.f1(j.avg10))}${cell('기준', j.kpj10 ? KINV.f1(j.kpj10) : '<small style="font-size:12px;color:var(--dim)">기준 없음</small>')}${cell('송장 절', J.sc == null ? '—' : J.sc)}${cell('송장 kg', J.st10 == null ? '—' : KINV.f1(J.st10))}${cell('차이%', j.pct == null ? '—' : (j.pct > 0 ? '+' : '') + kbPct(j.pct))}${cell('남은 절', x ? kQ(kbPend(x)) : '—')}</div>` : '';
+  const ext = c.dbl && !c.sent ? `<div class="kb-dup"><button type="button" data-kb="th" data-i="${c.parts[0].s.i}">이 사진 빼기</button><button type="button" data-kb="dblok" data-id="${esc(c.id)}">다른 송장 · 합치기</button></div>` : !x || c.sent ? '' : (c.dupR ? `<div class="kb-dup"><button type="button" class="on" data-kb="nw0" data-id="${esc(c.id)}">사진만 붙임</button><button type="button" data-kb="nw1" data-id="${esc(c.id)}">새 출고로</button></div>` : '')
+    + (x.t === 'stk' ? kbDestBtns(c.id, j.dest) : '');   /* hotfix713: 같은 출고 의심 [사진만 붙임](기본) / [새 출고로] · 재고 줄 출고처 고르기 */
   const fit = x && !c.sent && j.over && j.avg10 >= 50 && j.avg10 <= 600 && x.kk ? `<button type="button" class="kb-fit" data-kb="fit" data-id="${esc(c.id)}">이 중량으로 맞춤 · 절당 ${KINV.f1(j.avg10)}kg</button>` : '';
-  return `<div class="kb-c" data-col="${j.color}"${c.sent ? ' data-sent' : ''} data-kb="${open ? '' : 'card'}" data-id="${esc(c.id)}" role="${open ? 'group' : 'button'}" tabindex="0"><div class="kb-h"><span>${t}</span><span class="kb-v">${v}</span></div>${grid}${j.why.length ? `<div class="kb-why">${j.why.map(esc).join(' · ')}</div>` : ''}${fit}</div>`;
+  return `<div class="kb-c" data-col="${j.color}"${c.sent ? ' data-sent' : ''} data-kb="${open ? '' : 'card'}" data-id="${esc(c.id)}" role="${open ? 'group' : 'button'}" tabindex="0"><div class="kb-h"><span>${t}</span><span class="kb-v">${x && x.t === 'rep' && !c.sent ? '사진만' : v}</span></div>${grid}${j.why.length ? `<div class="kb-why">${j.why.map(esc).join(' · ')}</div>` : ''}${fit}${ext}</div>`;
 }
+/* hotfix713: 출고처 고르기(정해 준 곳만 · 처음엔 안 골라짐 — 대표 10/10 · 최근 보낸 곳이 앞) · 사진 번호(찍은 시각 순) · 손으로 고른 카드 · "어느 출고인가요?" 칸 */
+function kbDestBtns(id, cur) { const L0 = S.dests || []; if (!L0.length) return `<div class="kb-why" style="color:var(--st-bad-ink)">보낼 곳이 아직 정해지지 않았습니다 — ${esc(CN())}에 [대화]로 알려 주세요</div>`;
+  const rc = []; S.logs.slice().sort((a, b) => tOf(b) - tOf(a)).forEach(l => { if (l.by === 'vendor' && l.reason === 'self' && l.chip && L0.includes(l.chip) && !rc.includes(l.chip)) rc.push(l.chip); });
+  const L = rc.concat(L0.filter(d => !rc.includes(d)));
+  return `<div class="kb-lab2">출고처</div><div class="kb-dps">${L.map(d => `<button type="button" data-kb="dv" data-id="${esc(id)}" data-v="${esc(d)}"${d === cur ? ' class="on"' : ''}>${esc(d)}</button>`).join('')}</div>`; }
+const kbSorted = B => B.sheets.slice().sort((a, b) => (a.at || a.t0 || 0) - (b.at || b.t0 || 0) || a.i - b.i);   /* hotfix713b: 날짜 모름은 가져온 순서 */
+const kbNo = (B, s) => kInvReader() ? s.i + 1 : kbSorted(B).indexOf(s) + 1;
+function kbManCardHtml(B, c, j) {
+  const x = c.x, m = c.man || {}, T = j.dup ? 'dup' : x.t || 'gs'; const p0 = c.parts[0];
+  const bd = { rep: '사진만 붙임', gs: '출고 대기', stk: '재고에서 출고', dup: '같은 출고 의심' }[T];
+  const nm = esc(x.item || '-') + (x.lot ? ' <span class="kb-lot">' + esc(x.lot) + '</span>' : '') + (x.t === 'rep' ? ' · ' + kQ(x.j) + '절' : x.t !== 'stk' && x.dest ? ' → ' + esc(x.dest) : '');
+  const how = { time: '시각으로 짝', same: '앞 사진과 같은 출고', pick: '공장이 고름' }[c.how] || '공장이 고름';
+  const v = c.sent ? '보냄' : j.ready ? '보낼 준비' : '빈칸 있음';
+  const rl = (z => z && z.l ? `<div class="kb-repl">${kbWhen(tOf(z.l)).replace(/ 에$/, '')} ${kbHmT(tOf(z.l))} 보고 · ${kQ(z.j)}절${z.kg ? ' · ' + kQ(z.kg) + 'kg' : ''} · ${esc(z.item || '')}${z.lot ? ' ' + esc(z.lot) : ''}${z.dest ? ' → ' + esc(z.dest) : ''}</div>` : '')(x.t === 'rep' ? x : j.dup);   /* hotfix713b(실사용 6): 어느 보고(시각 · 절 · kg · 품목)에 붙는지 */
+  const ph = `<div class="kb-mph">${c.parts.map(p => `<button type="button" data-kb="fs" data-i="${p.s.i}" aria-label="사진 ${kbNo(B, p.s)} 보기">${p.s.q && p.s.q.prev ? `<img src="${p.s.q.prev}" alt="">` : ''}<b>${kbNo(B, p.s)}</b></button>`).join('')}<span>사진 ${c.parts.length}장${c.parts.length > 1 ? ' 합침' : ''}</span></div>`;
+  const bad = f => B && (B.tried || (B.touched || {})[c.id]) && j.miss && j.miss.includes(f === 'j' ? '절' : 'kg') ? ' k-bad' : '';
+  const inp = (f, lab, ph2) => `<label class="kb-mf"><span>${lab}</span><input type="text" inputmode="decimal" autocomplete="off" class="kb-in2${bad(f)}" data-mf="${f}" data-id="${esc(c.id)}" value="${esc(m[f] == null ? '' : String(m[f]))}" placeholder="${ph2}" aria-label="${lab}"></label>`;
+  const fields = c.sent || x.t === 'rep' ? '' : (x.t === 'stk' ? kbDestBtns(c.id, j.dest) : '') + `<div class="kb-mfs">${inp('j', '절', '예: 20')}${inp('kg', 'kg', '예: 430.6')}</div>`;
+  const dupH = c.sent ? '' : j.dup || (m.nw && j.dupAlt) ? `<div class="kb-dup"><button type="button" data-kb="nw0" data-id="${esc(c.id)}"${m.nw ? '' : ' class="on"'}>사진만 붙임</button><button type="button" data-kb="nw1" data-id="${esc(c.id)}"${m.nw ? ' class="on"' : ''}>새 출고로</button></div>` : '';
+  return `<div class="kb-c kb-mc" data-col="${j.color}"${c.sent ? ' data-sent' : ''} data-t="${T}" data-id="${esc(c.id)}" role="group"><div class="kb-h"><span class="kb-bd" data-t="${T}">${bd}</span><span class="kb-nm">${nm}</span><span class="kb-v">${v}</span></div>
+    ${c.sent ? '' : `<button type="button" class="kb-how" data-kb="chg" data-i="${p0.s.i}" data-slot="${p0.slot}">${how} · 바꾸려면 누르세요</button>`}${ph}${fields}<div class="kb-dupw">${rl}${j.why.length ? `<div class="kb-why">${j.why.map(esc).join(' · ')}</div>` : ''}${dupH}</div></div>`;
+}
+function kbLiveCard(B, o) {   /* hotfix713b(실사용 2): 숫자를 넣는 동안 그 카드의 색 · 꼬리표 · 같은 출고 의심만 다시 그림(넣는 칸은 그대로) */
+  if (!o) return; const el = $('kb-body') && $('kb-body').querySelector(`.kb-mc[data-id="${CSS.escape(o.c.id)}"]`); if (!el) return;
+  const t = document.createElement('div'); t.innerHTML = kbManCardHtml(B, o.c, o.j); const n = t.firstElementChild; if (!n) return;
+  el.dataset.col = n.dataset.col; el.dataset.t = n.dataset.t; [['.kb-bd', 'textContent'], ['.kb-v', 'textContent']].forEach(([q, p]) => { const a = el.querySelector(q), b = n.querySelector(q); if (a && b) a[p] = b[p]; });
+  const w = el.querySelector('.kb-dupw'), w2 = n.querySelector('.kb-dupw'); if (w && w2) w.innerHTML = w2.innerHTML; }
+function kbAskHtml(B, s, slot) {   /* 3-3: 사진 한 장 — 추천 3 · [앞 사진과 같은 출고] · [다른 출고 고르기] · [＋ 이 사진의 다른 품목] · 고르면 다음 사진으로 */
+  const no = kbNo(B, s), A = (B.as && B.as[s.i]) || [], view = slot == null, cur = view ? null : A[slot];
+  const SS = kbSorted(B), at = SS.indexOf(s); const pv = SS.slice(0, at).reverse().find(o => ((B.as && B.as[o.i]) || []).length);
+  const tm = s.at ? kbHmT(s.at) + ' 찍음' + (kbDay(s.at) !== kbDay() ? ' · ' + kbMd(s.at) : '') : '날짜 모름 · 시각으로 짝짓지 않아요';
+  const ex = new Set(A.filter((a, k) => a && k !== slot).map(a => a.c)); const R = view ? [] : kbRecs(B, s, ex);
+  const names = A.map((a, k) => { const z = kbFind(a.c); return z ? `<div class="kb-on1">${esc(z.item || '-')}${z.lot ? ' ' + esc(z.lot) : ''}<button type="button" data-kb="unas" data-i="${s.i}" data-slot="${k}" aria-label="이 출고에서 빼기">빼기</button></div>` : ''; }).join('');
+  const head = view ? `${no}번 사진` : cur ? `${no}번 사진 · 다른 출고로 바꾸기` : slot > 0 ? `${no}번 사진의 다른 품목은 어느 출고인가요?` : `${no}번 사진은 어느 출고인가요?`;
+  const same = pv && slot === 0 && !(cur && cur.c === B.as[pv.i][0].c) ? `<button type="button" class="kb-same" data-kb="same" data-i="${s.i}">앞 사진과 같은 출고</button><div class="kb-hint2">${kbNo(B, pv)}번 사진과 같은 출고면 한 번만 누르세요. 사진 ${(B.sheets.filter(o => ((B.as && B.as[o.i]) || []).some(a => a.c === B.as[pv.i][0].c)).length) + 1}장이 한 출고에 붙습니다.</div>` : '';
+  return `<div class="kb-ask" data-i="${s.i}"><div class="kb-ask-p">${s.q && s.q.prev ? `<img src="${s.q.prev}" alt="송장 사진 ${no}">` : ''}<div><b>${no}번 사진 · ${tm}</b>${names}</div></div>
+    <div class="kb-ask-h">${head}</div>${view ? '' : same + R.slice(0, 3).map(z => kbRecHtml(z, 0, s).replace('data-kb="as"', `data-kb="as" data-slot="${slot}"`)).join('')
+      + `<button type="button" class="kb-all" data-kb="all">${B.all ? '다른 출고 목록 닫기' : '다른 출고 고르기'}</button>${B.all ? `<input id="kb-q" type="search" class="kb-q" placeholder="품목 · 로트 · 출고처 찾기" autocomplete="off" value="${esc(B.q || '')}" aria-label="출고 찾기"><div id="kb-allL">${kbAllHtml(B, s, slot, R)}</div>` : ''}`}
+    ${A.length && (view || slot < A.length) ? `<button type="button" class="kb-more" data-kb="more" data-i="${s.i}">＋ 이 사진의 다른 품목</button><div class="kb-hint2">한 장에 품목이 둘이면 같은 사진이 두 출고에 붙습니다. 사진은 한 번만 올라갑니다.</div>` : ''}
+    <div class="kb-sub">${view && A.length ? `<button type="button" data-kb="chg" data-i="${s.i}" data-slot="0">다른 출고로 바꾸기</button>` : ''}<button type="button" data-kb="rm" data-i="${s.i}">사진 빼기</button><button type="button" data-kb="fsx" data-i="${s.i}">${A.length || view ? '닫기' : '나중에 고르기'}</button></div></div>`;
+}
+function kbAllHtml(B, s, slot, R) { const q = kbNz(B.q || ''); const L = (R || kbRecs(B, s, new Set(((B.as && B.as[s.i]) || []).filter((a, k) => a && k !== slot).map(a => a.c)))).filter((z, k) => q ? kbNz([z.item, z.lot, z.dest, z.no].join(' ')).includes(q) : k >= 3);   /* hotfix713b: 찾기 전엔 위 추천 3개는 빼고 */
+  return L.length ? L.slice(0, 60).map(z => kbRecHtml(z, 0, s).replace('data-kb="as"', `data-kb="as" data-slot="${slot}"`)).join('') : '<div class="kb-left">찾는 출고가 없습니다</div>'; }
+function kbAskOf(B) {   /* 지금 보여 줄 "어느 출고" 칸 — 누른 사진 · 아니면 아직 안 정한 첫 사진(찍은 시각 순) */
+  if (B.fs != null) { const s = B.sheets.find(o => o.i === B.fs && kbIsMan(B, o)); if (s) return { s, slot: B.slot }; B.fs = null; B.slot = null; }
+  const s = kbSorted(B).find(o => kbIsMan(B, o) && !((B.as && B.as[o.i]) || []).length && !(B.skip || []).includes(o.i)); return s ? { s, slot: 0 } : null; }
 function kbPaint(B) {
   if (S.bat !== B || !sheetIs(B.tok)) return; const body = $('kb-body'); if (!body) return;
+  kbAuto(B);   /* hotfix713: 시각 짝 */
+  const fa = document.activeElement, fk = fa && body.contains(fa) && fa.dataset ? (fa.dataset.mf ? { f: fa.dataset.mf, id: fa.dataset.id, p: fa.selectionStart } : fa.id === 'kb-q' ? { q: 1, p: fa.selectionStart } : null) : null;   /* hotfix713: 다시 그려도 넣던 칸 그대로 */
   const C = kbCards(B).map(c => ({ c, j: kbJudge(c) }));
-  const strip = `<div class="kb-strip">${B.sheets.map(s => `<button type="button" class="kb-th" data-kb="th" data-i="${s.i}" data-s="${s.st}" aria-label="사진 ${s.i + 1} · ${s.st === 'done' ? '읽음' : s.st === 'read' ? '읽는 중' : s.st === 'prep' ? '준비 중' : s.st === 'wait' ? '차례 기다림' : s.st === 'hold' ? '흐림 · 읽기 전' : '읽지 못함'}">${s.q && s.q.prev ? `<img src="${s.q.prev}" alt="">` : ''}<b>${s.i + 1}</b><i></i></button>`).join('')}</div>`;
+  const anyM = B.sheets.some(s => kbIsMan(B, s)); { const h = $('sheet').querySelector('h3'); if (h) h.textContent = '송장 한꺼번에' + (B.sheets.length ? ' · ' + B.sheets.length + '장' : ''); }
+  const strip = `<div class="kb-strip">${kbSorted(B).map(s => { const mn = kbIsMan(B, s), ok = mn && ((B.as && B.as[s.i]) || []).length > 0; return `<button type="button" class="kb-th${B.fs === s.i ? ' on' : ''}" data-kb="${mn ? 'fs' : 'th'}" data-i="${s.i}" data-s="${mn ? (ok ? 'done' : 'pick') : s.st}" aria-label="사진 ${kbNo(B, s)} · ${mn ? (ok ? '출고 정함' : '어느 출고인지 안 정함') : s.st === 'done' ? '읽음' : s.st === 'read' ? '읽는 중' : s.st === 'prep' ? '준비 중' : s.st === 'wait' ? '차례 기다림' : s.st === 'hold' ? '흐림 · 읽기 전' : '읽지 못함'}">${s.q && s.q.prev ? `<img src="${s.q.prev}" alt="">` : ''}<b>${kbNo(B, s)}</b>${mn ? `<small>${s.at ? kbHmT(s.at) : '날짜 모름'}</small>` : ''}<i></i></button>`; }).join('')}</div>${anyM ? '<div class="kb-left">찍은 시각 순으로 줄 섰어요 · 빨강 = 아직 어느 출고인지 안 정함</div>' : ''}`;
   const reading = B.sheets.filter(s => s.st === 'read' || s.st === 'wait' || s.st === 'prep').length;
   if (B.open) { const o = C.find(z => z.c.id === B.open); if (o) { body.innerHTML = strip + kbOpenHtml(B, o.c, o.j); kbBtn(B, C, reading); const I = $('kb-in'); if (I) { try { I.focus(); } catch (_) {} I.addEventListener('keydown', ev => { if (ev.key === 'Enter') { ev.preventDefault(); const k = body.querySelector('[data-kb="ok"]'); if (k) k.click(); } }); } return; } B.open = ''; }
   C.sort((a, b) => (Number(a.c.sent) - Number(b.c.sent)) || (KB_ORD[a.j.color] - KB_ORD[b.j.color]));
-  const holdH = B.sheets.filter(s => s.st === 'hold').map(s => `<div class="k-warn kb-hold">사진 ${s.i + 1} · ${esc(s.warn)}<div class="kb-sub"><button type="button" data-kb="retake" data-i="${s.i}">다시 찍기</button><button type="button" data-kb="goread" data-i="${s.i}">그대로 읽기</button></div></div>`).join('');
-  body.innerHTML = strip + holdH + (reading ? `<div class="kb-left">읽는 중 ${reading}장 — 끝나는 대로 카드가 생겨요</div>` : '') + (C.length ? C.map(o => kbCardHtml(o.c, o.j, false)).join('') : (B.sheets.length ? '' : '<div class="empty" style="padding:28px 6px">[＋ 찍기]로 송장을 여러 장 찍으세요<br>앨범에서 여러 장 골라도 됩니다</div>'));
+  const holdH = B.sheets.filter(s => s.st === 'hold').map(s => `<div class="k-warn kb-hold">사진 ${s.i + 1} · ${esc(s.warn)}<div class="kb-sub"><button type="button" data-kb="retake" data-i="${s.i}">다시 찍기</button><button type="button" data-kb="goread" data-i="${s.i}">${kInvReader() ? '그대로 읽기' : '그대로 쓰기'}</button></div></div>`).join('');
+  const ask = kbAskOf(B);   /* hotfix713: "N번 사진은 어느 출고인가요?" */
+  body.innerHTML = strip + holdH + (reading ? `<div class="kb-left">읽는 중 ${reading}장 — 끝나는 대로 카드가 생겨요</div>` : '') + (ask ? kbAskHtml(B, ask.s, ask.slot) : '') + (C.length ? C.map(o => kbCardHtml(o.c, o.j, false)).join('') : (B.sheets.length ? '' : '<div class="empty" style="padding:28px 6px">[촬영]으로 송장을 여러 장 찍으세요<br>[가져오기]로 앨범에서 여러 장 골라도 됩니다</div>'));
+  if (fk) { const el = fk.q ? $('kb-q') : body.querySelector(`[data-mf="${fk.f}"][data-id="${CSS.escape(fk.id || '')}"]`); if (el) { try { el.focus({ preventScroll: true }); if (fk.p != null) el.setSelectionRange(fk.p, fk.p); } catch (_) {} } }
   kbBtn(B, C, reading);
 }
-function kbBtn(B, C, reading) { const go = C.filter(o => o.c.x && !o.c.sent && o.j.J && o.j.J.n > 0 && o.j.J.read10 > 0).length, gray = C.filter(o => !o.c.sent && o.j.color === 'gray').length;
+function kbBtn(B, C, reading) { const go = C.filter(kbReady).length, gray = C.filter(o => !o.c.sent && !o.c.mc && o.j.color === 'gray').length;   /* hotfix713: 보낼 수 있는 카드 = kbReady */
+  const need = C.filter(o => o.c.mc && !o.c.sent && !o.j.ready).length, un = B.sheets.filter(s => kbIsMan(B, s) && !((B.as && B.as[s.i]) || []).length).length;
   const b = $('kb-send'); if (b) { b.disabled = B.busy || !go; b.textContent = B.busy ? '보내는 중…' : '모두 보냄 (' + go + '건)'; }
-  const l = $('kb-left'); if (l) l.textContent = [gray ? '짝 없음 · 못 읽음 ' + gray + '건 (보내지 않음)' : '', reading ? '읽는 중에도 보낼 수 있어요' : ''].filter(Boolean).join(' · '); }
+  const l = $('kb-left'); if (l) l.textContent = [gray ? '짝 없음 · 못 읽음 ' + gray + '건 (보내지 않음)' : '', un ? '어느 출고인지 안 정한 사진 ' + un + '장' : '', need ? '칸을 넣을 카드 ' + need + '건' : '', reading ? '읽는 중에도 보낼 수 있어요' : ''].filter(Boolean).join(' · '); }
 function kbOpenHtml(B, c, j) {
   const rows = j.J ? j.J.rows : []; const s0 = c.parts[0] ? c.parts[0].s : c.s; const sel = B.ed != null ? rows.find(r => r.no === B.ed) : null;
   const sIdx = sel && sel.__s != null ? sel.__s : (s0 ? s0.i : 0); const sh = B.sheets.find(s => s.i === sIdx) || s0;
@@ -2876,16 +3076,18 @@ function kbOpenHtml(B, c, j) {
   const g = c.parts.find(p => p.s === sh); const tBox = j.J && j.J.st10 != null && Math.abs(j.J.diff10) > j.J.tol10 && g && g.g.posT && g.g.posT.y != null ? box({ no: -1, y: g.g.posT.y, x: g.g.posT.x }) : '';
   const img = src ? `<div class="kb-img${B.big ? ' big' : ''}" data-kb="img">${src ? `<img src="${src}" alt="송장 원본 사진 ${sh ? sh.i + 1 : ''}">` : ''}${shown.filter(bad).map(box).join('')}${tBox}</div>` : '';
   const ed = B.ed != null ? `<div class="kb-in"><input id="kb-in" type="text" inputmode="decimal" autocomplete="off" value="${esc(B.ed === 'tot' ? j.tRaw || '' : B.ed === 'new' ? '' : (sel ? sel.digits : ''))}" placeholder="${B.ed === 'tot' ? '송장 합계 예: 202.5' : '예: 20.3'}" aria-label="${B.ed === 'tot' ? '송장 합계' : '줄 kg'}"><button type="button" data-kb="ok">확인</button>${typeof B.ed === 'number' ? '<button type="button" data-kb="del" style="background:#64748b">줄 지움</button>' : ''}</div>` : '';
-  const pick = B.pick ? `<div class="kb-left">어느 출고 줄인가요?</div>${kbCands().concat(c.x && !kbCands().includes(c.x) ? [c.x] : []).map(z => `<button type="button" class="kb-pick" data-kb="pk" data-k="${esc(z.k)}">${esc(z.dest || '-')} · ${esc(z.item)} ${esc(z.lot || '')} · 남은 ${kQ(kView(z).pend)}절${c.x && c.x.k === z.k ? ' (지금)' : ''}</button>`).join('')}` : '';
+  const pick = B.pick ? `<div class="kb-left">어느 출고 줄인가요?</div>${(L0 => L0.concat(c.x && !L0.some(z => kbCk(z) === kbCk(c.x)) ? [c.x] : []))(kbRecs(B, s0, null)).map(z => `<button type="button" class="kb-pick" data-kb="pk" data-k="${esc(kbCk(z))}">${z.t === 'rep' ? '[보낸 출고 · 사진만] ' + esc(z.item) + ' ' + esc(z.lot || '') + ' · ' + kQ(z.j) + '절 · ' + kbMd(tOf(z.l)) + ' ' + kbHmT(tOf(z.l)) : z.t === 'stk' ? '[재고] ' + esc(z.item) + ' ' + esc(z.lot || '') + ' · 재고 ' + kQ(kbStkLeft(z.r)) + '절' : `${esc(z.dest || '-')} · ${esc(z.item)} ${esc(z.lot || '')} · 남은 ${kQ(kView(z).pend)}절`}${c.x && kbCk(c.x) === kbCk(z) ? ' (지금)' : ''}</button>`).join('')}` : '';   /* hotfix713: 후보 = (가) 보고 · (나) 출고 대기 · (다) 재고 (추천 순서) */
   return kbCardHtml(c, j, true) + img + (rows.length ? `<div class="kb-rows">${rows.map(r => `<button type="button" class="kb-r${r.flags.length ? ' flag' : ''}${r.edited ? ' ed' : ''}" data-kb="row" data-no="${r.no}"${c.sent ? ' disabled' : ''}><i>${r.no}</i>${KINV.f1(r.kg10)}</button>`).join('')}</div>` : '') + ed
-    + `<div class="kb-sub">${c.fail ? (c.s && c.s.q && c.s.q.rd ? `<button type="button" data-kb="again" data-i="${c.s.i}">다시 읽기</button>` : '<span class="kb-left">사진을 다시 골라 주세요(앱을 껐다 켜서 사진이 없음)</span>') + `<button type="button" data-kb="th" data-i="${c.s ? c.s.i : ''}">사진 빼기</button>` : c.sent ? '' : `<button type="button" data-kb="pick">출고 줄 고르기</button><button type="button" data-kb="tot">송장 합계 고치기</button><button type="button" data-kb="add">＋ 줄</button>`}<button type="button" data-kb="back">목록으로</button></div>` + (c.fail ? '' : pick);
+    + `<div class="kb-sub">${c.fail ? (c.s && c.s.q && c.s.q.rd ? `<button type="button" data-kb="again" data-i="${c.s.i}">다시 읽기</button>` : '<span class="kb-left">사진을 다시 골라 주세요(앱을 껐다 켜서 사진이 없음)</span>') + (c.s && c.s.q && c.s.q.blob ? `<button type="button" data-kb="man" data-i="${c.s.i}">출고 직접 고르기</button>` : '') + `<button type="button" data-kb="th" data-i="${c.s ? c.s.i : ''}">사진 빼기</button>` : c.sent ? '' : `<button type="button" data-kb="pick">출고 줄 고르기</button><button type="button" data-kb="tot">송장 합계 고치기</button><button type="button" data-kb="add">＋ 줄</button>`}<button type="button" data-kb="back">목록으로</button></div>` + (c.fail ? '' : pick);
 }
 function kbClick(B, e) {
   const b = e.target.closest('[data-kb]'); if (!b || !b.dataset.kb) return; const a = b.dataset.kb;
   if (B.ed != null && a !== 'ok' && a !== 'del' && a !== 'img') { const ed0 = B.ed, t = String(($('kb-in') || {}).value || '').trim(); if (t && kbCommit(B, ed0, t) && a === 'row' && +b.dataset.no === ed0) return kbPaint(B); }   /* 700 실사용 시험 ⑧: 넣던 숫자는 다른 곳을 누르면 저절로 들어감(누름 3 + 숫자) */
   const C = kbCards(B); const c = C.find(z => z.id === (b.dataset.id || B.open));
+  if (kbClickM(B, a, b)) return;   /* hotfix713 */
   if (a === 'retake' || a === 'goread' || a === 'again') { const s = B.sheets.find(z => String(z.i) === b.dataset.i); if (!s) return;
     if (a === 'retake') { B.sheets.splice(B.sheets.indexOf(s), 1); kbSave(B); kbPaint(B); const cm = $('sheet').querySelector('[data-kb="cam"]'); if (cm) cm.click(); return; }
+    if (a === 'goread' && !kInvReader()) { s.st = 'man'; s.warn = ''; kbSave(B); return kbPaint(B); }   /* hotfix713: 판독 꺼진 공장 = 그대로 쓰기 */
     if (!(s.q && s.q.rd)) return; s.st = 'wait'; s.err = ''; s.warn = a === 'goread' ? '' : s.warn; if (a === 'again') B.open = ''; kbSave(B); kbPump(B); return kbPaint(B); }
   if (a === 'th') { const s = B.sheets.find(z => String(z.i) === b.dataset.i); if (!s) return; if (!confirm('사진 ' + (s.i + 1) + '을(를) 뺄까요?')) return; try { if (s.ac) s.ac.abort(); } catch (_) {} B.sheets.splice(B.sheets.indexOf(s), 1); kbSave(B); return kbPaint(B); }
   if (a === 'card') { if (!c) return; B.open = c.id; B.ed = null; B.pick = !c.x && !c.fail; return kbPaint(B); }
@@ -2903,6 +3105,23 @@ function kbClick(B, e) {
     if (!kbCommit(B, B.ed, t)) { toast('숫자로 넣어 주세요 (예: 20.3)', true); return; }
     B.ed = null; kbSave(B); return kbPaint(B); }
 }
+function kbClickM(B, a, b) {   /* hotfix713: 사진마다 "어느 출고" 고르기 · 같은 출고 의심 · 재고 줄 출고처 — 처리했으면 true */
+  const i = b.dataset.i != null && b.dataset.i !== '' ? +b.dataset.i : null, s = i == null ? null : B.sheets.find(z => z.i === i); B.as = B.as || {};
+  const done = () => { kbSave(B); kbPaint(B); return true; }, close = () => { B.fs = null; B.slot = null; B.all = false; B.q = ''; };
+  if (a === 'fs') { if (s) { B.fs = s.i; B.slot = (B.as[s.i] || []).length ? null : 0; B.all = false; B.q = ''; } return done(); }
+  if (a === 'fsx') { if (s && !(B.as[s.i] || []).length) B.skip = (B.skip || []).concat(s.i); close(); return done(); }
+  if (a === 'as') { if (!s || !b.dataset.c) return true; const A = (B.as[s.i] || []).slice(), sl = Math.min(+b.dataset.slot || 0, A.length); A[sl] = { c: b.dataset.c, how: 'pick' }; B.as[s.i] = A; close(); return done(); }   /* 고르면 다음 사진으로 저절로 */
+  if (a === 'same') { if (!s) return true; const SS = kbSorted(B), pv = SS.slice(0, SS.indexOf(s)).reverse().find(o => (B.as[o.i] || []).length); if (!pv) return true; const A = (B.as[s.i] || []).slice(); A[0] = { c: B.as[pv.i][0].c, how: 'same' }; B.as[s.i] = A; close(); return done(); }
+  if (a === 'more') { if (s) { B.fs = s.i; B.slot = (B.as[s.i] || []).length; B.all = false; } return done(); }
+  if (a === 'chg') { if (s) { B.fs = s.i; B.slot = +b.dataset.slot || 0; B.all = false; } return done(); }
+  if (a === 'unas') { if (!s) return true; const A = (B.as[s.i] || []).slice(); A.splice(+b.dataset.slot || 0, 1); B.as[s.i] = A; B.fs = s.i; B.slot = A.length ? null : 0; return done(); }
+  if (a === 'all') { B.all = !B.all; return done(); }
+  if (a === 'rm') { if (!s || !confirm('사진 ' + kbNo(B, s) + '을(를) 뺄까요?')) return true; B.sheets.splice(B.sheets.indexOf(s), 1); delete B.as[s.i]; close(); return done(); }
+  if (a === 'man') { if (!s) return true; B.as[s.i] = []; B.open = ''; B.ed = null; B.pick = false; B.fs = s.i; B.slot = 0; return done(); }   /* 판독이 못 읽은 사진 → 손으로 고르기 */
+  if (a === 'dblok') { const id = b.dataset.id; if (!id) return true; B.man[id] = Object.assign({}, B.man[id] || {}, { dblOk: 1 }); return done(); }   /* hotfix713b: 다른 송장이 맞으면 합침 */
+  if (a === 'nw0' || a === 'nw1' || a === 'dv') { const id = b.dataset.id; if (!id) return true; const m = B.man[id] = Object.assign({}, B.man[id] || {}); if (a === 'dv') m.d = b.dataset.v; else m.nw = a === 'nw1' ? 1 : 0; return done(); }
+  return false;
+}
 function kbCommit(B, ed, t0, del) {   /* 넣던 숫자 반영 — 맞으면 true */
   const c = kbCards(B).find(z => z.id === B.open); if (!c || c.fail) return false; const m = B.man[c.id] = Object.assign({}, B.man[c.id] || {});
   const t = String(t0 || '').trim().replace(',', '.');
@@ -2916,30 +3135,45 @@ function kbCommit(B, ed, t0, del) {   /* 넣던 숫자 반영 — 맞으면 true
 function kbNote(c, j) { const J = j.J; return (`[송장 판독] (${KB_COL[j.color]}) ${J.n}절 ${KINV.f1(J.read10)}kg · 송장 ${J.st10 == null ? '합계 없음' : KINV.f1(J.st10) + 'kg'}${J.diff10 ? ' (' + KINV.sg(J.diff10) + ')' : ''}${j.avg10 != null ? ' · 절당 ' + KINV.f1(j.avg10) + 'kg' + (j.kpj10 ? '(기준 ' + KINV.f1(j.kpj10) + ' ' + (j.pct > 0 ? '+' : '') + j.pct.toFixed(1) + '%)' : '') : ''}${c.merged ? ' · ' + c.parts.length + '장 합침' : ''} ${j.color === 'green' ? KIV_NAME[J.verdict] : (j.why || []).slice(0, 2).join(' · ').replace(/\s+/g, ' ')}`).slice(-300); }   /* 700 실사용 시험 ⑥: 끝말 = 판정(초록은 일치 · 작은 차이 / 빨강 · 노랑은 그 이유) */
 async function kbSend(B) {
   if (B.busy) return; const C = kbCards(B).map(c => ({ c, j: kbJudge(c) }));
-  const go = C.filter(o => o.c.x && !o.c.sent && o.j.J && o.j.J.n > 0 && o.j.J.read10 > 0);   /* 짝이 있는 카드는 색과 상관없이 보냄 · 빨강 · 노랑은 판정 표시를 달고 감(사무실 [보고대로 확인]이 안전 장치) */
-  if (!go.length) { toast('보낼 카드가 없습니다'); return; }
-  B.busy = true; kbPaint(B); let n = 0, dup = 0; const bySheet = new Map();
+  const go = C.filter(kbReady);   /* 짝이 있는 카드는 색과 상관없이 보냄 · 빨강 · 노랑은 판정 표시를 달고 감(사무실 [보고대로 확인]이 안전 장치) · hotfix713: 출고처 없는 재고 카드 · 빈칸 카드만 막힘 */
+  B.tried = 1;
+  { const dq = go.filter(o => (o.c.mc && o.j.dup) || (!o.c.mc && o.c.dupR)); if (dq.length && !confirm(dq.length + '건은 이미 보낸 출고와 품목 · 절 · kg 이 같아 새 출고 없이 사진만 붙입니다.\n새 출고가 맞으면 [취소]를 누르고 그 카드의 [새 출고로]를 누르세요.')) { kbPaint(B); return; } }   /* hotfix713b(실사용 2): 보내기 전에 한 번 */
+  if (!go.length) { toast(C.some(o => o.c.mc && !o.c.sent && !o.j.ready) ? '빨간 칸을 넣어 주세요' : '보낼 카드가 없습니다', true); kbPaint(B); return; }
+  B.busy = true; kbPaint(B); let n = 0, dup = 0, np = 0; const bySheet = new Map();
+  const addPh = (c, t) => c.parts.forEach(p => { const L = bySheet.get(p.s) || []; const tt = typeof t === 'function' ? t(p.s) : t; if (!L.some(z => z === tt || (z.k === tt.k && z.__id && z.__id === tt.__id))) L.push(tt); bySheet.set(p.s, L); });
   for (const { c, j } of go) {
-    const J = j.J; let ok = false;
-    try { ok = await put(c.x, { kind: 'ship', part: 'gs', body: J.n, n: J.read10 / 10, note: kbNote(c, j) }, c.id); } catch (_) { ok = false; }
+    const J = j.J; let ok = false; const m = c.man || {};
+    const tg = c.mc ? (j.dup || c.x) : c.x;   /* hotfix713: 같은 출고 의심(기본 = 사진만 붙임) */
+    if (tg.t === 'rep') {   /* (가) · 같은 출고 — 새 보고 없이 그 보고 열쇠로 사진 기록만(고정 번호 → 두 번 · 다른 휴대폰 = 한 번) */
+      B.man[c.id] = Object.assign({}, B.man[c.id] || {}, { done: 1 }); np++;
+      addPh(c, s => ({ k: tg.k, no: tg.no || '', __id: 'ip_' + String(s.fp || '').slice(0, 16) + '_' + kVh(tg.l.id), __phn: kbHowNote(c, s, tg.l, j.dup || c.dupR ? 'dup' : '') })); continue; }
+    const sid = c.mc ? c.sid : c.id; const pick = c.mc || !!m.k;
+    const o = c.mc ? { body: j.j, n: j.kg10 / 10, note: kbHowNote(c, c.parts[0].s, null, '') } : { body: J.n, n: J.read10 / 10, note: (pick ? kbHowNote(c, c.parts[0].s, null, '') + ' ' : '') + kbNote(c, j) };
+    const tx = tg.t === 'stk' ? { k: tg.r.k, no: tg.r.wo || '' } : tg;
+    try { ok = await put(tx, tg.t === 'stk' ? Object.assign({ kind: 'ship', part: 'gs', reason: 'self' }, o, { chip: String(j.dest || '').slice(0, 60), label: (tg.item + ' ' + (tg.lot || '')).trim().slice(0, 80) }) : Object.assign({ kind: 'ship', part: 'gs' }, o), sid); } catch (_) { ok = false; }   /* (다) = 재고 [출고]와 같은 길(의뢰서 없이) · (나) = [출고했어요]와 같은 길 */
     if (!ok) continue;
-    B.man[c.id] = Object.assign({}, B.man[c.id] || {}, { k: c.x.k });
-    if (kDupOther(c.id)) { dup++; continue; }   /* 다른 휴대폰이 같은 사진으로 먼저 보냄 → 한 번만 */
-    n++; kbCheck(B, c, j);
-    c.parts.forEach(p => { const L = bySheet.get(p.s) || []; if (!L.includes(c.x)) L.push(c.x); bySheet.set(p.s, L); });
+    if (!c.mc) B.man[c.id] = Object.assign({}, B.man[c.id] || {}, { k: kbCk(c.x) });
+    if (kDupOther(sid)) { dup++; continue; }   /* 다른 휴대폰이 같은 사진으로 먼저 보냄 → 한 번만 */
+    n++; if (!c.mc) kbCheck(B, c, j);
+    addPh(c, tx);
   }
   B.busy = false; kbSave(B);
-  bySheet.forEach((xs, s) => { if (s.q && s.q.blob) kbPhoto(s, xs); });   /* 보관본(원본 화질)은 뒤에서 — 한 장을 한 번 올려 그 장에 묶인 출고마다 사진 기록 */
-  if (n || dup) { ring(); toast((n ? n + '건 보냈습니다 — ' + CN() + '가 확인하면 숫자가 바뀝니다' : '') + (dup ? (n ? ' · ' : '') + dup + '건은 이미 다른 휴대폰에서 보낸 출고입니다' : '')); }
+  (async () => { for (const [s, xs] of bySheet) if (s.q && s.q.blob) await kbPhoto(s, xs); })();   /* hotfix713: 한 장씩 차례로 — 같은 출고에 여러 장이면 같은 순간 같은 파일 이름(열쇠_시각)으로 올라가 앞 장이 덮이던 것 */   /* 보관본(원본 화질)은 뒤에서 — 한 장을 한 번 올려 그 장에 묶인 출고마다 사진 기록 */
+  if (n || dup || np) { ring(); toast((n ? n + '건 보냈습니다 — ' + CN() + '가 확인하면 숫자가 바뀝니다' : '') + (np ? (n ? ' · ' : '') + '보낸 출고 ' + np + '건에 사진만 붙입니다' : '') + (dup ? (n || np ? ' · ' : '') + dup + '건은 이미 다른 휴대폰에서 보낸 출고입니다' : '')); }
   else toast('보내지 못했습니다 — 인터넷을 확인하십시오', true);
-  const left = kbCards(B).filter(c => !c.sent && !S.logs.some(l => l.id === c.id));
-  if (!left.length) { kbClear(); closeSheet(); render(); return; }
+  const left = kbCards(B).filter(c => !c.sent && !S.logs.some(l => l.id === c.id) && !(c.mc && S.logs.some(l => l.id === c.sid)));
+  if (!left.length && !B.sheets.some(s => kbIsMan(B, s) && !((B.as && B.as[s.i]) || []).length)) { kbClear(); closeSheet(); render(); return; }   /* hotfix713: 아직 안 정한 사진이 있으면 창 그대로 */
   kbPaint(B);
 }
+const KB_HOW = { time: '시각 짝', pick: '공장이 고름', same: '앞 사진과 같은 출고', read: '판독 짝', dup: '같은 출고 · 사진만' };
+function kbHowNote(c, s, l, kind) {   /* hotfix713(3-5): 짝 방법 · 사진 날짜(보고 날과 다를 때) · 붙일 보고 번호 — 기존 메모 칸에만 */
+  const how = kind === 'dup' ? KB_HOW.dup : c.mc ? (KB_HOW[c.how] || KB_HOW.pick) : (c.man && c.man.k) ? KB_HOW.pick : KB_HOW.read;
+  const d = s && s.at && kbDay(s.at) !== kbDay(l ? tOf(l) : Date.now()) ? ' · 사진 ' + (new Date(s.at).getMonth() + 1) + '/' + new Date(s.at).getDate() : '';
+  return '[송장 한꺼번에 · ' + how + d + (l ? ' · 보고 ' + l.id : '') + ']'; }
 async function kbPhoto(s, xs) {
   xs.forEach(x => { S.photoUp[x.k] = 'up'; }); let ref = '', err = '';
   for (let t = 0; t < 2 && !ref; t++) { try { ref = await kUpload(s.q.blob, xs[0].k); } catch (e) { err = String((e && (e.code || e.message)) || 'error').slice(0, 120); } }
-  for (const x of xs) { if (ref && await put(x, { kind: 'st', part: 'gs', stage: 'photo', ref })) { delete S.photoUp[x.k]; continue; } S.photoUp[x.k] = 'fail'; lsSet(vKey('phfail'), kPhFail().concat(x.k).slice(-100)); }
+  for (const x of xs) { if (ref && await put(x, Object.assign({ kind: 'st', part: 'gs', stage: 'photo', ref }, x.__phn ? { note: x.__phn } : {}), x.__id)) {   /* hotfix713: 사진만 붙임 = 메모(짝 방법 · 보고 번호) · 고정 번호 */ delete S.photoUp[x.k]; continue; } S.photoUp[x.k] = 'fail'; lsSet(vKey('phfail'), kPhFail().concat(x.k).slice(-100)); }
   if (!ref) { try { await put(xs[0], { kind: 'dev_fail', note: ('송장 사진: ' + err).slice(0, 200) }); } catch (_) {} toast('송장 사진을 올리지 못했습니다 — [할 일]에서 다시 보내 주세요', true); }
   render();
 }
@@ -2991,7 +3225,7 @@ function kShipSheet(x, more, seenL) {   /* hotfix672: more = [나머지 더 보�
   S.sending = S.sending || {}; if (S.sending[x.k]) { toast('이 건은 지금 보내는 중입니다 — 잠시 뒤 [할 일]을 보십시오'); return; }   /* hotfix579: 같은 건 두 번 보내지 않게 */
   const prevL = (() => { const m = new Map(); kShipAll(x).filter(kLiveL).concat(seenL || []).forEach(l => { if (l && l.id && !m.has(l.id)) m.set(l.id, l); }); return Array.from(m.values()).sort((a, b) => tOf(a) - tOf(b)); })();   /* hotfix672: 이 요청에 이미 들어간 보고(취소 · 반려 뺌) */
   { const W = prevL.filter(l => !(x.apl || []).includes(l.id)); if (!more && W.length) { kAlreadySheet(x, W); return; } }   /* hotfix672: 확인 전 보고가 있으면 먼저 [이미 보낸 출고] — 더 보내려면 [나머지 더 보냄] */
-  const v = kView(x); const st = { j: kQ(v.pend), kg: '', q: null, qs: [], memo: '', busy: false, tok: 0, err: {}, rq: kRqOf(x, kShipAll(x).concat((seenL || []).filter(l => !S.logs.some(m => m.id === l.id)))), dup: null, chk: false, known: new Set(prevL.map(l => l.id)) };   /* hotfix672: rq = 그 요청에 묶인 이름(ks_…) · known = 창을 열 때 본 보고 */   /* hotfix668: rq 요청 번호(이 창) · dup 확인 전 보고 안내 */   /* hotfix657(V8): 이 창 하나로 끝 — 절(기본 남음) · kg 선택 · 송장 사진 여러 장 · 메모 → [보냄] */
+  const v = kView(x); const st = { item: x.item || '', j: kQ(v.pend), kg: '', q: null, qs: [], memo: '', busy: false, tok: 0, err: {}, rq: kRqOf(x, kShipAll(x).concat((seenL || []).filter(l => !S.logs.some(m => m.id === l.id)))), dup: null, chk: false, known: new Set(prevL.map(l => l.id)) };   /* hotfix672: rq = 그 요청에 묶인 이름(ks_…) · known = 창을 열 때 본 보고 */   /* hotfix668: rq 요청 번호(이 창) · dup 확인 전 보고 안내 */   /* hotfix657(V8): 이 창 하나로 끝 — 절(기본 남음) · kg 선택 · 송장 사진 여러 장 · 메모 → [보냄] */
   const bdg = req => `<span class="k-bdg ${req ? 'req' : 'opt'}">${req ? '필수' : '선택'}</span>`;
   const errT = k => st.err[k] ? `<div class="k-err-t" id="sh-e-${k}">${esc(st.err[k])}</div>` : '';
   const chkNew = srv => { if (!sheetIs(st.tok) || st.busy) return false; const nw = kNewShips(x, st.known, srv).filter(l => !(l.id === st.rq && l.dev === S.dev)); if (!nw.length) return false; kAlreadySheet(x, nw); return true; };   /* hotfix672: 창을 연 뒤 다른 휴대폰 보고가 들어옴 */
