@@ -1027,7 +1027,7 @@ import { initializeFirestore, getFirestore, persistentLocalCache, persistentMult
  *   읽는 것: proc_acc/{내 uid} · proc_pub/{내 업체}.gs (현일텍스가 보낸 생지출고) · proc_log(내 업체 것만)
  *   쓰는 것: proc_log 한 줄 — kind 'ship' part 'gs' (body 절 · n kg · ref 송장 사진) · kind 'st' part 'gs' stage seen | ack_cxl | photo
  *   사진: Storage gs_photos/{업체}/{생지출고}_{시각}.jpg */
-const KVER = 'k148 (hotfix713)';
+const KVER = 'k149 (hotfix714)';
 try { if (matchMedia('(min-width:700px)').matches) document.body.classList.add('k620pc'); } catch (_) {}   /* hotfix620: PC 에서는 휴대폰 화면 너비로 가운데 */
 /* hotfix572(대표 10/1): 거래 원단회사 고르기 — FABIWOS 는 여러 원단회사에 팔 프로그램. 편직공장 한 곳이 여러 원단회사와 거래하므로
  *   계정(proc_acc.companies)에 거래 원단회사 목록 · 위 [→ 원단회사 ▾] 와 삼선 메뉴에서 고름 · 고른 회사의 할 일 · 재고 · 보낸 내역만 보임
@@ -2596,7 +2596,7 @@ function kbSave(B) { const pack = withPrev => ({ id: B.id, at: B.at, seq: B.seq,
 function kbClear() { const B = S.bat; if (B) B.sheets.forEach(s => { try { if (s.ac) s.ac.abort(); } catch (_) {} try { if (s.url) URL.revokeObjectURL(s.url); } catch (_) {} }); S.bat = null; lsSet(vKey('bat'), null); }
 const kbErr = m => /limit/.test(m) ? '오늘 판독 한도를 다 썼습니다 — 사진만 보내고 숫자는 손으로 넣어 주세요' : /price/.test(m) ? '판독 준비 중(단가 확인 전) — 손으로 넣어 주세요' : /empty/.test(m) ? '송장 글씨를 못 읽었습니다 — 다시 찍거나 손으로 넣어 주세요' : /reading/.test(m) ? '다른 휴대폰에서 같은 사진을 읽는 중 · 잠시 뒤 [다시 읽기]를 누르면 그 결과가 옵니다(0원)' : /busy/.test(m) ? '판독이 몰려 있습니다 — 잠시 뒤 [다시 읽기]' : /time/.test(m) ? '판독 시간이 넘었습니다 — [다시 읽기] 또는 손으로' : /cut/.test(m) ? '연결이 끊겼습니다 — [다시 읽기]' : /stop/.test(m) ? '읽기를 그만했습니다' : navigator.onLine === false ? '인터넷 연결되면 읽음' : '송장을 읽지 못했습니다 — [다시 읽기] 또는 손으로 넣어 주세요';   /* 700 실사용 시험 ④: 원인별 문구 */
 function kbGroups(res) { const G = Array.isArray(res.groups) && res.groups.length ? res.groups : [{ g: 1, ship_to: res.ship_to || '', fabric: res.fabric || '', lot: '', color: '', rows: res.rows || [], stated_count_raw: res.stated_count_raw || '', stated_total_raw: res.stated_total_raw || '', posT: res.posT || null }];
-  return G.map((g, i) => ({ g: parseInt(g.g, 10) || i + 1, dest: String(g.ship_to || ''), item: String(g.fabric || ''), lot: String(g.lot || ''), color: String(g.color || ''),
+  return G.map((g, i) => ({ g: parseInt(g.g, 10) || i + 1, dest: String(g.ship_to || (G.length === 1 ? res.ship_to : '') || ''), item: String(g.fabric || (G.length === 1 ? res.fabric : '') || ''), lot:   /* hotfix714(S19 ①): 묶음이 하나이고 G 줄 원단 · 출고처가 비면 H 줄(H|fabric · H|ship_to) 값 */ String(g.lot || ''), color: String(g.color || ''),
     rows: (g.rows || []).map(r => ({ raw: String(r.raw || ''), digits: String(r.digits || ''), aiDigits: String(r.digits || ''), underline: !!r.underline, point: !!r.point, confidence: r.confidence === 'low' ? 'low' : 'high', habit: String(r.habit || ''), y: r.y == null ? null : +r.y, x: r.x == null ? null : +r.x })),
     cRaw: String(g.stated_count_raw || ''), tRaw: String(g.stated_total_raw || ''), posT: g.posT || null, posN: g.posN || null })); }
 function kbPump(B) { const rd = kInvReader(); if (!rd || S.bat !== B) return;
@@ -2688,7 +2688,7 @@ function kbCards(B) {
     if (B.as && B.as[s.i]) return;   /* hotfix713: 손으로 고르는 사진은 아래 kbManCards */
     if (s.st !== 'done' || !s.res) { if (s.st === 'fail' || s.st === 'lost' || s.st === 'off') out.push({ id: 's' + s.i, fail: true, s, parts: [], why: s.err || '읽지 못함' }); return; }
     s.res.groups.forEach((g, gi) => {
-      const id = 'iv_' + String(s.fp || '').slice(0, 16) + '_' + (g.g || gi + 1); const m = B.man[id] || {}; let x = null, why = '', diff = false, dupR = false;
+      const id = 'iv_' + String(s.fp || '').slice(0, 16) + '_' + (g.g || gi + 1); const m = B.man[id] || {}; let x = null, why = '', diff = false, dupR = false, byNm = false;
       const sentL = S.logs.find(l => l.id === id), sent = !!sentL || !!m.done;   /* hotfix713: done = 사진만 붙여 보냄 */
       if (m.k) x = kbFind(m.k);   /* 사람이 고른 줄 · 보낸 카드 (hotfix713: 보고 · 재고 줄도) */
       else if (sentL) x = sentL.reason === 'self' ? kbFind('s:' + sentL.k) : (kList().find(z => z.k === sentL.k) || null);   /* 이미 보낸 사진(같은 번호) — 보낸 그 줄 */
@@ -2699,7 +2699,7 @@ function kbCards(B) {
         const byLot = gl ? L.filter(z => lotOf(z).includes(gl)) : [];
         if (byLot.length === 1) x = byLot[0];   /* 1) 로트 하나 */
         else if (byLot.length > 1) pool = byLot;
-        else { const bn = gi2 && gd ? L.filter(z => kbSame(gi2, kbNm(z.item)) && kbSame(gd, kbNm(z.dest))) : []; if (bn.length === 1) x = bn[0]; else if (bn.length > 1) pool = bn; }   /* 2) 품목 + 출고처 */
+        else { const bn = gi2 && gd ? L.filter(z => kbSame(gi2, kbNm(z.item)) && kbSame(gd, kbNm(z.dest))) : []; if (bn.length) byNm = true; if (bn.length === 1) x = bn[0]; else if (bn.length > 1) pool = bn; }   /* 2) 품목 + 출고처 */
         if (!x && pool) { const free = pool.filter(z => !taken.has(z.k)); if (free.length === 1) x = free[0]; else { const ex = free.filter(z => Math.abs(kView(z).pend - n) < 0.05); if (ex.length === 1) x = ex[0]; else why = 'pick'; } }   /* 3) 남은 절로 가름 · 못 가르면 고르기(대표 결정 ②) */
         if (!x && !why) {   /* hotfix713(3-1 (다)): 출고 대기 줄에 없으면 공장 재고 줄 — 로트 → 품목(재고 줄엔 출고처 없음) → 남은 절 · 못 가르면 고르기 */
           const SK = kbStks(); const sl = gl ? SK.filter(z => lotOf(z).includes(gl)) : []; let sp = null;
@@ -2712,7 +2712,7 @@ function kbCards(B) {
       if (x && taken.has(kbCk(x)) && !m.k) { const c = taken.get(kbCk(x)); const sg = q => [q.item, q.lot, q.rows.map(r => r.digits).join(','), q.cRaw, q.tRaw].join('|');   /* hotfix713b(실사용 4): 숫자가 똑같은 두 장 = 같은 송장을 두 번 찍음 → 합치지 않음(20 → 40절 막음) */
         if (!m.dblOk && c.parts.some(p => sg(p.g) === sg(g))) { out.push({ id, x, parts: [{ s, g }], why: '', diff, sent, man: m, dbl: c.parts.find(p => sg(p.g) === sg(g)).s }); return; }
         c.parts.push({ s, g }); c.merged = true; return; }   /* 5) 이어진 송장 → 한 카드에 합산 */
-      const c = { id, x, parts: [{ s, g }], why: x ? '' : why, diff, sent, man: m, dupR }; out.push(c); if (x && !taken.has(kbCk(x))) taken.set(kbCk(x), c);
+      const c = { id, x, parts: [{ s, g }], why: x ? '' : why, diff, sent, man: m, dupR, byNm: !!(x && byNm && !m.k) }; out.push(c);   /* hotfix714(S19 ②): 로트 없이 원단명(+출고처)으로만 짝 */ if (x && !taken.has(kbCk(x))) taken.set(kbCk(x), c);
     });
   });
   kbManCards(B, out);   /* hotfix713: 판독 없이 고른 사진 카드 */
@@ -2755,6 +2755,7 @@ function kbJudge(c) {
   { const lo = J.rows.filter(r => r.flags.includes('글씨 애매')).map(r => r.no); if (lo.length) { yel = true; why.push('애매한 글씨 ' + lo.slice(0, 3).join(' · ') + '번'); } }
   if (c.merged) { yel = true; why.push(c.parts.length + '장 합침 · 확인'); }
   if (c.diff) { yel = true; why.push('품목/출고처 다름'); }
+  if (c.byNm && !c.sent) { const ok714 = J.st10 != null && J.sc != null && J.diff10 === 0 && !J.cntBad; if (ok714) why.push('이름으로 짝'); else { yel = true; why.push('이름으로 짝 · 확인'); } }   /* hotfix714(실사용 6): 절 · kg 합계가 공장 기재와 딱 맞으면 노랑 대신 회색 작은 글씨 */   /* hotfix714(S19 ②): 원단명 오독이 다른 품목 줄로 가는 것 막기 — 노랑 */
   if (J.st10 == null || J.sc == null) { yel = true; why.push('송장 합계 없음'); }
   return { color: red ? 'red' : yel ? 'yellow' : 'green', why, J, cRaw, tRaw, kpj10, avg10, pct, over, pend, dest };
 }
