@@ -111,7 +111,7 @@
 
   /* 4 — 화면: 위 띠 · 시험 도구 · 사무실 화면 */
   const css = `#demo-band{position:fixed;left:0;right:0;top:0;height:40px;z-index:190;background:repeating-linear-gradient(135deg,#b91c1c 0 18px,#991b1b 18px 36px);color:#fff;display:flex;align-items:center;gap:6px;padding:0 8px;font:900 15px/1 system-ui,sans-serif;box-shadow:0 2px 8px rgba(0,0,0,.25)}
-#demo-band b{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#demo-band b{flex:1;min-width:0;font-size:13.5px;line-height:1.15;word-break:keep-all;overflow:hidden}
 #demo-band button{height:32px;border:0;border-radius:9px;background:#fff;color:#991b1b;font:900 14px system-ui,sans-serif;padding:0 10px;white-space:nowrap}
 #inbtn{display:none!important}
 #lg-inst{min-height:48px;background:#fff;color:#991b1b;border:0;font-weight:900}
@@ -182,7 +182,7 @@ body{padding-top:40px}.hd{top:40px!important}#login{min-height:calc(100vh - 40px
   }
   function boot() {
     const s = document.createElement('style'); s.textContent = css; document.head.appendChild(s);
-    const band = document.createElement('div'); band.id = 'demo-band'; band.innerHTML = '<b>시험용 · 실제 자료 아님</b><button type="button" id="demo-tools">시험 도구</button><button type="button" id="demo-off">사무실 화면</button>';
+    const band = document.createElement('div'); band.id = 'demo-band'; band.innerHTML = '<b>시험용<br>실제 자료 아님</b><button type="button" id="demo-tools">시험 도구</button><button type="button" id="demo-off">사무실 화면</button>';
     document.body.insertBefore(band, document.body.firstChild);
     pan = document.createElement('div'); pan.className = 'demo-ov'; pan.id = 'demo-panel'; pan.innerHTML = '<div class="demo-box"></div>'; document.body.appendChild(pan); paintPanel();
     band.querySelector('#demo-tools').addEventListener('click', () => { paintPanel(); pan.classList.add('on'); });
@@ -2789,7 +2789,7 @@ function kbPump(B) { const rd = kInvReader(); if (!rd || S.bat !== B) return;
 async function kbRead(B, s, rd) {
   s.st = 'read'; s.err = ''; B.act++; kbPaint(B); s.ac = new AbortController(); let res = null, err = '';
   for (let t = 0; t < 4; t++) {   /* 자동 다시 아님 — 다른 휴대폰이 같은 사진을 읽는 중(X|reading)일 때만 잠시 뒤 그 결과(0원)를 받음 */
-    try { res = await rd(s.q.rd, { model: 'fast', signal: s.ac.signal, sheet: s.i, fp: s.fp }, () => {}); err = ''; break; }
+    try { res = await rd(s.q.rd, { model: 'fast', signal: s.ac.signal, sheet: s.dupOf != null ? s.dupOf : s.i, fp: s.fp }, () => {});   /* 시험판(hotfix717): 같은 사진 = 같은 가상 결과 */ err = ''; break; }
     catch (e) { const m = String((e && e.message) || ''); if (/abort/.test(m)) { err = 'stop'; break; } if (/reading/.test(m) && t < 3) { s.err = '다른 휴대폰에서 읽는 중 · 잠시 뒤 결과가 옵니다'; kbPaint(B); await new Promise(r => setTimeout(r, 4000)); if (S.bat !== B) return; continue; } err = m; break; } }
   B.act = Math.max(0, B.act - 1); if (S.bat !== B) return;
   if (res) { s.res = { model: String(res.model || ''), groups: kbGroups(res) }; s.st = 'done'; } else { s.st = err !== 'stop' && navigator.onLine === false ? 'off' : 'fail'; s.err = kbErr(err); }
@@ -2802,7 +2802,9 @@ async function kbAdd(B, file) {
   let q = null, fp = ''; try { if (typeof File !== 'undefined' && file instanceof File) { const lm = file.lastModified || 0; s.at = (await kShotAt(file, true)) || (lm && Date.now() - lm > 120e3 ? lm : 0); } else s.at = Date.now(); q = await kImg2(file);   /* hotfix713b(실사용 3): 앨범 사진에 찍은 시각이 없으면(파일 시각이 방금) "날짜 모름" — 시각 짝 안 함 · 촬영은 지금 */ fp = await kFp(q.rd); } catch (_) { q = null; }   /* hotfix713: 찍은 시각(사진 속 → 파일 시각 → 지금) — 줄 세우기 · 시각 짝에만 · 저장 안 함 */
   if (S.bat !== B) return;
   if (!q) { B.sheets.splice(B.sheets.indexOf(s), 1); toast('사진을 읽지 못했습니다', true); kbPaint(B); return; }
-  if (B.sheets.some(z => z !== s && z.fp === fp)) { B.sheets.splice(B.sheets.indexOf(s), 1); toast('같은 사진입니다 — 한 번만 읽습니다'); kbPaint(B); return; }
+  { const z0 = B.sheets.find(z => z !== s && (z.fp === fp || z.fp0 === fp));   /* 시험판(hotfix717): 같은 사진을 또 고르면 "다시 찍은 같은 송장"처럼 — 같은 가상 판독 결과 → 빨강 [같은 송장 두 번] · 지문은 조금 바꿔 따로 한 장 */
+    if (z0 && window.__DEMO && kInvFakeOn()) { s.fp0 = fp; s.dupOf = z0.dupOf != null ? z0.dupOf : z0.i; let k = 1, f2; do { f2 = ((parseInt(fp[0], 16) + k++) % 16).toString(16) + fp.slice(1); } while (B.sheets.some(z => z.fp === f2) && k < 16); fp = f2; }
+    else if (z0) { B.sheets.splice(B.sheets.indexOf(s), 1); toast('같은 사진입니다 — 한 번만 읽습니다'); kbPaint(B); return; } }
   s.q = q; s.fp = fp; s.warn = kImgMsg(q); s.st = s.warn ? 'hold' : !kInvReader() ? 'man' : navigator.onLine === false ? 'off' : 'wait'; if (s.st === 'off') s.err = '인터넷 연결되면 읽음';   /* hotfix713: 판독 꺼진 공장 = 읽지 않고 고르기(man) */   /* 700 실사용 시험 ②: 흐리면 읽기 전에 [다시 찍기 / 그대로 읽기] */
   kbSave(B); kbPump(B); kbPaint(B);
 }
@@ -2973,7 +2975,7 @@ function kbOpen(pre) {
 }
 function kbDraw(B) {
   const n = kInvLeftN();
-  B.tok = sheet(`<h3>송장 한꺼번에${B.sheets.length ? ' · ' + B.sheets.length + '장' : ''}</h3><div class="sub">${kInvReader() ? '여러 장을 찍으면 출고 줄마다 저절로 짝지어요' + (n != null && n > 0 ? ' · 오늘 남은 판독 약 ' + n + '장' : '') : '여러 장을 가져오면 사진마다 어느 출고인지 정해요 · 보낸 출고에는 사진만 붙어요'}</div>${n === 0 ? '<div class="k-warn kb-zero">오늘 남은 판독 0장 — 사진만 보내기 가능 · 절 · kg 은 [출고했어요]에서 손으로 넣어 주세요</div>' : ''}
+  B.tok = sheet(`<h3>송장 한꺼번에${B.sheets.length ? ' · ' + B.sheets.length + '장' : ''}</h3><div class="sub">${kInvReader() ? '여러 장을 찍으면 출고 줄마다 저절로 짝지어요' + (n != null && n > 0 ? ' · 오늘 남은 판독 약 ' + n + '장' : '') + (window.__DEMO && kInvFakeOn() ? '<br><b style="color:#b91c1c">시험용 가상 판독</b> — 어떤 사진을 골라도 정해진 가상 숫자가 나와요(사진 내용을 읽지 않음) · 같은 사진을 두 번 고르면 "같은 송장 두 번"' : '') : '여러 장을 가져오면 사진마다 어느 출고인지 정해요 · 보낸 출고에는 사진만 붙어요'}</div>${n === 0 ? '<div class="k-warn kb-zero">오늘 남은 판독 0장 — 사진만 보내기 가능 · 절 · kg 은 [출고했어요]에서 손으로 넣어 주세요</div>' : ''}
     <div class="kb-add"><button type="button" data-kb="cam">촬영</button><button type="button" data-kb="alb">가져오기</button></div><input type="file" id="kb-file" accept="image/*" multiple style="display:none">
     <div id="kb-body"></div>
     <div class="kb-foot"><div class="row2"><button type="button" class="no" data-x>닫기</button><button type="button" class="ok" id="kb-send" disabled>모두 보냄</button></div><div class="kb-left" id="kb-left"></div></div>`);   /* 700 실사용 시험 ①: [모두 보냄] 아래 고정 */
