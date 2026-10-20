@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="FABIWOS">
 <meta name="mobile-web-app-capable" content="yes">
-<title>FABIWOS v2.53 hotfix723</title>
+<title>FABIWOS v2.53 hotfix725</title>
 <script>
 /* ===== HWChat 대화 화면 공용 (hotfix620 · 대표 10/9 "카톡처럼 쉽고 멋있게") — 이음 · 편직팀 앱 · 염/가공소 앱 · 현장 QC 앱이 같은 모양
  *   말풍선(내 글 노랑 · 받은 글 흰색) · 같은 사람 1분 안 글은 묶음(이름 · 사진은 첫 글, 시간은 끝 글) · 안 읽음 1
@@ -13440,6 +13440,27 @@ function yarnHasName(y, name) {
   if (!y || !k) return false;
   return vendorKey(y.name) === k || (Array.isArray(y.aliases) ? y.aliases : []).some(a => vendorKey(a) === k);
 }
+/* hotfix725(대표 10/20 "데이터 절대 흔들리면 안 됨"): 원사 한 줄을 쓰는 곳 세기(읽기만) — 원사 의뢰서(휴지통 포함) · 편직 설정 사종 · 원사 재고(원장) · 원사이동
+ *   같은 코드(yid · type_yid)이거나, 코드 없는 줄은 이 원사 이름 · 다른 표기와 같으면 셈(넉넉히 세어 지우기를 막는 쪽) · 자료를 다 받기 전이면 miss 에 이름 */
+function yarnRefs725(y) {
+  const yid = String((y && y.yid) || '').trim(); const out = { n: 0, rows: [], text: '', miss: hw714NotReady(['wo', 'kf', 'yl']) }; if (!y) return out;
+  const hitNm = nm => !!String(nm || '').trim() && yarnHasName(y, nm); const hitId = id => !!yid && String(id || '').trim() === yid;
+  const add = (label, n) => { if (n) { out.rows.push({ label, n }); out.n += n; } };
+  let nW = 0, nT = 0; ((typeof state !== 'undefined' && state.allWorkOrders) || []).forEach(w => { if (!w || w.type !== '원사') return; const hit = (Array.isArray(w.yarns) ? w.yarns : []).some(c => c && (hitId(c.type_yid) || hitId(c.yid) || (!c.type_yid && !c.yid && hitNm(c.type)))); if (hit) { if (w.deleted) nT++; else nW++; } });
+  add('원사 의뢰서', nW); add('휴지통 원사 의뢰서', nT);
+  const kfSeen = new Set(); [state.knitFee, state.knitFeeRaw].forEach(M => { if (M && typeof M === 'object') Object.keys(M).forEach(f => { const it = M[f]; if (it && typeof it === 'object') Object.keys(it).forEach(v => { const r = it[v]; if (!r || typeof r !== 'object') return; const ys = Array.isArray(r.yarns) ? r.yarns : []; const s = JSON.stringify(r);
+    if (ys.some(x => hitId(x) || hitNm(x)) || (yid && s.indexOf('"' + yid + '"') >= 0)) kfSeen.add(f + '|' + v); }); }); });
+  add('편직 설정 사종', kfSeen.size);
+  let nS = 0, nM = 0; (Array.isArray(state.yarnLedger) ? state.yarnLedger : []).forEach(r => { if (!r || r.void) return; let cid = ''; try { cid = yarnCanonYid(r); } catch (_) { cid = String(r.yid || ''); } if (!(hitId(cid) || hitId(r.yid) || (!r.yid && !cid && hitNm(r.yarn)))) return; if (r.kind === 'move') nM++; else nS++; });
+  add('원사 재고', nS); add('원사이동', nM);
+  out.text = out.rows.map(r => r.label + ' ' + r.n).join(' · '); return out;
+}
+if (typeof window !== 'undefined') window.__yarnRefs725 = yarnRefs725;
+/* hotfix725(데이터 안전 · 실사용 회의 20261020 1번): 원래 생지는 같은 구분끼리만(몸판 ↔ 리프 · 샘플 섞지 않음) — 다르면 막는 글 · 같으면 '' · 구분 빈 품목은 몸판으로 봄(greigeSetPlan 과 같게) */
+function gubunOf725(x) { return String((x && x.gubun) || '').trim() || GUBUN_BODY; }
+function gubunMismatch725(me, t) { if (!me || !t) return ''; const a = gubunOf725(me), b = gubunOf725(t); if (a === b) return '';
+  return a + '에는 ' + a + '만 원래 생지로 고를 수 있습니다 — [' + String(t.name || '') + ']은(는) ' + b + (a === GUBUN_RIB || b === GUBUN_RIB ? ' · 리프는 [짝 리프]로 연결하세요' : ''); }
+if (typeof window !== 'undefined') window.__gubunMismatch725 = gubunMismatch725;
 function yarnYidOf(name) {
   if (!vendorKey(name)) return '';
   const hits = Array.from(new Set(yarnNameList().filter(y => y && y.yid && yarnHasName(y, name)).map(y => String(y.yid))));
@@ -15648,6 +15669,13 @@ function buildEditPayload(d, existing) {
   }
   if (existing.completed_at !== undefined && payload.completed_at === undefined) {
     payload.completed_at = existing.completed_at;
+  }
+  // hotfix724(기획 4-2 "정산 뒤 의뢰 절 수정 → 투입 그대로"): 편직 품목 기록(생산 완료 · 되돌린 기록 · 절당 중량 기록 · 일부 취소)은 폼이 다루지 않음
+  //   → 같은 자리 · 같은 품목 · 같은 로트 줄이면 보존 (721 까지는 [저장] 때 빠져 품목 정산 · 생산 완료가 풀렸음) · 품목이나 로트를 바꾼 줄은 그대로(옮기지 않음)
+  if (d.type === '편직' && Array.isArray(payload.items) && Array.isArray(existing.items)) {
+    payload.items = payload.items.map((it, i) => { const o = existing.items[i]; if (!it || !o) return it;
+      const same = ((it.item_fid && it.item_fid === o.item_fid) || String(it.item || '').trim() === String(o.item || '').trim()) && String(it.greige_no || '') === String(o.greige_no || ''); if (!same) return it;
+      const x = Object.assign({}, it); ['knit_done', 'knit_done_void', 'kpj_log', 'jul_cxl'].forEach(k => { if (o[k] !== undefined && x[k] === undefined) x[k] = o[k]; }); return x; });
   }
 
   // 2. 컬러 머지 (염색가공 / BT — colors 배열 가진 유형만)
@@ -20425,6 +20453,7 @@ window.addEventListener('firebase-ready', () => {
       onSnapshot(doc(db, C('cost_data'), 'prices'), snap => {
         state.__pricesRaw = snap.exists() ? snap.data() : null;
         state.__pricesRawLoaded = true;
+        state.yarnYidLast = Math.max(Number(state.yarnYidLast) || 0, (snap.exists() && parseInt((snap.data() || {}).yid_last, 10)) || 0);   /* hotfix725: 원사 코드 마지막 번호 — 줄어들지 않음 */
         costPricesMerge();
         renderCostFromSub();
       }, err => console.warn('[costPrices sub]', err.message));
@@ -21365,6 +21394,7 @@ window.addEventListener('firebase-ready', () => {
       bg.querySelectorAll('.ud-ok').forEach(b => b.addEventListener('click', async () => { const g = gOf(b); const tr = b.closest('tr'); const nm = nameUs(tr.querySelector('.ud-nm').value); const gf = tr.querySelector('.ud-g').value;
         if (!nm || !gf) { toast('파생 품목 이름과 원래 생지를 넣어 주십시오', 'warning'); return; } if (getFabricSpecs().some(x => String(x.name || '').trim() === nm)) { toast('이미 [' + nm + '] 이(가) 있습니다 — 목록에서 고르십시오', 'warning'); return; }
         const gs = itemByFid(gf); const part = (g.lines.find(L => L.kind === 'd') || {}).part; const list = getFabricSpecs().map(x => Object.assign({}, x));
+        { const ge = gubunMismatch725({ gubun: part === 'rib' ? GUBUN_RIB : ((gs && gs.gubun) || GUBUN_BODY) }, gs); if (ge) { toast(ge, 'error'); return; } }   /* hotfix725: 리프 줄을 몸판 생지에 잇지 않음 */
         list.push({ name: nm, gubun: part === 'rib' ? GUBUN_RIB : ((gs && gs.gubun) || GUBUN_BODY), cat: (gs && gs.cat) || '', width: (gs && gs.width) || '', blend: (gs && gs.blend) || '', tube: !!(gs && gs.tube), greige_fids: [gf], active: true, updated_at: todayYMD() });
         try { assignFabricIds(list); } catch (_) {} if (!(await saveFabricSpecs(list))) return; const sp = getFabricSpecs().find(x => String(x.name || '').trim() === nm);
         if (sp) { const n = await hwUniApply(g, sp); toast(`새 파생 품목 [${nm}] (원래 생지 ${gs ? gs.name : gf}) · ${n}줄 맞음`, 'success'); } mkDer = ''; delete pick[g.k]; paint(true); }));
@@ -21689,7 +21719,7 @@ function gyToGsm(gy, widthIn, tube) { const g = parseFloat(gy), w = parseFloat(w
     });
     const get = (r, c) => (idx[c] >= 0 ? String(r[idx[c]] == null ? '' : r[idx[c]]).trim() : null);
     let changed = 0, added = 0, skipped = 0, autoGy = 0;   // hotfix400: autoGy = 야드 중량을 저절로 낸 줄 수
-    const addedNames = [], badFids = [];
+    const addedNames = [], badFids = []; const gubKeep725 = [];
     for (let i = 1; i < table.length; i++) {
       const r = table[i];
       const name = get(r, '품목명');
@@ -21705,7 +21735,9 @@ function gyToGsm(gy, widthIn, tube) { const g = parseFloat(gy), w = parseFloat(w
       const put = (target, isNew) => {
         const set = (col, fn) => { const v = get(r, col); if (v !== null) fn(v); };
         target.name = name;
-        set('구분', v => { if (v) target.gubun = v; });
+        set('구분', v => { if (!v) return; if (!isNew && gubunOf725({ gubun: v }) !== gubunOf725(target)) { const tf = String(target.fid || '').trim(); const gs = (Array.isArray(target.greige_fids) ? target.greige_fids : []).map(f => list.find(x => x && String(x.fid || '').trim() === String(f || '').trim())).filter(Boolean); const kids = tf ? list.filter(x => x && x !== target && Array.isArray(x.greige_fids) && x.greige_fids.some(f => String(f || '').trim() === tf)) : [];
+          if (gs.concat(kids).some(o => gubunMismatch725({ gubun: v }, o))) { gubKeep725.push(name); return; } }   /* hotfix725(데이터 안전): 원래 생지 · 파생과 구분이 갈라지는 구분 바꾸기는 하지 않음(그 칸만 그대로) */
+          target.gubun = v; });
         set('조직', v => { target.cat = v; });
         set('짝리프', v => { target.pair_rib = v; });
         set('기준폭', v => { if (v !== '') target.width = v; });   // hotfix400: 빈 칸은 안 건드린다 (중량 서식이 비워 보내도 옛 값 유지)
@@ -21727,7 +21759,7 @@ function gyToGsm(gy, widthIn, tube) { const g = parseFloat(gy), w = parseFloat(w
         added++; addedNames.push(name);
       }
     }
-    return { list, changed, added, skipped, addedNames, badFids, autoGy };
+    return { list, changed, added, skipped, addedNames, badFids, autoGy, gubKeep: gubKeep725 };
   }
   // ===== hotfix418: 김용범 조사 xlsx 그대로 올리기 =====
   //   서식(20260908_HIWOS_품목조사_폭중량_김용범.xlsx) 열: 품목명 · 구분 · 짝 리프/짝 몸판 · 튜브(O) · 기준 폭 inch("72/74" 글자 그대로) · 스퀘어 g/㎡ · 야드 g/y(자동, 무시) · 비고
@@ -22654,7 +22686,7 @@ function gyToGsm(gy, widthIn, tube) { const g = parseFloat(gy), w = parseFloat(w
   // hotfix391: 사종 고정 코드 — 없는 사종에만 새로 붙인다 (품목 fid 와 같은 규칙, 지운 번호 재사용 안 함)
   function assignYarnIds(list) {
     const used = new Set();
-    let max = 0;
+    let max = Math.max(0, (typeof state !== 'undefined' && state && Number(state.yarnYidLast)) || 0);   /* hotfix725(데이터 안전): 마지막 번호(cost_data/prices.yid_last)를 기억 — 맨 끝 원사를 지워도 그 번호를 새 원사에 다시 주지 않음(업체 vid_last · 품목 fid_last 와 같은 방식) */
     (list || []).forEach(y => {
       const f = String((y && y.yid) || '').trim();
       if (!f) return;
@@ -24143,10 +24175,14 @@ body:has(#ysj-pick:not([style*="none"])) #hw-si-ask{display:none!important}
       if (js714(procVendorsCopyOf(next)) !== js714(state.procVendors)) await setDoc(doc(db, C('settings'), 'proc_vendors'), Object.assign({ vendors: procVendorsCopyOf(next) }, stamp));
       state.procVendors = procVendorsCopyOf(next);
       if (isOwnerUser()) {
+        { let sv725 = null; try { const rd725 = (window.firebase && window.firebase.getDocFromServer) || getDoc; const sn = await Promise.race([rd725(doc(db, C('cost_data'), 'prices')), new Promise(r => setTimeout(() => r(null), 1500))]); sv725 = (sn && sn.exists && sn.exists()) ? (sn.data() || {}) : null; } catch (_) { sv725 = null; }   /* hotfix725: 새 번호 주기 직전 서버 최신 마지막 번호를 한 번 읽음(다른 PC 가 그 사이 원사를 더했거나 지웠어도 번호가 겹치지 않게) · 못 읽으면 지금 아는 값으로 */
+          if (sv725) { let m = parseInt(sv725.yid_last, 10) || 0; (Array.isArray(sv725.yarns) ? sv725.yarns : []).forEach(y => { const x = /^Y(\d{4,})$/.exec(String((y && y.yid) || '')); if (x) m = Math.max(m, parseInt(x[1], 10) || 0); }); state.yarnYidLast = Math.max(Number(state.yarnYidLast) || 0, m); } }
         assignYarnIds(next.yarns || []);   // hotfix391: 코드 없는 사종에만 새 코드(Y0001…). 있는 코드는 절대 안 바뀜
+        const yidLast725 = (next.yarns || []).reduce((m, y) => { const x = /^Y(\d{4,})$/.exec(String((y && y.yid) || '')); return x ? Math.max(m, parseInt(x[1], 10) || 0) : m; }, Math.max(0, Number(state.yarnYidLast) || 0));   /* hotfix725: 마지막 번호 — 줄어들지 않는다 */
         // hotfix412: prices 에는 원사 단가 · 편직료만 남긴다 (가공 칸은 proc_prices 로). 옛 약어(proc_abbr)는 settings/lists 로 갔으므로 여기 안 씀
-        await setDoc(doc(db, C('cost_data'), 'prices'), Object.assign({ yarns: next.yarns || [], knit: next.knit || [] }, stamp));
-        state.__pricesRaw = { yarns: next.yarns || [], knit: next.knit || [] };
+        await setDoc(doc(db, C('cost_data'), 'prices'), Object.assign({ yarns: next.yarns || [], knit: next.knit || [], yid_last: yidLast725 }, stamp));
+        state.yarnYidLast = yidLast725;
+        state.__pricesRaw = { yarns: next.yarns || [], knit: next.knit || [], yid_last: yidLast725 };
         state.__pricesRawLoaded = true;
       }
       costPricesMerge();
@@ -48541,7 +48577,7 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
   /* 원래 생지로 고를 수 있는 품목 — 금지 규칙(자기 자신 · 파생 품목 · 구분 다름)에 걸리는 것은 목록에서 뺌 */
   function kf702Greiges(forFid) {
     const me = forFid ? itemByFid(forFid) : null; const rib = me ? (me.gubun === GUBUN_RIB) : null; const pend = greigeMapNow();
-    return getFabricSpecs().filter(x => { const f = specFid(x); if (!f || x.trashed || pend[f]) return false; if (forFid && (f === String(forFid) || (x.gubun === GUBUN_RIB) !== rib)) return false; return true; })
+    return getFabricSpecs().filter(x => { const f = specFid(x); if (!f || x.trashed || pend[f]) return false; if (forFid && (f === String(forFid) || (me ? !!gubunMismatch725(me, x) : (x.gubun === GUBUN_RIB) !== rib))) return false; return true; })   /* hotfix725: 같은 구분만 */
       .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'ko', { numeric: true }));
   }
   function kf702GItems(forFid) { return kf702Greiges(forFid).map(x => (gb => ({ value: String(x.name || ''), label: (gb || String(x.name || '')) + ' · ' + (x.gubun || GUBUN_BODY) + ' · ' + (greigeFacOf(specFid(x)) || '편직공장 없음'), search: String(x.name || '') + (gb ? ' ' + gb : ''), k: specFid(x), ...(gb ? { badge: String(x.name || ''), cls: 'kf723-pi' } : {}) }))(gb719Name(specFid(x)))); }   /* hotfix723(W3): 최고관리자 = 원래생지명(+ 작은 원래 이름 · 둘 다로 찾음) · 고른 값(value)은 원래 이름 그대로 */
@@ -48554,7 +48590,7 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
     const all = getFabricSpecs().filter(x => specFid(x)); const specs = all.filter(x => !x.trashed);   /* 702 고침(기획 대조 1): 휴지통 품목은 비교에서 뺌 */
     const nameHit = (x, a, b) => K(x.name) === K(a) || K(x.name) === K(b) || (Array.isArray(x.aliases) && x.aliases.some(z => K(z) === K(a) || K(z) === K(b)));
     const findByName = (t, pool) => { const k = K(t); if (!k) return null; const hit = pool.filter(x => K(x.name) === k || (Array.isArray(x.aliases) && x.aliases.some(a => K(a) === k))); return hit.length === 1 ? hit[0] : null; };
-    const rib = g.gubun === GUBUN_RIB; const dPool = specs.filter(x => specFid(x) !== selG && !isSrc(specFid(x)) && pend[specFid(x)] !== selG && ((x.gubun === GUBUN_RIB) === rib));
+    const rib = g.gubun === GUBUN_RIB; const dPool = specs.filter(x => specFid(x) !== selG && !isSrc(specFid(x)) && pend[specFid(x)] !== selG && !gubunMismatch725(x, g))   /* hotfix725: 같은 구분만(몸판 ↔ 리프 · 샘플 섞지 않음) */;
     const fac0 = greigeFacOf(selG);
     parts.forEach(t0 => { const t = (typeof nameUs === 'function') ? nameUs(t0) : t0; if (!t) return;
       const hit = findByName(t, dPool) || (fac0 ? findByName(kfAutoItemName(t, fac0), dPool) : null);
@@ -49675,6 +49711,7 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
     if (to === id) return { err: '자기 자신은 원래 생지가 될 수 없습니다' };
     const t = list.find(x => String(x.fid || '').trim() === to); if (!t) return { err: '고른 생지를 찾지 못했습니다' };
     if ((Array.isArray(t.greige_fids) ? t.greige_fids : []).some(f => String(f || '').trim())) return { err: '[' + String(t.name || '') + ']은(는) 그 자신이 다른 생지에서 나오는 품목입니다 — 생지로 고를 수 없습니다' };
+    { const ge = gubunMismatch725(me, t); if (ge) return { err: ge }; }   /* hotfix725(데이터 안전): 구분이 다른 품목(몸판 ↔ 리프 · 샘플)은 원래 생지로 못 고름 — 고르면 구분이 바뀌고 원사 사용량이 남의 사종으로 빠졌음 */
     /* hotfix452(대표 지시 9/19): 원래 생지를 고르면 구분 · 조직은 원래 생지 값을 그대로 쓰고(고칠 수 없다), 이름 뒤에 원래 생지의 편직공장이 붙는다 — 새품목(원래생지공장) */
     const tail = (() => { const m = /\(([^()]*)\)\s*$/.exec(String(t.name || '')); return m ? String(m[1]).trim() : ''; })();
     const base = String(me.name || '').replace(/\s*\([^()]*\)\s*$/, '').trim() || String(me.name || '');
@@ -49773,7 +49810,7 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
     const iS = 'padding:7px 9px;border:1px solid #d1d5db;border-radius:8px;font-size:13px;font-family:inherit;width:100%;box-sizing:border-box;';
     const cand = () => getFabricSpecs().filter(x => { const f = specFid(x); if (!f || f === String(fid)) return false;
       if ((Array.isArray(x.greige_fids) ? x.greige_fids : []).some(y => String(y || '').trim())) return false;   /* 이미 파생인 품목은 생지가 될 수 없다(사슬 금지) */
-      if (gub && String(x.gubun || GUBUN_BODY) !== gub) return false; return true; })
+      if (gub && String(x.gubun || GUBUN_BODY) !== gub) return false; if (gubunMismatch725(sp, x)) return false; return true; })   /* hotfix725: 구분이 다른 품목은 목록에서 뺌 */
       .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'ko', { numeric: true }));
     const draw = () => {
       const usedBy = getFabricSpecs().filter(x => (Array.isArray(x.greige_fids) ? x.greige_fids : []).includes(String(fid)));
@@ -49826,6 +49863,7 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
       wrap.querySelector('#gset-add-ok')?.addEventListener('click', async () => {   /* hotfix537: 다른 공장 원래 생지 더하기 */
         const g = (wrap.querySelector('#gset-add') || {}).value || ''; if (!g) { toast('더할 생지를 고르십시오', 'warning'); return; }
         const now = specGreigeFids(itemByFid(String(fid)) || sp); if (now.includes(g)) return; const gname = String((itemByFid(g) || {}).name || g);
+        { const ge = gubunMismatch725(itemByFid(String(fid)) || sp, itemByFid(g)); if (ge) { toast(ge, 'error'); return; } }   /* hotfix725: 저장 전 한 번 더 */
         if (!confirm('[' + String(sp.name || '') + '] 에 [' + gname + '] 을(를) 더합니다.\n\n· 컬러 · 가공 · 짝 리프는 이 품목 하나에 그대로입니다\n· 염가공 의뢰서의 생지로트 목록에 [' + gname + '] 재고도 나옵니다\n· 재고 숫자 · 저장된 의뢰서는 바뀌지 않습니다\n\n더할까요?')) return;
         if (!hwLocalBackup('원래생지더하기직전', { fabric_specs: getFabricSpecs() })) return;   /* hotfix635 */
         const btn = wrap.querySelector('#gset-add-ok'); btn.disabled = true; gsetBeforeSave();
@@ -49878,6 +49916,7 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
       if (b) {
         const g = by[b]; if (!g || pend[b] || b === f) { warns.push('[' + ch.oldName + '] — 원래 생지로 쓸 수 없는 품목입니다'); return; }
         if (Object.keys(pend).some(k => pend[k] === f)) { warns.push('[' + ch.oldName + '] — 이미 다른 품목의 원래 생지라 파생 품목이 될 수 없습니다'); return; }
+        { const ge = gubunMismatch725(it, g); if (ge) { warns.push('[' + ch.oldName + '] — ' + ge); return; } }   /* hotfix725: 구분이 다른 품목은 묶지 않음 */
         it.greige_fids = [b];
         const fac = greigeFacOf(b); const nn = fac ? kfAutoItemName(ch.oldName, fac) : ch.oldName;
         if (nn && nn !== ch.oldName) { if (list.some(x => x !== it && String(x.name || '').trim() === nn)) warns.push('[' + ch.oldName + '] — 새 이름 [' + nn + '] 이(가) 이미 있어 이름은 그대로 둡니다'); else { it.aliases = Array.from(new Set((Array.isArray(it.aliases) ? it.aliases : []).concat([ch.oldName]).map(x => String(x || '').trim()).filter(x => x && x !== nn))); list.forEach(x => { if (String(x.pair_rib || '').trim() === ch.oldName) x.pair_rib = nn; }); it.name = nn; ch.newName = nn; } }
@@ -49914,7 +49953,7 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
     const findByName = (t, pool) => { const k = K(t); if (!k) return null; const hit = pool.filter(x => K(x.name) === k || (Array.isArray(x.aliases) && x.aliases.some(a => K(a) === k))); return hit.length === 1 ? hit[0] : null; };
     const isSrc = f => Object.keys(pend).some(k => pend[k] === f);
     const gPool = () => specs().filter(x => !pend[specFid(x)]).sort((a, b) => String(a.name).localeCompare(String(b.name), 'ko', { numeric: true }));
-    const dPool = () => { const g = itemByFid(selG); if (!g) return []; const rib = g.gubun === GUBUN_RIB; return specs().filter(x => specFid(x) !== selG && !isSrc(specFid(x)) && pend[specFid(x)] !== selG && ((x.gubun === GUBUN_RIB) === rib)).sort((a, b) => String(a.name).localeCompare(String(b.name), 'ko', { numeric: true })); };
+    const dPool = () => { const g = itemByFid(selG); if (!g) return []; const rib = g.gubun === GUBUN_RIB; return specs().filter(x => specFid(x) !== selG && !isSrc(specFid(x)) && pend[specFid(x)] !== selG && !gubunMismatch725(x, g))   /* hotfix725: 같은 구분만(몸판 ↔ 리프 · 샘플 섞지 않음) */.sort((a, b) => String(a.name).localeCompare(String(b.name), 'ko', { numeric: true })); };
     const wrap = document.createElement('div'); wrap.id = 'gm-popup';
     wrap.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:10050;display:flex;align-items:flex-start;justify-content:center;overflow:auto;padding:26px 12px;';
     document.body.appendChild(wrap);
@@ -50401,7 +50440,7 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
     let savedG = newItem ? '' : specPrimaryGreige(key); let pendG = savedG;
     const gMode = () => !!(pendG || savedG);
     const gFacOf = g => (g ? (Object.keys(knitFeeOf(g)).find(v => v && v !== KF_NO_FAC) || '') : '');
-    const gCands = () => { const isRib = String(pend.gubun || '') === GUBUN_RIB; return getFabricSpecs().filter(x => specFid(x) && specFid(x) !== key && !(Array.isArray(x.greige_fids) && x.greige_fids.length) && ((x.gubun === GUBUN_RIB) === isRib)).sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'ko', { numeric: true })); };
+    const gCands = () => { const isRib = String(pend.gubun || '') === GUBUN_RIB; return getFabricSpecs().filter(x => specFid(x) && specFid(x) !== key && !(Array.isArray(x.greige_fids) && x.greige_fids.length) && !gubunMismatch725(pend, x)).sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'ko', { numeric: true })); };
     const gUsedBy = () => (key ? getFabricSpecs().filter(x => Array.isArray(x.greige_fids) && x.greige_fids.includes(key)).map(x => x.name) : []);
     const gPanelHtml = () => {
       if (!pendG) return `<div class="dash-empty" style="padding:22px;">원래 생지를 비웠습니다. [저장]하면 이 품목이 다시 생지가 됩니다 — 이 품목에 있던 옛 편직 값은 저장한 뒤 이 창을 다시 열면 보입니다.</div>`;
@@ -50888,6 +50927,7 @@ function vendorTypeAddPlan(list, name) {   /* 계산만 */
         }
         // hotfix421: 저장 전에 한 번 묻는다 (대표 확정)
         readBasics();
+        { const gk725 = pendG || savedG; const ge725 = (gk725 && (pendG !== savedG || newItem || gubunOf725(pend) !== gubunOf725(sp))) ? gubunMismatch725(pend, itemByFid(gk725)) : ''; if (ge725) { toast(ge725, 'error'); return; } }   /* hotfix725(데이터 안전): 원래 생지를 새로 고르거나 구분을 바꿀 때 — 구분이 다르면 저장 안 함 */
         if (newItem) {
           // hotfix422i: [신규품목저장] — 품목 스펙(F 자동 · 같은 이름 검사)을 먼저 만들고, 그 뒤는 보통 저장과 같다
           const nm0 = String(pend.name || '').trim();
@@ -63177,7 +63217,9 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
           const ok = await saveVendors(list);
           if (ok === false) return false;
           resetForm(); if (!prev) { state.vendorFormOpen = false; window.__vd714hl = name; }   /* hotfix714(S6 5-2): 추가하면 창 닫힘 · 새 줄 1초 노랑 */
-          toast(`거래처 "${name}" 저장 완료`, 'success');
+          { const off725 = prev ? vendorTypesNorm(prev).filter(t => !entry.types.includes(t)) : [];   /* hotfix725(데이터 안전 · 화면만 · 막지 않음): 업체구분을 뺀 저장 → 365ERP 업종 어긋남 경고 한 줄 */
+            if (off725.length) toast(`거래처 "${name}" 저장 완료 — 이 업체는 365ERP 에 ${off725.join(' · ')} 업종으로 보냈을 수 있습니다 — 업종이 어긋날 수 있습니다`, 'warning');
+            else toast(`거래처 "${name}" 저장 완료`, 'success'); }
           state.__hwForceRender = true; renderDashboard();
           return true;
         } catch (err) { toast('저장 실패: ' + err.message, 'error'); return false; }
@@ -63808,6 +63850,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
           abbr: (document.getElementById('fs-f-abbr')?.value || '').trim().toUpperCase(),   // hotfix392: 공유코드용 줄임말
           updated_at: todayYMD()
         };
+        { const was725 = (editingSpecIdx >= 0) ? getFabricSpecs()[editingSpecIdx] : null; const bad725 = (!was725 || gubunOf725(was725) !== gubunOf725(entry)) ? (entry.greige_fids || []).map(f => gubunMismatch725(entry, itemByFid(f))).find(Boolean) : ''; if (bad725) { toast(bad725, 'error'); return; } }   /* hotfix725(데이터 안전): 구분을 원래 생지와 다르게 바꿔 저장하는 것도 막음 */
         { const cur590 = (editingSpecIdx >= 0) ? getFabricSpecs()[editingSpecIdx] : null; const lk = document.getElementById('fs-f-qclock')?.checked;   /* hotfix590: 기준 설정 · 마지막 QC 반영 기록은 이어간다 */
           if (cur590 && cur590.qc_auto) entry.qc_auto = cur590.qc_auto;
           if (lk) entry.qc_lock = (cur590 && cur590.qc_lock) ? cur590.qc_lock : { at: new Date().toISOString(), by: state.user?.email || '', width: entry.width, gsm: entry.gsm }; }
@@ -63950,6 +63993,7 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
           if (res.autoGy) msg += `\n· 스퀘어g/㎡ · 기준폭이 있어 야드 중량이 계산되는 품목 ${res.autoGy}개 (저장 안 함 — 매번 계산)`;   // hotfix400
           if (res.skipped) msg += `\n· 건너뛴 줄 ${res.skipped}개`;
           if (res.badFids.length) msg += `\n· 없는 품목코드 ${res.badFids.slice(0, 5).join(', ')}${res.badFids.length > 5 ? ' 외' : ''}`;
+          if (res.gubKeep && res.gubKeep.length) msg += `\n· 구분은 그대로 두는 품목 ${res.gubKeep.length}개 (${res.gubKeep.slice(0, 5).join(', ')}${res.gubKeep.length > 5 ? ' 외' : ''}) — 원래 생지와 구분이 같아야 합니다 · 리프는 [짝 리프]로 연결하세요`;   /* hotfix725 */
           msg += `\n\n· 파일에 없는 품목은 그대로 둡니다 (지워지지 않습니다)\n· 주의사항은 손대지 않습니다\n\n계속할까요?`;
           if (!confirm(msg)) return;
           const ok = await saveFabricSpecs(res.list);
@@ -65783,6 +65827,8 @@ window.__hiwosCard=()=>({품목수:Object.keys(ITEMS).length,고른품목:CUR,
         const list = t === 'yarn' ? P.yarns : t === 'knit' ? P.knit : t === 'proc' ? P.proc : P.bundles;
         const row = list[i]; if (!row) return;
         if (t === 'yarn' && row.yid && list.some(y => y && y !== row && String(y.sj_of || '').trim() === String(row.yid))) { toast('다른 코드가 같은 사종으로 가리키는 원사라 지울 수 없습니다 — 구매 상태를 종료로 바꾸십시오', 'error'); return; }   /* hotfix695 */
+        if (t === 'yarn') { const R = window.__yarnRefs725(row); if (R.miss.length) { toast('아직 ' + R.miss.join(' · ') + ' 자료를 다 받지 못했습니다 — 잠시 뒤 다시 눌러 주세요(쓰는 곳을 다 세기 전에는 지우지 않습니다)', 'error'); return; }
+          if (R.n > 0) { toast('쓰는 곳 ' + R.n + '건(' + R.text + ') — 지우지 말고 [상태]를 [구매종료](사용 안 함)로 바꾸세요', 'error'); return; } }   /* hotfix725(데이터 안전): 쓰는 곳이 1건이라도 있으면 지우지 않음 */
         const label = row.name || `${row.vendor || ''} ${row.proc || (row.procs || []).join('+')}`;
         if (!confirm(`"${label}" 단가를 지울까요?\n\n지난 값 이력은 그대로 남습니다.`)) return;
         list.splice(i, 1);
@@ -69359,7 +69405,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix723';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
+  const VERSION = 'v2.53 hotfix725';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
