@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="FABIWOS">
 <meta name="mobile-web-app-capable" content="yes">
-<title>FABIWOS v2.53 hotfix726</title>
+<title>FABIWOS v2.53 hotfix728</title>
 <script>
 /* ===== HWChat 대화 화면 공용 (hotfix620 · 대표 10/9 "카톡처럼 쉽고 멋있게") — 이음 · 편직팀 앱 · 염/가공소 앱 · 현장 QC 앱이 같은 모양
  *   말풍선(내 글 노랑 · 받은 글 흰색) · 같은 사람 1분 안 글은 묶음(이름 · 사진은 첫 글, 시간은 끝 글) · 안 읽음 1
@@ -13110,7 +13110,7 @@ function greigeSplit(text) {
 function hwSrcOfPart(p) { try { if (!p) return ''; const nm = String(p.item || '').trim(); if (!nm) return ''; let src = String(p.src || '').trim();
   if (!src) { const sp = (p.item_fid && itemByFid(p.item_fid)) || (window.__hwFindSpec ? window.__hwFindSpec(nm) : null); const g = sp ? specGreigeFids(sp) : []; const gs = g.length ? itemByFid(g[0]) : null; src = gs ? String(gs.name || '').trim() : ''; }
   return (src && vendorKey(src) !== vendorKey(nm)) ? src : ''; } catch (_) { return ''; } }
-function itemShowSrcLot(p) { const s0 = itemShowLot(p && p.item, p && p.item_fid, p && p.greige_no, p && p.greige_mix); const src = hwSrcOfPart(p); return s0 && src ? src + ' > ' + s0 : s0; }
+function itemShowSrcLot(p) { const s0 = itemShowLot(p && p.item, p && p.item_fid, p && p.greige_no, p && p.greige_mix); return s0; }   /* hotfix728(대표 10/21): 미리보기 · 이미지 · 프린트 · 카톡 = 고른 품목 이름 하나만(전: "원래생지 > 품목") · 저장 src 는 그대로 */
 function itemShowLot(name, fid, greigeNo, mix) {
   let nm = String(name || '').trim();
   if (Array.isArray(mix) && mix.length > 1) { if (codesOn()) { const sp = itemByFid(fid); if (sp) nm = String(sp.name || '').trim() || nm; } return (nm + ' (생지로트 : ' + mix.map(m => greigeNoClean(m.no) + ' ' + (Number(m.jul) || 0) + '절').join(' + ') + ')').trim(); }   // hotfix509: 섞어 나감
@@ -15921,6 +15921,13 @@ function setFormData(d, opts={}) {
     document.getElementById('f_rib_item').value = d.rib?.item || '';
     document.getElementById('f_rib_gno').value = d.rib?.greige_no || '';   // hotfix390
     hwSelectEnsure(document.getElementById('f_rib_receiving'), d.rib?.receiving || '');
+    /* hotfix728(대표 10/21): 복사 · [수정] 불러오기 — 숨은 입고처 값만 들고 고르개는 "— 선택 —"이던 것 → 고르개를 원본 값으로 · 목록에 없으면 값은 두고 빨간 한 줄 · 품목/로트 목록도 그 입고처로 */
+    try { refreshVendorSelects();
+      [['f_receiving', d.body?.receiving], ['f_rib_receiving', d.rib?.receiving]].forEach(([id, v0]) => { const s = document.querySelector('.vendor-select[data-target="' + id + '"]'); if (!s) return; const old = document.getElementById('hw728-rv-' + id); if (old) old.remove(); const v = String(v0 || '').trim(); if (!v) return;
+        const op = s.options[s.selectedIndex]; const miss = !s.value || (op && /\((미등록|사용 안 함)\)\s*$/.test(op.textContent || '') && !(state.vendors || []).some(x => x && vendorIsActive(x) && String(x.name || '').trim() === s.value));   /* 리프 입고처 목록 거르기로만 빠진 등록 업체는 빨간 줄 없음 */
+        if (!miss) return; const n = document.createElement('div'); n.id = 'hw728-rv-' + id; n.className = 'hw728-rv'; n.style.cssText = 'color:var(--st-bad-ink,#dc2626);font-size:13px;font-weight:700;margin-top:4px;'; n.textContent = '원본 입고처 ' + v + ' — 다시 고르세요'; s.insertAdjacentElement('afterend', n);
+        s.addEventListener('change', () => { const e = document.getElementById('hw728-rv-' + id); if (e) e.remove(); }, { once: true }); });
+      if (window.__refreshPartItemLists) window.__refreshPartItemLists(); if (window.__fillGnoLists) window.__fillGnoLists(); } catch (e) { console.warn('[728 recv]', e && e.message); }
     document.getElementById('f_rib_spec').value = d.rib?.spec || '';
   { const h = document.getElementById('f_rib_proc_picker'); if (h && h.__set) { h.__set(d.rib?.spec_procs || [], d.rib?.spec_note || ''); if (h.__setPv) h.__setPv(d.rib?.spec_proc_vendors || {}); } if (!(d.rib?.spec_procs || []).length) document.getElementById('f_rib_spec').value = d.rib?.spec || ''; }   // hotfix403
     document.getElementById('f_rib_spec_width').value = d.rib?.spec_width || '';
@@ -24774,9 +24781,16 @@ body:has(#ysj-pick:not([style*="none"])) #hw-si-ask{display:none!important}
       const names = stockOn ? use.filter(hasStock).map(s => String(s.name || '')) : use.map(s => String(s.name || '')).concat(rawNames);
       dl.innerHTML = names.map(n => `<option value="${escapeHtml(n)}"></option>`).join('');
       window.__partItems = window.__partItems || {}; window.__partItems[rib ? 'rib' : 'body'] = names;
+      /* hotfix728(대표 10/21 급함): 그 입고처에 재고가 있는 생지는 구분(리프 · 몸판) · 코드 유무와 상관없이 고를 수 있게 — 위 목록에 없는 것을 "다른 생지(재고 있음)" 묶음으로 · 재고 셈은 로트 목록과 같은 greigeStockList */
+      const other = []; if (fac) { try { const seenO = new Set(names.map(vendorKey)); const specsO = Array.isArray(state.fabricSpecs) ? state.fabricSpecs : [];
+        (state.allWorkOrders || []).forEach(wo => { if (!wo || wo.deleted || wo.completed || wo.type !== '편직') return; const here = vendorSameAs(wo.recipient, wo.vendor_vid, fac) || vendorSameAs(wo.final_destination, wo.final_destination_vid, fac) || (Array.isArray(wo.greige_shipments) ? wo.greige_shipments : []).some(x => x && x.move && shLive(x) && vendorSameAs(x.dest, x.dest_vid, fac)); if (!here) return;
+          (Array.isArray(wo.items) ? wo.items : []).forEach(it => { if (!it || !it.item) return; const f0 = String(it.item_fid || '') || itemFidOf(greigeSplit(it.item).name); const sp = f0 ? specsO.find(x => specFid(x) === String(f0)) : null; const nm = String((sp && sp.name) || greigeSplit(it.item).name || '').trim(); const k = vendorKey(nm); if (!k || seenO.has(k)) return; seenO.add(k);
+            const s = greigeStockList(nm, (sp && specFid(sp)) || itemFidOf(nm), { moved: true }).filter(r => r.rem > 0 && vendorSameAs(r.vendor, r.vendor_vid, fac)).reduce((a, r) => a + r.rem, 0); if (s > 0) other.push(nm); }); });
+        other.sort((a, b) => a.localeCompare(b, 'ko', { numeric: true })); } catch (e) { console.warn('[728 other]', e && e.message); } }
+      window.__partItems[(rib ? 'rib' : 'body') + 'Other'] = other;
       // hotfix399b: 입고처를 바꿨는데 적힌 품목이 그 공장 품목이 아니면 품목·로트를 비운다 (다시 고르게)
       const itEl = document.getElementById(rib ? 'f_rib_item' : 'f_body_item'), gEl = document.getElementById(rib ? 'f_rib_gno' : 'f_body_gno');
-      if (itEl && itEl.dataset.free !== '1' && mine.length && itEl.value.trim() && document.activeElement !== itEl && !names.some(n => vendorKey(n) === vendorKey(itEl.value))) {   /* hotfix523: 직접입력은 입고처를 바꿔도 안 지움 */   // hotfix509: 글자로 찾는 중에는 비우지 않는다(전: 울리프를 치는 동안 칸이 비워짐)
+      if (itEl && itEl.dataset.free !== '1' && mine.length && itEl.value.trim() && document.activeElement !== itEl && !names.concat(other).some(n => vendorKey(n) === vendorKey(itEl.value))) {   /* hotfix728: 다른 생지(재고 있음)도 그 곳 것 */   /* hotfix523: 직접입력은 입고처를 바꿔도 안 지움 */   // hotfix509: 글자로 찾는 중에는 비우지 않는다(전: 울리프를 치는 동안 칸이 비워짐)
         const was = itEl.value; itEl.value = ''; if (gEl) gEl.value = '';
         // hotfix422i: 리프 품목을 비우면 그 품목에서 저절로 채운 값(혼용율 · 가공 사양 · 폭 · 중량 · 튜브)도 같이 비운다 — 옛 값이 남아 다른 리프에 묻어가지 않게
         if (rib) { try { ['f_rib_spec_width', 'f_rib_spec_gy', 'f_rib_spec', 'f_rib_spec_note'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; }); const t = document.getElementById('f_rib_spec_tube'); if (t) t.checked = false; const h = document.getElementById('f_rib_proc_picker'); if (h && h.__set) h.__set([], ''); if (typeof renderBlendRows === 'function') renderBlendRows('rib_blends', []); } catch (_) {} }
@@ -24784,10 +24798,11 @@ body:has(#ysj-pick:not([style*="none"])) #hw-si-ask{display:none!important}
         try { render(); markDirty(); } catch (_) {}
       }
       if (hint) hint.textContent = !fac ? `입고처(편직 공장)를 먼저 고르면 그 공장 ${rib ? '리프' : '품목'}만 뜹니다.`
-        : (mine.length ? (names.length ? `${fac} ${rib ? '리프' : '품목'} ${names.length}개${rawNames.length ? ` (품목 미등록 ${rawNames.length}개 포함 — 품목 디테일 [옛 자료 맞추기]로 이으면 합쳐집니다)` : ''}${(() => { try { const seen = new Set(); let t = 0; names.forEach(n => greigeStockList(n, itemFidOf(n), { moved: true }).forEach(r => { if (!(r.rem > 0) || !vendorSameAs(r.vendor, r.vendor_vid, fac)) return; const k = r.woId + '|' + r.no + '|' + r.vendor + '|' + (r.moved ? 1 : 0); if (seen.has(k)) return; seen.add(k); t += r.rem; })); return ' · 재고 ' + (Math.round(t * 10) / 10) + '절'; } catch (_) { return ''; } })()} — 고르면 재고가 있는 생지로트만 뜹니다 (목록에 품목마다 재고 절수).` : `${fac} 에 등록된 ${rib ? '리프가' : '몸판 품목이'} 없습니다. 없는 품목은 적고 칸을 나가면 [코드 등록 요청]을 보낼 수 있습니다.`)
+        : (mine.length ? (names.length ? `${fac} ${rib ? '리프' : '품목'} ${names.length}개${rawNames.length ? ` (품목 미등록 ${rawNames.length}개 포함 — 품목 디테일 [옛 자료 맞추기]로 이으면 합쳐집니다)` : ''}${(() => { try { const seen = new Set(); let t = 0; names.forEach(n => greigeStockList(n, itemFidOf(n), { moved: true }).forEach(r => { if (!(r.rem > 0) || !vendorSameAs(r.vendor, r.vendor_vid, fac)) return; const k = r.woId + '|' + r.no + '|' + r.vendor + '|' + (r.moved ? 1 : 0); if (seen.has(k)) return; seen.add(k); t += r.rem; })); return ' · 재고 ' + (Math.round(t * 10) / 10) + '절'; } catch (_) { return ''; } })()}${other.length ? ` · 다른 생지(재고 있음) ${other.length}개는 목록 아래쪽` : ''} — 고르면 재고가 있는 생지로트만 뜹니다 (목록에 품목마다 재고 절수).` : (other.length ? `${fac} ${rib ? '리프' : '품목'} 0개 · 다른 생지(재고 있음) ${other.length}개 — 고르면 재고가 있는 생지로트만 뜹니다.` : `${fac} 에 등록된 ${rib ? '리프가' : '몸판 품목이'} 없습니다. 없는 품목은 적고 칸을 나가면 [코드 등록 요청]을 보낼 수 있습니다.`))   /* hotfix728 */
           : `${fac} 에 등록된 품목이 없어 전체(${use.length}개)를 보입니다. [설정 및 관리] > 편직 설정에서 이 공장을 넣으면 그 품목만 뜹니다.`);
     });
   }
+  if (typeof window !== 'undefined') window.__refreshPartItemLists = refreshPartItemLists;   /* hotfix728: 복사 · 수정 불러오기에서 입고처 기준으로 다시 */
   // hotfix391: 원사 의뢰서 사종 고르개 — settings/yarn_names 사본 (직원도 봄)
   function refreshYarnNameDatalist() {
     const dl = document.getElementById('yarn-name-datalist');
@@ -24882,7 +24897,7 @@ body:has(#ysj-pick:not([style*="none"])) #hw-si-ask{display:none!important}
     const el = document.getElementById('f_rib_item');
     if (!el) return;
     // hotfix422i: 리프는 목록(그 입고처 리프)에서만 고른다 — 목록에 없는 글자는 비운다 (대표 확정 9/14)
-    { const typed = String(el.value || '').trim(); const list = (window.__partItems && Array.isArray(window.__partItems.rib)) ? window.__partItems.rib : null;
+    { const typed = String(el.value || '').trim(); const list = (window.__partItems && Array.isArray(window.__partItems.rib)) ? window.__partItems.rib.concat(window.__partItems.ribOther || []) : null;   /* hotfix728: 다른 생지(재고 있음)도 */
       if (typed && list && list.length && !list.some(n => vendorKey(n) === vendorKey(typed))) { el.value = ''; const g = document.getElementById('f_rib_gno'); if (g) g.value = ''; try { toast(`리프는 목록에서 골라 주십시오 — "${typed}" 은(는) 목록에 없습니다`, 'warning'); } catch (_) {} return; } }
     const spec = findFabricSpec(el.value);
     if (!spec || spec.gubun !== GUBUN_RIB) return;
@@ -25143,10 +25158,11 @@ body:has(#ysj-pick:not([style*="none"])) #hw-si-ask{display:none!important}
           srcEl.addEventListener('blur', () => setTimeout(() => { const v = String(srcEl.value || '').trim(); if (!v) return; const L = (window.__partItems || {})[key] || []; if (L.some(n => srcOf(n) === v)) return;
             const hit = L.find(n => vendorKey(n) === vendorKey(v)); const it = document.getElementById(key === 'rib' ? 'f_rib_item' : 'f_body_item'); if (!hit || !it || String(it.value || '').trim()) return;
             srcEl.value = srcOf(hit) !== hit ? srcOf(hit) : ''; it.value = hit; it.dispatchEvent(new Event('input', { bubbles: true })); it.dispatchEvent(new Event('change', { bubbles: true })); try { render(); markDirty(); toast(`"${hit}" 은(는) 품목이라 품목 칸으로 옮겼습니다`, 'info'); } catch (_) {} }, 220)); }
-        attachPickList(el, () => { try { refreshPartItemLists(); } catch (_) {} const sv = String((srcEl && srcEl.value) || '').trim(); return ((window.__partItems || {})[key] || []).filter(n => !sv || srcOf(n) === sv).map(n => withStock(specPickLabel(n, facNow()))).concat(window.hwItemAddRow ? [window.hwItemAddRow(el, facNow, key === 'rib' ? '리프 품목' : '몸판 품목')] : []); }, () => { el.dispatchEvent(new Event('change', { bubbles: true })); });   /* hotfix701(tester 9): 몸판 · 리프 품목 목록 맨 끝 [＋ 품목 추가] */
+        attachPickList(el, () => { try { refreshPartItemLists(); } catch (_) {} const sv = String((srcEl && srcEl.value) || '').trim(); return ((window.__partItems || {})[key] || []).filter(n => !sv || srcOf(n) === sv).map(n => withStock(specPickLabel(n, facNow()))).concat((() => { const O7 = sv ? [] : ((window.__partItems || {})[key + 'Other'] || []); return O7.length ? [{ value: '', label: '── 다른 생지 (재고 있음) ──', search: '', muted: true, noPick: true, cls: 'hw728-sep' }].concat(O7.map(n => withStock({ value: n, label: n, search: n + ' 다른 생지' }))) : []; })()).concat(window.hwItemAddRow ?   /* hotfix728: 리프(몸판) 아래 그 입고처의 다른 생지(재고 있음) */ [window.hwItemAddRow(el, facNow, key === 'rib' ? '리프 품목' : '몸판 품목')] : []); }, () => { el.dispatchEvent(new Event('change', { bubbles: true })); });   /* hotfix701(tester 9): 몸판 · 리프 품목 목록 맨 끝 [＋ 품목 추가] */
         el.addEventListener('blur', () => setTimeout(() => {
           const v = el.value.trim(); if (!v || v === '-') return;
           if (el.dataset.free === '1') return;   /* hotfix523: 직접입력 — 목록에 없어도 그대로 둔다 */
+          if (((window.__partItems || {})[key + 'Other'] || []).some(n => vendorKey(n) === vendorKey(v))) return;   /* hotfix728: 다른 생지(재고 있음)에서 고른 것은 그대로 */
           const sp = getFabricSpecs().find(x => vendorKey(x.name) === vendorKey(v) && !x.trashed) || getFabricSpecs().find(x => itemHasName(x, v) && !specGreigeOnly(x) && !x.trashed) || getFabricSpecs().find(x => itemHasName(x, v));   /* hotfix511: 이름 같은 판매 품목 먼저 */
           if (sp) { if (String(sp.name || '') !== v) { el.value = sp.name; el.dispatchEvent(new Event('change', { bubbles: true })); } return; }
           el.value = ''; const g = document.getElementById(key === 'rib' ? 'f_rib_gno' : 'f_body_gno'); if (g) g.value = '';
@@ -69687,7 +69703,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix726';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
+  const VERSION = 'v2.53 hotfix728';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
