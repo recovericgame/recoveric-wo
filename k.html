@@ -267,7 +267,7 @@ button{font-family:inherit;cursor:pointer}
 .ig{display:flex;gap:14px;align-items:flex-start;margin:6px 0 10px}
 .ig-steps{margin:0;padding-left:20px;font-size:15px;line-height:1.65}.ig-steps li{margin-bottom:8px}
 .ig-note{font-size:13.5px;color:var(--sub);background:#f8fafc;border-radius:11px;padding:10px 12px}
-#toast{position:fixed;left:50%;bottom:92px;transform:translateX(-50%) translateY(20px);background:#0f172a;color:#fff;border-radius:13px;padding:12px 18px;font-size:15px;font-weight:700;opacity:0;transition:.25s;z-index:40;max-width:90vw;text-align:center;pointer-events:none;word-break:keep-all}
+#toast{position:fixed;left:50%;bottom:92px;transform:translateX(-50%) translateY(20px);background:#0f172a;color:#fff;border-radius:13px;padding:12px 18px;font-size:15px;font-weight:700;opacity:0;transition:.25s;z-index:40;max-width:90vw;width:max-content;box-sizing:border-box;text-align:center;pointer-events:none;word-break:keep-all}
 #toast.on{opacity:.96;transform:translateX(-50%)}#toast.err{background:var(--red)}
 body:has(#sheet.on) #toast{top:calc(10px + env(safe-area-inset-top));bottom:auto;transform:translateX(-50%) translateY(-20px)}body:has(#sheet.on) #toast.on{transform:translateX(-50%)}   /* hotfix713b(디자인 점검): 창이 열려 있으면 알림은 화면 맨 위 — 칸 · [닫기] · 아래 단추를 가리지 않게 */
 .kk{display:none;position:fixed;inset:0;z-index:50;background:var(--g1);color:#fff;padding:40px 26px;text-align:center;flex-direction:column;justify-content:center;gap:14px}
@@ -1029,7 +1029,7 @@ import { initializeFirestore, getFirestore, persistentLocalCache, persistentMult
  *   읽는 것: proc_acc/{내 uid} · proc_pub/{내 업체}.gs (현일텍스가 보낸 생지출고) · proc_log(내 업체 것만)
  *   쓰는 것: proc_log 한 줄 — kind 'ship' part 'gs' (body 절 · n kg · ref 송장 사진) · kind 'st' part 'gs' stage seen | ack_cxl | photo
  *   사진: Storage gs_photos/{업체}/{생지출고}_{시각}.jpg */
-const KVER = 'k172 (hotfix739)';
+const KVER = 'k173 (hotfix740)';
 try { if (matchMedia('(min-width:700px)').matches) document.body.classList.add('k620pc'); } catch (_) {}   /* hotfix620: PC 에서는 휴대폰 화면 너비로 가운데 */
 /* hotfix572(대표 10/1): 거래 원단회사 고르기 — FABIWOS 는 여러 원단회사에 팔 프로그램. 편직공장 한 곳이 여러 원단회사와 거래하므로
  *   계정(proc_acc.companies)에 거래 원단회사 목록 · 위 [→ 원단회사 ▾] 와 삼선 메뉴에서 고름 · 고른 회사의 할 일 · 재고 · 보낸 내역만 보임
@@ -1311,6 +1311,9 @@ function kShipStat(l) {   /* hotfix581: 내가 보낸 출고 보고의 지금 �
 const kPhFail = () => lsGet(vKey('phfail'), []);
 const kHasPhoto = k => S.logs.some(l => l.by === 'vendor' && l.k === k && ((l.kind === 'st' && l.stage === 'photo') || (l.kind === 'ship' && l.ref)));
 const kInvAsk = x => !!(x && x.inv && !x.photo && !kHasPhoto(x.k));   /* hotfix661(W4 ⭐A): 송장 사진 요청이 살아 있는지 — inv 는 현일텍스 PC 가 "요청 && 사진 없음 && 출고 대기 > 0" 으로 올림 (출고 확인되면 저절로 꺼짐) */
+/* GG1a(중5): 이미 보낸(사진 있는) 건에 현일텍스가 [사진 요청] — 그 건의 송장 요청 글(proc_log req · 3일 안)보다 새 사진이 없으면 할 일에 "사진 요청" 줄 · 새 사진을 보내면 닫힘 (새 자료 없음 · 읽기만) */
+function kPhReq(x) { if (!x || kInvAsk(x)) return null; const R = S.logs.filter(l => l.by === 'us' && l.kind === 'req' && l.k === x.k && /송장/.test(String(l.note || '')) && Date.now() - tOf(l) < 3 * 864e5); if (!R.length) return null; const r = R.reduce((a, b) => tOf(b) >= tOf(a) ? b : a); const t = tOf(r);
+  return S.logs.some(l => l.by === 'vendor' && l.k === x.k && ((l.kind === 'st' && l.stage === 'photo') || (l.kind === 'ship' && l.ref)) && tOf(l) > t) ? null : r; }
 function kView(x) { const w = kSent(x); const j = w.reduce((a, l) => a + (parseFloat(l.body) || 0), 0), kg = w.reduce((a, l) => a + (parseFloat(l.n) || 0), 0); return { done: (x.done || 0) + j, kg: (x.kg || 0) + kg, pend: Math.max(0, (x.pend || 0) - j), wait: w.length > 0 }; }
 /* hotfix672(대표 10/14 "a 가 [출고했어요]를 눌렀는데 b · c 휴대폰에 그대로 남아 같은 출고가 두 번" · V쭈리):
  *   ① 요청 카드 보고 = 문서 이름이 그 요청 하나에 묶임(ks_요청_업체_순번) — a · b · c 가 같은 카드를 눌러도 같은 이름 → 두 번째는 서버가 거절(proc_log 는 만들기만 · 규칙 게시 없음)
@@ -1368,12 +1371,12 @@ window.addEventListener('focus', () => { if (Date.now() - (S.wakeAt || 0) > 1500
 window.addEventListener('online', () => kWake());
 window.__kWake = kWake;   /* 시험용 */
 function kAcked(x) { return lsGet(vKey('ack'), []).includes(x.k + ':' + x.cxl) || S.logs.some(l => l.by === 'vendor' && l.kind === 'st' && l.stage === 'ack_cxl' && l.k === x.k); }
-function kTodo(x) { const v = kView(x); return (v.pend > 0 && !v.wait) /* hotfix672: 보고가 있으면(확인 전) 할 일에서 빠짐 → [보낸 것 · 최근] */ || (x.inv && !x.photo && !kHasPhoto(x.k)) || (kPhFail().includes(x.k) && !kHasPhoto(x.k)) || (x.st === 'cxl' && x.cxl > 0 && !kAcked(x)); }   /* hotfix581: 사진을 못 올린 출고도 할 일로 */
+function kTodo(x) { const v = kView(x); return (v.pend > 0 && !v.wait) /* hotfix672: 보고가 있으면(확인 전) 할 일에서 빠짐 → [보낸 것 · 최근] */ || (x.inv && !x.photo && !kHasPhoto(x.k)) || (kPhFail().includes(x.k) && !kHasPhoto(x.k)) || (x.st === 'cxl' && x.cxl > 0 && !kAcked(x)) || !!kPhReq(x); }   /* hotfix581: 사진을 못 올린 출고도 할 일로 */   /* GG1a(중5): 보낸 건 사진 요청도 */
 const kQ = n => String(Math.round((parseFloat(n) || 0) * 10) / 10);
 const kY2 = n => String(Math.round((parseFloat(n) || 0) * 100) / 100);   /* hotfix679(대표): 원사 고리 · kg 은 소수 둘째 자리까지 보임(셋째에서 반올림) — 보이는 자리만 · 저장 · 셈 그대로 */
 function kSeen(x) { const seen = lsGet(vKey('seen'), []); if (seen.includes(x.k)) return; lsSet(vKey('seen'), seen.concat(x.k).slice(-300)); if (S.logs.some(l => l.by === 'vendor' && l.kind === 'st' && l.stage === 'seen' && l.k === x.k)) return; put(x, { kind: 'st', part: 'gs', stage: 'seen' }); }
 /* hotfix568: 할 일 종류 · 보낼 곳 거르기 */
-function kKind(x) { const v = kView(x); if (v.pend > 0 && !v.wait) return v.done > 0 ? 'part' : 'new'; if (x.st === 'cxl' && x.cxl > 0 && !kAcked(x)) return 'cxl'; if (((x.inv && !x.photo) || kPhFail().includes(x.k)) && !kHasPhoto(x.k)) return 'inv'; return ''; }
+function kKind(x) { const v = kView(x); if (v.pend > 0 && !v.wait) return v.done > 0 ? 'part' : 'new'; if (x.st === 'cxl' && x.cxl > 0 && !kAcked(x)) return 'cxl'; if (((x.inv && !x.photo) || kPhFail().includes(x.k)) && !kHasPhoto(x.k)) return 'inv'; if (kPhReq(x)) return 'inv'; return ''; }
 const KINDS = [['', '할 일 전체'], ['new', '새 요청'], ['part', '일부 보냄 · 남은 것'], ['inv', '송장 요청'], ['cxl', '남은 것 취소 알림']];
 const byDest = x => !S.dest || (x.dest || '') === S.dest;
 function paintFbar() {
@@ -1434,7 +1437,7 @@ function render() {
   if (!todo.length) { $('list').innerHTML = (S.kind ? '' : kYinHtml()) + ((S.dest || S.kind) ? `<div class="empty"><b>✓</b>고른 곳에는 할 일이 없습니다.<br>전체 할 일 ${todoAll.length}건<br><br><button type="button" class="k-go" style="max-width:260px;margin:0 auto" data-dclear>모두 보기</button></div>` : kbTopHtml() + `<div class="empty"><b>✓</b>지금 할 일이 없습니다.<br>현일텍스가 생지 출고를 보내면<br>여기에 나타나고 휴대폰이 울립니다.</div>`) + (S.kind ? '' : kRecentHtml(L)); return; }   /* hotfix672: 보낸 것 · 최근 */
   const ORD = { new: 0, part: 1, inv: 2, cxl: 3 };
   todo.sort((a, b) => (ORD[kKind(a)] ?? 9) - (ORD[kKind(b)] ?? 9) || String(a.date || '').localeCompare(String(b.date || '')));
-  $('list').innerHTML = (S.kind ? '' : kYinJump()) + kbTopHtml() + `<div class="sec-t">${S.dest ? esc(S.dest) + '(으)로 보낼 ' : esc(CN()) + ' 생지 출고 요청 '}${todo.length}건</div>` + todo.map(kCard).join('') + (S.kind ? '' : kRecentHtml(L) + kYinHtml());   /* hotfix672: 보낸 것 · 최근 */   /* hotfix614: 원사 받을 것 */
+  $('list').innerHTML = kbTopHtml() + `<div class="sec-t">${S.dest ? esc(S.dest) + '(으)로 보낼 ' : esc(CN()) + ' 생지 출고 요청 '}${todo.length}건</div>` + todo.map(kCard).join('') + (S.kind ? '' : kRecentHtml(L) + kYinHtml());   /* hotfix672: 보낸 것 · 최근 */   /* hotfix614: 원사 받을 것 */
   todo.forEach(x => { if (kView(x).pend > 0) kSeen(x); });
 }
 /* hotfix672: [할 일] 아래 "보낸 것 · 최근" — 다 보낸 요청(남음 0)이 할 일에서 사라지기 전 · 뒤에 모든 휴대폰에서 "보냄 · 확인 중" 또는 "끝" (할 일 수에는 안 셈) */
@@ -1458,8 +1461,8 @@ function kCard(x) {
     <div class="k-it" style="color:#475569">${esc(x.item)}${lot}</div>
     <div class="k-q3"><div><small>주문</small><b>${kQ(x.ord)}</b></div><div><small>보냄</small><b>${kQ(v.done)}</b></div><div><small>취소</small><b style="color:#94a3b8;text-decoration:line-through">${kQ(x.cxl)}</b></div></div>
     <div class="k-meta">${esc(CN())}가 남은 ${kQ(x.cxl)}절을 취소했습니다.<br><b>더 보내지 않으셔도 됩니다.</b></div><button type="button" class="k-go gray" data-kack="${esc(x.k)}">알겠습니다</button></div>`;
-  if ((v.pend <= 0 || v.wait) && kKind(x) === 'inv') { const pf = !(x.inv && !x.photo); return `<div class="k-card inv" data-kk="${esc(x.k)}"><span class="k-tag t-y">${pf ? '송장 사진 못 올림' : '송장 요청'}</span>${S.photoUp[x.k] === 'up' ? ' <span class="k-tag t-g">사진 올리는 중…</span>' : ''}
-    <div class="k-it">${esc(x.item)}${lot}</div><div class="k-meta">${esc(x.date)} · ${kQ(v.done)}절 보냄 · ${esc(x.dest)}<br>${pf ? '출고는 보냈지만 <b>송장 사진</b>이 올라가지 않았습니다. 다시 보내 주십시오.' : esc(CN()) + '가 이 출고의 <b>송장</b>을 요청했습니다. 사진을 찍어 보내 주십시오.'} (팩스로 보내셔도 됩니다)</div>
+  if ((v.pend <= 0 || v.wait) && kKind(x) === 'inv') { const rq = kPhReq(x); const pf = !(x.inv && !x.photo) && !rq; return `<div class="k-card inv" data-kk="${esc(x.k)}"><span class="k-tag t-y">${pf ? '송장 사진 못 올림' : rq ? '사진 요청' : '송장 요청'}</span>${S.photoUp[x.k] === 'up' ? ' <span class="k-tag t-g">사진 올리는 중…</span>' : ''}
+    <div class="k-it">${esc(x.item)}${lot}</div>${rq && !pf ? `<div class="k-meta"><b>송장 사진 다시 요청</b> · ${esc(kHm(rq))}</div>` : `<div class="k-meta">${esc(x.date)} · ${kQ(v.done)}절 보냄 · ${esc(x.dest)}<br>${pf ? '출고는 보냈지만 <b>송장 사진</b>이 올라가지 않았습니다. 다시 보내 주십시오.' : esc(CN()) + '가 이 출고의 <b>송장</b>을 요청했습니다. 사진을 찍어 보내 주십시오.'} (팩스로 보내셔도 됩니다)</div>`}
     <button type="button" class="k-go amber" data-kph="${esc(x.k)}">송장 사진 보내기</button></div>`; }
   const part = v.done > 0; const pct = x.ord ? Math.min(100, Math.round(v.done / x.ord * 100)) : 0;
   if (v.wait) { const W = kSent(x).sort((a, b) => tOf(a) - tOf(b));   /* hotfix672: 그 요청 보고가 하나라도 있으면(확인 전) 모든 휴대폰에서 "보냄 · 확인 중" — [출고했어요] 대신 [나머지 N절 더 보냄](따로 보이는 길) */
@@ -3104,7 +3107,7 @@ function kShipSheet(x, more, seenL) {   /* hotfix672: more = [나머지 더 보�
       st.busy = false; const mine = sheetIs(st.tok);
       if (ok2 && kDupOther(st.rq)) { const d = S.lastDup; S.lastDup = null; if (mine) kAlreadySheet(x, [d]); else toast('이미 다른 휴대폰에서 보낸 출고입니다 — 한 번만 들어갔습니다', true); return; }   /* hotfix672: 같은 이름을 다른 휴대폰이 먼저 씀 → 서버가 거절 → 보낸 사람 · 시각 · 절 · kg */
       if (ok2) kInvSave(x, st, st.rq);   /* hotfix689: 검수 기록 — 만들기만 · 같은 보고 번호 두 번째는 서버가 거절 */
-      if (ok2) { if (mine) closeSheet(); ring(); toast((j < v.pend ? `${kQ(j)}절 보냈다고 알렸습니다 — 남은 ${kQ(v.pend - j)}절은 할 일에 남습니다` : `${kQ(j)}절 보냈다고 ${CN()}에 알렸습니다`) + (blobs.length ? ` · 송장 사진 ${blobs.length > 1 ? blobs.length + '장 ' : ''}올리는 중` : '')); if (blobs.length) (async () => { for (const b of blobs) await kPhotoBg(x, b); })(); render(); } else if (mine) draw(); else toast('보내지 못했습니다 — 다시 눌러 주세요', true);   /* hotfix657(V8): 사진은 예전과 같은 길(gs_photos · st/photo 기록)로 한 장씩 차례로 */
+      if (ok2) { if (mine) closeSheet(); ring(); toast((j < v.pend ? `남은 ${kQ(v.pend - j)}절 · [보낸 것 · 최근]에서 더 보내기` : `${kQ(j)}절 보냈다고 ${CN()}에 알렸습니다`) + (blobs.length ? ` · 송장 사진 ${blobs.length > 1 ? blobs.length + '장 ' : ''}올리는 중` : '')); if (blobs.length) (async () => { for (const b of blobs) await kPhotoBg(x, b); })(); render(); } else if (mine) draw(); else toast('보내지 못했습니다 — 다시 눌러 주세요', true);   /* hotfix657(V8): 사진은 예전과 같은 길(gs_photos · st/photo 기록)로 한 장씩 차례로 */
     });
   };
   draw();
