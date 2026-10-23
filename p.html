@@ -1035,7 +1035,7 @@ import { initializeFirestore, getFirestore, persistentLocalCache, persistentMult
  *   읽는 것: proc_acc/{내 uid} · proc_pub/{내 업체} · proc_log(내 업체 것만)
  *   쓰는 것: proc_log 한 줄 추가(고치기 · 지우기 없음) · 처음 로그인 때 내 기기 등록 한 번
  */
-const PVER = 'p189 (hotfix741)';
+const PVER = 'p190 (hotfix742)';
 /* hotfix574(대표 10/1): 거래 원단회사 고르기 (판매 대비) — 가공소 한 곳이 여러 원단회사와 거래. 앱을 열면 먼저 [거래 원단회사] 화면 — 회사마다 진행 중 · 확인 요청 · 입력 전 건수
  *   계정(proc_acc.companies [{id, name, src}])에 회사 목록 · 없으면 현일텍스 · 고른 회사는 휴대폰이 기억(hwp.co) · 위 [› 회사 이름]을 누르면 다시 고름
  *   지금 서버 = 현일텍스 자료. 다른 원단회사가 FABIWOS 를 쓰면 그 회사 자료 자리(src)를 더함 */
@@ -1352,7 +1352,7 @@ function newsList() { const a = lsGet(vKey('news'), []); const lim = Date.now() 
 function newsSave(a) { lsSet(vKey('news'), a.slice(0, 60)); paintBell(); }
 function paintBell() { const n = newsList().filter(x => !x.read).length; const i = $('bell-n'); if (i) { i.textContent = n > 99 ? '99+' : (n || ''); i.className = n ? 'on' : ''; } const b = $('bell'); if (b) b.classList.toggle('has', !!n); }
 const NT = { new: ['새 작업의뢰', 't-new'], req: ['확인 요청', 't-req'], lack: ['부족분 확인', 't-req'], note: ['현일텍스 안내', 't-note'] };
-function newsLine(n) { if (n.k === 'chat') return { nm: CN() + ' 글', sub: n.note || '' };   /* hotfix613 */ const it = S.items.find(x => x.k === n.k); const nm = it ? `${it.item} · ${it.color}` : (n.name || '원단'); const q = it ? `몸판 ${Number(it.body) || 0}절${it.rib ? ' · 리프 ' + Number(it.rib) + '절' : ''}` : ''; return { nm, sub: n.type === 'new' ? q : (n.note || (n.type === 'req' ? '출고 예정일을 알려 주십시오' : '')) }; }
+function newsLine(n) { if (n.k === 'chat') return { nm: CN() + ' 글', sub: n.note || '' };   /* hotfix613 */ const it = S.items.find(x => x.k === n.k); const nm = it ? `${it.item} · ${it.color}` : (n.name || '원단'); const q = it ? `${it.print ? '' : '몸판 '}${Number(it.body) || 0}절${it.rib ? ' · 리프 ' + Number(it.rib) + '절' : ''}` : ''; return { nm, sub: n.type === 'new' ? q : (n.note || (n.type === 'req' ? '출고 예정일을 알려 주십시오' : '')) }; }
 function scanNews() {
   if (!S.gotPub || !S.gotLog || !S.acc) return;
   const us = S.logs.filter(l => l && l.by === 'us' && l.kind !== 'dev_fail' && l.kind !== 'cancel' && l.kind !== 'notice_off' && !(l.kind === 'st' && l.stage === 'chat_seen'));   /* hotfix620: 공지 내리기는 소식 아님 */   /* hotfix616: 원단회사가 읽음 표시는 소식 아님 */   /* hotfix613: 대화 보내기 취소는 소식 아님 */
@@ -1594,9 +1594,9 @@ function render() {
 }
 function card(it, st) {
   const nx = st.next;
-  const qtyB = `<div class="q"><span>몸판</span><b>${esc(it.body)}</b><em>절</em></div>`;
+  const qtyB = `<div class="q">${it.print ? '' : '<span>몸판</span>'}<b>${esc(it.body)}</b><em>절</em></div>`;   /* GG5: 나염 줄은 "N절" */
   const qtyR = it.rib ? `<div class="q rib"><span>리프</span><b>${esc(it.rib)}</b><em>절</em>${it.rib_item ? `<small>${esc(it.rib_item)}</small>` : ''}</div>` : '';
-  const rest = st.partial ? `<div class="qty2"><div class="q rest"><span>잔량</span><b>${st.restB}</b><em>몸판</em><b>${st.restR}</b><em>리프</em></div></div>` : '';
+  const rest = st.partial ? `<div class="qty2"><div class="q rest"><span>잔량</span><b>${st.restB}</b>${it.print ? '<em>절</em>' : `<em>몸판</em><b>${st.restR}</b><em>리프</em>`}</div></div>` : '';
   let etaH = '';
   if (st.eta && st.eta.date && !st.shippedAll) {
     const left = dayDiff(Date.now(), new Date(st.eta.date + 'T09:00:00').getTime());
@@ -1879,11 +1879,11 @@ function shipSheet(it) {
   const rq = pRq(), open0 = new Set(st.ships.map(l => l.id)); let dupOk = false;   /* hotfix668: 요청 번호(이 창) · 창을 열 때 있던 출고 기록 */
   const draw = () => {
     const rb = st.restB, rr = st.restR;
-    sheet(`<h3>${st.partial ? '잔량 출고' : '출고'}</h3><div class="sub">${esc(it.item)} · ${esc(it.color)} — ${st.partial ? `남은 것 몸판 ${rb} · 리프 ${rr}절` : `몸판 ${it.body}절${it.rib ? ' · 리프 ' + it.rib + '절' : ''}`}</div>
+    sheet(`<h3>${st.partial ? '잔량 출고' : '출고'}</h3><div class="sub">${esc(it.item)} · ${esc(it.color)} — ${it.print ? (st.partial ? `남은 것 ${rb}절` : `${it.body}절`) : st.partial ? `남은 것 몸판 ${rb} · 리프 ${rr}절` : `몸판 ${it.body}절${it.rib ? ' · 리프 ' + it.rib + '절' : ''}`}</div>
       <div class="choice"><button type="button" class="${SH.mode === 'all' ? 'on' : ''}" data-mode="all">${st.partial ? '남은 것 전부' : '전량 출고'}<small>한 번에 다 보냄</small></button><button type="button" class="${SH.mode === 'part' ? 'on' : ''}" data-mode="part">부분 출고<small>몸판 · 리프 절수 넣기</small></button></div>
-      ${SH.mode === 'part' ? `<div class="qin"><label>몸판 <em>(남은 ${rb})</em><input id="sh-b" type="text" inputmode="decimal" autocomplete="off" max="${rb}" placeholder="0"></label>${(it.rib || rr) ? `<label class="rib">리프 <em>(남은 ${rr})</em><input id="sh-r" type="text" inputmode="decimal" autocomplete="off" max="${rr}" placeholder="0"></label>` : ''}</div><div class="restnote" id="sh-rest"></div>` : ''}
+      ${SH.mode === 'part' ? `<div class="qin"><label>${it.print ? '수량' : '몸판'} <em>(남은 ${rb})</em><input id="sh-b" type="text" inputmode="decimal" autocomplete="off" max="${rb}" placeholder="0"></label>${(it.rib || rr) ? `<label class="rib">리프 <em>(남은 ${rr})</em><input id="sh-r" type="text" inputmode="decimal" autocomplete="off" max="${rr}" placeholder="0"></label>` : ''}</div><div class="restnote" id="sh-rest"></div>` : ''}
       <div class="row2"><button type="button" class="no" data-x>닫기</button><button type="button" class="ok${SH.mode ? '' : ' soft'}" data-ok>저장</button></div>`);
-    const upd = () => { const b = Math.min(rb, Math.max(0, hwNum(($('sh-b') || {}).value) || 0)), r = Math.min(rr, Math.max(0, hwNum(($('sh-r') || {}).value) || 0)); const el = $('sh-rest'); if (el) el.textContent = `보낸 뒤 잔량 — 몸판 ${rb - b} · 리프 ${rr - r}절` + ((rb - b) + (rr - r) > 0 ? ' (다음에 잔량 출고 예정일을 받습니다)' : ''); };
+    const upd = () => { const b = Math.min(rb, Math.max(0, hwNum(($('sh-b') || {}).value) || 0)), r = Math.min(rr, Math.max(0, hwNum(($('sh-r') || {}).value) || 0)); const el = $('sh-rest'); if (el) el.textContent = (it.print ? `보낸 뒤 잔량 — ${rb - b}절` : `보낸 뒤 잔량 — 몸판 ${rb - b} · 리프 ${rr - r}절`) + ((rb - b) + (rr - r) > 0 ? ' (다음에 잔량 출고 예정일을 받습니다)' : ''); };
     ['sh-b', 'sh-r'].forEach(id => { const el = $(id); if (el) el.addEventListener('input', upd); }); upd();
     if ($('sh-b')) setTimeout(() => $('sh-b').focus(), 60);
   };
@@ -1949,7 +1949,7 @@ function drawDrawer() {
   const items = S.items.filter(it => !stOf(it).shippedAll);
   $('dr-t').textContent = (S.acc ? S.acc.vendor : '') + ' › ' + CN(); $('dr-s').textContent = `진행 중 ${items.length}건 · 누르면 그 원단으로`;
   $('dr-l').innerHTML = items.length ? items.slice().sort((a, b) => (!!stOf(b).openReq - !!stOf(a).openReq) || (String(b.date || '') + String(b.wo || '')).localeCompare(String(a.date || '') + String(a.wo || ''))).map(it => { const st = stOf(it); const cur = st.cur >= 0 ? st.stages[st.cur].n : '입력 전';
-    return `<button type="button" class="dr" data-k="${esc(it.k)}"><div class="l1"><i class="${st.openReq ? 'req' : ''}"></i><b>${esc(it.item)} · ${esc(it.color)}</b></div><div class="l2"><span class="st">${esc(cur)}</span><span class="q">몸판 ${Number(it.body) || 0}${it.rib ? ' · 리프 ' + Number(it.rib) : ''}절</span>${st.eta && st.eta.date ? `<span class="eta">예정 ${esc(md(st.eta.date))}</span>` : ''}${st.openReq ? '<span class="rq">확인 요청</span>' : ''}</div></button>`; }).join('') : '<div class="pe">진행 중인 원단이 없습니다.</div>';
+    return `<button type="button" class="dr" data-k="${esc(it.k)}"><div class="l1"><i class="${st.openReq ? 'req' : ''}"></i><b>${esc(it.item)} · ${esc(it.color)}</b></div><div class="l2"><span class="st">${esc(cur)}</span><span class="q">${it.print ? '' : '몸판 '}${Number(it.body) || 0}${it.rib ? ' · 리프 ' + Number(it.rib) : ''}절</span>${st.eta && st.eta.date ? `<span class="eta">예정 ${esc(md(st.eta.date))}</span>` : ''}${st.openReq ? '<span class="rq">확인 요청</span>' : ''}</div></button>`; }).join('') : '<div class="pe">진행 중인 원단이 없습니다.</div>';
 }
 document.addEventListener('click', e => { if (e.target.closest && e.target.closest('#hq-co')) { e.stopPropagation(); coHome(true); } }, true);
 function openDrawer() { drawDrawer(); paintNset(); $('drawer').classList.add('on'); lockScroll(true); }
