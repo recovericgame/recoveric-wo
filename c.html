@@ -867,7 +867,7 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/fireba
 import { getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult, onAuthStateChanged, signOut, setPersistence, browserLocalPersistence } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 import { initializeFirestore, getFirestore, persistentLocalCache, persistentMultipleTabManager, doc, getDoc, setDoc, deleteDoc, collection, query, where, onSnapshot as fsOnSnapshot, addDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
-const CVER = 'c129 (hotfix749)';
+const CVER = 'c130 (hotfix750)';
 const EMBED = /[?&]embed=1(?:&|$)/.test(location.search);   /* FABIWOS [대화] 창 안 */
 if (EMBED) document.documentElement.classList.add('embed');
 const cfg = { apiKey: "AIzaSyAIaNFZozda5sp4Qjs7LEn-aXYLX1JZi10", authDomain: "recoveric-wo.firebaseapp.com", projectId: "recoveric-wo", storageBucket: "recoveric-wo.firebasestorage.app", messagingSenderId: "267946532287", appId: "1:267946532287:web:fcc1b597c9bf53c9d8950a" };
@@ -1079,7 +1079,8 @@ const GRP = [['qc', '현장 QC'], ['yarn', '원사'], ['gs', '편직'], ['pc', '
 const GRP_I = Object.fromEntries(GRP.map((g, i) => [g[0], i])); const GRP_N = Object.fromEntries(GRP);
 function grpOf(r) { if (r.type === 'qc') return 'qc'; if (r.type === 'gs') return 'gs'; const T = (S.vtypes || {})[r.name] || [];
   if (T.includes('염색처') || T.includes('가공처')) return 'pc'; if (T.includes('후가공처')) return 'post'; if (T.includes('나염공장')) return 'print'; if (T.includes('원사 구매처')) return 'yarn'; return 'pc'; }
-function whoOf(l) { if (l.vendor === FIELD) return mineQc(l) ? '나' : nameOf(l.email); if (l.by === 'us') return String(l.email || '').toLowerCase() === S.me ? '나' : nameOf(l.email); return l.vendor || ''; }
+function whoOf(l) { if (l.vendor === FIELD) return mineQc(l) ? '나' : nameOf(l.email); if (l.by === 'us') return String(l.email || '').toLowerCase() === S.me ? '나' : nameOf(l.email); return vWho(l); }
+const vWho = l => String(l.vendor || '') + (l.who ? ' · ' + String(l.who).slice(0, 20) : '');   /* HH7a: 업체 · 담당자 이름 */
 const shortT = t => { const d = new Date(t), n = new Date(); if (d.toDateString() === n.toDateString()) return HWChat.hm(t); const y = new Date(n); y.setDate(n.getDate() - 1); if (d.toDateString() === y.toDateString()) return '어제'; return (d.getMonth() + 1) + '월 ' + d.getDate() + '일'; };
 
 /* ---------- 그리기 ---------- */
@@ -1127,13 +1128,13 @@ function kitMsgs(rk) {
   const seenV = type === 'qc' ? 0 : roomLogs(rk).filter(l => l.by === 'vendor' && l.kind === 'st' && l.stage === 'chat_seen').reduce((a, l) => Math.max(a, tOf(l)), 0);
   const nts = new Set(roomLogs(rk).filter(l => l.kind === 'notice_on' && l.ref).map(l => l.ref)); const nb = noticeOf(rk);
   return M.map(l => { const out = type === 'qc' ? mineQc(l) : (l.by === 'us' && String(l.email || '').toLowerCase() === S.me); const t = tOf(l);
-    const staff = l.vendor === FIELD || l.by === 'us'; const who = staff ? nameOf(l.email) : l.vendor;
+    const staff = l.vendor === FIELD || l.by === 'us'; const who = staff ? nameOf(l.email) : vWho(l);   /* HH7a: 공장 글 = 업체 · 담당자 이름 (이름 없는 옛 글은 업체 이름만) */
     let reId = '', rt = null; if (type === 'qc') { if (l.kind === 'field_reply') { reId = l.ref; rt = byId[l.ref] || S.field.find(x => x.id === l.ref); } } else if (String(l.chip || '').startsWith('re:')) { reId = String(l.chip).slice(3); rt = byId[reId] || null; }
     let mark = '';
     if (out) { if (type === 'qc') { const n = new Set(acksOf(l.id).filter(a => String(a.email || '').toLowerCase() !== S.me).map(a => String(a.email || '').toLowerCase())).size; mark = n ? '' : '1'; /* hotfix627: 카톡처럼 — 읽으면 1 이 사라짐 ("확인 N" 감춤) */ } else mark = seenV >= t ? '' : '1'; }
     else if (staff && type !== 'qc') mark = seenV >= t ? '' : '1';
     const canDel = type === 'qc' ? S.me === OWNER : (l.by === 'us' && (S.me === OWNER || String(l.email || '').toLowerCase() === S.me));
-    return { id: l.id, t, out, who, whoKey: staff ? 's:' + String(l.email || l.k || '') : 'v:' + l.vendor, av: avTxt(who), avc: staff ? HWChat.avc(who) : 'c-' + type, note: l.note, att: l.att || null,
+    return { id: l.id, t, out, who, whoKey: staff ? 's:' + String(l.email || l.k || '') : 'v:' + l.vendor + (l.who ? '|' + l.who : ''), av: avTxt(staff ? who : l.vendor), avc: staff ? HWChat.avc(who) : 'c-' + type, note: l.note, att: l.att || null,
       re: reId ? { who: rt ? (whoOf(rt) === '나' ? '나' : whoOf(rt)) : '', text: rt ? (String(rt.note || '').trim() || HWChat.word(rt.att)) : '지난 글' } : null, reId, replyId: type === 'qc' ? (l.kind === 'field_reply' ? l.ref : l.id) : l.id,
       mark, notice: !!l.notice || nts.has(l.id) || (nb && nb.ref === l.id), canDel, delLabel: '모두에게서 삭제', delSub: type === 'qc' ? '현장 휴대폰 · PC 모두에서 사라짐 (대표만)' : '업체 앱에서도 사라짐', delAsk: type === 'qc' ? '이 글을 지울까요? 현장 휴대폰 · PC 모두에서 사라집니다.' : '보내기 취소할까요? 업체 앱에서도 사라집니다.' }; });
 }

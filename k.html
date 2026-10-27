@@ -1034,7 +1034,7 @@ import { initializeFirestore, getFirestore, persistentLocalCache, persistentMult
  *   읽는 것: proc_acc/{내 uid} · proc_pub/{내 업체}.gs (현일텍스가 보낸 생지출고) · proc_log(내 업체 것만)
  *   쓰는 것: proc_log 한 줄 — kind 'ship' part 'gs' (body 절 · n kg · ref 송장 사진) · kind 'st' part 'gs' stage seen | ack_cxl | photo
  *   사진: Storage gs_photos/{업체}/{생지출고}_{시각}.jpg */
-const KVER = 'k182 (hotfix749)';
+const KVER = 'k183 (hotfix750)';
 try { if (matchMedia('(min-width:700px)').matches) document.body.classList.add('k620pc'); } catch (_) {}   /* hotfix620: PC 에서는 휴대폰 화면 너비로 가운데 */
 /* hotfix572(대표 10/1): 거래 원단회사 고르기 — FABIWOS 는 여러 원단회사에 팔 프로그램. 편직공장 한 곳이 여러 원단회사와 거래하므로
  *   계정(proc_acc.companies)에 거래 원단회사 목록 · 위 [→ 원단회사 ▾] 와 삼선 메뉴에서 고름 · 고른 회사의 할 일 · 재고 · 보낸 내역만 보임
@@ -1169,6 +1169,7 @@ async function enter(user) {
   $('vn').textContent = acc.vendor; $('meta').textContent = '→ ' + CN();
   S.dest = ''; S.kind = '';   // hotfix581(대표 10/1): [보낼 곳] 거르기 없앰 — 카드에 보낼 곳은 그대로 보임
   subscribe(); render(); hwbInit();   /* hotfix600 */
+  kWhoAsk(false);   /* HH7a: 이 휴대폰에 이름이 없으면 처음 한 번 묻기 */
   (S.permP || Promise.resolve()).then(() => pushReg(false)).then(ok => { if (ok && !lsGet('hwk.pushOkShown', false)) { lsSet('hwk.pushOkShown', true); toast('알림이 켜졌습니다 — 앱을 꺼 둬도 출고 요청이 오면 울립니다'); } else if (!ok) nudgeNotify(); });
 }
 /* ---------- 앱을 꺼 둬도 알림 ---------- */
@@ -1282,11 +1283,41 @@ function kRq() { return 'r' + Date.now().toString(36) + Math.random().toString(3
 async function kDupIn(ref, e) { if (!ref || !(e && e.code === 'permission-denied')) return false; try { const s = await getDoc(ref); const ok = !!(s && s.exists()); if (ok) S.lastDup = Object.assign({ id: ref.id }, s.data() || {}); return ok; } catch (_) { return false; } }   /* hotfix672: 찾은 문서를 S.lastDup 에 — 다른 휴대폰이 먼저 쓴 것인지 봄 */
 const kDupOther = id => !!(S.lastDup && S.lastDup.id === id && S.lastDup.dev && S.lastDup.dev !== S.dev);   /* hotfix672: 같은 이름 문서가 다른 휴대폰 것 */
 /* hotfix668: 사람 이름(who) 칸 스위치 — 대표가 규칙(proc_log 업체 쓰기 hasOnly 에 who)을 게시한 뒤에만 true · 지금 켜면 보고가 거절됨 */
-const K_WHO_ON = false;
+const K_WHO_ON = true;   /* HH7a(대표 10/27 "담당자 이름으로 데이터가 나오게"): 게시된 718 규칙이 who(1~20자)를 허용 → 켬 · 이름은 이 휴대폰에 기억(hwk.who) · 처음 한 번 묻고 [설정 › 내 이름 바꾸기] */
+const kWhoNorm = s => String(s == null ? '' : s).normalize('NFC').trim().replace(/\s+/g, ' ');
+const kWhoJamo = /[\u1100-\u11FF\u3130-\u318F\uA960-\uA97F\uD7B0-\uD7FF\uFFA0-\uFFDC]/;   /* 한글 낱자(ㅋ · ㅅ · 덜 된 글자) */
+const kWhoOk = s => { const v = kWhoNorm(s); const n = [...v].length; return n >= 2 && n <= 20 && v.length <= 20 && !kWhoJamo.test(v) && /^[\p{L}\p{M} ]+$/u.test(v) && /\p{L}/u.test(v); };   /* HH7a: 모든 나라 글자(한글 · 영문 · 악센트 · 한자 · 태국어 …) + 띄어쓰기 2~20자 · 숫자 · 기호 안 됨 · 규칙 1~20자 안 */
+const kWhoWhy = s => { const v = kWhoNorm(s); const n = [...v].length; if (!v) return ''; if (!/^[\p{L}\p{M} ]+$/u.test(v) || !/\p{L}/u.test(v)) return '글자와 띄어쓰기만 넣어 주십시오 (숫자 · 기호 안 됨)'; if (kWhoJamo.test(v)) return '완성된 글자로 넣어 주십시오 (ㅋ · ㅅ 같은 낱자 안 됨)'; if (n < 2) return '2자 이상 넣어 주십시오'; if (n > 20 || v.length > 20) return '20자까지 넣을 수 있습니다'; return ''; };
+function kWhoPh() { try { const w = String(localStorage.getItem('hwk.who') || '').trim(); return kWhoOk(w) ? w : ''; } catch (_) { return ''; } }
+/* 사람별 계정(proc_acc.name 있음) = 계정 이름 그대로(R4 규칙: who == 계정 이름) · 공용 계정(이름 없음) = 이 휴대폰 이름 */
+const kWhoAcc = () => { const n = S.acc && S.acc.name; return (typeof n === 'string' && n !== '' && n.length <= 20) ? n : ''; };
+const kWhoGet = () => kWhoAcc() || kWhoPh();
+function kWhoAsk(force) {
+  if (!K_WHO_ON || document.getElementById('k-who') || kWhoAcc()) return;   /* 사람별 계정은 묻지 않음 */
+  const cur = kWhoPh(); if (!force && (cur || window.__hwWhoLater || (window.__reviveTs && !window.__hwWhoAsk))) return;   /* 시험 틀(가짜 Firebase · __reviveTs 있음)에서는 처음 묻기 안 띄움 — 새 검사만 __hwWhoAsk 로 켬 */
+  if (!document.getElementById('k-who-css')) { const st = document.createElement('style'); st.id = 'k-who-css'; st.textContent = '#k-who{position:fixed;inset:0;z-index:2147483002;background:rgba(15,23,42,.6);display:flex;align-items:flex-end;justify-content:center}#k-who .b{width:100%;max-width:520px;background:var(--surface);border-radius:22px 22px 0 0;padding:22px 18px calc(18px + env(safe-area-inset-bottom));box-sizing:border-box}#k-who h3{margin:0 0 6px;font-size:var(--fs-lg);color:var(--ink)}#k-who p{margin:0 0 12px;font-size:var(--fs-md);color:var(--gray-600);line-height:1.5}#k-who input{width:100%;box-sizing:border-box;height:52px;font-size:20px;padding:0 14px;border:2px solid var(--gray-300);border-radius:var(--r-m);color:var(--ink)}#k-who input:focus{outline:none;border-color:var(--brand-700)}#k-who input.bad{border-color:var(--st-bad-solid)}#k-who .kw-e{min-height:22px;margin-top:6px;font-size:var(--fs-sm);color:var(--st-bad-ink);font-weight:700}#k-who .kw-a{display:flex;gap:8px;margin-top:8px}#k-who .kw-a button{flex:1;height:52px;font-size:var(--fs-md);font-weight:800;border-radius:var(--r-m);border:1px solid var(--gray-300);background:var(--surface);color:var(--gray-700)}#k-who .kw-a button.kw-s{background:var(--brand-700);border-color:var(--brand-700);color:#fff}#k-who .kw-a button:disabled{background:var(--gray-200);border-color:var(--gray-200);color:var(--gray-500)}'; document.head.appendChild(st); }
+  const d = document.createElement('div'); d.id = 'k-who';
+  d.innerHTML = `<div class="b" role="dialog" aria-modal="true" aria-labelledby="kw-t"><h3 id="kw-t">${force ? '내 이름 바꾸기' : '이 휴대폰을 쓰시는 분 이름'}</h3><p>기록에 이 이름이 남습니다 · 2~20자 · 숫자 안 됨</p><input id="kw-in" type="text" maxlength="60" autocomplete="off" autofocus placeholder="예: 홍길동 · Nguyen Van A" aria-label="이름"><div class="kw-e" aria-live="polite"></div><div class="kw-a">${force ? '<button type="button" data-kw="x">닫기</button>' : '<button type="button" data-kw="later">나중에</button>'}<button type="button" class="kw-s" data-kw="save">저장</button></div></div>`;
+  document.body.appendChild(d);
+  const inp = d.querySelector('#kw-in'), sv = d.querySelector('[data-kw="save"]'), er = d.querySelector('.kw-e');
+  const chk = comp => { const v = inp.value; const ok = kWhoOk(v); sv.disabled = !ok; const why = comp === true ? '' : kWhoWhy(v); er.textContent = why; inp.classList.toggle('bad', !!why); };   /* 빈칸은 막기만 · 1글자 · 21자 · 기호는 빨간 글 + 빨간 테두리 */
+  inp.value = cur; chk(); inp.addEventListener('input', e => chk(!!(e && e.isComposing))); inp.addEventListener('compositionend', () => chk());   /* 한글 조립 중에는 막기만 · 빨간 글은 조립이 끝난 뒤 */
+  inp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); sv.click(); } });
+  d.addEventListener('click', e => { const b = e.target.closest && e.target.closest('[data-kw]'); if (!b) return;
+    if (b.dataset.kw === 'x') { d.remove(); return; }
+    if (b.dataset.kw === 'later') { d.remove(); window.__hwWhoLater = true; toast('이름 없이 씁니다 — 다음에 앱을 열 때 다시 묻습니다'); return; }   /* [나중에] = who 없이 저장 · 이번에 연 동안 다시 안 물음 */
+    const v = kWhoNorm(inp.value); if (!kWhoOk(v)) { chk(); inp.focus(); return; }
+    try { localStorage.setItem('hwk.who', v); } catch (_) { er.textContent = '이 휴대폰에 저장하지 못했습니다'; return; }
+    d.remove(); toast(v + ' 님 — 이제 보고 · 대화에 이 이름이 남습니다'); if (S.tab === 'set') { try { render(); } catch (_) {} } });
+  setTimeout(() => { try { inp.focus(); } catch (_) {} }, 60); }
+window.__kWhoAsk = kWhoAsk;   /* 시험용 */
+let K_INV_WHO_ON = false;   /* HH7a: 송장 판독 기록(knit_inv_checks)의 who — 지금 게시된 718 규칙은 이 칸을 막음(넣으면 송장 확인 저장 거절) → 기본 꺼짐 · 11/3 R4 게시 확인 뒤 HH7b 에서 true */
+const kInvWho = d => { if (K_INV_WHO_ON && d) { const w = kWhoGet(); if (w) d.who = w; } return d; };
+window.__kInvWhoOn = v => { K_INV_WHO_ON = !!v; };   /* 시험용 */
 async function put(x, o, rq) {
   S.lastDup = null;   /* hotfix672 */
   const d = Object.assign({ vendor: S.acc.vendor, k: x.k, wo: x.no || '', note: '', by: 'vendor', uid: S.uid, dev: S.dev, at: serverTimestamp() }, o);
-  if (K_WHO_ON) { try { const w = String(localStorage.getItem('hwk.who') || '').trim().slice(0, 20); if (w) d.who = w; } catch (_) {} }
+  if (K_WHO_ON) { const w = kWhoGet(); if (w) d.who = w; }   /* HH7a: 한글 · 영문 2~20자만 (규칙 1~20자 안) · 이름 없으면 칸 없음 = 옛 기록과 같음 */
   Object.keys(d).forEach(k => { if (d[k] === undefined) delete d[k]; });
   const sig = JSON.stringify([d.k, d.kind, d.stage, d.mode, d.part, d.body, d.rib, d.n, d.ref, d.issue, d.date, d.note, d.kg]);   /* hotfix636: + kg (B안 생산 완료 kg 칸) */   /* hotfix596: 같은 내용을 보내는 중에 또 누르면 무시 — 느린 인터넷에서 두 번 눌러 출고가 두 번 잡히던 것 (다른 기록은 막지 않음) */
   S.putBusy = S.putBusy || new Set(); if (S.putBusy.has(sig)) { toast('보내는 중입니다 — 잠시만 기다려 주십시오'); return false; } S.putBusy.add(sig);
@@ -1454,6 +1485,7 @@ function drawDrawer() {
       <button type="button" class="di${S.tab === 'hist' ? ' on' : ''}" data-dt="hist">보낸 내역</button></div>
     <div class="dsec"><h4>설정</h4>
       <button type="button" class="di" data-dt="set">알림 · 소리 · 진동<span class="dc${S.push ? '' : ' red'}">${S.push ? '켜짐' : (perm === 'denied' ? '막힘' : '꺼짐')}</span></button>
+      ${kWhoAcc() ? '' : `<button type="button" class="di" data-set="who">${kWhoGet() ? '내 이름 바꾸기' : '이름 넣기'}<span class="dc">${esc(kWhoGet() || '없음')}</span></button>`}
       ${isApp() ? '' : '<button type="button" class="di" data-set="inst">바탕화면에 앱 설치</button>'}
       <button type="button" class="di red-t" data-set="out">로그아웃</button></div>
     <div class="dver">편직팀 · FABIWOS ${esc(KVER)}</div>`;
@@ -2234,6 +2266,7 @@ function kSet() {
     <div class="rw"><b>미리 듣기</b><button type="button" data-set="test">울려 보기</button></div></div>
     <div class="sec-t">앱</div><div class="set">
     ${isApp() ? '<div class="rw"><b>바탕화면 앱<small>설치되어 있습니다</small></b><span class="ok-t">설치됨</span></div>' : '<div class="rw"><b>바탕화면에 앱 설치<small>초록색 [편직팀] 아이콘</small></b><button type="button" class="g" data-set="inst">설치</button></div>'}
+    <div class="rw"><b>내 이름<small>${kWhoAcc() ? esc(kWhoAcc()) + ' 님 (계정 이름)' : (kWhoGet() ? esc(kWhoGet()) + ' 님' : '이름 없음')}</small></b>${kWhoAcc() ? '' : `<button type="button" data-set="who">${kWhoGet() ? '내 이름 바꾸기' : '이름 넣기'}</button>`}</div>
     <div class="rw"><b>${esc(S.acc.vendor)}<small>아이디 ${esc(S.acc.login_id || '')} · ${esc(KVER)}</small></b><button type="button" class="red" data-set="out">로그아웃</button></div></div>
     <div class="empty" style="padding:24px 10px;font-size:13px">편직팀 앱 (FABIWOS)</div>`;
 }
@@ -2618,7 +2651,7 @@ function kInvDoc(x, st, rq) {   /* 검수 기록 한 건 — 숫자는 0.1kg 정
 async function kInvSave(x, st, rq) {   /* [보냄]이 들어간 뒤 — 만들기만 · 못 적으면 이 휴대폰에 남겨 다음에 */
   if (!st.inv || st.inv.phase !== 'done' || !rq) return 'none';
   if (kInvNoSave()) return 'fake';   /* hotfix693: 가짜 판독 기록은 적지 않음 */
-  const d = kInvDoc(x, st, rq); const q = lsGet(vKey('kinvq'), []);
+  const d = kInvWho(kInvDoc(x, st, rq)); const q = lsGet(vKey('kinvq'), []);
   try { await Promise.race([setDoc(doc(db, 'knit_inv_checks', rq), d), new Promise((_, no) => setTimeout(() => no(new Error('wait')), 10000))]); kInvFlush(); return 'ok'; }
   catch (e) { if (e && e.code === 'permission-denied') { try { const s = await getDoc(doc(db, 'knit_inv_checks', rq)); if (s && s.exists()) return 'dup'; } catch (_) {} }
     if (!(e && e.message === 'wait')) { const o = Object.assign({}, d, { at: null, __id: rq }); lsSet(vKey('kinvq'), q.filter(z => z.__id !== rq).concat(o).slice(-50)); } return 'later'; }
@@ -3072,7 +3105,7 @@ async function kbCheck(B, c, j) {   /* 검수 기록 — 만들기만(같은 번
     statedCount: J.sc, statedTotal10: J.st10, readCount: J.n, readTotal10: J.read10, diff10: J.diff10, diffPct: J.pct, tol10: J.tol10, verdict: J.verdict, flagN: J.flagN,
     applied: true, prevJ: null, prevKg: null, sentJ: J.n, sentKg10: J.read10, aiModel: String((s.res && s.res.model) || ''), aiModel2: '', aiMs: 0, aiMs2: 0, aiFirst: [], aiTotalRaw: String(g.tRaw || ''), status: 'confirmed',
     bat: B.id, sheet: s.i, g: g.g, fp: String(s.fp || ''), box, avg10: j.avg10, kpj10: j.kpj10, avgPct: j.pct, color: j.color };
-  const q = lsGet(vKey('kinvq'), []);
+  kInvWho(d); const q = lsGet(vKey('kinvq'), []);
   try { await Promise.race([setDoc(doc(db, 'knit_inv_checks', rid), d), new Promise((_, no) => setTimeout(() => no(new Error('wait')), 10000))]); return 'ok'; }
   catch (e) { if (e && e.code === 'permission-denied') { try { const sn = await getDoc(doc(db, 'knit_inv_checks', rid)); if (sn && sn.exists()) return 'dup'; } catch (_) {} }
     if (!(e && e.message === 'wait')) lsSet(vKey('kinvq'), q.filter(z => z.__id !== rid).concat(Object.assign({}, d, { at: null, __id: rid })).slice(-50)); return 'later'; }
@@ -3205,8 +3238,9 @@ document.addEventListener('click', async e => {
   if (sb) { const a = sb.dataset.set; if ($('drw').classList.contains('on')) openDrw(false);
     if (a === 'push') { const ok = await pushReg(true); toast(ok ? '알림이 켜졌습니다 — 앱을 꺼 둬도 울립니다' : '알림 등록이 안 됐습니다' + (S.pushErr ? ' — ' + S.pushErr.slice(0, 60) : ''), !ok); render(); }
     else if (a === 'test') ring();
+    else if (a === 'who') kWhoAsk(true);   /* HH7a */
     else if (a === 'inst') doInstall();
-    else if (a === 'out') { if (!confirm('로그아웃합니까?')) return; S.sess = null; S.acc = null; await pushOff(); await signOut(auth); }
+    else if (a === 'out') { if (!confirm('로그아웃합니까?')) return; try { localStorage.removeItem('hwk.who'); } catch (_) {} window.__hwWhoLater = false; S.sess = null; S.acc = null;   /* HH7a: 다음 사람이 이전 이름으로 기록되지 않게 휴대폰 이름 지움 */ await pushOff(); await signOut(auth); }
     return; }
   if (e.target.closest && e.target.closest('[data-cop]')) { kCoSheet(); return; }
   { const bh = e.target.closest && e.target.closest('[data-bhide]'); if (bh) { const id = bh.dataset.bhide;   /* hotfix626: 띠 [확인 ✕] — 이 휴대폰에서만 감춤 */
