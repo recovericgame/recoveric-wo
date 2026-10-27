@@ -429,6 +429,9 @@ button.kd-c{min-height:74px;width:100%;cursor:pointer;-webkit-tap-highlight-colo
 .ys-n{flex:1;min-width:0;font-size:17px;font-weight:800;color:var(--ink);word-break:keep-all}.ys-c{font-size:13px;font-weight:700;color:var(--sub)}
 .ys-kg{white-space:nowrap;font-size:14px;color:var(--sub)}.ys-kg b{font-size:22px;font-weight:900;color:var(--st-ok-ink);margin-right:1px}
 .st-r2.ys.neg .ys-kg b{color:var(--st-bad-ink)}.st-r2.ys.zero .ys-kg b{color:var(--dim)}
+.st-r2.ys.neg.ymg{background:#fff;border-color:var(--line);border-left-color:var(--dim)}.st-r2.ys.neg.ymg .ys-kg b{color:var(--sub)}
+.st-r2.ys.neg.ymo{background:var(--st-warn-bg);border-color:var(--st-warn-line);border-left-color:var(--st-warn-solid)}.st-r2.ys.neg.ymo .ys-kg b{color:var(--st-warn-ink)}
+.st-r2.ys .ys-ymw{font-size:14px;font-weight:800;line-height:1.4}.st-r2.ys .ys-ymw.o{color:var(--st-warn-ink)}.st-r2.ys .ys-ymw.r{color:var(--st-bad-ink)}
 .st-r2.ys .st-is{margin:6px 0 0}
 .st-r2.ys .st-btns.y3{margin:8px 0 0}.st-r2.ys .st-btns.y3 button{height:44px;min-height:44px;border-radius:10px}
 .st-r2.ys .st-ship{background:var(--brand-700);color:#fff}
@@ -1034,7 +1037,7 @@ import { initializeFirestore, getFirestore, persistentLocalCache, persistentMult
  *   읽는 것: proc_acc/{내 uid} · proc_pub/{내 업체}.gs (현일텍스가 보낸 생지출고) · proc_log(내 업체 것만)
  *   쓰는 것: proc_log 한 줄 — kind 'ship' part 'gs' (body 절 · n kg · ref 송장 사진) · kind 'st' part 'gs' stage seen | ack_cxl | photo
  *   사진: Storage gs_photos/{업체}/{생지출고}_{시각}.jpg */
-const KVER = 'k184 (hotfix751)';
+const KVER = 'k186 (hotfix753)';
 try { if (matchMedia('(min-width:700px)').matches) document.body.classList.add('k620pc'); } catch (_) {}   /* hotfix620: PC 에서는 휴대폰 화면 너비로 가운데 */
 /* hotfix572(대표 10/1): 거래 원단회사 고르기 — FABIWOS 는 여러 원단회사에 팔 프로그램. 편직공장 한 곳이 여러 원단회사와 거래하므로
  *   계정(proc_acc.companies)에 거래 원단회사 목록 · 위 [→ 원단회사 ▾] 와 삼선 메뉴에서 고름 · 고른 회사의 할 일 · 재고 · 보낸 내역만 보임
@@ -1681,11 +1684,14 @@ function kYShow(n, c) { let s = String(n == null ? '' : n).trim(); const t = Str
   if (t && s.endsWith(' ' + t) && kYTok(s.slice(0, -(t.length + 1)), t)) s = s.slice(0, -(t.length + 1)).trim();
   return s || String(n || ''); }
 function kYCol(n, c) { const t = String(c || '').trim(); return t && !kYTok(kYShow(n, t), t) ? t : ''; }   /* 이름에 이미 있는 색상은 옆에 또 안 붙임 */
+function kYLv(kg) { const v = Math.round((Number(kg) || 0) * 10) / 10; return v < -500 ? 2 : v < -10 ? 1 : 0; }   /* 원사D(판 1): 0.1 반올림 · "미만" = 작다 */
+window.__kYmD1 = kYLv;
 function kYRow(r) {
   const L = kYIssues(r);
   const kg = Number(r.kg || 0), kgS = kYKg(r);   /* 679 마무리(designer ⑤): 보이는 kg = kg2(소수 둘째 자리 · 표시용) — 색 · 요청에 보내는 값은 kg 그대로 */   /* hotfix657(V2): 사종마다 독립 카드 · 음수 .neg(빨강 띠) · 0 .zero(회색) · 천단위 쉼표 */
-  return `<div class="st-r2 ys${kg < 0 ? ' neg' : kg === 0 ? ' zero' : ''}"><div class="ys-h"><span class="ys-n" title="${esc(r.yarn)}">${esc(kYShow(r.yarn, r.color))}${kYCol(r.yarn, r.color) ? ' <small class="ys-c">' + esc(r.color) + '</small>' : ''}</span><span class="ys-kg"><b>${kKg2(kgS)}</b>kg</span></div>
-    ${L.map(o => { const w = o.i.issue === YI.diff ? '수량이 다르다고 보냄 (' + o.i.n + 'kg)' : o.i.issue === YI.ship ? (o.i.chip || '') + '(으)로 ' + o.i.n + 'kg 보냄' : '삭제 요청'; if (!o.d) return `<div class="st-is">${esc(w)} · ${esc(CN())} 확인 중</div>`; const a = kAns(o.d);
+  const lv = kYLv(kgS);   /* 원사D(판 1): −10 이상 0 미만 = 회색 띠(.ymg) · −10 미만 주황(.ymo) · −500 미만 빨강(.neg 그대로) + 한 줄 — PC [원사 재고] yarnOverLv 와 같은 경계 */
+  return `<div class="st-r2 ys${kg < 0 ? ' neg' + (lv === 1 ? ' ymo' : lv === 0 ? ' ymg' : '') : kg === 0 ? ' zero' : ''}"><div class="ys-h"><span class="ys-n" title="${esc(r.yarn)}">${esc(kYShow(r.yarn, r.color))}${kYCol(r.yarn, r.color) ? ' <small class="ys-c">' + esc(r.color) + '</small>' : ''}</span><span class="ys-kg"><b>${kKg2(kgS)}</b>kg</span></div>
+    ${lv ? `<div class="st-is ys-ymw ${lv === 2 ? 'r' : 'o'}">입고 기록보다 ${kKg(-Math.round(kgS * 10) / 10)} kg 더 씀 — ${esc(CN())} 확인 중</div>` : ''}${L.map(o => { const w = o.i.issue === YI.diff ? '수량이 다르다고 보냄 (' + o.i.n + 'kg)' : o.i.issue === YI.ship ? (o.i.chip || '') + '(으)로 ' + o.i.n + 'kg 보냄' : '삭제 요청'; if (!o.d) return `<div class="st-is">${esc(w)} · ${esc(CN())} 확인 중</div>`; const a = kAns(o.d);
         if (/모자람으로 기록/.test(String(o.d.note || ''))) return kBand('adj', `${esc(w)} — ${esc(CN())} 확인 · ${esc(String(o.d.note || '').replace(/^현일텍스\s*확인\s*—?\s*/, ''))}`, o.d.id);   /* hotfix636(명세 3-5): 현일텍스가 모자람으로 기록 — 띠 + [확인 ✕] */
         if (!a.rej && !a.adj) return '';   /* hotfix630: 확인 완료 띠는 안 그림 */ return kBand(a.rej ? 'rj' : 'adj', `${esc(w)} — ${esc(CN())} ${a.rej ? '반려 · ' + esc(a.body) : '조정 · ' + esc(a.body)}`, o.d.id); }).join('')}
     <div class="st-btns y3"><button type="button" class="st-ship" data-yship="${esc(r.k)}">원사이동</button><button type="button" class="st-diff" data-ydf="${esc(r.k)}">수량조정</button><button type="button" class="st-diff st-del" data-ydel="${esc(r.k)}">삭제 요청</button></div></div>`;   /* hotfix655(대표): [다른 곳으로 보냄] → [원사이동] · [수량이 달라요] → [수량조정] · [지우기 요청] → [삭제 요청] · 세 단추 한 줄 (창 내용은 그대로) */
