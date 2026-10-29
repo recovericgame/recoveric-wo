@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="FABIWOS">
 <meta name="mobile-web-app-capable" content="yes">
-<title>FABIWOS v2.53 hotfix758</title>
+<title>FABIWOS v2.53 hotfix759</title>
 <script>
 /* ===== HWChat 대화 화면 공용 (hotfix620 · 대표 10/9 "카톡처럼 쉽고 멋있게") — 이음 · 편직팀 앱 · 염/가공소 앱 · 현장 QC 앱이 같은 모양
  *   말풍선(내 글 노랑 · 받은 글 흰색) · 같은 사람 1분 안 글은 묶음(이름 · 사진은 첫 글, 시간은 끝 글) · 안 읽음 1
@@ -26489,6 +26489,16 @@ body:has(#ysj-pick:not([style*="none"])) #hw-si-ask{display:none!important}
     }
   }
   
+  /* 759(대표 10/29 "다른 PC 에서 넘긴 값이 새로고침해야만 보임"): 의뢰서가 바뀌어도 표를 다시 그리지 않고 미루는 것은 표 안 입력칸에 커서가 있을 때만.
+     메모는 635 부터 표 밖 메모 창에서 고치므로 창이 열려 있어도 뒤 표는 바로 갱신 · 메모 창이 다른 창(의뢰서 보기 등)으로 바뀐 뒤 닫혀 남은 편집 표시는 여기서 지움
+     (전에는 그 표시가 남으면 새로고침 전까지 다른 PC · 앱에서 바뀐 값이 표에 안 나왔음) · 미룬 갱신은 커서가 칸에서 나가면 바로 */
+  function hwDashEditing() {
+    const ae = document.activeElement, be = document.getElementById('dash-body');
+    if (ae && be && be.contains(ae) && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName) && (ae.tagName === 'TEXTAREA' || ae.closest('.editable, [data-sp-memo]'))) return true;
+    if (state.editingMemoCellId && !document.querySelector('#dash-modal-bg.show #memo-modal-input')) state.editingMemoCellId = null;
+    return false;
+  }
+  document.addEventListener('focusout', () => setTimeout(() => { try { if (state.pendingDashRender && state.uiMode === 'dashboard' && !hwDashEditing()) { state.pendingDashRender = false; renderDashboard(); } } catch (_) {} }, 0));
   function loadWorkOrders() {
     if (state.unsubscribe) state.unsubscribe();
     const q = query(collection(db, C('workorders')), orderBy('created_at', 'desc'));
@@ -26509,7 +26519,7 @@ body:has(#ysj-pick:not([style*="none"])) #hw-si-ask{display:none!important}
       // 대시보드 모드일 때 자동 갱신
       // v2.48: 메모 편집 중이면 재렌더 보류 (강제 blur 방지) — 편집 종료 후 대기 갱신 적용
       if (state.uiMode === 'dashboard') {
-        if (state.editingMemoCellId) {
+        if (hwDashEditing()) {   /* 759: 표 안 칸을 고치는 중일 때만 미룸 (메모 창 · 남은 편집 표시로는 안 미룸) */
           state.pendingDashRender = true;  // 편집 끝나면 적용
         } else {
           renderDashboard();
@@ -26705,7 +26715,7 @@ body:has(#ysj-pick:not([style*="none"])) #hw-si-ask{display:none!important}
     if (cq) {
       visible = visible.filter(wo => woColorNames(wo).some(n => hwTextMatch(n, cq)));
     }
-    let __perHid = 0; { const o = state.hist701; const R = o && o.per ? hwFltRange(o.per, o.from, o.to) : null; if (R && (R.from || R.to)) { const n0 = visible.length; visible = visible.filter(wo => { const d = String(wo.date || '').slice(0, 10); return !!d && (!R.from || d >= R.from) && (!R.to || d <= R.to); }); __perHid = n0 - visible.length; } }   /* hotfix701(P7): 기간(발주일) · 759: 기간 때문에 안 보이는 건수를 알림 */
+    let __perHid = 0, __perOn759 = 0; { const o = state.hist701; const R = o && o.per ? hwFltRange(o.per, o.from, o.to) : null; if (R && (R.from || R.to)) { __perOn759 = 1; const n0 = visible.length; visible = visible.filter(wo => { const d = String(wo.date || '').slice(0, 10); return !!d && (!R.from || d >= R.from) && (!R.to || d <= R.to); }); __perHid = n0 - visible.length; } }   /* hotfix701(P7): 기간(발주일) · 759: 기간 때문에 안 보이는 건수를 알림 */
     const hint = document.getElementById('history-color-hint');
     if (hint) {
       hint.textContent = (cq
@@ -26716,7 +26726,8 @@ body:has(#ysj-pick:not([style*="none"])) #hw-si-ask{display:none!important}
     /* hotfix657(V4): 이력 순서 = 마지막으로 [저장]한 때(saved_at · 없으면 만든 때) 최신이 위 · 저장 중(시각이 아직 서버에서 안 옴)이면 맨 위 */
     { const ms = t => { if (t == null) return 0; if (typeof t.toMillis === 'function') return t.toMillis(); if (t.seconds != null) return t.seconds * 1000 + Math.floor((t.nanoseconds || 0) / 1e6); if (typeof t === 'number') return t; const p = Date.parse(t); return isNaN(p) ? 0 : p; };
       const key = wo => { if ('saved_at' in wo) return wo.saved_at == null ? 9e15 : ms(wo.saved_at); if ('created_at' in wo && wo.created_at == null) return 9e15; return ms(wo.created_at); };
-      if (__pin657 && !visible.includes(__pin657)) visible.push(__pin657);
+      const __flt759 = !!((state.historyTypeFilter && state.historyTypeFilter !== 'all') || state.historySampleScope === 'sample' || state.historySampleScope === 'order' || state.historySearch || cq || __perOn759); window.__hist759 = 1;   /* 759(대표 10/29 "검색 결과만 나오게"): 검색어 · 유형 · 범위 · 컬러 · 기간 거르기가 하나라도 켜져 있으면 방금 저장한 의뢰서도 끼워 넣지 않음(거르기 결과만) · 거르기가 없을 때만 657 그대로 */
+      if (__pin657 && !__flt759 && !visible.includes(__pin657)) visible.push(__pin657);
       visible = visible.map((wo, i) => ({ wo, i, k: key(wo) })).sort((a, b) => (b.k - a.k) || (a.i - b.i)).map(x => x.wo); }
     if (visible.length === 0) {
       const reason = cq ? `컬러 "${state.historyColorSearch}" 검색 결과 없음`
@@ -72363,7 +72374,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix758';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
+  const VERSION = 'v2.53 hotfix759';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
@@ -73391,11 +73402,12 @@ window.addEventListener('beforeunload', e => {
       try { if (window.hwDrRefresh) window.hwDrRefresh(); } catch (_) {}   /* hotfix513: 공정 기록이 바뀌면 일일 보고 진행상황도 */
       try {
         if ((typeof state === 'undefined') || state.uiMode !== 'dashboard') return;
-        const ae = document.activeElement; if (ae && /INPUT|TEXTAREA|SELECT/.test(ae.tagName) && ae.closest && ae.closest('#dash-body')) return;
+        const ae = document.activeElement; if (ae && /INPUT|TEXTAREA|SELECT/.test(ae.tagName) && ae.closest && ae.closest('#dash-body')) { rrWait = 1; return; }   /* 759: 버리지 않고 커서가 나가면 다시 */
         if (state.dashView === 'overview' || state.dashView === 'procAcc') { if (H().render) H().render(); }
       } catch (_) {}
     }, 250);
   }
+  let rrWait = 0; document.addEventListener('focusout', () => { if (rrWait) { rrWait = 0; rerender(); } });   /* 759: 표 안 입력칸(검색 등)에 커서가 있는 동안 온 공정 기록 → 칸에서 나가면 바로 그림(전에는 다음 기록이 올 때까지 안 보였음) */
 
   /* ---------- 일일 체크 카드마다 [공정 체크 주소 복사] ---------- */
   P.kakaoText = function (vn) {   /* hotfix502: 2판 안내 */
