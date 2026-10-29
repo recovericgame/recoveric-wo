@@ -821,7 +821,8 @@ html body .set .rw button{min-height:44px}
   const CP_OK = () => !!(window.isSecureContext !== false && navigator.clipboard && navigator.clipboard.write && window.ClipboardItem);
   function imgPngBlob(img) {
     const draw = src => new Promise((res, rej) => { try { const c = document.createElement('canvas'); c.width = src.naturalWidth || src.width; c.height = src.naturalHeight || src.height; if (!c.width || !c.height) return rej(new Error('사진 크기를 읽지 못함')); c.getContext('2d').drawImage(src, 0, 0); c.toBlob(b => b ? res(b) : rej(new Error('png 로 바꾸지 못함')), 'image/png'); } catch (e) { rej(e); } });
-    return draw(img).catch(async () => { const r = await fetch(img.currentSrc || img.src); const b = await r.blob(); if (b.type === 'image/png') return b; return draw(await createImageBitmap(b)); });
+    return draw(img).catch(async () => { let r; try { r = await fetch(img.currentSrc || img.src, { cache: 'no-store' }); if (!r.ok) throw 0; } catch (_) { throw new Error('이 사진은 바로 복사가 막혀 있습니다 · 사진 위 마우스 오른쪽(휴대폰은 길게 누르기) → 이미지 복사 · 또는 [원본 저장]'); }   /* 760(대표 10/29): 받은 사진(Storage 주소)은 CORS 없으면 fetch 가 막혀 Failed to fetch 만 보이던 것 → 할 일 안내 */
+    const b = await r.blob(); if (b.type === 'image/png') return b; return draw(await createImageBitmap(b)); });
   }
   function imgCopy(img) { return navigator.clipboard.write([new ClipboardItem({ 'image/png': imgPngBlob(img) })]); }
   async function copy(t) { try { await navigator.clipboard.writeText(t); toast('복사했습니다'); } catch (_) { const a = document.createElement('textarea'); a.value = t; a.style.position = 'fixed'; a.style.opacity = '0'; document.body.appendChild(a); a.select(); try { document.execCommand('copy'); toast('복사했습니다'); } catch (__) { toast('복사하지 못했습니다', true); } a.remove(); } }
@@ -1037,7 +1038,7 @@ import { initializeFirestore, getFirestore, persistentLocalCache, persistentMult
  *   읽는 것: proc_acc/{내 uid} · proc_pub/{내 업체}.gs (현일텍스가 보낸 생지출고) · proc_log(내 업체 것만)
  *   쓰는 것: proc_log 한 줄 — kind 'ship' part 'gs' (body 절 · n kg · ref 송장 사진) · kind 'st' part 'gs' stage seen | ack_cxl | photo
  *   사진: Storage gs_photos/{업체}/{생지출고}_{시각}.jpg */
-const KVER = 'k192 (hotfix759)';
+const KVER = 'k193 (hotfix760)';
 try { if (matchMedia('(min-width:700px)').matches) document.body.classList.add('k620pc'); } catch (_) {}   /* hotfix620: PC 에서는 휴대폰 화면 너비로 가운데 */
 /* hotfix572(대표 10/1): 거래 원단회사 고르기 — FABIWOS 는 여러 원단회사에 팔 프로그램. 편직공장 한 곳이 여러 원단회사와 거래하므로
  *   계정(proc_acc.companies)에 거래 원단회사 목록 · 위 [→ 원단회사 ▾] 와 삼선 메뉴에서 고름 · 고른 회사의 할 일 · 재고 · 보낸 내역만 보임
@@ -1734,7 +1735,7 @@ document.addEventListener('click', e => { const b = e.target.closest && e.target
 const KPER = [['month', '이번달'], ['year', '올해'], ['all', '여태까지'], ['range', '기간설정']];
 const kYmd5 = d => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 const kDay = s => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(s || '')); return m ? new Date(+m[1], +m[2] - 1, +m[3]) : null; };
-function kPer() { const p = S.kper || { m: 'month' }; const n = new Date(); const da0 = kYmd5(new Date(n.getFullYear(), n.getMonth(), 1)), db0 = kYmd5(n);
+function kPer() { const p = S.kper || { m: 'all' };   /* hotfix760(대표 10/29 "모든 자료 날짜 제한 두지 마세요"): 처음은 [여태까지](전체) · 고른 기간은 앱을 다시 열면 전체로 */ const n = new Date(); const da0 = kYmd5(new Date(n.getFullYear(), n.getMonth(), 1)), db0 = kYmd5(n);
   if (p.m === 'year') return { m: p.m, a: +new Date(n.getFullYear(), 0, 1), b: +new Date(n.getFullYear() + 1, 0, 1), lab: n.getFullYear() + '년', da: p.da || da0, db: p.db || db0 };
   if (p.m === 'all') return { m: p.m, a: -Infinity, b: Infinity, lab: '전체', da: p.da || da0, db: p.db || db0 };
   if (p.m === 'range') { let da = p.da || da0, db = p.db || db0; if (da > db) { const t = da; da = db; db = t; } const A = kDay(da), B = kDay(db); return { m: p.m, a: +A, b: +B + 864e5, lab: da.slice(5).replace('-', '.') + '~' + db.slice(5).replace('-', '.'), da, db }; }
@@ -2135,28 +2136,29 @@ function kYinSheet(y) {
 function kYinHist(inP) {
   const L = S.logs.filter(l => l.by === 'vendor' && l.kind === 'st' && l.stage === 'yarn_in').map(l => ({ l, d: kYmd(new Date(tOf(l))) })).filter(o => inP(o.d)).sort((a, b) => tOf(b.l) - tOf(a.l)); if (!L.length) return '';
   return `<div class="sec-t" style="margin-top:14px">원사 받은 보고 ${L.length}건</div>` + L.map(({ l, d }) => { const a = kAnsOf(l.id); const s = a ? (kAns(a).rej ? ['반려 · ' + kAns(a).body, 't-r'] : ['현일 확인 완료', 't-g']) : ['현일 확인 대기', 't-o']; const t = new Date(tOf(l));
-    return `<div class="k-row"><b>${esc(d.slice(5).replace('-', '/'))} ${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}</b> ${esc(l.label || '')} · 송장 ${kY2(l.body)}kg<br><span class="k-tag ${s[1]}">${esc(s[0])}</span>${kHasPhoto(l.k) ? ' <span class="k-tag t-s">송장 사진</span>' : ''} <span style="color:#94a3b8;font-size:13px">${esc(l.wo || '')}</span></div>`; }).join('');
+    return `<div class="k-row"><b>${esc((d.slice(0, 4) !== String(new Date().getFullYear()) ? d.slice(2, 4) + '/' : '') + d.slice(5).replace('-', '/'))} ${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}</b> ${esc(l.label || '')} · 송장 ${kY2(l.body)}kg<br><span class="k-tag ${s[1]}">${esc(s[0])}</span>${kHasPhoto(l.k) ? ' <span class="k-tag t-s">송장 사진</span>' : ''} <span style="color:#94a3b8;font-size:13px">${esc(l.wo || '')}</span></div>`; }).join('');
 }
 function kYmd(d) { return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
 function kHist() {   /* hotfix581(대표 10/1): 보낸 내역 = 내가 보낸 출고 보고 · 기간 / 월 / 연도 · 처음은 오늘 · 보낸 것 취소 */
   const today = kYmd(new Date());
-  const hp = S.hp || (S.hp = { m: 'range', a: today, b: today, ym: today.slice(0, 7), y: today.slice(0, 4) });
+  const hp = S.hp || (S.hp = { m: 'all', a: today, b: today, ym: today.slice(0, 7), y: today.slice(0, 4) });   /* hotfix760(대표 10/29): 처음은 [전체] · 기간 · 월 · 연도는 누를 때만 거름 · 줄은 100줄씩 그림(더 보기 · 끝에 닿으면 자동) */
   const ships = S.logs.filter(l => l.by === 'vendor' && l.kind === 'ship').map(l => ({ l, d: kYmd(new Date(tOf(l))) }));
-  const inP = d => hp.m === 'range' ? (d >= (hp.a <= hp.b ? hp.a : hp.b) && d <= (hp.a <= hp.b ? hp.b : hp.a)) : hp.m === 'month' ? d.slice(0, 7) === hp.ym : d.slice(0, 4) === hp.y;
+  const inP = d => hp.m === 'all' ? true : hp.m === 'range' ? (d >= (hp.a <= hp.b ? hp.a : hp.b) && d <= (hp.a <= hp.b ? hp.b : hp.a)) : hp.m === 'month' ? d.slice(0, 7) === hp.ym : d.slice(0, 4) === hp.y;
   const L = ships.filter(o => inP(o.d)).sort((a, b) => tOf(b.l) - tOf(a.l));
   const live = L.filter(o => !['cx', 'rej'].includes(kShipStat(o.l)[0]));
   const fx = o => { const f = kFixOf(o.l); return f ? f.fix : null; };   /* GG1c: 정정한 출고는 정정 숫자로 합계 */
   const tj = live.reduce((a, o) => { const F = fx(o); return a + (parseFloat(F ? F.j : o.l.body) || 0); }, 0), tk = live.reduce((a, o) => { const F = fx(o), n0 = parseFloat(o.l.n) || 0; return a + (!F ? n0 : (parseFloat(F.kg) > 0 ? parseFloat(F.kg) : (parseFloat(F.j0) > 0 ? n0 * (parseFloat(F.j) || 0) / parseFloat(F.j0) : n0))); }, 0);   /* 정정 kg 를 비웠으면 절 비율로 */
   const years = Array.from(new Set(ships.map(o => o.d.slice(0, 4)).concat(today.slice(0, 4)))).sort().reverse();
-  const lab = hp.m === 'range' ? (hp.a === hp.b ? (hp.a === today ? '오늘' : hp.a.slice(5).replace('-', '/')) : hp.a.slice(5).replace('-', '/') + ' ~ ' + hp.b.slice(5).replace('-', '/')) : hp.m === 'month' ? Number(hp.ym.slice(5)) + '월' : hp.y + '년';
-  let h = `<div class="k-hseg"><button type="button" data-hpm="range" class="${hp.m === 'range' ? 'on' : ''}">기간</button><button type="button" data-hpm="month" class="${hp.m === 'month' ? 'on' : ''}">월</button><button type="button" data-hpm="year" class="${hp.m === 'year' ? 'on' : ''}">연도</button></div>
-    <div class="k-hrng">${hp.m === 'range' ? `<input type="date" data-hpa value="${esc(hp.a)}" max="${today}"><span>~</span><input type="date" data-hpb value="${esc(hp.b)}" max="${today}">` : hp.m === 'month' ? `<input type="month" data-hpym value="${esc(hp.ym)}" max="${today.slice(0, 7)}">` : `<select data-hpy>${years.map(y => `<option${y === hp.y ? ' selected' : ''}>${y}</option>`).join('')}</select>`}</div>
+  const lab = hp.m === 'all' ? '전체' : hp.m === 'range' ? (hp.a === hp.b ? (hp.a === today ? '오늘' : hp.a.slice(5).replace('-', '/')) : hp.a.slice(5).replace('-', '/') + ' ~ ' + hp.b.slice(5).replace('-', '/')) : hp.m === 'month' ? Number(hp.ym.slice(5)) + '월' : hp.y + '년';
+  let h = `<div class="k-hseg"><button type="button" data-hpm="all" class="${hp.m === 'all' ? 'on' : ''}">전체</button><button type="button" data-hpm="range" class="${hp.m === 'range' ? 'on' : ''}">기간</button><button type="button" data-hpm="month" class="${hp.m === 'month' ? 'on' : ''}">월</button><button type="button" data-hpm="year" class="${hp.m === 'year' ? 'on' : ''}">연도</button></div>
+    ${hp.m === 'all' ? '' : `<div class="k-hrng">${hp.m === 'range' ? `<input type="date" data-hpa value="${esc(hp.a)}" max="${today}"><span>~</span><input type="date" data-hpb value="${esc(hp.b)}" max="${today}">` : hp.m === 'month' ? `<input type="month" data-hpym value="${esc(hp.ym)}" max="${today.slice(0, 7)}">` : `<select data-hpy>${years.map(y => `<option${y === hp.y ? ' selected' : ''}>${y}</option>`).join('')}</select>`}</div>`}
     <div class="k-sum"><div style="font-size:15px;font-weight:800;color:#065f46">${esc(lab)} ${esc(CN())}로 보낸 생지</div><b>${tk.toFixed(1)}kg</b><div style="font-size:14.5px;color:#475569">${kQ(tj)}절 · ${live.length}번${L.length > live.length ? ' <span style="color:#94a3b8">(취소 · 반려 ' + (L.length - live.length) + ')</span>' : ''}</div></div>`;
   if (!L.length) return h + (kYinHist(inP) || '<div class="empty">이 기간에 보낸 내역이 없습니다.</div>');
-  return h + L.map(({ l, d }) => { const x = kList().find(i => i.k === l.k) || {}; const st = kShipStat(l); const t = new Date(tOf(l));
+  const hpN = S.hpn || 100;
+  return h + L.slice(0, hpN).map(({ l, d }) => { const x = kList().find(i => i.k === l.k) || {}; const st = kShipStat(l); const t = new Date(tOf(l));
     const canCx = st[0] === 'wait' || st[0] === 'ok' || st[0] === 'fix';
-    return `<div class="k-row">${canCx ? `<button type="button" class="k-cx" data-kcx="${esc(l.id)}">보낸 것 취소</button>` : ''}<b>${esc(d.slice(5).replace('-', '/'))} ${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}</b> ${esc(x.item || l.label || l.wo || '')} <b style="color:#b45309">${esc(x.lot || '')}</b>${l.reason === 'self' ? ' <span class="k-tag t-s">의뢰서 없이</span>' : ''} · ${kQ(l.body)}절${Number(l.n) ? ' · ' + (parseFloat(l.n) || 0).toFixed(1) + 'kg' : ''}<br><span class="k-tag ${st[2]}">${esc(st[1])}</span>${kHasPhoto(l.k) ? ' <span class="k-tag t-s">송장 사진</span>' : (S.photoUp[l.k] === 'up' ? ' <span class="k-tag t-g">사진 올리는 중…</span>' : '')} <span style="color:#94a3b8;font-size:13px">${esc(l.wo || x.no || '')} → ${esc(x.dest || l.chip || '')}</span></div>`; }).join('') + kYinHist(inP)
-    + '<div class="empty" style="padding:14px 10px;font-size:13px"><span data-hf="682">앱으로 보낸 출고만 나옵니다 · </span>[보낸 것 취소]를 누르면 ' + esc(CN()) + '가 확인한 뒤 다시 출고 대기로 돌아갑니다</div>';
+    return `<div class="k-row">${canCx ? `<button type="button" class="k-cx" data-kcx="${esc(l.id)}">보낸 것 취소</button>` : ''}<b>${esc((d.slice(0, 4) !== String(new Date().getFullYear()) ? d.slice(2, 4) + '/' : '') + d.slice(5).replace('-', '/'))} ${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}</b> ${esc(x.item || l.label || l.wo || '')} <b style="color:#b45309">${esc(x.lot || '')}</b>${l.reason === 'self' ? ' <span class="k-tag t-s">의뢰서 없이</span>' : ''} · ${kQ(l.body)}절${Number(l.n) ? ' · ' + (parseFloat(l.n) || 0).toFixed(1) + 'kg' : ''}<br><span class="k-tag ${st[2]}">${esc(st[1])}</span>${kHasPhoto(l.k) ? ' <span class="k-tag t-s">송장 사진</span>' : (S.photoUp[l.k] === 'up' ? ' <span class="k-tag t-g">사진 올리는 중…</span>' : '')} <span style="color:#94a3b8;font-size:13px">${esc(l.wo || x.no || '')} → ${esc(x.dest || l.chip || '')}</span></div>`; }).join('') + kYinHist(inP)
+    + (L.length > hpN ? `<button type="button" class="ko-more" data-hpmore>더 보기 (${L.length - hpN}줄 더)</button>` : '') + '<div class="empty" style="padding:14px 10px;font-size:13px"><span data-hf="682">앱으로 보낸 출고만 나옵니다 · </span>[보낸 것 취소]를 누르면 ' + esc(CN()) + '가 확인한 뒤 다시 출고 대기로 돌아갑니다</div>';
 }
 function kCxSheet(l) {
   const x = kList().find(i => i.k === l.k) || { k: l.k, no: l.wo }; const st = { busy: false, tok: 0, n: '', rq: kRq() };   /* hotfix668: 요청 번호 */
@@ -3233,8 +3235,10 @@ function kPhotoSheet(x) {
   };
   draw();
 }
-document.addEventListener('click', e => { const m = e.target.closest && e.target.closest('[data-hpm]'); if (m) { S.hp = S.hp || {}; S.hp.m = m.dataset.hpm; render(); return; } const c = e.target.closest && e.target.closest('[data-kcx]'); if (c) { const l = S.logs.find(x => x.id === c.dataset.kcx); if (l) kCxSheet(l); } });
-document.addEventListener('change', e => { const t = e.target; if (!S.hp || !t || !t.closest || !t.closest('.k-hrng')) return; if (t.dataset.hpa != null) S.hp.a = t.value || S.hp.a; if (t.dataset.hpb != null) S.hp.b = t.value || S.hp.b; if (t.dataset.hpym != null) S.hp.ym = t.value || S.hp.ym; if (t.dataset.hpy != null) S.hp.y = t.value; t.blur(); render(); });
+document.addEventListener('click', e => { const m = e.target.closest && e.target.closest('[data-hpm]'); if (m) { S.hp = S.hp || {}; S.hp.m = m.dataset.hpm; S.hpn = 100; render(); return; } if (e.target.closest && e.target.closest('[data-hpmore]')) { S.hpn = (S.hpn || 100) + 100; render(); return; } const c = e.target.closest && e.target.closest('[data-kcx]'); if (c) { const l = S.logs.find(x => x.id === c.dataset.kcx); if (l) kCxSheet(l); } });
+document.addEventListener('change', e => { const t = e.target; if (!S.hp || !t || !t.closest || !t.closest('.k-hrng')) return; if (t.dataset.hpa != null) S.hp.a = t.value || S.hp.a; if (t.dataset.hpb != null) S.hp.b = t.value || S.hp.b; if (t.dataset.hpym != null) S.hp.ym = t.value || S.hp.ym; if (t.dataset.hpy != null) S.hp.y = t.value; S.hpn = 100; t.blur(); render(); });
+window.addEventListener('scroll', () => { const b = document.querySelector('[data-hpmore]'); if (!b || b.dataset.busy) return; if (b.getBoundingClientRect().top < innerHeight + 300) { b.dataset.busy = '1'; b.click(); } }, { passive: true });   /* hotfix760: 보낸 내역 — 끝에 닿으면 다음 100줄 자동 */
+window.__per760 = 1;
 document.addEventListener('click', async e => {
   if (e.target.closest && e.target.closest('[data-dclear]')) { S.dest = ''; S.kind = ''; lsSet(vKey('dest'), ''); window.scrollTo(0, 0); render(); return; }
   const ymb = e.target.closest && e.target.closest('[data-ym]'); if (ymb) { const now = new Date(); const base = S.ym || (now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0')); const [y, m] = base.split('-').map(Number); const d = new Date(y, m - 1 + Number(ymb.dataset.ym), 1); S.ym = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'); render(); return; }
