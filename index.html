@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="FABIWOS">
 <meta name="mobile-web-app-capable" content="yes">
-<title>FABIWOS v2.53 hotfix762</title>
+<title>FABIWOS v2.53 hotfix764</title>
 <script>
 /* ===== HWChat 대화 화면 공용 (hotfix620 · 대표 10/9 "카톡처럼 쉽고 멋있게") — 이음 · 편직팀 앱 · 염/가공소 앱 · 현장 QC 앱이 같은 모양
  *   말풍선(내 글 노랑 · 받은 글 흰색) · 같은 사람 1분 안 글은 묶음(이름 · 사진은 첫 글, 시간은 끝 글) · 안 읽음 1
@@ -72531,7 +72531,7 @@ window.addEventListener('beforeunload', e => {
 /* ==================== v2.17: 버전 자동 동기화 ==================== */
 /* 다음 버전부터는 이 상수만 변경하면 title + 사이드바 자동 갱신 */
 (function syncVersion() {
-  const VERSION = 'v2.53 hotfix762';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
+  const VERSION = 'v2.53 hotfix764';   // 9/15 대표 지시: 수정본을 낼 때마다 번호를 하나씩 올린다(422 → 423 → 424 …) · hotfix461(9/20): 원본 파일 안에서 올린다(사본만 바꾸면 화면에 옛 번호가 남는다)
   // ⚠ 버전관리: 다음 수정부터 반드시 hotfix20, hotfix21... 로 올릴 것 (박 대표 지시 - 같은 번호 반복 금지)
   // hotfix158: (1) 구역 머리행 colspan 14→16(색이 완료·삭제칸까지 전체 폭 채움) + 헤더 메모 이모지 제거. (2) 행 호버 파란색 완화(#e3eeff→#eef3fb, 병합셀 블록 과채색 가독성 개선). (3) 거래처(업체) 관리 설정 화면 신설 — settings/vendors 문서에 입력/수정/삭제(기존 workorders 데이터와 완전 분리, 관리자 전용). ※작지 폼 연동은 다음 단계.
   // hotfix157: 재염된 색 "재염중" 표시(✓QC 제거). hotfix156: 로그인 파란 리뉴얼. hotfix153: 되돌리기 근본수정.
@@ -73958,6 +73958,32 @@ window.addEventListener('beforeunload', e => {
         if (act === 'invon' || act === 'invoff') { if (!(H().isOwner && H().isOwner())) { toast('송장 판독 켜기는 최고관리자만 됩니다', 'error'); return; } const vn = b.dataset.v || ''; if (!vn) return;   /* hotfix700 */
           if (act === 'invon' && !confirm(vn + ' 송장 판독을 켭니다.\n\n편직팀 앱에 [송장 한꺼번에]가 보이고, 판독 요금이 이 공장 하루 1,000원 안에서 나갑니다.\n(단가 문서 settings/inv_price · 판독 서버 배포 · 규칙 게시가 끝난 뒤에 켜 주세요)')) return;
           try { await P.invSet(vn, act === 'invon'); if (P.pubs[vn]) P.pubs[vn].inv_read = act === 'invon' ? 'real' : 'off'; toast(vn + ' 송장 판독을 ' + (act === 'invon' ? '켰습니다' : '껐습니다 — 앱 카드가 바로 감춰지고 서버도 거절합니다'), 'success'); rerenderNow(); } catch (e) { toast('바꾸지 못했습니다 — ' + ((e && e.message) || ''), 'error'); } return; }
+        if (act === 'invprice' || act === 'invhab' || act === 'invitems') { if (!(H().isOwner && H().isOwner())) { toast('송장 판독 설정은 최고관리자만 바꿀 수 있습니다', 'error'); return; }   /* hotfix764(D2 · D3) */
+          const n0 = s => { const t = String(s == null ? '' : s).trim().replace(/,/g, ''); return t === '' ? 0 : Number(t); };
+          if (act === 'invprice') { const w = b.closest('.hwp-invp'); if (!w) return; const models = {}; let bad = false;
+            P.INV_MODELS.forEach(([m]) => { const i = n0((w.querySelector(`[data-invp="${m}|in"]`) || {}).value), o = n0((w.querySelector(`[data-invp="${m}|out"]`) || {}).value); if (!(isFinite(i) && isFinite(o) && i >= 0 && o >= 0 && i <= 1000 && o <= 1000) || ((i > 0) !== (o > 0))) bad = true; models[m] = { in: i, out: o }; });
+            if (bad) { toast('단가는 입력 · 출력을 둘 다 넣거나 둘 다 비워 주십시오 (0 ~ 1,000 달러)', 'error'); return; }
+            const fxT = String((w.querySelector('[data-invfx]') || {}).value || '').trim(); const fx = fxT === '' ? 1500 : n0(fxT); if (!(fx >= 1000 && fx <= 5000)) { toast('환율은 1,000 ~ 5,000 원 사이로 넣어 주십시오', 'error'); return; }
+            const ck = String((w.querySelector('[data-invck]') || {}).value || '').slice(0, 10); const by = email();
+            busy('저장 중 …'); try { await f.setDoc(f.doc(f.db, f.C('settings'), 'inv_price'), { models, fx, checked_on: ck, checked_by: by, price_at: f.serverTimestamp() }, { merge: true }); }
+            catch (e) { b.disabled = false; b.textContent = b.dataset.t; toast('단가를 저장하지 못했습니다 — ' + ((e && (e.code || e.message)) || ''), 'error'); return; }
+            b.disabled = false; b.textContent = b.dataset.t; P.invPrice = Object.assign({}, P.invPrice || {}, { models, fx, checked_on: ck, checked_by: by }); P.invPriceT = Date.now(); P.invDraft = {}; P.invPriceFill();
+            toast(P.INV_MODELS.some(([m]) => models[m].in > 0) ? '단가 · 환율을 저장했습니다 — 다음 판독부터 적용' : '단가를 비웠습니다 — 판독이 되지 않습니다', 'success'); return; }
+          const vn = b.dataset.v || '', row = b.closest('.hwp-inv-r'); if (!vn || !row) return; const ta = row.querySelector('[data-invhab]'), ci = row.querySelector('[data-invcap]'); if (!ta || !ci) return;
+          if (act === 'invitems') { const head = '원단명은 다음 중 하나: ', names = [];
+            try { ((window.__hwGs && window.__hwGs.pubFor) ? window.__hwGs.pubFor(vn) : []).forEach(x => { const s = String((x && x.item) || '').trim(); if (s && !names.includes(s)) names.push(s); }); } catch (_) {}
+            if (!names.length) { toast(vn + ' 에 보낸 생지출고 품목이 없습니다', 'error'); return; }
+            let line = head, k = 0; for (const s of names) { const add = (k ? ', ' : '') + s; if ((line + add).length > 200) break; line += add; k++; }
+            const L = String(ta.value || '').split('\n').map(s => s.trim()).filter(s => s && !s.startsWith(head)); L.push(line); ta.value = L.join('\n'); ((P.invDraftH = P.invDraftH || {})[vn] = P.invDraftH[vn] || {}).ta = ta.value;
+            toast(`품목 ${k}개를 습관 칸에 넣었습니다${k < names.length ? ` (한 줄 200자에 맞춰 ${names.length - k}개는 뺌)` : ''} — [습관 · 상한 저장]을 눌러야 저장됩니다`, 'success'); return; }
+          const L = String(ta.value || '').split('\n').map(s => s.trim()).filter(Boolean);
+          if (L.length > 20) { toast('습관은 20줄까지 넣을 수 있습니다 (지금 ' + L.length + '줄)', 'error'); return; }
+          const lg = L.findIndex(s => s.length > 200); if (lg >= 0) { toast((lg + 1) + '번째 줄이 200자를 넘습니다 (' + L[lg].length + '자)', 'error'); return; }
+          const cT = String(ci.value || '').trim(); const cap = cT === '' ? 1000 : Math.round(n0(cT)); if (!(cap >= 0 && cap <= 1000)) { toast('하루 상한은 0 ~ 1,000 원 사이로 넣어 주십시오', 'error'); return; }
+          busy('저장 중 …'); try { await f.setDoc(f.doc(f.db, f.C('proc_pub'), vn), { inv_habits: L, inv_cap_won: cap }, { merge: true }); }
+          catch (e) { b.disabled = false; b.textContent = b.dataset.t; toast('저장하지 못했습니다 — ' + ((e && (e.code || e.message)) || ''), 'error'); return; }
+          b.disabled = false; b.textContent = b.dataset.t; if (P.pubs[vn]) Object.assign(P.pubs[vn], { inv_habits: L, inv_cap_won: cap }); if (P.invDraftH) delete P.invDraftH[vn];
+          toast(`${vn} 습관 ${L.length}줄 · 하루 상한 ${cap.toLocaleString('ko-KR')}원을 저장했습니다 — 다음 판독부터 적용`, 'success'); return; }
         if (act === 'lowjul') { if (!(H().isAdmin && H().isAdmin())) { toast('생지 재고 주의 표시는 관리자만 바꿀 수 있습니다', 'error'); return; }   /* hotfix627 */
           const n = parseInt(val('hwp-lowjul'), 10); if (!(n >= 1 && n <= 999)) { toast('1 ~ 999 사이 절수를 넣어 주십시오', 'error'); return; }
           await f.setDoc(f.doc(f.db, f.C('settings'), 'proc_cfg'), { gs_low_jul: n, gs_low_jul_by: email(), gs_low_jul_at: f.serverTimestamp() }, { merge: true });   /* 다른 칸(단계 · 목록 · 화면 구성 · 보낼 곳)은 그대로 · updated_at 안 건드림 */
@@ -74084,10 +74110,38 @@ window.addEventListener('beforeunload', e => {
   P.invBoxHtml = function (accs) {
     const V = Array.from(new Set((accs || []).filter(a => a && a.active && a.vendor).map(a => a.vendor))).sort((x, y) => x.localeCompare(y, 'ko')); if (!V.length) return '';
     setTimeout(() => P.invFill(V), 0);
-    return `<div class="hwp-qcbox one hwp-inv"><div><b>송장 판독 (최고관리자만)</b><p>켜면 그 공장 편직팀 앱에 [송장 한꺼번에]가 보입니다 · 요금은 공장마다 하루 1,000원을 넘지 않습니다 · 끄면 바로 감춰집니다</p>${V.map(v => { const on = (P.pubs[v] || {}).inv_read === 'real'; return `<div class="hwp-inv-r" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:4px 0;"><b style="min-width:120px;">${esc(v)}</b><span style="font-weight:800;color:${on ? 'var(--st-ok-ink)' : 'var(--gray-600)'};">${on ? '켜짐' : '꺼짐'}</span><span class="hwp-dim" data-invuse="${esc(v)}">오늘 —</span><button type="button" class="hwp-btn${on ? '' : ' green'}" data-hwp-act="${on ? 'invoff' : 'invon'}" data-v="${esc(v)}">${on ? '판독 끄기' : '판독 켜기'}</button></div>`; }).join('')}</div></div>`;
+    return `<div class="hwp-qcbox one hwp-inv"><div><b>송장 판독 (최고관리자만)</b><p>켜면 그 공장 편직팀 앱에 [송장 한꺼번에]가 보입니다 · 요금은 공장마다 하루 1,000원을 넘지 않습니다 · 끄면 바로 감춰집니다</p>${P.invPriceHtml()}${V.map(v => { const pb = P.pubs[v] || {}, on = pb.inv_read === 'real', cap = Number(pb.inv_cap_won), hb = Array.isArray(pb.inv_habits) ? pb.inv_habits : [], dr = (P.invDraftH || {})[v] || {}; return `<div class="hwp-inv-r" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:4px 0;"><b style="min-width:120px;">${esc(v)}</b><span style="font-weight:800;color:${on ? 'var(--st-ok-ink)' : 'var(--gray-600)'};">${on ? '켜짐' : '꺼짐'}</span><span class="hwp-dim" data-invuse="${esc(v)}">오늘 —</span><button type="button" class="hwp-btn${on ? '' : ' green'}" data-hwp-act="${on ? 'invoff' : 'invon'}" data-v="${esc(v)}">${on ? '판독 끄기' : '판독 켜기'}</button>`
+      /* hotfix764(D3 · 기획 20261029_판독켜기 6장): 공장별 필기 습관(proc_pub.inv_habits · 20줄 · 줄당 200자) · [이 공장 품목 넣기] · 하루 상한(inv_cap_won · 0~1,000 · 서버는 낮추기만) — 최고관리자만 · 바꾸면 그 뒤 판독부터 */
+      + `<details data-invd="${esc(v)}" style="flex-basis:100%;"${(P.invOpen || {})[v] ? ' open' : ''}><summary style="cursor:pointer;color:var(--gray-600);">습관 · 하루 상한 — ${hb.length ? '습관 ' + hb.length + '줄' : '습관 없음(기본 2줄)'} · 상한 ${(cap >= 0 && cap < 1000 ? cap : 1000).toLocaleString('ko-KR')}원</summary><div style="display:flex;flex-direction:column;gap:6px;padding:6px 0 4px;">`
+      + `<label>하루 상한 <input type="number" data-invcap min="0" max="1000" step="10" inputmode="numeric" value="${esc(dr.cap !== undefined ? dr.cap : (cap >= 0 && cap < 1000 ? String(cap) : ''))}" placeholder="1000" style="width:90px;padding:5px 6px;border:1px solid var(--gray-300);border-radius:6px;font:inherit;text-align:right;"> 원 <span class="hwp-dim">(0 ~ 1,000 · 비우면 1,000 · 첫 주 300 권장)</span></label>`
+      + `<textarea data-invhab rows="5" maxlength="4100" placeholder="필기 습관 한 줄에 하나 (최대 20줄 · 줄당 200자)&#10;예) 1을 갈고리 모양으로 씁니다. 1로 읽으세요.&#10;기본 2줄(P→9 · 빗금 7)은 늘 함께 들어갑니다 — 같은 글자를 적으면 이 공장 것이 먼저" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid var(--gray-300);border-radius:6px;font:inherit;">${esc(dr.ta !== undefined ? dr.ta : hb.join('\n'))}</textarea>`
+      + `<div style="display:flex;gap:8px;flex-wrap:wrap;"><button type="button" class="hwp-btn" data-hwp-act="invitems" data-v="${esc(v)}">이 공장 품목 넣기</button><button type="button" class="hwp-btn green" data-hwp-act="invhab" data-v="${esc(v)}">습관 · 상한 저장</button></div></div></details></div>`; }).join('')}</div></div>`;
+  };
+  /* hotfix764(D2 · 기획 20261029_판독켜기 6장): [단가 · 환율] — settings/inv_price.models.{모델}.{in,out}(달러/100만 토큰) · fx(1,000~5,000 · 기본 1,500) · checked_on(확인일) · checked_by(확인자) · 최고관리자만(규칙도 최고관리자만 씀) · 비우면 0 = 판독 안 됨(X|price) · on.{공장} 은 건드리지 않음 */
+  P.INV_MODELS = [['claude-haiku-5-5', '빠른 (Haiku)'], ['claude-opus-5-5', '정밀 (Opus)']];
+  P.invPriceHtml = function () {
+    const inp = (a, w, ph) => `<input type="text" inputmode="decimal" ${a} placeholder="${ph}" style="width:${w}px;padding:5px 6px;border:1px solid var(--gray-300);border-radius:6px;font:inherit;text-align:right;">`;
+    return `<div class="hwp-invp" style="display:flex;flex-direction:column;gap:6px;padding:6px 0 10px;border-bottom:1px solid var(--gray-200);margin-bottom:6px;"><b>단가 · 환율 <span class="hwp-dim" style="font-weight:400;">(Anthropic 공개 단가 화면의 값 · 달러 / 100만 토큰)</span></b>`
+      + P.INV_MODELS.map(([m, t]) => `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;"><span style="min-width:110px;">${t}</span>입력 ${inp(`data-invp="${m}|in"`, 80, '예 1')} 출력 ${inp(`data-invp="${m}|out"`, 80, '예 5')}</div>`).join('')
+      + `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;"><span style="min-width:110px;">환율</span>${inp('data-invfx', 80, '1500')} 원 / 달러 <span style="margin-left:8px;">확인일</span><input type="date" data-invck style="padding:4px 6px;border:1px solid var(--gray-300);border-radius:6px;font:inherit;"><button type="button" class="hwp-btn green" data-hwp-act="invprice">단가 저장</button></div>`
+      + `<span class="hwp-dim" data-invpst>단가 불러오는 중 …</span></div>`;
+  };
+  P.invPriceFill = function () {
+    const d = P.invPrice; if (d === undefined) return; const md = (d && d.models) || {};
+    const put = (el, key, v) => { el.oninput = () => { (P.invDraft = P.invDraft || {})[key] = el.value; }; if (el.dataset.filled || document.activeElement === el) return; const dv = (P.invDraft || {})[key]; el.value = dv !== undefined ? dv : v; el.dataset.filled = '1'; };   /* 저장 전 넣던 값은 다시 그려도 그대로 */
+    document.querySelectorAll('[data-invp]').forEach(el => { const [m, k] = el.dataset.invp.split('|'); const x = Number((md[m] || {})[k]); put(el, el.dataset.invp, x > 0 ? String(x) : ''); });
+    document.querySelectorAll('[data-invfx]').forEach(el => { const x = Number(d && d.fx); put(el, 'fx', x >= 1000 && x <= 5000 ? String(x) : ''); });
+    document.querySelectorAll('[data-invck]').forEach(el => { put(el, 'ck', (d && /^\d{4}-\d{2}-\d{2}$/.test(d.checked_on || '')) ? d.checked_on : new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10)); });
+    document.querySelectorAll('details[data-invd]').forEach(dt => { const v = dt.dataset.invd, D = () => ((P.invDraftH = P.invDraftH || {})[v] = P.invDraftH[v] || {}); const ta = dt.querySelector('[data-invhab]'), ci = dt.querySelector('[data-invcap]'); if (ta) ta.oninput = () => { D().ta = ta.value; }; if (ci) ci.oninput = () => { D().cap = ci.value; }; });
+    const okM = P.INV_MODELS.filter(([m]) => Number((md[m] || {}).in) > 0 && Number((md[m] || {}).out) > 0).map(x => x[1]);
+    const st = d === null ? '단가를 읽지 못했습니다 — 다시 열어 주십시오' : !okM.length ? '단가가 비어 있어 판독이 되지 않습니다 (편직팀 앱에 "판독 준비 중") — 위 칸을 채우고 [단가 저장]' : `단가 있음: ${okM.join(' · ')}${okM.length < 2 ? ' (나머지는 비어 있어 그 판독은 안 됨)' : ''} · 확인일 ${d.checked_on || '—'} · 확인자 ${d.checked_by || '—'}`;
+    document.querySelectorAll('[data-invpst]').forEach(el => { el.textContent = st; });
   };
   P.invFill = async function (V) {
     const f = FB(); if (!f || !f.getDoc) return; const d = new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10).replace(/-/g, '');
+    document.querySelectorAll('details[data-invd]').forEach(el => { el.ontoggle = () => { (P.invOpen = P.invOpen || {})[el.dataset.invd] = el.open; }; });   /* hotfix764: 다시 그려도 펼친 칸 그대로 */
+    try { if (P.invPrice === undefined || P.invPrice === null || Date.now() - (P.invPriceT || 0) > 60000) { const sp = await f.getDoc(f.doc(f.db, f.C('settings'), 'inv_price')); P.invPrice = sp && sp.exists() ? (sp.data() || {}) : {}; P.invPriceT = Date.now(); } } catch (_) { P.invPrice = P.invPrice || null; }   /* hotfix764(D2) */
+    try { P.invPriceFill(); } catch (_) {}
     for (const v of V) { let u = P.invUse[v]; if (!u || Date.now() - u.t > 60000 || u.d !== d) { try { const sn = await f.getDoc(f.doc(f.db, f.C('inv_usage'), d + '_' + v)); const x = sn && sn.exists() ? (sn.data() || {}) : {}; u = P.invUse[v] = { t: Date.now(), d, spent: Number(x.spent) || 0, held: Number(x.held) || 0, cap: Number(x.cap) || 1000, n: x.n || {} }; } catch (_) { u = null; } }
       document.querySelectorAll('[data-invuse]').forEach(el => { if (el.dataset.invuse !== v) return; el.textContent = u ? `오늘 ${Math.ceil(u.spent + u.held).toLocaleString('ko-KR')}원 / ${u.cap.toLocaleString('ko-KR')}원 · 판독 ${(u.n.fast || 0) + (u.n.exact || 0)}장 · 다시 쓴 사진 ${u.n.cache || 0} · 한도 넘음 ${u.n.limit || 0}` : '오늘 쓴 금액을 못 읽음(규칙 게시 전)'; }); }
   };
