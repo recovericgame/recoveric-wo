@@ -894,7 +894,7 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/fireba
 import { getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult, onAuthStateChanged, signOut, setPersistence, browserLocalPersistence } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 import { initializeFirestore, getFirestore, persistentLocalCache, persistentMultipleTabManager, doc, getDoc, setDoc, deleteDoc, collection, query, where, onSnapshot as fsOnSnapshot, addDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
-const CVER = 'c146 (hotfix768)';
+const CVER = 'c147 (hotfix769)';
 const EMBED = /[?&]embed=1(?:&|$)/.test(location.search);   /* FABIWOS [대화] 창 안 */
 if (EMBED) document.documentElement.classList.add('embed');
 const cfg = { apiKey: "AIzaSyAIaNFZozda5sp4Qjs7LEn-aXYLX1JZi10", authDomain: "recoveric-wo.firebaseapp.com", projectId: "recoveric-wo", storageBucket: "recoveric-wo.firebasestorage.app", messagingSenderId: "267946532287", appId: "1:267946532287:web:fcc1b597c9bf53c9d8950a" };
@@ -1019,7 +1019,8 @@ addEventListener('online', liveWake);
 function start() {
   live('acc', (ok, er) => onSnapshot(collection(db, 'proc_acc'), sn => { ok(); const a = []; sn.forEach(d => a.push(Object.assign({ uid: d.id }, d.data()))); S.accs = a; paint(); }, er));
   live('pub', (ok, er) => onSnapshot(collection(db, 'proc_pub'), sn => { ok(); const o = {}; sn.forEach(d => { const x = d.data() || {}; o[d.id] = { mode: x.mode || '', gs: Array.isArray(x.gs) && x.gs.length > 0, items: Array.isArray(x.items) && x.items.length > 0 }; }); S.pub = o; paint(); }, er));   /* hotfix621: 업체 종류 (FABIWOS 와 같게) */
-  live('users', (ok, er) => onSnapshot(doc(db, 'settings', 'users'), sn => { ok(); if (sn.exists()) { S.users = Array.isArray(sn.data().items) ? sn.data().items : []; $('me-nm').textContent = nameOf(S.me) + ' · 현일텍스 본사'; paint(); } }, er));
+  live('users', (ok, er) => onSnapshot(doc(db, 'settings', 'users'), sn => { ok(); if (sn.exists() && S.me !== OWNER && Array.isArray(sn.data().emails) && sn.data().emails.length && !sn.data().emails.map(x => String(x).toLowerCase()).includes(S.me)) { S.users = []; try { signOut(auth); } catch (_) {} showLogin(null, '접속 권한이 없어졌습니다 — 관리자(박영균 대표)에게 문의해 주세요'); return; }   /* hotfix769: 명단에서 지워진 사람은 바로 쫓겨남 */
+    if (sn.exists()) { S.users = Array.isArray(sn.data().items) ? sn.data().items : []; $('me-nm').textContent = nameOf(S.me) + ' · 현일텍스 본사'; paint(); } }, er));
   live('vendors', (ok, er) => onSnapshot(doc(db, 'settings', 'vendors'), sn => { ok(); const o = {}; if (sn.exists()) (sn.data().items || []).forEach(v => { if (v && v.name) o[String(v.name).trim()] = (Array.isArray(v.types) ? v.types : (v.type ? [v.type] : [])).map(String); }); S.vtypes = o; S.vids = vidMap(sn.exists() ? sn.data().items : []); paint(); }, er));   /* hotfix624: 업체코드 종류 → 대화방 순서(원사 · 편직 · 염/가공 · 후가공 · 나염) */
   const take = sn => { const a = []; sn.forEach(d => { const x = (typeof d.data === 'function') ? d.data({ serverTimestamps: 'estimate' }) : d.data; a.push(Object.assign({ id: d.id }, x)); }); return a; };
   live('chat', (ok, er) => onSnapshot(query(collection(db, 'proc_log'), where('k', '==', 'chat')), sn => { ok(); const prev = S.gotChat ? new Set(S.chat.map(l => l.id)) : null; S.chat = take(sn).filter(l => l.k === 'chat' && l.vendor !== FIELD); S.gotChat = true; arrive(prev, S.chat); paint(); }, er));
